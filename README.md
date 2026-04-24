@@ -151,12 +151,18 @@ for ev in events {
 
 ## CLI
 
-The `cmd/` directory includes a `cx` command-line tool for converting between
-formats. After installing the module, build it with:
+Install the `cx` command-line tool:
 
 ```sh
 v install --git https://github.com/cx-home/cx-v
-v -o cx ~/.vmodules/cx/cmd/main.v
+make -C ~/.vmodules/cx install
+```
+
+This builds a production binary and places it in `~/.local/bin/cx`. Override
+the destination with `PREFIX`:
+
+```sh
+make -C ~/.vmodules/cx install PREFIX=/usr/local/bin
 ```
 
 Usage:
@@ -176,6 +182,22 @@ cx --from=yaml --to=json file.yaml # YAML → JSON
 
 Input is read from a file argument or stdin. Format is auto-detected from the
 file extension when `--from` is omitted.
+
+## Editor tooling
+
+VS Code and Neovim syntax highlighting and completions are available in the
+main CX repository: [cx-home/cx](https://github.com/cx-home/cx/tree/main/tooling)
+
+Quick install from that repo:
+
+```sh
+# VS Code
+make build-vscode
+code --install-extension tooling/vscode/cx-language-0.1.0.vsix
+
+# Neovim — see tooling/neovim/README.md for the full setup block
+make build-lsp
+```
 
 ## Conversion shortcuts
 
