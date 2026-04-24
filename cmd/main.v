@@ -3,12 +3,20 @@ module main
 import os
 import cx
 
+const version = '0.1.0'
+
 fn main() {
 	args := os.args[1..]
 	if args.len == 0 {
 		eprintln('Usage: cx --ast|--cx|--xml|--json|--yaml|--toml|--md [--compact] [input_file]')
 		eprintln('       cx --from=cx|xml|md --to=cx|xml|json|yaml|toml|md [--compact] [input_file]')
+		eprintln('       cx -v|--version')
 		exit(1)
+	}
+
+	if args[0] == '-v' || args[0] == '--version' {
+		println('cx ${version}')
+		exit(0)
 	}
 
 	// Determine input
