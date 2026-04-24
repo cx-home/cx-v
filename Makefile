@@ -14,5 +14,9 @@ uninstall:
 	rm -f $(PREFIX)/cx
 	@echo "removed: $(PREFIX)/cx"
 
+# v test needs to resolve `import cx` to this repo.
+# We create a temporary _modules/cx symlink pointing here so VMODULES
+# works regardless of what the shell has set for VMODULES.
 test:
-	$(V) test tests/
+	@mkdir -p _modules && ln -sfn $$(pwd) _modules/cx
+	@VMODULES=$$(pwd)/_modules $(V) test tests/; STATUS=$$?; rm -rf _modules; exit $$STATUS
