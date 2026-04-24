@@ -20,6 +20,10 @@ of those formats and emit any other.
 ]
 ```
 
+See [COMPARISON.md](COMPARISON.md) for a detailed analysis of how CX compares
+to JSON, YAML, XML, and TOML — keystroke cost, character counts, compact format,
+type safety, and when to use CX vs. each alternative.
+
 ## Quick Start
 
 ```v
