@@ -1,0 +1,802 @@
+[services
+  [service id=1 name=svc-1 host=svc-1.example.com port=8001 active=true ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=2 name=svc-2 host=svc-2.example.com port=8002 active=true ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=3 name=svc-3 host=svc-3.example.com port=8003 active=false ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=4 name=svc-4 host=svc-4.example.com port=8004 active=true ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=5 name=svc-5 host=svc-5.example.com port=8005 active=true ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=6 name=svc-6 host=svc-6.example.com port=8006 active=false ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=7 name=svc-7 host=svc-7.example.com port=8007 active=true ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=8 name=svc-8 host=svc-8.example.com port=8008 active=true ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=9 name=svc-9 host=svc-9.example.com port=8009 active=false ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=10 name=svc-10 host=svc-10.example.com port=8010 active=true ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=11 name=svc-11 host=svc-11.example.com port=8011 active=true ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=12 name=svc-12 host=svc-12.example.com port=8012 active=false ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=13 name=svc-13 host=svc-13.example.com port=8013 active=true ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=14 name=svc-14 host=svc-14.example.com port=8014 active=true ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=15 name=svc-15 host=svc-15.example.com port=8015 active=false ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=16 name=svc-16 host=svc-16.example.com port=8016 active=true ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=17 name=svc-17 host=svc-17.example.com port=8017 active=true ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=18 name=svc-18 host=svc-18.example.com port=8018 active=false ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=19 name=svc-19 host=svc-19.example.com port=8019 active=true ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=20 name=svc-20 host=svc-20.example.com port=8020 active=true ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=21 name=svc-21 host=svc-21.example.com port=8021 active=false ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=22 name=svc-22 host=svc-22.example.com port=8022 active=true ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=23 name=svc-23 host=svc-23.example.com port=8023 active=true ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=24 name=svc-24 host=svc-24.example.com port=8024 active=false ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=25 name=svc-25 host=svc-25.example.com port=8025 active=true ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=26 name=svc-26 host=svc-26.example.com port=8026 active=true ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=27 name=svc-27 host=svc-27.example.com port=8027 active=false ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=28 name=svc-28 host=svc-28.example.com port=8028 active=true ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=29 name=svc-29 host=svc-29.example.com port=8029 active=true ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=30 name=svc-30 host=svc-30.example.com port=8030 active=false ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=31 name=svc-31 host=svc-31.example.com port=8031 active=true ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=32 name=svc-32 host=svc-32.example.com port=8032 active=true ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=33 name=svc-33 host=svc-33.example.com port=8033 active=false ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=34 name=svc-34 host=svc-34.example.com port=8034 active=true ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=35 name=svc-35 host=svc-35.example.com port=8035 active=true ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=36 name=svc-36 host=svc-36.example.com port=8036 active=false ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=37 name=svc-37 host=svc-37.example.com port=8037 active=true ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=38 name=svc-38 host=svc-38.example.com port=8038 active=true ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=39 name=svc-39 host=svc-39.example.com port=8039 active=false ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=40 name=svc-40 host=svc-40.example.com port=8040 active=true ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=41 name=svc-41 host=svc-41.example.com port=8041 active=true ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=42 name=svc-42 host=svc-42.example.com port=8042 active=false ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=43 name=svc-43 host=svc-43.example.com port=8043 active=true ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=44 name=svc-44 host=svc-44.example.com port=8044 active=true ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=45 name=svc-45 host=svc-45.example.com port=8045 active=false ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=46 name=svc-46 host=svc-46.example.com port=8046 active=true ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=47 name=svc-47 host=svc-47.example.com port=8047 active=true ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=48 name=svc-48 host=svc-48.example.com port=8048 active=false ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=49 name=svc-49 host=svc-49.example.com port=8049 active=true ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=50 name=svc-50 host=svc-50.example.com port=8050 active=true ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=51 name=svc-51 host=svc-51.example.com port=8051 active=false ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=52 name=svc-52 host=svc-52.example.com port=8052 active=true ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=53 name=svc-53 host=svc-53.example.com port=8053 active=true ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=54 name=svc-54 host=svc-54.example.com port=8054 active=false ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=55 name=svc-55 host=svc-55.example.com port=8055 active=true ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=56 name=svc-56 host=svc-56.example.com port=8056 active=true ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=57 name=svc-57 host=svc-57.example.com port=8057 active=false ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=58 name=svc-58 host=svc-58.example.com port=8058 active=true ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=59 name=svc-59 host=svc-59.example.com port=8059 active=true ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=60 name=svc-60 host=svc-60.example.com port=8060 active=false ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=61 name=svc-61 host=svc-61.example.com port=8061 active=true ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=62 name=svc-62 host=svc-62.example.com port=8062 active=true ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=63 name=svc-63 host=svc-63.example.com port=8063 active=false ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=64 name=svc-64 host=svc-64.example.com port=8064 active=true ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=65 name=svc-65 host=svc-65.example.com port=8065 active=true ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=66 name=svc-66 host=svc-66.example.com port=8066 active=false ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=67 name=svc-67 host=svc-67.example.com port=8067 active=true ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=68 name=svc-68 host=svc-68.example.com port=8068 active=true ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=69 name=svc-69 host=svc-69.example.com port=8069 active=false ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=70 name=svc-70 host=svc-70.example.com port=8070 active=true ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=71 name=svc-71 host=svc-71.example.com port=8071 active=true ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=72 name=svc-72 host=svc-72.example.com port=8072 active=false ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=73 name=svc-73 host=svc-73.example.com port=8073 active=true ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=74 name=svc-74 host=svc-74.example.com port=8074 active=true ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=75 name=svc-75 host=svc-75.example.com port=8075 active=false ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=76 name=svc-76 host=svc-76.example.com port=8076 active=true ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=77 name=svc-77 host=svc-77.example.com port=8077 active=true ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=78 name=svc-78 host=svc-78.example.com port=8078 active=false ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=79 name=svc-79 host=svc-79.example.com port=8079 active=true ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=80 name=svc-80 host=svc-80.example.com port=8080 active=true ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=81 name=svc-81 host=svc-81.example.com port=8081 active=false ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=82 name=svc-82 host=svc-82.example.com port=8082 active=true ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=83 name=svc-83 host=svc-83.example.com port=8083 active=true ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=84 name=svc-84 host=svc-84.example.com port=8084 active=false ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=85 name=svc-85 host=svc-85.example.com port=8085 active=true ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=86 name=svc-86 host=svc-86.example.com port=8086 active=true ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=87 name=svc-87 host=svc-87.example.com port=8087 active=false ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=88 name=svc-88 host=svc-88.example.com port=8088 active=true ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=89 name=svc-89 host=svc-89.example.com port=8089 active=true ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=90 name=svc-90 host=svc-90.example.com port=8090 active=false ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=91 name=svc-91 host=svc-91.example.com port=8091 active=true ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=92 name=svc-92 host=svc-92.example.com port=8092 active=true ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=93 name=svc-93 host=svc-93.example.com port=8093 active=false ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=94 name=svc-94 host=svc-94.example.com port=8094 active=true ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=95 name=svc-95 host=svc-95.example.com port=8095 active=true ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=96 name=svc-96 host=svc-96.example.com port=8096 active=false ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=97 name=svc-97 host=svc-97.example.com port=8097 active=true ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=98 name=svc-98 host=svc-98.example.com port=8098 active=true ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=99 name=svc-99 host=svc-99.example.com port=8099 active=false ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=100 name=svc-100 host=svc-100.example.com port=8100 active=true ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=101 name=svc-101 host=svc-101.example.com port=8101 active=true ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=102 name=svc-102 host=svc-102.example.com port=8102 active=false ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=103 name=svc-103 host=svc-103.example.com port=8103 active=true ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=104 name=svc-104 host=svc-104.example.com port=8104 active=true ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=105 name=svc-105 host=svc-105.example.com port=8105 active=false ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=106 name=svc-106 host=svc-106.example.com port=8106 active=true ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=107 name=svc-107 host=svc-107.example.com port=8107 active=true ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=108 name=svc-108 host=svc-108.example.com port=8108 active=false ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=109 name=svc-109 host=svc-109.example.com port=8109 active=true ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=110 name=svc-110 host=svc-110.example.com port=8110 active=true ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=111 name=svc-111 host=svc-111.example.com port=8111 active=false ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=112 name=svc-112 host=svc-112.example.com port=8112 active=true ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=113 name=svc-113 host=svc-113.example.com port=8113 active=true ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=114 name=svc-114 host=svc-114.example.com port=8114 active=false ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=115 name=svc-115 host=svc-115.example.com port=8115 active=true ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=116 name=svc-116 host=svc-116.example.com port=8116 active=true ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=117 name=svc-117 host=svc-117.example.com port=8117 active=false ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=118 name=svc-118 host=svc-118.example.com port=8118 active=true ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=119 name=svc-119 host=svc-119.example.com port=8119 active=true ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=120 name=svc-120 host=svc-120.example.com port=8120 active=false ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=121 name=svc-121 host=svc-121.example.com port=8121 active=true ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=122 name=svc-122 host=svc-122.example.com port=8122 active=true ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=123 name=svc-123 host=svc-123.example.com port=8123 active=false ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=124 name=svc-124 host=svc-124.example.com port=8124 active=true ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=125 name=svc-125 host=svc-125.example.com port=8125 active=true ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=126 name=svc-126 host=svc-126.example.com port=8126 active=false ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=127 name=svc-127 host=svc-127.example.com port=8127 active=true ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=128 name=svc-128 host=svc-128.example.com port=8128 active=true ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=129 name=svc-129 host=svc-129.example.com port=8129 active=false ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=130 name=svc-130 host=svc-130.example.com port=8130 active=true ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=131 name=svc-131 host=svc-131.example.com port=8131 active=true ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=132 name=svc-132 host=svc-132.example.com port=8132 active=false ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=133 name=svc-133 host=svc-133.example.com port=8133 active=true ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=134 name=svc-134 host=svc-134.example.com port=8134 active=true ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=135 name=svc-135 host=svc-135.example.com port=8135 active=false ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=136 name=svc-136 host=svc-136.example.com port=8136 active=true ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=137 name=svc-137 host=svc-137.example.com port=8137 active=true ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=138 name=svc-138 host=svc-138.example.com port=8138 active=false ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=139 name=svc-139 host=svc-139.example.com port=8139 active=true ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=140 name=svc-140 host=svc-140.example.com port=8140 active=true ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=141 name=svc-141 host=svc-141.example.com port=8141 active=false ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=142 name=svc-142 host=svc-142.example.com port=8142 active=true ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=143 name=svc-143 host=svc-143.example.com port=8143 active=true ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=144 name=svc-144 host=svc-144.example.com port=8144 active=false ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=145 name=svc-145 host=svc-145.example.com port=8145 active=true ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=146 name=svc-146 host=svc-146.example.com port=8146 active=true ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=147 name=svc-147 host=svc-147.example.com port=8147 active=false ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=148 name=svc-148 host=svc-148.example.com port=8148 active=true ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=149 name=svc-149 host=svc-149.example.com port=8149 active=true ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=150 name=svc-150 host=svc-150.example.com port=8150 active=false ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=151 name=svc-151 host=svc-151.example.com port=8151 active=true ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=152 name=svc-152 host=svc-152.example.com port=8152 active=true ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=153 name=svc-153 host=svc-153.example.com port=8153 active=false ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=154 name=svc-154 host=svc-154.example.com port=8154 active=true ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=155 name=svc-155 host=svc-155.example.com port=8155 active=true ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=156 name=svc-156 host=svc-156.example.com port=8156 active=false ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=157 name=svc-157 host=svc-157.example.com port=8157 active=true ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=158 name=svc-158 host=svc-158.example.com port=8158 active=true ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=159 name=svc-159 host=svc-159.example.com port=8159 active=false ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=160 name=svc-160 host=svc-160.example.com port=8160 active=true ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=161 name=svc-161 host=svc-161.example.com port=8161 active=true ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=162 name=svc-162 host=svc-162.example.com port=8162 active=false ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=163 name=svc-163 host=svc-163.example.com port=8163 active=true ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=164 name=svc-164 host=svc-164.example.com port=8164 active=true ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=165 name=svc-165 host=svc-165.example.com port=8165 active=false ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=166 name=svc-166 host=svc-166.example.com port=8166 active=true ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=167 name=svc-167 host=svc-167.example.com port=8167 active=true ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=168 name=svc-168 host=svc-168.example.com port=8168 active=false ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=169 name=svc-169 host=svc-169.example.com port=8169 active=true ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=170 name=svc-170 host=svc-170.example.com port=8170 active=true ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=171 name=svc-171 host=svc-171.example.com port=8171 active=false ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=172 name=svc-172 host=svc-172.example.com port=8172 active=true ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=173 name=svc-173 host=svc-173.example.com port=8173 active=true ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=174 name=svc-174 host=svc-174.example.com port=8174 active=false ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=175 name=svc-175 host=svc-175.example.com port=8175 active=true ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=176 name=svc-176 host=svc-176.example.com port=8176 active=true ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=177 name=svc-177 host=svc-177.example.com port=8177 active=false ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=178 name=svc-178 host=svc-178.example.com port=8178 active=true ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=179 name=svc-179 host=svc-179.example.com port=8179 active=true ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=180 name=svc-180 host=svc-180.example.com port=8180 active=false ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=181 name=svc-181 host=svc-181.example.com port=8181 active=true ratio=1.1
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=182 name=svc-182 host=svc-182.example.com port=8182 active=true ratio=1.2
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=183 name=svc-183 host=svc-183.example.com port=8183 active=false ratio=1.3
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=184 name=svc-184 host=svc-184.example.com port=8184 active=true ratio=1.4
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=185 name=svc-185 host=svc-185.example.com port=8185 active=true ratio=1.5
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=186 name=svc-186 host=svc-186.example.com port=8186 active=false ratio=1.6
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=187 name=svc-187 host=svc-187.example.com port=8187 active=true ratio=1.7
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=188 name=svc-188 host=svc-188.example.com port=8188 active=true ratio=1.8
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=189 name=svc-189 host=svc-189.example.com port=8189 active=false ratio=1.9
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=190 name=svc-190 host=svc-190.example.com port=8190 active=true ratio=1.0
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=191 name=svc-191 host=svc-191.example.com port=8191 active=true ratio=1.1
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=192 name=svc-192 host=svc-192.example.com port=8192 active=false ratio=1.2
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=193 name=svc-193 host=svc-193.example.com port=8193 active=true ratio=1.3
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=194 name=svc-194 host=svc-194.example.com port=8194 active=true ratio=1.4
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=195 name=svc-195 host=svc-195.example.com port=8195 active=false ratio=1.5
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=196 name=svc-196 host=svc-196.example.com port=8196 active=true ratio=1.6
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+  [service id=197 name=svc-197 host=svc-197.example.com port=8197 active=true ratio=1.7
+    [tags :string[] internal db cache]
+    [meta created=2026-01-01 region=us-west]
+  ]
+  [service id=198 name=svc-198 host=svc-198.example.com port=8198 active=false ratio=1.8
+    [tags :string[] web frontend cdn]
+    [meta created=2026-01-01 region=eu-west]
+  ]
+  [service id=199 name=svc-199 host=svc-199.example.com port=8199 active=true ratio=1.9
+    [tags :string[] worker queue async]
+    [meta created=2026-01-01 region=ap-east]
+  ]
+  [service id=200 name=svc-200 host=svc-200.example.com port=8200 active=true ratio=1.0
+    [tags :string[] web api backend]
+    [meta created=2026-01-01 region=us-east]
+  ]
+]

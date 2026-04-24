@@ -1,0 +1,15 @@
+[article lang=en
+  [head
+    [title Getting Started with CX]
+    [tags :string[] tutorial beginner]
+  ]
+  [body
+    [h1 Introduction]
+    [p First paragraph.]
+    [section id=details
+      [h2 Details]
+      [p Nested paragraph.]
+      [p Another nested paragraph.]
+    ]
+  ]
+]

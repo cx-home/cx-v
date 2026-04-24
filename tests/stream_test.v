@@ -5,7 +5,7 @@ import os
 
 // ── fixture loader ────────────────────────────────────────────────────────────
 
-const fixtures = os.join_path(os.dir(@FILE), '..', '..', 'fixtures')
+const fixtures = os.join_path(@VMODROOT, 'fixtures')
 
 fn fx(name string) string {
 	return os.read_file(os.join_path(fixtures, name)) or {

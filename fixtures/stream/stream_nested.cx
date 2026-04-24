@@ -1,0 +1,14 @@
+[level1 &root
+  [level2
+    [level3
+      [level4
+        [level5
+          [level6 deepest text]
+        ]
+      ]
+    ]
+  ]
+  [sibling1 side-a]
+  [sibling2 side-b]
+  [*root]
+]

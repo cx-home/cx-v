@@ -1,0 +1,5 @@
+[config
+  [server host=localhost port=8080 debug=false ratio=1.5]
+  [database host=db.local port=5432 name=myapp pool=10]
+  [logging level=info file=/var/log/app.log]
+]

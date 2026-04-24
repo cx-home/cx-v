@@ -1,0 +1,9 @@
+[values
+  [count :int 42]
+  [ratio :float 1.5]
+  [enabled true]
+  [disabled false]
+  [nothing null]
+  [label :string 'hello world']
+  [today :date 2026-04-20]
+]

@@ -1,0 +1,14 @@
+[doc
+  [-a comment node]
+  [?pi pi data here]
+  [text-node plain text with &amp; entity ref]
+  [scalar-int :int 42]
+  [scalar-bool :bool true]
+  [raw-block [#inline raw text#]]
+  [server &srv host=localhost port=8080 active=false ratio=1.5]
+  [*srv]
+  [nested
+    [child-a alpha text]
+    [child-b beta text]
+  ]
+]
