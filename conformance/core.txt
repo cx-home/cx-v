@@ -1,0 +1,898 @@
+# CX Conformance — Core Tests
+# Version: 1.0 — 2026-04-19
+# Covers: Document, Element, Text, Comment, PI, XMLDecl, CXDirective,
+#         EntityRef, RawText, EntityDecl, DoctypeDecl, and related decl types.
+
+=== test: 001-empty-doc
+level: core
+tags: document empty
+--- in_cx
+
+--- out_ast
+{"type":"Document"}
+--- out_xml
+
+--- out_cx
+
+=== test: 002-element-empty
+level: core
+tags: element
+--- in_cx
+[br]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Element", "name": "br"}
+  ]
+}
+--- out_xml
+<br/>
+--- out_cx
+[br]
+
+=== test: 003-element-text
+level: core
+tags: element text
+--- in_cx
+[p Hello]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "Hello"}]
+    }
+  ]
+}
+--- out_xml
+<p>Hello</p>
+--- out_cx
+[p Hello]
+
+=== test: 004-element-attrs-only
+level: core
+tags: element attrs
+--- in_cx
+[input type=text name=q]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "input",
+      "attrs": [
+        {"name": "type", "value": "text"},
+        {"name": "name", "value": "q"}
+      ]
+    }
+  ]
+}
+--- out_xml
+<input type="text" name="q"/>
+--- out_cx
+[input type=text name=q]
+
+=== test: 005-element-attrs-text
+level: core
+tags: element attrs text
+--- in_cx
+[a href=https://example.com/path Click here]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "a",
+      "attrs": [{"name": "href", "value": "https://example.com/path"}],
+      "items": [{"type": "Text", "value": "Click here"}]
+    }
+  ]
+}
+--- out_xml
+<a href="https://example.com/path">Click here</a>
+--- out_cx
+[a href=https://example.com/path Click here]
+
+=== test: 006-nested-elements
+level: core
+tags: element nested
+--- in_cx
+[config
+  [db host=localhost port=5432]
+  [server port=8080]
+]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "config",
+      "items": [
+        {
+          "type": "Element",
+          "name": "db",
+          "attrs": [
+            {"name": "host", "value": "localhost"},
+            {"name": "port", "value": 5432, "dataType": "int"}
+          ]
+        },
+        {
+          "type": "Element",
+          "name": "server",
+          "attrs": [{"name": "port", "value": 8080, "dataType": "int"}]
+        }
+      ]
+    }
+  ]
+}
+--- out_xml
+<config>
+  <db host="localhost" port="5432"/>
+  <server port="8080"/>
+</config>
+--- out_cx
+[config
+  [db host=localhost port=5432]
+  [server port=8080]
+]
+
+=== test: 007-mixed-content
+level: core
+tags: element text mixed
+--- in_cx
+[p text [b bold] more]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [
+        {"type": "Text", "value": "text "},
+        {
+          "type": "Element",
+          "name": "b",
+          "items": [{"type": "Text", "value": "bold"}]
+        },
+        {"type": "Text", "value": " more"}
+      ]
+    }
+  ]
+}
+--- out_xml
+<p>text <b>bold</b> more</p>
+--- out_cx
+[p 'text ' [b bold] ' more']
+
+=== test: 008-multi-root
+level: core
+tags: document multi-root
+--- in_cx
+[title Hello]
+[body
+  [p World]
+]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "title",
+      "items": [{"type": "Text", "value": "Hello"}]
+    },
+    {
+      "type": "Element",
+      "name": "body",
+      "items": [
+        {
+          "type": "Element",
+          "name": "p",
+          "items": [{"type": "Text", "value": "World"}]
+        }
+      ]
+    }
+  ]
+}
+--- out_xml
+<title>Hello</title>
+<body>
+  <p>World</p>
+</body>
+--- out_cx
+[title Hello]
+[body
+  [p World]
+]
+
+=== test: 009-quoted-text
+level: core
+tags: text quoted whitespace
+--- in_cx
+[pre '  indented  ']
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "pre",
+      "items": [{"type": "Text", "value": "  indented  "}]
+    }
+  ]
+}
+--- out_xml
+<pre>  indented  </pre>
+--- out_cx
+[pre '  indented  ']
+
+=== test: 010-comment
+level: core
+tags: comment
+--- in_cx
+[-a comment]
+[p text]
+--- out_ast
+{
+  "type": "Document",
+  "prolog": [
+    {"type": "Comment", "value": "a comment"}
+  ],
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "text"}]
+    }
+  ]
+}
+--- out_xml
+<!--a comment-->
+<p>text</p>
+--- out_cx
+[-a comment]
+[p text]
+
+=== test: 011-comment-in-element
+level: core
+tags: comment element
+--- in_cx
+[div
+  [-section one]
+  [p Hello]
+]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "div",
+      "items": [
+        {"type": "Comment", "value": "section one"},
+        {
+          "type": "Element",
+          "name": "p",
+          "items": [{"type": "Text", "value": "Hello"}]
+        }
+      ]
+    }
+  ]
+}
+--- out_xml
+<div>
+  <!--section one-->
+  <p>Hello</p>
+</div>
+--- out_cx
+[div
+  [-section one]
+  [p Hello]
+]
+
+=== test: 012-rawtext
+level: core
+tags: rawtext cdata
+--- in_cx
+[script [# if (x < y) { return [1,2]; } #]]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "script",
+      "items": [
+        {"type": "RawText", "value": " if (x < y) { return [1,2]; } "}
+      ]
+    }
+  ]
+}
+--- out_xml
+<script><![CDATA[ if (x < y) { return [1,2]; } ]]></script>
+--- out_cx
+[script [# if (x < y) { return [1,2]; } #]]
+
+=== test: 013-entity-ref
+level: core
+tags: entity entityref
+--- in_cx
+[p &amp; &lt; &gt;]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [
+        {"type": "EntityRef", "name": "amp"},
+        {"type": "Text", "value": " "},
+        {"type": "EntityRef", "name": "lt"},
+        {"type": "Text", "value": " "},
+        {"type": "EntityRef", "name": "gt"}
+      ]
+    }
+  ]
+}
+--- out_xml
+<p>&amp; &lt; &gt;</p>
+--- out_cx
+[p &amp; &lt; &gt;]
+
+=== test: 014-charref
+level: core
+tags: charref text
+--- in_cx
+[p &#169; 2026]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "© 2026"}]
+    }
+  ]
+}
+--- out_xml
+<p>© 2026</p>
+--- out_cx
+[p © 2026]
+
+=== test: 015-pi
+level: core
+tags: pi
+--- in_cx
+[?php return 42]
+[root]
+--- out_ast
+{
+  "type": "Document",
+  "prolog": [
+    {"type": "PI", "target": "php", "data": "return 42"}
+  ],
+  "elements": [
+    {"type": "Element", "name": "root"}
+  ]
+}
+--- out_xml
+<?php return 42?>
+<root/>
+--- out_cx
+[?php return 42]
+[root]
+
+=== test: 016-xmldecl
+level: core
+tags: xmldecl prolog
+--- in_cx
+[?xml version=1.0 encoding=UTF-8]
+[root]
+--- out_ast
+{
+  "type": "Document",
+  "prolog": [
+    {"type": "XMLDecl", "version": "1.0", "encoding": "UTF-8"}
+  ],
+  "elements": [
+    {"type": "Element", "name": "root"}
+  ]
+}
+--- out_xml
+<?xml version="1.0" encoding="UTF-8"?>
+<root/>
+--- out_cx
+[?xml version=1.0 encoding=UTF-8]
+[root]
+
+=== test: 017-cxdirective
+level: core
+tags: cxdirective
+--- in_cx
+[?cx include=base.cx]
+[root]
+--- out_ast
+{
+  "type": "Document",
+  "prolog": [
+    {
+      "type": "CXDirective",
+      "attrs": [{"name": "include", "value": "base.cx"}]
+    }
+  ],
+  "elements": [
+    {"type": "Element", "name": "root"}
+  ]
+}
+--- out_xml
+<?cx include="base.cx"?>
+<root/>
+--- out_cx
+[?cx include=base.cx]
+[root]
+
+=== test: 018-namespaces
+level: core
+tags: namespaces attrs
+--- in_cx
+[doc ns:default=urn:doc ns:xl=http://www.w3.org/1999/xlink
+  [xl:a href=https://example.com Link]
+]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "doc",
+      "attrs": [
+        {"name": "ns:default", "value": "urn:doc"},
+        {"name": "ns:xl", "value": "http://www.w3.org/1999/xlink"}
+      ],
+      "items": [
+        {
+          "type": "Element",
+          "name": "xl:a",
+          "attrs": [{"name": "href", "value": "https://example.com"}],
+          "items": [{"type": "Text", "value": "Link"}]
+        }
+      ]
+    }
+  ]
+}
+--- out_xml
+<doc xmlns="urn:doc" xmlns:xl="http://www.w3.org/1999/xlink">
+  <xl:a href="https://example.com">Link</xl:a>
+</doc>
+--- out_cx
+[doc ns:default=urn:doc ns:xl=http://www.w3.org/1999/xlink
+  [xl:a href=https://example.com Link]
+]
+
+=== test: 019-doctype-internal
+level: core
+tags: doctype dtd
+--- in_cx
+[!DOCTYPE root [
+  [!ELEMENT root EMPTY]
+]]
+[root]
+--- out_ast
+{
+  "type": "Document",
+  "doctype": {
+    "type": "DoctypeDecl",
+    "name": "root",
+    "intSubset": [
+      {"type": "ElementDecl", "name": "root", "contentspec": "EMPTY"}
+    ]
+  },
+  "elements": [
+    {"type": "Element", "name": "root"}
+  ]
+}
+--- out_xml
+<!DOCTYPE root [
+  <!ELEMENT root EMPTY>
+]>
+<root/>
+--- out_cx
+[!DOCTYPE root [
+  [!ELEMENT root EMPTY]
+]]
+[root]
+
+=== test: 020-entity-decl-internal
+level: core
+tags: entity decl
+--- in_cx
+[!ENTITY greeting 'Hello World']
+[p &greeting;]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "EntityDecl",
+      "kind": "GE",
+      "name": "greeting",
+      "def": "Hello World"
+    },
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "EntityRef", "name": "greeting"}]
+    }
+  ]
+}
+--- out_xml
+<!ENTITY greeting "Hello World">
+<p>&greeting;</p>
+--- out_cx
+[!ENTITY greeting 'Hello World']
+[p &greeting;]
+
+=== test: 021-entity-decl-external
+level: core
+tags: entity decl external
+--- in_cx
+[!ENTITY ext SYSTEM 'data.txt']
+[p &ext;]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "EntityDecl",
+      "kind": "GE",
+      "name": "ext",
+      "def": {"externalID": {"system": "data.txt"}}
+    },
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "EntityRef", "name": "ext"}]
+    }
+  ]
+}
+--- out_xml
+<!ENTITY ext SYSTEM "data.txt">
+<p>&ext;</p>
+--- out_cx
+[!ENTITY ext SYSTEM 'data.txt']
+[p &ext;]
+
+=== test: 022-entity-decl-pe
+level: core
+tags: entity decl pe
+--- in_cx
+[!ENTITY % common 'id CDATA #REQUIRED']
+[p text]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "EntityDecl",
+      "kind": "PE",
+      "name": "common",
+      "def": "id CDATA #REQUIRED"
+    },
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "text"}]
+    }
+  ]
+}
+--- out_xml
+<!ENTITY % common "id CDATA #REQUIRED">
+<p>text</p>
+--- out_cx
+[!ENTITY % common 'id CDATA #REQUIRED']
+[p text]
+
+=== test: 023-element-decl
+level: extended
+tags: dtd elementdecl
+--- in_cx
+[!ELEMENT p (#PCDATA|b|em)*]
+[p text]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {"type": "ElementDecl", "name": "p", "contentspec": "(#PCDATA|b|em)*"},
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "text"}]
+    }
+  ]
+}
+--- out_xml
+<!ELEMENT p (#PCDATA|b|em)*>
+<p>text</p>
+--- out_cx
+[!ELEMENT p (#PCDATA|b|em)*]
+[p text]
+
+=== test: 024-attlist-decl
+level: extended
+tags: dtd attlist
+--- in_cx
+[!ATTLIST img src CDATA #REQUIRED alt CDATA #IMPLIED]
+[img src=logo.png]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "AttlistDecl",
+      "name": "img",
+      "defs": [
+        {"name": "src", "type": "CDATA", "default": "#REQUIRED"},
+        {"name": "alt", "type": "CDATA", "default": "#IMPLIED"}
+      ]
+    },
+    {
+      "type": "Element",
+      "name": "img",
+      "attrs": [{"name": "src", "value": "logo.png"}]
+    }
+  ]
+}
+--- out_xml
+<!ATTLIST img src CDATA #REQUIRED alt CDATA #IMPLIED>
+<img src="logo.png"/>
+--- out_cx
+[!ATTLIST img src CDATA #REQUIRED alt CDATA #IMPLIED]
+[img src=logo.png]
+
+=== test: 025-notation-decl
+level: extended
+tags: dtd notation
+--- in_cx
+[!NOTATION gif PUBLIC 'image/gif']
+[p text]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "NotationDecl",
+      "name": "gif",
+      "publicID": "image/gif"
+    },
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "text"}]
+    }
+  ]
+}
+--- out_xml
+<!NOTATION gif PUBLIC "image/gif">
+<p>text</p>
+--- out_cx
+[!NOTATION gif PUBLIC 'image/gif']
+[p text]
+
+=== test: 026-conditional-sect
+level: extended
+tags: dtd conditional
+--- in_cx
+[![INCLUDE[
+  [!ELEMENT x EMPTY]
+]]]
+[root [x]]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "ConditionalSect",
+      "kind": "include",
+      "subset": [
+        {"type": "ElementDecl", "name": "x", "contentspec": "EMPTY"}
+      ]
+    },
+    {
+      "type": "Element",
+      "name": "root",
+      "items": [{"type": "Element", "name": "x"}]
+    }
+  ]
+}
+--- out_xml
+<![INCLUDE[
+  <!ELEMENT x EMPTY>
+]]>
+<root>
+  <x/>
+</root>
+--- out_cx
+[![INCLUDE[
+  [!ELEMENT x EMPTY]
+]]]
+[root
+  [x]
+]
+
+=== test: 027-unparsed-entity
+level: core
+tags: entity decl ndata
+--- in_cx
+[!ENTITY logo SYSTEM 'logo.png' NDATA png]
+[p image]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "EntityDecl",
+      "kind": "GE",
+      "name": "logo",
+      "def": {
+        "externalID": {"system": "logo.png"},
+        "ndata": "png"
+      }
+    },
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "image"}]
+    }
+  ]
+}
+--- out_xml
+<!ENTITY logo SYSTEM "logo.png" NDATA "png">
+<p>image</p>
+--- out_cx
+[!ENTITY logo SYSTEM 'logo.png' NDATA png]
+[p image]
+
+=== test: 028-bool-scalar-autotype
+level: core
+tags: scalar bool autotype regression
+--- in_cx
+[active true]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "active",
+      "items": [{"type": "Scalar", "dataType": "bool", "value": true}]
+    }
+  ]
+}
+--- out_cx
+[active true]
+--- out_json
+{"active": true}
+
+=== test: 029-bool-scalar-false
+level: core
+tags: scalar bool autotype regression
+--- in_cx
+[enabled false]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "enabled",
+      "items": [{"type": "Scalar", "dataType": "bool", "value": false}]
+    }
+  ]
+}
+--- out_cx
+[enabled false]
+--- out_json
+{"enabled": false}
+
+=== test: 030-null-scalar-autotype
+level: core
+tags: scalar null autotype regression
+--- in_cx
+[value null]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "value",
+      "items": [{"type": "Scalar", "dataType": "null", "value": null}]
+    }
+  ]
+}
+--- out_cx
+[value null]
+--- out_json
+{"value": null}
+
+=== test: 031-quoted-bool-preserved
+level: core
+tags: scalar string quoting cx-output regression
+--- in_cx
+[status 'true']
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "status",
+      "items": [{"type": "Text", "value": "true"}]
+    }
+  ]
+}
+--- out_cx
+[status 'true']
+--- out_json
+{"status": "true"}
+
+=== test: 032-raw-text-not-heading
+level: core
+tags: raw-text heading disambiguation regression
+--- in_cx
+[script [# raw content #]]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "script",
+      "items": [{"type": "RawText", "value": " raw content "}]
+    }
+  ]
+}
+--- out_cx
+[script [# raw content #]]
+
+=== test: 033-b-element-name-preserved
+level: core
+tags: element html-alias name-preservation regression
+--- in_cx
+[b bold text]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "b",
+      "items": [{"type": "Text", "value": "bold text"}]
+    }
+  ]
+}
+--- out_cx
+[b bold text]
+
+=== test: 034-conditional-sect-close
+level: extended
+tags: dtd conditional close-bracket regression
+--- in_cx
+[![INCLUDE[
+  [!ELEMENT x EMPTY]
+]]]
+[root]
+--- out_cx
+[![INCLUDE[
+  [!ELEMENT x EMPTY]
+]]]
+[root]

@@ -1,0 +1,256 @@
+# CX Conformance — Markdown Tests
+# Version: 1.0 — 2026-04-19
+# Covers: CX MD dialect → Markdown output, MD input → CX AST.
+
+=== test: 001-md-h1-cx-to-md
+level: md
+tags: heading h1 md-output
+--- in_cx
+[# Hello]
+--- out_md
+# Hello
+
+=== test: 002-md-h1-html-alias
+level: md
+tags: heading h1 md-output canonical
+--- in_cx
+[h1 Hello]
+--- out_md
+# Hello
+
+=== test: 003-md-paragraph
+level: md
+tags: paragraph md-output
+--- in_cx
+[p Hello world]
+--- out_md
+Hello world
+
+=== test: 004-md-bold-shorthand
+level: md
+tags: strong bold md-output shorthand
+--- in_cx
+[** bold text]
+--- out_md
+**bold text**
+
+=== test: 005-md-bold-html
+level: md
+tags: strong bold md-output
+--- in_cx
+[strong bold text]
+--- out_md
+**bold text**
+
+=== test: 006-md-italic
+level: md
+tags: em italic md-output
+--- in_cx
+[* italic]
+--- out_md
+*italic*
+
+=== test: 007-md-inline-code
+level: md
+tags: code inline md-output
+--- in_cx
+[` code sample]
+--- out_md
+`code sample`
+
+=== test: 008-md-blockquote
+level: md
+tags: blockquote md-output
+--- in_cx
+[> quote text]
+--- out_md
+> quote text
+
+=== test: 009-md-ul
+level: md
+tags: ul li list md-output
+--- in_cx
+[ul
+  [li item one]
+  [li item two]
+]
+--- out_md
+- item one
+- item two
+
+=== test: 010-md-ol
+level: md
+tags: ol li list md-output
+--- in_cx
+[ol
+  [li step one]
+  [li step two]
+]
+--- out_md
+1. step one
+2. step two
+
+=== test: 011-md-link
+level: md
+tags: anchor link md-output
+--- in_cx
+[a href=https://example.com click here]
+--- out_md
+[click here](https://example.com)
+
+=== test: 012-md-img
+level: md
+tags: image img md-output
+--- in_cx
+[img src=photo.png alt=photo]
+--- out_md
+![photo](photo.png)
+
+=== test: 013-md-hr
+level: md
+tags: hr rule md-output
+--- in_cx
+[---]
+--- out_md
+---
+
+=== test: 014-md-strikethrough
+level: md
+tags: del strikethrough md-output
+--- in_cx
+[~~ deleted]
+--- out_md
+~~deleted~~
+
+=== test: 015-md-del-alias
+level: md
+tags: del strikethrough md-output alias
+--- in_cx
+[del text]
+--- out_md
+~~text~~
+
+=== test: 016-md-unknown-element
+level: md
+tags: unknown element md-output comment
+--- in_cx
+[widget type:fancy Hello]
+--- out_md
+<!-- [widget type:fancy Hello] -->
+
+=== test: 017-md-from-heading
+level: md
+tags: heading md-input parse
+--- in_md
+# Hello
+--- out_cx
+[doc
+  [h1 Hello]
+]
+
+=== test: 018-md-from-paragraph
+level: md
+tags: paragraph md-input parse
+--- in_md
+Hello world
+--- out_cx
+[doc
+  [p Hello world]
+]
+
+=== test: 019-md-h2-shorthand
+level: md
+tags: heading h2 md-output shorthand
+--- in_cx
+[## Section Title]
+--- out_md
+## Section Title
+
+=== test: 020-md-strong-b-alias
+level: md
+tags: strong bold md-output html-alias
+--- in_cx
+[b bold text]
+--- out_md
+**bold text**
+
+=== test: 021-md-em-i-alias
+level: md
+tags: em italic md-output html-alias
+--- in_cx
+[i italic text]
+--- out_md
+*italic text*
+
+=== test: 022-md-sub
+level: md
+tags: sub subscript md-output
+--- in_cx
+[~ subscript]
+--- out_md
+~subscript~
+
+=== test: 023-md-sup
+level: md
+tags: sup superscript md-output
+--- in_cx
+[^ superscript]
+--- out_md
+^superscript^
+
+=== test: 024-md-from-h2
+level: md
+tags: heading h2 md-input parse
+--- in_md
+## Section
+--- out_cx
+[doc
+  [h2 Section]
+]
+
+=== test: 025-md-from-hr
+level: md
+tags: hr md-input parse
+--- in_md
+---
+--- out_cx
+[doc
+  [hr]
+]
+
+=== test: 026-md-frontmatter-not-hr
+level: md
+tags: frontmatter yaml md-input parse regression
+--- in_md
+---
+title: Hello
+---
+# World
+--- out_cx
+[doc title=Hello
+  [h1 World]
+]
+
+=== test: 027-md-b-alias-bold
+level: md
+tags: strong bold html-alias md-output regression
+--- in_cx
+[b bold]
+--- out_md
+**bold**
+
+=== test: 028-md-i-alias-italic
+level: md
+tags: em italic html-alias md-output regression
+--- in_cx
+[i italic]
+--- out_md
+*italic*
+
+=== test: 029-md-del-s-alias
+level: md
+tags: del strikethrough html-alias md-output regression
+--- in_cx
+[s deleted]
+--- out_md
+~~deleted~~
