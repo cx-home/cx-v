@@ -482,7 +482,7 @@ Markdown remains the right choice.
 | URLs unquoted             | ✓   | ✗   | ✗    | ✗    | ✗    |
 | Streaming parser          | ✓   | ✓   | ✗    | ✗    | ✗    |
 | Human writable            | ✓   | partial | ✓ | ✓  | ✓    |
-| Native language support   | ✗   | ✓   | ✓    | lib  | lib  |
+| Native language support   | lib (10) | ✓ | ✓ | lib  | lib  |
 
 † YAML auto-typing has correctness bugs in YAML 1.1 (the "Norway problem").
 
@@ -505,7 +505,7 @@ Scores relative to CX (1.00). Lower = better for that format. **Bold** = winner.
 | Type safety (predictability)| **1.00**| 0.20 | 0.80 | 0.50    | 0.90 |
 | Compact readability         | **1.00**| 0.50 | 0.20 | 0 (N/A) | 0.40 |
 | Parse spec complexity       | **1.00**| 1.50 | 0.80 | 3.00+   | 1.20 |
-| Ecosystem (parser count)    | 0.00    | 1.00 |**1.00**| 0.90  | 0.70 |
+| Ecosystem (tooling breadth) | 0.10    | 1.00 |**1.00**| 0.90  | 0.70 |
 
 ---
 
