@@ -3,8 +3,8 @@
 CX is a bracket-based markup and configuration format. This is the native V
 implementation — no C dependencies, pure V.
 
-```
-v install cx-home.cx
+```sh
+v install --git https://github.com/cx-home/cx-v
 ```
 
 ## What is CX?
@@ -40,7 +40,7 @@ fn main() {
 ## Install
 
 ```sh
-v install cx-home.cx
+v install --git https://github.com/cx-home/cx-v
 ```
 
 Then import:
