@@ -149,6 +149,34 @@ for ev in events {
 }
 ```
 
+## CLI
+
+The `cmd/` directory includes a `cx` command-line tool for converting between
+formats. After installing the module, build it with:
+
+```sh
+v install --git https://github.com/cx-home/cx-v
+v -o cx ~/.vmodules/cx/cmd/main.v
+```
+
+Usage:
+
+```sh
+cx --json file.cx          # CX → JSON
+cx --yaml file.cx          # CX → YAML
+cx --xml  file.cx          # CX → XML
+cx --toml file.cx          # CX → TOML
+cx --md   file.cx          # CX → Markdown
+cx --cx   file.cx          # re-format as canonical CX
+cx --cx --compact file.cx  # compact single-line CX
+
+cx --from=json --to=cx file.json   # JSON → CX
+cx --from=yaml --to=json file.yaml # YAML → JSON
+```
+
+Input is read from a file argument or stdin. Format is auto-detected from the
+file extension when `--from` is omitted.
+
 ## Conversion shortcuts
 
 ```v
