@@ -122,6 +122,39 @@ pub fn from_xml(src string) !string {
 	return emit_cx(doc)
 }
 
+// Convert JSON source to CX.
+pub fn json_to_cx(src string) !string {
+	res := parse_json_cx(src)!
+	if res.is_multi {
+		docs := res.multi or { return error('no multi docs') }
+		return emit_cx_docs(docs)
+	}
+	doc := res.single or { return error('no document') }
+	return emit_cx(doc)
+}
+
+// Convert YAML source to CX.
+pub fn yaml_to_cx(src string) !string {
+	res := parse_yaml_cx(src)!
+	if res.is_multi {
+		docs := res.multi or { return error('no multi docs') }
+		return emit_cx_docs(docs)
+	}
+	doc := res.single or { return error('no document') }
+	return emit_cx(doc)
+}
+
+// Convert TOML source to CX.
+pub fn toml_to_cx(src string) !string {
+	res := parse_toml_cx(src)!
+	if res.is_multi {
+		docs := res.multi or { return error('no multi docs') }
+		return emit_cx_docs(docs)
+	}
+	doc := res.single or { return error('no document') }
+	return emit_cx(doc)
+}
+
 // Convert any format to any other format.
 pub fn convert(src string, from Format, to Format) !string {
 	// Parse

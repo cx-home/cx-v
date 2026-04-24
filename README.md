@@ -32,8 +32,8 @@ fn main() {
 ]') or { panic(err) }
 
     server := doc.at('config/server') or { panic('not found') }
-    println(server.attr('host') or { '' }.str()) // localhost
-    println(server.attr('port') or { '' }.str()) // 8080
+    println(server.attr('host')) // localhost
+    println(server.attr('port')) // 8080
 }
 ```
 
@@ -86,7 +86,7 @@ for el in doc.find_all('server') {
 }
 
 // Read attribute
-port := server.attr('port') or { '' }.str()
+port := server.attr('port')
 ```
 
 ## CXPath
@@ -97,7 +97,7 @@ svc := doc.select('//service') or { panic('') }
 
 // All matches
 for svc in doc.select_all('//service[@active=true]') {
-    println(svc.attr('name') or { '' }.str())
+    println(svc.attr('name'))
 }
 
 // Numeric comparison
@@ -115,16 +115,16 @@ original is unchanged.
 ```v
 updated := doc.transform('config/server', fn (el cx.Element) cx.Element {
     mut e := el
-    e.set_attr('host', cx.ScalarVal('prod.example.com'))
+    e.set_attr('host', cx.ScalarValue('prod.example.com'))
     return e
 })
 
 // Original unchanged
-println(doc.at('config/server') or { panic('') }.attr('host') or { '' }.str())
+println(doc.at('config/server') or { panic('') }.attr('host'))
 // localhost
 
 // New document has the update
-println(updated.at('config/server') or { panic('') }.attr('host') or { '' }.str())
+println(updated.at('config/server') or { panic('') }.attr('host'))
 // prod.example.com
 ```
 
@@ -133,7 +133,7 @@ println(updated.at('config/server') or { panic('') }.attr('host') or { '' }.str(
 ```v
 updated := doc.transform_all('//service', fn (el cx.Element) cx.Element {
     mut e := el
-    e.set_attr('active', cx.ScalarVal(true))
+    e.set_attr('active', cx.ScalarValue(true))
     return e
 })
 ```
@@ -143,8 +143,8 @@ updated := doc.transform_all('//service', fn (el cx.Element) cx.Element {
 ```v
 events := cx.stream(src) or { panic(err) }
 for ev in events {
-    if ev.typ == .start_element {
-        println('${ev.name}')
+    if ev is cx.StreamStartElement {
+        println(ev.name)
     }
 }
 ```
@@ -156,6 +156,9 @@ json_str := cx.to_json(cx_src)!
 yaml_str := cx.to_yaml(cx_src)!
 cx_str   := cx.json_to_cx(json_src)!
 cx_str   := cx.yaml_to_cx(yaml_src)!
+cx_str   := cx.toml_to_cx(toml_src)!
+cx_str   := cx.from_xml(xml_src)!
+cx_str   := cx.from_md(md_src)!
 ```
 
 ## API Reference
@@ -200,15 +203,16 @@ cx_str   := cx.yaml_to_cx(yaml_src)!
 | `get(name) ?Element` | First direct child by name |
 | `get_all(name) []Element` | All direct children by name |
 | `at(path) ?Element` | Navigate relative path |
-| `attr(name) ?ScalarVal` | Read attribute |
+| `attr(name) string` | Read attribute as string (`''` if absent) |
+| `has_attr(name) bool` | True if attribute exists |
 | `text() string` | Concatenated text content |
-| `scalar() ?ScalarVal` | First scalar child value |
+| `scalar() ?ScalarValue` | First scalar child value |
 | `children() []Element` | All direct child elements |
 | `find_first(name) ?Element` | First matching descendant |
 | `find_all(name) []Element` | All matching descendants |
 | `select(expr) ?Element` | First descendant matching CXPath |
 | `select_all(expr) []Element` | All descendants matching CXPath |
-| `set_attr(name, ScalarVal)` | Set or update attribute |
+| `set_attr(name, ScalarValue)` | Set or update attribute |
 | `remove_attr(name)` | Remove attribute |
 | `append(node)` | Add child node |
 | `prepend(node)` | Insert child at position 0 |
@@ -235,16 +239,20 @@ cx_str   := cx.yaml_to_cx(yaml_src)!
 
 ### Stream events
 
+`StreamEvent` is a V sum type. Use `match` or `if ev is T {}` to dispatch.
+
 | Type | Fields |
 |---|---|
-| `.start_element` | `name`, `attrs`, `anchor`, `merge`, `data_type` |
-| `.end_element` | `name` |
-| `.text` | `value` |
-| `.scalar` | `value` |
-| `.comment` | `value` |
-| `.pi` | `target`, `data` |
-| `.entity_ref` | `value` |
-| `.start_doc` `.end_doc` | — |
+| `StreamStartElement` | `name`, `attrs []Attribute`, `anchor`, `merge`, `data_type` |
+| `StreamEndElement` | `name` |
+| `StreamText` | `value` |
+| `StreamScalar` | `data_type`, `value ScalarValue` |
+| `StreamComment` | `value` |
+| `StreamPI` | `target`, `data ?string` |
+| `StreamEntityRef` | `name` |
+| `StreamAlias` | `name` |
+| `StreamRawText` | `value` |
+| `StreamStartDoc` `StreamEndDoc` | — |
 
 ## License
 
