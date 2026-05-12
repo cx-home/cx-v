@@ -7,6 +7,13 @@ pub fn emit_ast_json(doc Document) string {
 	return json_document(doc)
 }
 
+// emit_ast_json_element returns the AST-JSON encoding of a single
+// Element. Used by the ID/IDREF C ABI (cx_id_lookup / cx_resolve_ref)
+// to return a node subtree without wrapping it in a Document.
+pub fn emit_ast_json_element(e Element) string {
+	return json_element(e)
+}
+
 pub fn emit_ast_json_docs(docs []Document) string {
 	parts := docs.map(json_document(it))
 	return '[${parts.join(',')}]'
@@ -50,6 +57,38 @@ fn json_node(n Node) string {
 			items := n.items.map(json_node(it))
 			'{"type":"BlockContent","items":[${items.join(',')}]}'
 		}
+		InterpolationNode {
+			'{"type":"Interpolation","expr":${json_str(n.expr)}}'
+		}
+		EvalDirectiveNode {
+			mut pairs := []string{}
+			pairs << '"type":"EvalDirective"'
+			pairs << '"name":${json_str(n.name)}'
+			if n.attrs.len > 0 { pairs << '"attrs":${json_attrs(n.attrs)}' }
+			if n.items.len > 0 {
+				items := n.items.map(json_node(it))
+				pairs << '"items":[${items.join(',')}]'
+			}
+			'{${pairs.join(',')}}'
+		}
+		SequenceNode {
+			items := n.items.map(json_node(it))
+			'{"type":"Sequence","items":[${items.join(',')}]}'
+		}
+		ArrayNode {
+			items := n.items.map(json_node(it))
+			'{"type":"Array","items":[${items.join(',')}]}'
+		}
+		MapNode {
+			mut entries := []string{cap: n.entries.len}
+			for entry in n.entries {
+				key_str := json_str(scalar_value_str(entry.key_value))
+				key_type := scalar_type_name(entry.key_type)
+				val_str := json_node(entry.value)
+				entries << '{"key":${key_str},"keyType":"${key_type}","value":${val_str}}'
+			}
+			'{"type":"Map","entries":[${entries.join(',')}]}'
+		}
 	}
 }
 
@@ -59,6 +98,9 @@ fn json_element(e Element) string {
 	pairs << '"name":${json_str(e.name)}'
 	if a := e.anchor   { pairs << '"anchor":${json_str(a)}' }
 	if m := e.merge    { pairs << '"merge":${json_str(m)}' }
+	if id := e.id      { pairs << '"id":${json_str(id)}' }
+	// v3.4 (ADR 0003 D1): body-position reference shape `[name @id]`.
+	if br := e.body_ref { pairs << '"bodyRef":${json_str(br)}' }
 	if dt := e.data_type { pairs << '"dataType":${json_str(dt)}' }
 	if e.attrs.len > 0  { pairs << '"attrs":${json_attrs(e.attrs)}' }
 	if e.items.len > 0 || e.data_type != none {
@@ -115,9 +157,18 @@ fn json_attrs(attrs []Attribute) string {
 fn json_attr(a Attribute) string {
 	mut pairs := []string{}
 	pairs << '"name":${json_str(a.name)}'
-	pairs << '"value":${json_scalar_value(a.value)}'
-	if dt := a.data_type {
-		pairs << '"dataType":"${scalar_type_name(dt)}"'
+	if body_items := a.body {
+		// v3.5 (ADR 0016): BracketBody attribute value.
+		items := body_items.map(json_node(it))
+		pairs << '"body":[${items.join(',')}]'
+	} else {
+		pairs << '"value":${json_scalar_value(a.value)}'
+		if dt := a.data_type {
+			pairs << '"dataType":"${scalar_type_name(dt)}"'
+		}
+	}
+	if a.is_ref {
+		pairs << '"isRef":true'
 	}
 	return '{${pairs.join(',')}}'
 }

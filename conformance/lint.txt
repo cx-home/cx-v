@@ -1,0 +1,252 @@
+# CX Conformance — cx lint (ADR 0013)
+# Version: 1.0 — 2026-05-08
+# Covers: CX-L003 (unused anchor), CX-L004 (dangling alias/merge),
+#         CX-L005 (v3.4 deprecated patterns — leading-zero numerics).
+#         CX-L001 and CX-L002 stubs are not exercised here (they
+#         emit no findings in the v0 implementation).
+#
+# Each test runs `cx lint --format=json` on `in_cx` and asserts:
+#   - `expected_check_count` matches the number of findings
+#   - For tests with exactly 1 finding, also asserts `expected_check`
+#     and `expected_severity` match the first finding's check/severity.
+
+=== test: 001-clean-no-findings
+level: core
+tags: lint clean
+--- in_cx
+[server host=localhost]
+--- expected_check_count
+0
+
+=== test: 002-clean-with-anchors-and-refs
+level: core
+tags: lint l003 clean
+--- in_cx
+[base &b host=localhost]
+[prod *b host=acme.com]
+--- expected_check_count
+0
+
+=== test: 010-l003-unused-anchor
+level: core
+tags: lint l003
+--- in_cx
+[base &b host=localhost]
+[other host=acme.com]
+--- expected_check_count
+1
+--- expected_check
+CX-L003
+--- expected_severity
+warn
+
+=== test: 020-l004-dangling-alias
+level: core
+tags: lint l004
+--- in_cx
+[other host=localhost]
+[prod *base host=acme.com]
+--- expected_check_count
+1
+--- expected_check
+CX-L004
+--- expected_severity
+error
+
+=== test: 030-l005-leading-zero-bare
+level: core
+tags: lint l005 leading-zero
+--- in_cx
+[zip 02134]
+--- expected_check_count
+1
+--- expected_check
+CX-L005
+--- expected_severity
+warn
+
+=== test: 031-l005-leading-zero-no-warn-on-zero-itself
+level: core
+tags: lint l005
+--- in_cx
+[count 0]
+--- expected_check_count
+0
+
+=== test: 032-l005-leading-zero-no-warn-on-decimal
+level: core
+tags: lint l005
+--- in_cx
+[ratio 0.5]
+--- expected_check_count
+0
+
+=== test: 033-l005-leading-zero-no-warn-on-hex
+level: core
+tags: lint l005
+--- in_cx
+[mask 0xCAFE]
+--- expected_check_count
+0
+
+=== test: 034-l005-leading-zero-no-warn-on-quoted
+level: core
+tags: lint l005 quoted
+--- in_cx
+[zip '02134']
+--- expected_check_count
+0
+
+=== test: 040-l001-mixed-comment-styles
+level: core
+tags: lint l001
+# Document uses both # line comments and a single-line [- block ]
+# comment. Lint flags the single-line block comment as drift.
+--- in_cx
+# top-level note
+[server [- single-line block ] host=localhost]
+--- expected_check_count
+1
+--- expected_check
+CX-L001
+--- expected_severity
+info
+
+=== test: 041-l001-only-line-comments-no-warn
+level: core
+tags: lint l001 clean
+--- in_cx
+# top
+[server host=localhost]
+# bottom
+--- expected_check_count
+0
+
+=== test: 042-l001-only-block-comments-no-warn
+level: core
+tags: lint l001 clean
+# Block-only is consistent (no line comments to clash with). No
+# warning.
+--- in_cx
+[- top-level note ]
+[server host=localhost]
+[- another single-liner ]
+--- expected_check_count
+0
+
+=== test: 043-l001-multiline-block-no-warn
+level: core
+tags: lint l001 multiline
+# Multi-line block comment alongside line comments is fine — the
+# block form is the canonical for multi-line.
+--- in_cx
+# header
+[- this is a
+   multi-line block comment ]
+[server host=localhost]
+--- expected_check_count
+0
+
+=== test: 050-l002-mixed-long-short-type-form
+level: core
+tags: lint l002
+# Document uses both :int and :i — minority form (whichever has
+# fewer uses) is flagged. Tie goes to flagging short form. Two
+# long-form (:int / :string) and one short-form (:i) → flag the
+# short.
+--- in_cx
+[count :int 42]
+[name :string alice]
+[short :i 7]
+--- expected_check_count
+1
+--- expected_check
+CX-L002
+--- expected_severity
+info
+
+=== test: 051-l002-consistent-long-form-no-warn
+level: core
+tags: lint l002 clean
+--- in_cx
+[count :int 42]
+[name :string alice]
+[active :bool true]
+--- expected_check_count
+0
+
+=== test: 052-l002-consistent-short-form-no-warn
+level: core
+tags: lint l002 clean
+--- in_cx
+[count :i 42]
+[name :s alice]
+[active :b true]
+--- expected_check_count
+0
+
+=== test: 053-l002-sized-types-not-flagged
+level: core
+tags: lint l002 sized
+# Sized types (:u16, :u32, :i64, :f32 etc.) and :decimal/:bigint
+# have no short alias — they don't participate in long-vs-short
+# detection. Mixed with :i is fine.
+--- in_cx
+[port :u16 8080]
+[count :u32 1000000]
+[ratio :i 5]
+--- expected_check_count
+0
+
+=== test: 060-suppression-disable-suppresses-l003
+level: core
+tags: lint suppression directive
+--- in_cx
+[?cx lint-disable=CX-L003]
+[base &b host=localhost]
+[other host=acme.com]
+--- expected_check_count
+0
+
+=== test: 061-suppression-disable-all-suppresses-everything
+level: core
+tags: lint suppression directive
+--- in_cx
+[?cx lint-disable=all]
+[base &b host=localhost]
+[zip 02134]
+[other *missing host=acme.com]
+--- expected_check_count
+0
+
+=== test: 062-suppression-enable-restores-check
+level: core
+tags: lint suppression directive
+# disable then re-enable: findings after the re-enable directive
+# are surfaced again.
+--- in_cx
+[?cx lint-disable=CX-L003]
+[silent &s host=localhost]
+[?cx lint-enable=CX-L003]
+[loud &l host=acme.com]
+--- expected_check_count
+1
+--- expected_check
+CX-L003
+--- expected_severity
+warn
+
+=== test: 063-suppression-targeted-leaves-others
+level: core
+tags: lint suppression directive
+# disable only L003: L004 dangling alias still surfaces.
+--- in_cx
+[?cx lint-disable=CX-L003]
+[unused &u host=localhost]
+[broken *missing host=acme.com]
+--- expected_check_count
+1
+--- expected_check
+CX-L004
+--- expected_severity
+error

@@ -195,7 +195,9 @@ pub fn parse_yaml(src string) !Document {
 	}
 	if r.pos >= r.lines.len { return Document{} }
 	val := r.parse_block(0)
-	return jv_to_cx_doc(val)
+	mut doc := jv_to_cx_doc(val)
+	resolve_namespaces(mut doc)
+	return doc
 }
 
 pub fn parse_yaml_cx(src string) !ParseResult {

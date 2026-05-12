@@ -1,0 +1,177 @@
+# CX Conformance — data_bin chunked-table round-trips
+# Version: 0.2 — 2026-05-09 (V core impl landed in Phase 7.72)
+# Covers: spec/data_bin.md §3.11, spec/decisions/0015 D1.
+#
+# Verification:
+#   1. parse(in_cx) → emit_data_bin_chunked(chunk_size=chunk_at) →
+#      hex(bytes) == out_data_bin_hex
+#   2. cx_from_data_bin(bytes) → emit_cx round-trips the data
+#      (logical equivalence; presentation-form may differ — fixtures
+#      verify byte form here, not text round-trip).
+#
+# Hex notation: bytes are space-separated, two hex digits each.
+# Comments (text after `# `) are non-normative; the byte sequence is
+# the test value. The runner strips the framing prefix
+# `[u32 LE size]` before comparing — fixtures record the CXDB header
+# onward.
+#
+# Embedding: a `[name :table[...]]` document encodes as
+# `<header> 0x50 0x01 <key=name> <chunked-table>`. The chunked-table
+# value (tag `0x63`) carries no element name itself; the wrapping
+# single-pair map preserves the name. See spec/data_bin.md §3.11.1.
+#
+# `chunk_at: N` metadata sets emit_data_bin_chunked's chunk_size for
+# this fixture; default is 2^20 (the strict-canonical value, ADR
+# 0015 D1) when absent.
+
+=== test: ch-001-chunked-empty
+level: extended
+tags: data_bin chunked empty
+--- in_cx
+[points :table[name:string score:i32]]
+--- out_data_bin_hex
+43 58 44 42 01 01 40 00 00 00 00 00   # CXDB v1 header
+50 01                                  # map, 1 pair
+30 06 70 6F 69 6E 74 73                # key "points"
+63 02                                  # tag 0x63 = chunked, col_count = 2
+30 04 6E 61 6D 65 30                   # col 0: "name" / type 0x30 string
+30 05 73 63 6F 72 65 12                # col 1: "score" / type 0x12 i32
+00                                     # end-of-table marker (no row groups)
+
+=== test: ch-002-chunked-single-row-group
+level: extended
+tags: data_bin chunked single
+--- in_cx
+[points :table[name:string score:i32]
+  alice 91
+  bob 88
+]
+--- out_data_bin_hex
+43 58 44 42 01 01 40 00 00 00 00 00   # CXDB v1 header
+50 01 30 06 70 6F 69 6E 74 73          # map / key "points"
+63 02                                  # chunked / col_count = 2
+30 04 6E 61 6D 65 30                   # col 0
+30 05 73 63 6F 72 65 12                # col 1
+14                                     # body_byte_len = 20 (= body-tag + plain body)
+01                                     # body-tag = 0x01 (plain)
+02                                     # row_count = 2
+05 61 6C 69 63 65                      # col 0 row 0: "alice"
+03 62 6F 62                            # col 0 row 1: "bob"
+5B 00 00 00                            # col 1 row 0: 91 (i32 LE)
+58 00 00 00                            # col 1 row 1: 88
+00                                     # end-of-table
+
+=== test: ch-003-chunked-multi-row-group
+level: extended
+tags: data_bin chunked multi
+chunk_at: 4
+# Six rows split into two groups of 4 / 2 (chunk_at=4). The 2^20
+# strict-canonical default would emit a single 6-row group; this
+# fixture exercises the multi-group path with a small chunk size
+# instead of a 1M+ row corpus.
+--- in_cx
+[points :table[name:string score:i32]
+  alice 91
+  bob 88
+  carol 73
+  dave 95
+  eve 84
+  frank 60
+]
+--- out_data_bin_hex
+43 58 44 42 01 01 40 00 00 00 00 00   # header
+50 01 30 06 70 6F 69 6E 74 73          # map / key "points"
+63 02                                  # chunked / col_count=2
+30 04 6E 61 6D 65 30                   # col 0
+30 05 73 63 6F 72 65 12                # col 1
+27 01 04                               # row-group 0: body_len=39, plain, row_count=4
+05 61 6C 69 63 65 03 62 6F 62 05 63 61 72 6F 6C 04 64 61 76 65   # col 0: 21 bytes
+5B 00 00 00 58 00 00 00 49 00 00 00 5F 00 00 00                  # col 1: 16 bytes
+14 01 02                               # row-group 1: body_len=20, plain, row_count=2
+03 65 76 65 05 66 72 61 6E 6B          # col 0: 10 bytes
+54 00 00 00 3C 00 00 00                # col 1: 8 bytes
+00                                     # end-of-table
+
+=== test: ch-004-chunked-vs-non-chunked-equivalent-data-distinct-bytes
+level: extended
+tags: data_bin chunked canonical
+# The same 2 rows emitted as chunked (0x63) and as plain (0x60)
+# encode to DIFFERENT byte sequences. Per spec/data_bin.md §3.11.3
+# the chunk boundaries are part of the canonical form. Adopters
+# wanting hash invariance over chunking emit through 0x60 when the
+# data fits.
+--- in_cx
+[points :table[name:string score:i32]
+  alice 91
+  bob 88
+]
+--- assert_chunked_distinct_from_plain
+1
+
+=== test: ch-005-chunked-canonical-2-pow-20
+level: extended
+tags: data_bin chunked canonical_chunk_size
+pending: phase-7.74c+ (1M+ row synthesized corpus + per-group inspection
+# DSL: the streaming Table reader landed in 7.74a can decode such a
+# corpus row-group-by-row-group, but the runner currently lacks the
+# corpus-synthesis hook and per-group assertion vocabulary)
+# Strict-canonical chunk size is 2^20 rows (D1). A million-row table
+# emits as exactly one row group of 2^20 rows. A 2-million-row table
+# emits as two groups of 2^20 each. A 2.5-million-row table emits as
+# three groups: 2^20, 2^20, 0.5M.
+#
+# Test value: row count = 2^20 + 1; expected groups = 2 (sizes 2^20 and 1).
+--- in_cx
+# (synthesized at runtime; not authored inline)
+--- assertion
+strict_canonical(input).group_count == 2
+strict_canonical(input).row_counts == [1048576, 1]
+
+=== test: ch-006-chunked-datetime-column-zulu
+level: extended
+tags: data_bin chunked datetime
+# Phase 7.74c-datetime-foundations — strict-cell datetime wire form
+# per spec/data_bin.md §3.6.1 / §3.10.3. Each cell is 12 bytes:
+# i64 unix_nanos LE + i16 offset_minutes LE (always 0 in canonical) +
+# u16 reserved (zero). 2024-01-15T12:34:56Z = 1705322096 s since epoch
+# = 1705322096000000000 ns = 0x17AA85693FB46000.
+--- in_cx
+[evts :table[name:string when:datetime]
+  alice 2024-01-15T12:34:56Z
+]
+--- out_data_bin_hex
+43 58 44 42 01 01 40 00 00 00 00 00   # header
+50 01 30 04 65 76 74 73                # map / key "evts"
+63 02                                  # chunked / col_count = 2
+30 04 6E 61 6D 65 30                   # col 0 "name" / type 0x30 string
+30 04 77 68 65 6E 32                   # col 1 "when" / type 0x32 datetime
+14                                     # body_byte_len = 20
+01                                     # body-tag = 0x01 (plain)
+01                                     # row_count = 1
+05 61 6C 69 63 65                      # col 0 row 0: "alice"
+00 60 B4 3F 69 85 AA 17 00 00 00 00    # col 1 row 0: 1705322096000000000 ns, off=0, rsvd=0
+00                                     # end-of-table
+
+=== test: ch-007-chunked-datetime-offset-normalizes-to-utc
+level: extended
+tags: data_bin chunked datetime canonical_offset
+# Strict canonical (spec §3.6.1) normalizes datetime offsets to UTC:
+# offset_minutes is always 0 on the wire and unix_nanos already
+# encodes UTC. 2025-06-30T23:00:00+02:00 = 2025-06-30T21:00:00Z =
+# 1751317200 s = 1751317200000000000 ns = 0x184DEDB6EB082000 LE.
+--- in_cx
+[evts :table[name:string when:datetime]
+  beta 2025-06-30T23:00:00+02:00
+]
+--- out_data_bin_hex
+43 58 44 42 01 01 40 00 00 00 00 00   # header
+50 01 30 04 65 76 74 73                # map / key "evts"
+63 02                                  # chunked / col_count = 2
+30 04 6E 61 6D 65 30                   # col 0
+30 04 77 68 65 6E 32                   # col 1 datetime
+13                                     # body_byte_len = 19
+01                                     # body-tag plain
+01                                     # row_count = 1
+04 62 65 74 61                         # col 0 row 0: "beta"
+00 20 08 EB B6 ED 4D 18 00 00 00 00    # col 1 row 0: 1751317200000000000 ns (UTC-normalized), off=0
+00                                     # end-of-table

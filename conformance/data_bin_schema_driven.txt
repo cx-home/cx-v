@@ -1,0 +1,204 @@
+# CX Conformance — data_bin schema-driven encoding round-trips
+# Version: 0.2 — 2026-05-10 (V core impl shipped in Phase 7.73)
+# Covers: spec/data_bin.md §3.13, spec/decisions/0015 D3 / D4 / D5 / D6.
+#
+# Section types used:
+#
+#   schema_cxs               — schema source text
+#   sd_ref_form              — "hash" | "inline" | "hash_with_name"
+#                              (default "hash")
+#   sd_name_hint             — name string for hash_with_name form
+#   sd_assert_round_trip     — "1" asserts encode → decode succeeds
+#   sd_expected_decoded_cx   — exact CX text after decode (optional;
+#                              compared only when present)
+#   sd_assert_flag_bit_1     — "1" asserts CXDB header flag bit 1 is set
+#   sd_assert_ref_tag        — expected first byte of schema reference
+#                              ("0x10" / "0x11" / "0x12")
+#   sd_expected_emit_error   — expected substring of encode error message
+#                              (skips round-trip if encode rejects)
+#   schema_cxs_a / schema_cxs_b + sd_assert_hash_equal:
+#                              hash-stability cross-check
+#   in_data_bin_hex + sd_expected_decode_error:
+#                              feed concrete framed bytes through the
+#                              decoder and assert error
+#
+# Hash placeholders are NOT byte-compared. The schema content-hash is
+# deterministic per ADR 0015 D5 but recomputing it on each test run
+# avoids embedding a 64-character hex literal in the fixture file.
+# Property tests (hash stability, ref-tag identity, flag bit identity,
+# decode round-trip) cover what byte-comparison would have.
+
+=== test: sd-001-content-hash-only-reference
+level: extended
+tags: data_bin schema_driven content_hash
+--- schema_cxs
+[?cx schema-of server]
+[server
+  [body :elem]
+  [attr host :string :req]
+  [attr port :u16 :req]
+  [attr active :bool :def=true]
+]
+--- in_cx
+[server host=localhost port=8080 active=true]
+--- sd_ref_form
+hash
+--- sd_assert_flag_bit_1
+1
+--- sd_assert_ref_tag
+0x10
+--- sd_assert_round_trip
+1
+--- sd_expected_decoded_cx
+[server host=localhost port=8080 active=true]
+
+=== test: sd-002-inline-schema-reference
+level: extended
+tags: data_bin schema_driven inline
+--- schema_cxs
+[?cx schema-of port-only]
+[port-only
+  [body :u16]
+]
+--- in_cx
+[port-only :u16 8080]
+--- sd_ref_form
+inline
+--- sd_assert_flag_bit_1
+1
+--- sd_assert_ref_tag
+0x11
+--- sd_assert_round_trip
+1
+
+=== test: sd-003-content-hash-with-name-hint
+level: extended
+tags: data_bin schema_driven hash_with_hint
+--- schema_cxs
+[?cx schema-of server]
+[server
+  [body :elem]
+  [attr host :string :req]
+]
+--- in_cx
+[server host=localhost]
+--- sd_ref_form
+hash_with_name
+--- sd_name_hint
+server.cxs
+--- sd_assert_flag_bit_1
+1
+--- sd_assert_ref_tag
+0x12
+--- sd_assert_round_trip
+1
+--- sd_expected_decoded_cx
+[server host=localhost]
+
+=== test: sd-004-partial-schema-open-mode-mixed-tags
+level: extended
+tags: data_bin schema_driven partial open_mode
+# Document includes an undeclared attribute (`region`); under the
+# default `open` mode the encoder accepts it and emits self-describing
+# fallback for that one attribute. Declared attributes still get
+# tag-omission.
+--- schema_cxs
+[?cx schema-of server]
+[server
+  [body :elem]
+  [attr host :string :req]
+  [attr port :u16 :req]
+]
+--- in_cx
+[server host=localhost port=8080 region=us-west]
+--- sd_assert_flag_bit_1
+1
+--- sd_assert_ref_tag
+0x10
+--- sd_assert_round_trip
+1
+--- sd_expected_decoded_cx
+[server host=localhost port=8080 region=us-west]
+
+=== test: sd-005-closed-mode-rejects-undeclared
+level: extended
+tags: data_bin schema_driven closed_mode error
+--- schema_cxs
+[?cx schema-of server]
+[?cx schema-mode closed]
+[server
+  [body :elem]
+  [attr host :string :req]
+]
+--- in_cx
+[server host=localhost region=us-west]
+--- sd_expected_emit_error
+S012: unknown attribute 'region'
+
+=== test: sd-006-hash-stable-across-source-formatting
+level: extended
+tags: data_bin schema_driven canonical
+# Two semantically-identical schemas with different formatting (one
+# with comments / extra whitespace) produce the same content-hash
+# because the hash is over cx_to_data_bin(parse(schema_text)),
+# not over the raw schema source.
+--- schema_cxs_a
+[?cx schema-of server]
+[server
+  [body :elem]
+  [attr host :string :req]
+]
+--- schema_cxs_b
+[?cx schema-of server]
+
+[- a comment that does not change semantics -]
+[server [body :elem] [attr host :string :req] ]
+--- sd_assert_hash_equal
+1
+
+=== test: sd-007-flag-set-without-schema-ref-rejected
+level: extended
+tags: data_bin schema_driven error
+--- in_data_bin_hex
+43 58 44 42 01 03 40 00 00 00 00 00       # flag bit 1 set
+50 00                                      # root value: empty map (no schema-ref!)
+--- sd_expected_decode_error
+expected schema-ref tag
+
+=== test: sd-008-content-hash-mismatch-rejected
+level: extended
+tags: data_bin schema_driven error hash_mismatch
+pending: phase-7.74 (decode-time schema-store lookup; v0 requires hint)
+# The reader looks up the schema by hash; consumer's content-store
+# returns a schema whose computed hash differs from the embedded one.
+# v0 requires the hint to be passed in; the hint-mismatch path is
+# exercised via direct V tests but the content-store-lookup path is
+# part of Phase 7.74 streaming Table API.
+--- schema_cxs
+[?cx schema-of server]
+[server [body :elem] [attr host :string :opt]]
+--- in_cx
+[server host=localhost]
+
+=== test: sd-009-encoding-validation-decoupled
+level: extended
+tags: data_bin schema_driven decoupled
+# Per ADR 0015 D3, schema-driven encoding is independent of validation
+# mode. A document is encoded SCHEMA-DRIVEN (flag bit 1 set) AND
+# remains under `open` mode validation; an undeclared field encodes
+# self-describing without producing a validation error.
+--- schema_cxs
+[?cx schema-of server]
+[?cx schema-mode open]
+[server
+  [body :elem]
+  [attr host :string :req]
+]
+--- in_cx
+[server host=localhost extra=42]
+--- sd_assert_flag_bit_1
+1
+--- sd_assert_round_trip
+1
+--- sd_expected_decoded_cx
+[server host=localhost extra=42]

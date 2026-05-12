@@ -444,7 +444,7 @@ tags: cxdirective
 level: core
 tags: namespaces attrs
 --- in_cx
-[doc ns:default=urn:doc ns:xl=http://www.w3.org/1999/xlink
+[doc xmlns=urn:doc xmlns:xl=http://www.w3.org/1999/xlink
   [xl:a href=https://example.com Link]
 ]
 --- out_ast
@@ -455,8 +455,8 @@ tags: namespaces attrs
       "type": "Element",
       "name": "doc",
       "attrs": [
-        {"name": "ns:default", "value": "urn:doc"},
-        {"name": "ns:xl", "value": "http://www.w3.org/1999/xlink"}
+        {"name": "xmlns", "value": "urn:doc"},
+        {"name": "xmlns:xl", "value": "http://www.w3.org/1999/xlink"}
       ],
       "items": [
         {
@@ -474,7 +474,7 @@ tags: namespaces attrs
   <xl:a href="https://example.com">Link</xl:a>
 </doc>
 --- out_cx
-[doc ns:default=urn:doc ns:xl=http://www.w3.org/1999/xlink
+[doc xmlns=urn:doc xmlns:xl=http://www.w3.org/1999/xlink
   [xl:a href=https://example.com Link]
 ]
 

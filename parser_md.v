@@ -49,7 +49,9 @@ fn parse_md_document(src string) !Document {
 		items: block_nodes
 	}
 
-	return Document{ elements: [Node(doc_elem)] }
+	mut doc := Document{ elements: [Node(doc_elem)] }
+	resolve_namespaces(mut doc)
+	return doc
 }
 
 fn parse_yaml_frontmatter(lines []string) []Attribute {

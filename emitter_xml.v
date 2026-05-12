@@ -44,7 +44,98 @@ fn emit_xml_node(n Node, depth int, mut out []string) {
 			for item in n.items { emit_xml_inline_node(item, mut out) }
 			out << '</cx:block>\n'
 		}
+		InterpolationNode {
+			// v3.5 (ADR 0016): no XML-native equivalent for CXL
+			// interpolation; emit as a cx-namespaced PI carrying the
+			// expression. Round-trips via xml_parser when re-read.
+			out << '${xml_indent(depth)}<?cx:interp ${xml_escape_attr(n.expr)}?>\n'
+		}
+		EvalDirectiveNode {
+			emit_xml_eval_directive(n, depth, mut out)
+		}
+		SequenceNode { emit_xml_sequence(n, depth, mut out) }
+		ArrayNode    { emit_xml_array(n, depth, mut out) }
+		MapNode      { emit_xml_map(n, depth, mut out) }
 	}
+}
+
+// emit_xml_sequence renders a SequenceNode as `<cx:seq><item>…</item>…</cx:seq>`
+// per ADR 0017 §D12 (the W015 wrapping convention). Sequences emit
+// post-flatten per CXDM §1.2.
+fn emit_xml_sequence(n SequenceNode, depth int, mut out []string) {
+	ind := xml_indent(depth)
+	if n.items.len == 0 {
+		out << '${ind}<cx:seq/>\n'
+		return
+	}
+	out << '${ind}<cx:seq>'
+	for item in n.items {
+		out << '<item>'
+		emit_xml_inline_node(item, mut out)
+		out << '</item>'
+	}
+	out << '</cx:seq>\n'
+}
+
+// emit_xml_array renders an ArrayNode as `<cx:arr><item>…</item>…</cx:arr>`.
+// Nested arrays preserve structure (ArrayNode children emit recursively).
+fn emit_xml_array(n ArrayNode, depth int, mut out []string) {
+	ind := xml_indent(depth)
+	if n.items.len == 0 {
+		out << '${ind}<cx:arr/>\n'
+		return
+	}
+	out << '${ind}<cx:arr>'
+	for item in n.items {
+		out << '<item>'
+		emit_xml_inline_node(item, mut out)
+		out << '</item>'
+	}
+	out << '</cx:arr>\n'
+}
+
+// emit_xml_map renders a MapNode as `<cx:map><entry key="…">…</entry>…</cx:map>`.
+// Non-string keys carry a cx:key-type attribute alongside key for round-trip.
+fn emit_xml_map(n MapNode, depth int, mut out []string) {
+	ind := xml_indent(depth)
+	if n.entries.len == 0 {
+		out << '${ind}<cx:map/>\n'
+		return
+	}
+	out << '${ind}<cx:map>'
+	for entry in n.entries {
+		key_str := scalar_value_str(entry.key_value)
+		key_type_attr := if entry.key_type == .string_type {
+			''
+		} else {
+			' cx:key-type="${scalar_type_name(entry.key_type)}"'
+		}
+		out << '<entry key="${xml_escape_attr(key_str)}"${key_type_attr}>'
+		emit_xml_inline_node(entry.value, mut out)
+		out << '</entry>'
+	}
+	out << '</cx:map>\n'
+}
+
+fn emit_xml_eval_directive(n EvalDirectiveNode, depth int, mut out []string) {
+	ind := xml_indent(depth)
+	mut attr_str := ''
+	for a in n.attrs {
+		if body_items := a.body {
+			mut tmp := []string{}
+			for item in body_items { emit_xml_inline_node(item, mut tmp) }
+			attr_str += ' ${a.name}="${xml_escape_attr(tmp.join(''))}"'
+		} else {
+			attr_str += ' ${a.name}="${xml_escape_attr(a.str_value())}"'
+		}
+	}
+	if n.items.len == 0 {
+		out << '${ind}<cx:eval name="${n.name}"${attr_str}/>\n'
+		return
+	}
+	out << '${ind}<cx:eval name="${n.name}"${attr_str}>'
+	for item in n.items { emit_xml_inline_node(item, mut out) }
+	out << '</cx:eval>\n'
 }
 
 fn emit_xml_element(e Element, depth int, mut out []string) {
@@ -54,10 +145,18 @@ fn emit_xml_element(e Element, depth int, mut out []string) {
 	mut attr_str := ''
 	if a := e.anchor   { attr_str += ' cx:anchor="${a}"' }
 	if m := e.merge    { attr_str += ' cx:merge="${m}"' }
+	// v3.4 (ADR 0003 D6): #id round-trips as xml:id (XML built-in URI ns).
+	if id := e.id      { attr_str += ' xml:id="${xml_escape_attr(id)}"' }
 	if dt := e.data_type { attr_str += ' cx:type="${dt}"' }
 	for a in e.attrs {
-		xml_name := cx_ns_to_xmlns(a.name)
-		attr_str += ' ${xml_name}="${xml_escape_attr(a.str_value())}"'
+		// v3.4 (ADR 0002): xmlns / xmlns:foo declarations round-trip
+		// verbatim. Names retain source form (the legacy `ns:foo`
+		// translation is no longer applied; CX source uses xmlns:
+		// directly).
+		// v3.4 (ADR 0003 D6): is_ref attrs emit as name="<id>" (no @);
+		// XML semantics defer reference disambiguation to xs:IDREF
+		// schema validation, which CX doesn't carry in-band.
+		attr_str += ' ${a.name}="${xml_escape_attr(a.str_value())}"'
 	}
 
 	if e.items.len == 0 {
@@ -134,15 +233,6 @@ fn xml_escape_text(s string) string {
 
 fn xml_escape_attr(s string) string {
 	return s.replace('&', '&amp;').replace('<', '&lt;').replace('"', '&quot;')
-}
-
-fn cx_ns_to_xmlns(name string) string {
-	if name.starts_with('ns:') {
-		suffix := name[3..]
-		if suffix == 'default' { return 'xmlns' }
-		return 'xmlns:${suffix}'
-	}
-	return name
 }
 
 fn emit_xml_pi(p PINode, depth int, mut out []string) {

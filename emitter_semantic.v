@@ -35,12 +35,15 @@ fn sem_document(doc Document) JsonVal {
 fn sem_element(e Element) JsonVal {
 	content := e.items.filter(
 		!(it is CommentNode) && !(it is PINode) && !(it is XMLDeclNode) && !(it is CXDirectiveNode)
+		&& !(it is InterpolationNode) && !(it is EvalDirectiveNode)
 	)
 
 	has_attrs    := e.attrs.len > 0
 	has_elements := content.any(it is Element)
 	all_scalars  := content.len > 0 && content.all(it is ScalarNode)
 	has_text     := content.any(it is TextNode || it is RawTextNode || it is EntityRefNode || it is BlockContentNode)
+	has_collections := content.any(it is SequenceNode || it is ArrayNode || it is MapNode)
+	all_collections := content.len > 0 && content.all(it is SequenceNode || it is ArrayNode || it is MapNode)
 
 	// Pure scalars, no attrs
 	if !has_attrs && all_scalars {
@@ -51,8 +54,18 @@ fn sem_element(e Element) JsonVal {
 		return JsonVal(content.map(scalar_native(it as ScalarNode)))
 	}
 
+	// Pure collection-literal body, no attrs (ADR 0017 §D12 — element body
+	// is exactly the collection's JSON shape; sequence/array → JSON array,
+	// map → JSON object).
+	if !has_attrs && !has_elements && !has_text && all_collections {
+		if content.len == 1 {
+			return collection_to_json(content[0])
+		}
+		return JsonVal(content.map(collection_to_json(it)))
+	}
+
 	// Pure text, no attrs, no elements
-	if !has_attrs && !has_elements && has_text {
+	if !has_attrs && !has_elements && !has_collections && has_text {
 		return JsonVal(sem_collect_text(content))
 	}
 
@@ -65,7 +78,7 @@ fn sem_element(e Element) JsonVal {
 		obj[attr.name] = scalar_val_to_json(attr.value)
 	}
 
-	if has_elements {
+	if has_elements || has_collections {
 		for n in content {
 			match n {
 				Element {
@@ -79,6 +92,12 @@ fn sem_element(e Element) JsonVal {
 				RawTextNode  { push_text(mut obj, n.value) }
 				EntityRefNode { push_text(mut obj, entity_ref_str(n.name)) }
 				ScalarNode    { push_keyed(mut obj, '_', scalar_native(n)) }
+				// ADR 0017 §D12 mixed-content fallback: collection literals
+				// alongside elements / attrs route through synthetic keys
+				// (_seq / _arr / _map). Lossy at the JSON boundary by design.
+				SequenceNode  { push_keyed(mut obj, '_seq', collection_to_json(n)) }
+				ArrayNode     { push_keyed(mut obj, '_arr', collection_to_json(n)) }
+				MapNode       { push_keyed(mut obj, '_map', collection_to_json(n)) }
 				BlockContentNode {
 					for item in n.items {
 						if item is TextNode {
@@ -94,12 +113,52 @@ fn sem_element(e Element) JsonVal {
 	} else if has_attrs {
 		if all_scalars && content.len == 1 {
 			obj['_'] = scalar_native(content[0] as ScalarNode)
+		} else if all_collections && content.len == 1 {
+			obj['_'] = collection_to_json(content[0])
 		} else if has_text {
 			obj['_'] = JsonVal(sem_collect_text(content))
 		}
 	}
 
 	return JsonVal(obj)
+}
+
+// collection_to_json converts a SequenceNode / ArrayNode / MapNode to its
+// data-shape JsonVal per ADR 0017 §D12.
+//   - SequenceNode → JSON array (parser already flattened per CXDM §1.2)
+//   - ArrayNode    → JSON array (nesting preserved)
+//   - MapNode      → JSON object (key stringified via canonical form)
+fn collection_to_json(n Node) JsonVal {
+	return match n {
+		SequenceNode { JsonVal(n.items.map(node_value_to_json(it))) }
+		ArrayNode    { JsonVal(n.items.map(node_value_to_json(it))) }
+		MapNode {
+			mut obj := map[string]JsonVal{}
+			for entry in n.entries {
+				obj[scalar_value_str(entry.key_value)] = node_value_to_json(entry.value)
+			}
+			JsonVal(obj)
+		}
+		else { JsonVal(JsonNull{}) }
+	}
+}
+
+// node_value_to_json materializes a Node appearing inside a collection
+// literal (item / map value) as a JsonVal. Scalars become native JSON
+// scalars; nested collections recurse; elements route back through
+// sem_element so the object/array hierarchy stays semantic.
+fn node_value_to_json(n Node) JsonVal {
+	return match n {
+		ScalarNode    { scalar_native(n) }
+		SequenceNode  { collection_to_json(n) }
+		ArrayNode     { collection_to_json(n) }
+		MapNode       { collection_to_json(n) }
+		Element       { sem_element(n) }
+		TextNode      { JsonVal(n.value) }
+		RawTextNode   { JsonVal(n.value) }
+		EntityRefNode { JsonVal(entity_ref_str(n.name)) }
+		else          { JsonVal(JsonNull{}) }
+	}
 }
 
 fn push_keyed(mut obj map[string]JsonVal, key string, val JsonVal) {

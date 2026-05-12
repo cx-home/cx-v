@@ -1,0 +1,78 @@
+╭──────────────────────────────────────────────────────────────╮
+│ CX — one format for config, data, docs, and tabular data │
+╰──────────────────────────────────────────────────────────────╯
+
+1. Typed round-trip: integers stay integers across format hops
+─────────────────────────────────────────────────────────────────
+
+ CX source:
+ [config
+  [port :u16 8080]
+  [user_id :i64 9007199254740993]
+  [pi :f64 3.141592653589793]
+ ]
+
+ Converted to JSON:
+ {
+   "config": {
+     "port": 8080,
+     "user_id": 9007199254740993,
+     "pi": 3.141592653589793
+   }
+ }
+
+ JSON would silently float 9007199254740993 → 9007199254740992
+ in JavaScript / browsers / many parsers. CX/CXDB preserves
+ int64 exactly. This is the type-fidelity contract that makes
+ CX an honest source-of-truth format.
+
+2. :table block as a first-class shape (CSV-natively round-trippable)
+─────────────────────────────────────────────────────────────────
+
+ CX source:
+ [users :table[name age:int city]
+  alice 30 portland
+  bob 25 austin
+  carol 40 lisbon
+ ]
+
+ Converted to CSV ( — RFC 4180):
+ name,age,city
+ alice,30,portland
+ bob,25,austin
+ carol,40,lisbon
+
+3. CXL — CX-native templating that shares one parser & data model
+─────────────────────────────────────────────────────────────────
+
+ Template: [greeting [?if @verbose :then [?= @name] :else friend]]
+ Data: [ctx name=erik verbose=true]
+
+ Parses cleanly: [greeting [?if [@verbose, [?=@name], friend]]]
+ (Full CXL eval: cx eval template.cxl --data=data.cx)
+
+4. Why CX over JSON / YAML / TOML?
+─────────────────────────────────────────────────────────────────
+
+ | feature | JSON | YAML | TOML | CX |
+ |----------------------------------|------|------|------|----|
+ | Comments | - | ✓ | ✓ | ✓ |
+ | Sized integer types | - | - | - | ✓ |
+ | int64 / bigint precision | - | ✓ | ✓ | ✓ |
+ | One syntax for data + docs | - | - | - | ✓ |
+ | Canonical hash for content addr | - | - | - | ✓ |
+ | Tabular `:table` block | - | - | - | ✓ |
+ | logfmt mode (top-level kv) | - | - | - | ✓ |
+ | Lossless round-trip to all 5 | - | - | - | ✓ |
+
+ Full comparison: docs/COMPARISON.md
+
+────────────────────────────────────────────────────────────────
+ Next: cx scaffold config > my.cx # start a real file
+ cx --json my.cx # convert to JSON
+ cx canonical my.cx | cx hash # content-address it
+ cx table info my.cx # inspect a :table block
+
+ Docs: https://github.com/cx-home/cx#readme
+ docs/TUTORIAL.md docs/CHEATSHEET.md docs/FAQ.md
+────────────────────────────────────────────────────────────────

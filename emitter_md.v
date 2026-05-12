@@ -137,7 +137,20 @@ fn emit_md_block(n Node, mut out []string) {
 					out << '${emit_md_inline(n)}\n\n'
 				}
 				else {
-					out << '<!-- [${emit_md_unknown_element(e)}] -->\n\n'
+					// ADR 0017 §D12 — an unknown element whose body is one
+					// or more collection literals renders the collection
+					// directly (sequence/array → bulleted list, map →
+					// definition list). The wrapper element name is
+					// dropped in MD since MD has no generic element
+					// shape to map it to.
+					if e.attrs.len == 0 && e.items.len > 0
+						&& e.items.all(it is SequenceNode || it is ArrayNode || it is MapNode) {
+						for item in e.items {
+							emit_md_block(item, mut out)
+						}
+					} else {
+						out << '<!-- [${emit_md_unknown_element(e)}] -->\n\n'
+					}
 				}
 			}
 		}
@@ -152,7 +165,66 @@ fn emit_md_block(n Node, mut out []string) {
 			c := n as CommentNode
 			out << '<!--${c.value}-->\n\n'
 		}
+		// ADR 0017 §D12 — sequence/array render as bulleted lists; maps
+		// render as definition lists. Block position uses indented forms.
+		SequenceNode { emit_md_collection_list(n.items, mut out) }
+		ArrayNode    { emit_md_collection_list(n.items, mut out) }
+		MapNode      { emit_md_collection_deflist(n.entries, mut out) }
 		else {}
+	}
+}
+
+fn emit_md_collection_list(items []Node, mut out []string) {
+	for item in items {
+		out << '- ${md_render_collection_value(item)}\n'
+	}
+	out << '\n'
+}
+
+fn emit_md_collection_deflist(entries []MapEntry, mut out []string) {
+	for entry in entries {
+		key := scalar_value_str(entry.key_value)
+		out << '${key}\n: ${md_render_collection_value(entry.value)}\n\n'
+	}
+}
+
+// md_render_collection_value renders a value (scalar / nested collection /
+// element) inline within a bullet or definition-list term.
+fn md_render_collection_value(n Node) string {
+	return match n {
+		ScalarNode    { md_render_scalar(n) }
+		TextNode      { md_escape_text(n.value) }
+		RawTextNode   { n.value }
+		EntityRefNode { entity_ref_str(n.name) }
+		SequenceNode  { md_render_inline_list(n.items) }
+		ArrayNode     { md_render_inline_list(n.items) }
+		MapNode       { md_render_inline_map(n.entries) }
+		Element       { emit_md_inline(n) }
+		else          { '' }
+	}
+}
+
+fn md_render_inline_list(items []Node) string {
+	parts := items.map(md_render_collection_value(it))
+	return '[${parts.join(', ')}]'
+}
+
+fn md_render_inline_map(entries []MapEntry) string {
+	mut pairs := []string{cap: entries.len}
+	for entry in entries {
+		key := scalar_value_str(entry.key_value)
+		pairs << '${key}: ${md_render_collection_value(entry.value)}'
+	}
+	return '{${pairs.join(', ')}}'
+}
+
+fn md_render_scalar(s ScalarNode) string {
+	return match s.value {
+		i64       { s.value.str() }
+		f64       { format_float(s.value as f64) }
+		bool      { if s.value as bool { 'true' } else { 'false' } }
+		NullValue { 'null' }
+		string    { s.value as string }
 	}
 }
 

@@ -345,7 +345,9 @@ pub fn parse_toml(src string) !Document {
 		}
 	}
 
-	return jv_to_cx_doc(JV(root))
+	mut doc := jv_to_cx_doc(JV(root))
+	resolve_namespaces(mut doc)
+	return doc
 }
 
 // Set key=val inside the last element of the array-of-tables at path

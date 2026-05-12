@@ -24,7 +24,7 @@ pub fn (d Document) transform(path string, f fn (Element) Element) Document {
 // transform_all applies f to every element matching the CXPath expression and
 // returns a new Document. Invalid expressions panic.
 pub fn (d Document) transform_all(expr string, f fn (Element) Element) Document {
-	cx_expr := cxpath_parse(expr)
+	cx_expr := cxpath_parse(expr) or { panic(err.msg()) }
 	mut new_elements := []Node{cap: d.elements.len}
 	for node in d.elements {
 		new_elements << transform_rebuild_node(node, cx_expr, f)

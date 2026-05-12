@@ -1,0 +1,142 @@
+# CX Conformance — cx diff (ADR 0012)
+# Version: 1.0 — 2026-05-08
+# Covers: data-equivalence, attribute changes, element changes, body
+#         changes, type-annotation changes, format outputs (unified/
+#         json/summary), exit-code semantics.
+#
+# Each test runs `cx diff` on `in_a` and `in_b`. The empty
+# `expected_unified` / `expected_summary` sections mean "no output
+# expected" (data-equivalent inputs); the runner asserts the output
+# is empty AND that the change list is empty.
+
+=== test: 001-data-equivalent-identical
+level: core
+tags: diff equiv
+--- in_a
+[server host=localhost]
+--- in_b
+[server host=localhost]
+--- expected_unified
+
+--- expected_summary
+no changes
+
+=== test: 002-data-equivalent-attribute-reorder
+level: core
+tags: diff equiv attribute-order
+--- in_a
+[server host=localhost +tls port=8080]
+--- in_b
+[server +tls port=8080 host=localhost]
+--- expected_unified
+
+--- expected_summary
+no changes
+
+=== test: 003-data-equivalent-comments-stripped
+level: core
+tags: diff equiv comments
+--- in_a
+[server host=localhost]
+--- in_b
+[- a leading comment]
+[server host=localhost]
+[- a trailing comment]
+--- expected_unified
+
+--- expected_summary
+no changes
+
+=== test: 004-data-equivalent-whitespace
+level: core
+tags: diff equiv whitespace
+--- in_a
+[server host=localhost
+  [port :u16 8080]
+]
+--- in_b
+[server host=localhost [port :u16 8080]]
+--- expected_unified
+
+--- expected_summary
+no changes
+
+=== test: 010-attribute-changed
+level: core
+tags: diff attribute-changed
+--- in_a
+[server host=localhost]
+--- in_b
+[server host=acme.com]
+--- expected_unified
+@@ /server/@host @@
+- host=localhost
++ host=acme.com
+--- expected_summary
+1 change(s): 0 element, 1 attribute, 0 body
+
+=== test: 011-attribute-added
+level: core
+tags: diff attribute-added
+--- in_a
+[server host=localhost]
+--- in_b
+[server host=localhost +tls]
+--- expected_unified
+@@ /server/@tls @@
++ tls=true
+--- expected_summary
+1 change(s): 0 element, 1 attribute, 0 body
+
+=== test: 012-attribute-removed
+level: core
+tags: diff attribute-removed
+--- in_a
+[server host=localhost +tls]
+--- in_b
+[server host=localhost]
+--- expected_unified
+@@ /server/@tls @@
+- tls=true
+--- expected_summary
+1 change(s): 0 element, 1 attribute, 0 body
+
+=== test: 020-element-added-tail
+level: core
+tags: diff element-added
+--- in_a
+[a 1] [b 2]
+--- in_b
+[a 1] [b 2] [c 3]
+--- expected_summary
+1 change(s): 1 element, 0 attribute, 0 body
+
+=== test: 021-element-removed-tail
+level: core
+tags: diff element-removed
+--- in_a
+[a 1] [b 2] [c 3]
+--- in_b
+[a 1] [b 2]
+--- expected_summary
+1 change(s): 1 element, 0 attribute, 0 body
+
+=== test: 030-body-scalar-changed
+level: core
+tags: diff body-changed
+--- in_a
+[port 8080]
+--- in_b
+[port 443]
+--- expected_summary
+1 change(s): 0 element, 0 attribute, 1 body
+
+=== test: 040-type-annotation-changed
+level: core
+tags: diff type-changed
+--- in_a
+[port :u32 8080]
+--- in_b
+[port :u16 8080]
+--- expected_summary
+1 change(s): 0 element, 0 attribute, 1 body

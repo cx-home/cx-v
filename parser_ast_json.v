@@ -9,7 +9,9 @@ pub fn parse_ast_json(src string) !Document {
 	r.skip_ws()
 	if r.pos >= r.src.len { return Document{} }
 	v := r.read_val()
-	return ajv_to_doc(v)!
+	mut doc := ajv_to_doc(v)!
+	resolve_namespaces(mut doc)
+	return doc
 }
 
 fn ajv_to_doc(v JV) !Document {
@@ -70,6 +72,7 @@ fn ajv_to_element(obj map[string]JV) !Node {
 		name:      ajv_str(obj, 'name')
 		anchor:    ajv_opt_str(obj, 'anchor')
 		merge:     ajv_opt_str(obj, 'merge')
+		id:        ajv_opt_str(obj, 'id')
 		data_type: ajv_opt_str(obj, 'dataType')
 		attrs:     attrs
 		items:     items
@@ -79,7 +82,10 @@ fn ajv_to_element(obj map[string]JV) !Node {
 fn ajv_to_attr(obj map[string]JV) !Attribute {
 	dt     := if s := ajv_opt_str(obj, 'dataType') { ajv_scalar_type(s) } else { none }
 	val_jv := obj['value'] or { JV(JVNull{}) }
-	return Attribute{ name: ajv_str(obj, 'name'), value: ajv_scalar_val(val_jv), data_type: dt }
+	is_ref := if rv := obj['isRef'] {
+		if rv is bool { rv as bool } else { false }
+	} else { false }
+	return Attribute{ name: ajv_str(obj, 'name'), value: ajv_scalar_val(val_jv), data_type: dt, is_ref: is_ref }
 }
 
 fn ajv_to_scalar_node(obj map[string]JV) !Node {
@@ -98,6 +104,15 @@ fn ajv_scalar_type(s string) ?ScalarType {
 		'date'     { ?ScalarType(ScalarType.date_type) }
 		'datetime' { ?ScalarType(ScalarType.datetime_type) }
 		'bytes'    { ?ScalarType(ScalarType.bytes_type) }
+		// v3.4 additions
+		'decimal'  { ?ScalarType(ScalarType.decimal_type) }
+		'bigint'   { ?ScalarType(ScalarType.bigint_type) }
+		// v3.4 sized variants map to their base category in the AST.
+		// The original annotation string is preserved on the parent
+		// Element's data_type field for round-trip and binary emission.
+		'i8', 'i16', 'i32', 'i64'   { ?ScalarType(ScalarType.int_type) }
+		'u8', 'u16', 'u32', 'u64'   { ?ScalarType(ScalarType.int_type) }
+		'f16', 'f32', 'f64'          { ?ScalarType(ScalarType.float_type) }
 		else       { none }
 	}
 }

@@ -1,0 +1,320 @@
+# CX Conformance — ID/IDREF tests
+# Version: 1.0 — 2026-05-08
+# Covers: spec/decisions/0003-id-idref.md (ID declarations, attribute-
+#         value references, CXPath [#id] predicate, round-trip).
+#
+# v0 scope (per ADR 0003): document-scope only. The CX → XML / JSON /
+# YAML / TOML / MD round-trip mappings (D6), canonical-form ID
+# renaming (D7), include-time ID merging (D3 second paragraph), and
+# the [ref @id] body-position node form (D1 second bullet) are
+# deferred to follow-up phases.
+#
+# Verification: parse `in_cx`, re-emit through emit_cx, compare
+# against `out_cx`. Mismatch on parse OR mismatch on round-trip
+# fails.
+
+=== test: id-001-declaration-only
+level: core
+tags: identity declaration
+--- in_cx
+[user #u-1 name=alice]
+--- out_cx
+[user #u-1 name=alice]
+
+=== test: id-002-declaration-with-anchor
+level: core
+tags: identity declaration anchor
+# Anchors and IDs are independent. AnchorDef? MergeRef? Id? per the
+# meta order; emitter writes them in that sequence.
+--- in_cx
+[item &a #u-1 v=42]
+--- out_cx
+[item &a #u-1 v=42]
+
+=== test: id-003-attribute-value-reference
+level: core
+tags: identity reference
+--- in_cx
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+]
+--- out_cx
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+]
+
+=== test: id-004-forward-reference-resolves
+level: core
+tags: identity reference forward
+# Reference `@u-1` appears before `#u-1` in source order. Allowed
+# per ADR 0003 D4: collection happens on first pass, validation on
+# second.
+--- in_cx
+[users
+  [reviewer assigned-to=@u-1]
+  [user #u-1 name=alice]
+]
+--- out_cx
+[users
+  [reviewer assigned-to=@u-1]
+  [user #u-1 name=alice]
+]
+
+=== test: id-005-quoted-at-literal-round-trips
+level: core
+tags: identity reference quoting
+# A quoted `'@literal'` is a string value, not a reference. The
+# emitter must quote `@`-prefixed string values to disambiguate
+# from the bare reference form.
+--- in_cx
+[item label='@literal']
+--- out_cx
+[item label='@literal']
+
+=== test: id-006-multiple-ids-no-collision
+level: core
+tags: identity declaration
+--- in_cx
+[a #x v=1]
+[b #y v=2]
+[c #z v=3]
+--- out_cx
+[a #x v=1]
+[b #y v=2]
+[c #z v=3]
+
+=== test: id-007-ref-in-nested-element
+level: core
+tags: identity reference nested
+--- in_cx
+[doc
+  [users
+    [user #u-1 name=alice]
+  ]
+  [reviews
+    [review target=@u-1 score=5]
+  ]
+]
+--- out_cx
+[doc
+  [users
+    [user #u-1 name=alice]
+  ]
+  [reviews
+    [review target=@u-1 score=5]
+  ]
+]
+
+=== test: id-008-id-with-hyphens-and-digits
+level: core
+tags: identity declaration charset
+# Per ADR 0003 D2: ID is a Name (letter/_ then letter/digit/_/-/.).
+--- in_cx
+[user #user-42 name=alice]
+[reviewer assigned-to=@user-42]
+--- out_cx
+[user #user-42 name=alice]
+[reviewer assigned-to=@user-42]
+
+=== test: id-009-multiple-refs-to-same-id
+level: core
+tags: identity reference multiple
+--- in_cx
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+  [approver checked-by=@u-1]
+]
+--- out_cx
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+  [approver checked-by=@u-1]
+]
+
+=== test: id-010-xml-emit-id-as-xml-id
+level: core
+tags: identity xml roundtrip
+# ADR 0003 D6: #id round-trips as XML xml:id (XML built-in URI ns).
+--- in_cx
+[user #u-1 name=alice]
+--- out_xml
+<user xml:id="u-1" name="alice"/>
+
+=== test: id-011-xml-parse-xml-id-to-hash
+level: core
+tags: identity xml roundtrip
+# Inverse direction: XML xml:id hoists to CX #id.
+--- in_xml
+<user xml:id="u-1" name="alice"/>
+--- out_cx
+[user #u-1 name=alice]
+
+=== test: id-012-xml-emit-ref-as-plain-attr
+level: core
+tags: identity reference xml
+# ADR 0003 D6: is_ref attrs emit as name="<id>" (no @). XML defers
+# IDREF disambiguation to schema validation.
+--- in_cx
+[users [user #u-1 name=alice] [reviewer assigned-to=@u-1]]
+--- out_xml
+<users>
+  <user xml:id="u-1" name="alice"/>
+  <reviewer assigned-to="u-1"/>
+</users>
+
+=== test: id-013-xml-parse-marks-matching-attr-as-ref
+level: core
+tags: identity reference xml
+# Inverse direction: XML attribute whose value matches a declared
+# xml:id is reconstructed as a CX is_ref attribute (@id form).
+--- in_xml
+<users>
+  <user xml:id="u-1" name="alice"/>
+  <reviewer assigned-to="u-1"/>
+</users>
+--- out_cx
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+]
+
+=== test: id-014-xml-roundtrip-nested-ids-and-refs
+level: core
+tags: identity xml nested roundtrip
+# Full round-trip: CX with multiple IDs and refs survives intact
+# through XML emission.
+--- in_cx
+[doc
+  [users
+    [user #u-1 name=alice]
+    [user #u-2 name=bob]
+  ]
+  [reviews
+    [review target=@u-1 score=5]
+    [review target=@u-2 score=4]
+  ]
+]
+--- out_xml
+<doc>
+  <users>
+    <user xml:id="u-1" name="alice"/>
+    <user xml:id="u-2" name="bob"/>
+  </users>
+  <reviews>
+    <review target="u-1" score="5"/>
+    <review target="u-2" score="4"/>
+  </reviews>
+</doc>
+
+=== test: id-015-canonical-renames-in-document-order
+level: core
+tags: identity canonical
+# ADR 0003 D7: strict canonical rewrites IDs to id-N in document
+# order, and rewrites references to track the renamed declarations.
+# Two documents differing only in ID spelling produce byte-identical
+# canonical output.
+--- in_cx
+[users
+  [user #alice name=Alice]
+  [user #bob name=Bob]
+  [reviewer assigned-to=@alice]
+  [reviewer assigned-to=@bob]
+]
+--- out_canonical
+[users
+  [user #id-1 name=Alice]
+  [user #id-2 name=Bob]
+  [reviewer assigned-to=@id-1]
+  [reviewer assigned-to=@id-2]
+]
+
+=== test: id-016-canonical-spelling-independent-hash
+level: core
+tags: identity canonical
+# Same shape as id-015 but with completely different ID spellings.
+# Strict canonical produces the identical id-N renaming, so the
+# canonical bytes (and cx hash) match id-015.
+--- in_cx
+[users
+  [user #zzz name=Alice]
+  [user #aaa name=Bob]
+  [reviewer assigned-to=@zzz]
+  [reviewer assigned-to=@aaa]
+]
+--- out_canonical
+[users
+  [user #id-1 name=Alice]
+  [user #id-2 name=Bob]
+  [reviewer assigned-to=@id-1]
+  [reviewer assigned-to=@id-2]
+]
+
+=== test: id-017-canonical-forward-reference-renamed
+level: core
+tags: identity canonical forward
+# Forward reference: @target appears before #target in source order.
+# Renaming visits #target on the second pass; the forward @target
+# reference picks up the same id-1 name.
+--- in_cx
+[doc
+  [pointer to=@target]
+  [thing #target value=42]
+]
+--- out_canonical
+[doc
+  [pointer to=@id-1]
+  [thing #id-1 value=42]
+]
+
+=== test: id-018-body-position-ref-round-trips
+level: core
+tags: identity reference body-position
+# ADR 0003 D1 second bullet: `[ref @id]` body-position node form.
+# Element named `ref` with body of exactly a single `@name` token
+# is a syntactic reference, not a regular text-body element.
+--- in_cx
+[doc
+  [thing #t-1 v=42]
+  [para See [ref @t-1] for details.]
+]
+--- out_cx
+[doc
+  [thing #t-1 v=42]
+  [para 'See ' [ref @t-1] ' for details.']
+]
+
+=== test: id-019-body-position-ref-canonical-rename
+level: core
+tags: identity reference body-position canonical
+# Body-position ref participates in canonical-form id-N renaming
+# alongside attribute-value refs.
+--- in_cx
+[doc
+  [thing #target v=42]
+  [para See [ref @target] for details.]
+]
+--- out_canonical
+[doc
+  [thing #id-1 v=42]
+  [para 'See ' [ref @id-1] ' for details.']
+]
+
+=== test: id-020-body-position-ref-non-id-element-name-untouched
+level: core
+tags: identity reference body-position
+# Elements named `ref` whose body is NOT exactly a single `@id`
+# token are left as regular elements (back-compat for v0). Only
+# the exact `[ref @<Name>]` shape is treated as a syntactic ref.
+--- in_cx
+[doc
+  [ref note=hi]
+  [ref text content]
+]
+--- out_cx
+[doc
+  [ref note=hi]
+  [ref text content]
+]

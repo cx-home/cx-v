@@ -14,7 +14,7 @@ import strconv
 //   JSON bool    → ScalarNode (bool)
 //   JSON null    → empty Element (or omitted, depending on context)
 
-// ── Internal JSON value type (mirrors conformance_run.v) ─────────────────────
+// ── Internal JSON value type (mirrors tests/runners/conformance/conformance_run.v) ──
 
 type JV = JVNull | bool | i64 | f64 | string | []JV | map[string]JV
 
@@ -334,7 +334,9 @@ pub fn parse_json(src string) !Document {
 	r.skip_ws()
 	if r.pos >= r.src.len { return Document{} }
 	v := r.read_val()
-	return jv_to_cx_doc(v)
+	mut doc := jv_to_cx_doc(v)
+	resolve_namespaces(mut doc)
+	return doc
 }
 
 pub fn parse_json_cx(src string) !ParseResult {

@@ -127,7 +127,54 @@ fn (mut p XmlParser) parse_xml_document() !Document {
 		}
 	}
 
-	return Document{ prolog: prolog, doctype: doctype, elements: elements }
+	mut doc := Document{ prolog: prolog, doctype: doctype, elements: elements }
+	resolve_namespaces(mut doc)
+	// v3.4 (ADR 0003 D6): mark attrs whose values match a declared
+	// xml:id (now hoisted to Element.id) as is_ref. Without an XML
+	// schema we can't disambiguate xs:IDREF from a plain string that
+	// happens to match an ID, so we adopt the conservative posture:
+	// any attribute whose value matches a known ID becomes a reference.
+	// Round-trip lossless against documents whose only ID-shaped
+	// attribute values ARE references; would over-promote in the
+	// pathological case of a plain string that collides with an ID.
+	mark_ref_attrs(mut doc)
+	resolve_ids(doc)!
+	return doc
+}
+
+// mark_ref_attrs walks the document, builds the ID set, then walks
+// again marking every attribute whose string value is in the ID set
+// as is_ref. v3.4 (ADR 0003 D6).
+fn mark_ref_attrs(mut doc Document) {
+	mut id_set := map[string]bool{}
+	collect_id_set(doc.elements, mut id_set)
+	collect_id_set(doc.prolog, mut id_set)
+	if id_set.len == 0 { return }
+	mark_refs(mut doc.elements, id_set)
+	mark_refs(mut doc.prolog, id_set)
+}
+
+fn collect_id_set(nodes []Node, mut id_set map[string]bool) {
+	for n in nodes {
+		if n is Element {
+			if id := n.id { id_set[id] = true }
+			collect_id_set(n.items, mut id_set)
+		}
+	}
+}
+
+fn mark_refs(mut nodes []Node, id_set map[string]bool) {
+	for mut n in nodes {
+		if mut n is Element {
+			for mut a in n.attrs {
+				if !a.is_ref {
+					vstr := scalar_value_str(a.value)
+					if vstr in id_set { a.is_ref = true }
+				}
+			}
+			mark_refs(mut n.items, id_set)
+		}
+	}
 }
 
 fn (mut p XmlParser) parse_xml_pi() !Node {
@@ -342,6 +389,7 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	mut cx_anchor := ?string(none)
 	mut cx_merge := ?string(none)
 	mut cx_type := ?string(none)
+	mut cx_id := ?string(none)
 	mut attrs := []Attribute{}
 
 	// Read attributes
@@ -359,10 +407,19 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 		if aname == 'cx:anchor' { cx_anchor = aval }
 		else if aname == 'cx:merge' { cx_merge = aval }
 		else if aname == 'cx:type' { cx_type = aval }
+		else if aname == 'xml:id' {
+			// v3.4 (ADR 0003 D6): xml:id (XML built-in URI ns) hoists
+			// to Element.id. The attribute is consumed; the bare CX
+			// emitter writes #id from the field, never as an attribute.
+			cx_id = aval
+		}
 		else {
-			// Convert xmlns attrs back to ns: form
-			cx_name := xmlns_to_cx_ns(aname)
-			attrs << Attribute{ name: cx_name, value: ScalarValue(aval), data_type: none }
+			// v3.4 (ADR 0002): xmlns / xmlns:foo declarations round-trip
+			// as plain attributes carrying the literal source name. The
+			// post-parse resolve_namespaces() pass sees them and uses
+			// them to fill Element.ns_uri / Attribute.ns_uri across the
+			// scope. The legacy `ns:foo` translation is dropped.
+			attrs << Attribute{ name: aname, value: ScalarValue(aval), data_type: none }
 		}
 	}
 
@@ -380,7 +437,7 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	if b == `/` {
 		p.advance() // '/'
 		p.xml_expect(`>`)!
-		return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, attrs: attrs, items: [] }
+		return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, id: cx_id, attrs: attrs, items: [] }
 	}
 
 	p.xml_expect(`>`)!
@@ -390,7 +447,7 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	p.parse_xml_content(name, cx_type, mut items)!
 
 	// If cx_type is an array type, items should already be Scalar nodes
-	return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, attrs: attrs, items: items }
+	return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, id: cx_id, attrs: attrs, items: items }
 }
 
 fn (mut p XmlParser) parse_xml_content(parent_name string, cx_type ?string, mut items []Node) ! {
@@ -581,12 +638,6 @@ fn (mut p XmlParser) parse_xml_ref() !Node {
 	name := p.xml_read_name()!
 	p.xml_expect(`;`)!
 	return EntityRefNode{ name: name }
-}
-
-fn xmlns_to_cx_ns(name string) string {
-	if name == 'xmlns' { return 'ns:default' }
-	if name.starts_with('xmlns:') { return 'ns:${name[6..]}' }
-	return name
 }
 
 fn (mut p XmlParser) xml_read_name() !string {

@@ -928,3 +928,87 @@ tags: block-content mixed-content
 <p><cx:block>hello world</cx:block></p>
 --- out_cx
 [p [|hello world|]]
+
+=== test: 040-interpolation-simple
+level: extended
+tags: cxl interpolation v3.5
+# v0.6.0 grammar v3.5 [58] (ADR 0016): `[?=EXPR]` value-interpolation.
+# At v0.6.0 the parser captures EXPR as opaque text; the CXL evaluator
+# at v0.7.0+ parses it as CXPath. Pure-data tools round-trip it.
+--- in_cx
+[?=@name]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Interpolation", "expr": "@name"}
+  ]
+}
+--- out_cx
+[?=@name]
+
+=== test: 041-interpolation-nested-brackets
+level: extended
+tags: cxl interpolation v3.5 bracket-balance
+# Grammar [58a]/[58b]: InterpolationBody is bracket-balanced opaque
+# text. Internal `[`/`]` (CXPath predicates) survive the capture.
+--- in_cx
+[p [?=//service[@port=8080]/@host]]
+--- out_cx
+[p [?=//service[@port=8080]/@host]]
+
+=== test: 042-eval-directive-single-slot
+level: extended
+tags: cxl eval-directive v3.6 adr-0017
+# Grammar [59] post-ADR-0017: `[?Name ArgArray? ]` uniform shape.
+# Every EvalDirective body is zero or one Array literal whose items
+# are the positional slots (ADR 0017 §D6 / §D7). The single-slot
+# disambiguation rule (resolution 2.i, 2026-05-12) forces the first
+# `[…]` body item to parse as an Array regardless of comma presence
+# — `[?if [cond]]` is an EvalDirective whose arg array has one
+# textual slot, not an EvalDirective with a nested `cond` element.
+--- in_cx
+[?if [cond]]
+--- out_ast
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "EvalDirective",
+      "name": "if",
+      "items": [
+        {
+          "type": "Array",
+          "items": [{"type": "Text", "value": "cond"}]
+        }
+      ]
+    }
+  ]
+}
+--- out_cx
+[?if [cond]]
+
+=== test: 043-eval-directive-three-slot
+level: extended
+tags: cxl eval-directive v3.6 adr-0017
+# Grammar [59] post-ADR-0017 §D7: three-slot `[?if [cond, then-body,
+# else-body]]`. The `:then=…` / `:else=…` named-attribute slots
+# from the pre-0017 draft are dropped (§D7 / §D17). Then-body and
+# else-body slots contain CX body items (here `[yes]` and `[no]`
+# are Elements with no body — the canonical literal-content idiom).
+--- in_cx
+[?if [cond, [yes], [no]]]
+--- out_cx
+[?if [cond, [yes], [no]]]
+
+=== test: 044-eval-directive-for-3slot
+level: extended
+tags: cxl eval-directive for v3.6 adr-0017
+# Grammar [59] post-ADR-0017 §D7: `[?for [var, iterable, body]]`
+# three-slot uniform shape. The pre-0017 `[?for v in expr body]`
+# positional-text form is dropped — `v` is now slot 0, `//variant`
+# is slot 1, the body element is slot 2.
+--- in_cx
+[?for [v, //variant, [card [?=v/@sku]]]]
+--- out_cx
+[?for [v, //variant, [card [?=v/@sku]]]]

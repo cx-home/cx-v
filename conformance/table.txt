@@ -1,0 +1,245 @@
+# CX Conformance — :table block tests
+# Version: 1.0 — 2026-05-08
+# Covers: spec/grammar.ebnf [29], spec/table_api.md, spec/canonical.md §2.
+#   - Header column declarations (typed, untyped, mixed)
+#   - Row parsing (typed cells preserve their type)
+#   - Quoted string cells
+#   - Null cells
+#   - Numeric underscores in typed-int cells
+#   - CX → CX lossless round-trip
+#   - Empty :table (header only, no rows)
+#
+# Verification is via the conformance_run.v out_cx section: parse the
+# input CX, re-emit through emit_cx, compare against the expected
+# output. Mismatch fails. The fixtures pin the v3.4 grammar — in
+# particular ns-013-style colon handling: `name:string` in a :table
+# header MUST split into (name, string) regardless of whether `:` is
+# accepted as a name-character elsewhere in the parser (it is, for
+# namespace-prefixed identifiers like `xmlns:foo`).
+
+=== test: tab-001-typed-columns
+level: core
+tags: table header typed
+--- in_cx
+[users :table[name:string age:int active:bool]
+  alice 30 true
+  bob 25 false
+]
+--- out_cx
+[users :table[name:string age:int active:bool]
+  alice 30 true
+  bob 25 false
+]
+
+=== test: tab-002-untyped-columns
+level: core
+tags: table header untyped
+# Untyped columns omit the `:type` suffix on emit per the
+# implementation contract: type_name == '' means string default.
+--- in_cx
+[t :table[a b c]
+  x y z
+  p q r
+]
+--- out_cx
+[t :table[a b c]
+  x y z
+  p q r
+]
+
+=== test: tab-003-mixed-typed-untyped
+level: core
+tags: table header mixed
+--- in_cx
+[t :table[name age:int tag]
+  alice 30 admin
+  bob 25 user
+]
+--- out_cx
+[t :table[name age:int tag]
+  alice 30 admin
+  bob 25 user
+]
+
+=== test: tab-004-single-column-single-row
+level: core
+tags: table edge
+--- in_cx
+[t :table[v:int]
+  42
+]
+--- out_cx
+[t :table[v:int]
+  42
+]
+
+=== test: tab-005-typed-int-cells
+level: core
+tags: table cells int
+--- in_cx
+[t :table[n:int]
+  1
+  2
+  3
+]
+--- out_cx
+[t :table[n:int]
+  1
+  2
+  3
+]
+
+=== test: tab-006-typed-bool-cells
+level: core
+tags: table cells bool
+--- in_cx
+[t :table[active:bool]
+  true
+  false
+  true
+]
+--- out_cx
+[t :table[active:bool]
+  true
+  false
+  true
+]
+
+=== test: tab-007-typed-float-cells
+level: core
+tags: table cells float
+--- in_cx
+[t :table[ratio:float]
+  1.5
+  2.5
+  3.5
+]
+--- out_cx
+[t :table[ratio:float]
+  1.5
+  2.5
+  3.5
+]
+
+=== test: tab-008-quoted-string-cell
+level: core
+tags: table cells quoted
+--- in_cx
+[users :table[name:string age:int]
+  'alice jones' 30
+  bob 25
+]
+--- out_cx
+[users :table[name:string age:int]
+  'alice jones' 30
+  bob 25
+]
+
+=== test: tab-009-null-cell
+level: core
+tags: table cells null
+--- in_cx
+[t :table[a b]
+  alice null
+  bob 30
+]
+--- out_cx
+[t :table[a b]
+  alice null
+  bob 30
+]
+
+=== test: tab-010-underscored-int-cells
+level: core
+tags: table cells numerics
+# v3.4 numeric underscores apply inside typed-int table cells the
+# same way they do as scalars: 1_000_000 → 1000000 on parse, and the
+# emitter outputs the raw decimal form (no underscore reinsertion).
+--- in_cx
+[stats :table[count:int]
+  1_000_000
+  2_500_000
+]
+--- out_cx
+[stats :table[count:int]
+  1000000
+  2500000
+]
+
+=== test: tab-011-empty-rows
+level: core
+tags: table edge empty
+--- in_cx
+[t :table[a b]]
+--- out_cx
+[t :table[a b]]
+
+=== test: tab-012-array-cells
+level: core
+tags: table cells collection-literal ADR-0017 ADR-0018
+# Phase 2.1: V :table parser accepts collection-literal Array cells
+# per ADR 0018 §D4. Single-element arrays use trailing-comma form
+# `[v,]` per ADR 0017 §D1's comma-marker disambiguator (without
+# the trailing comma `[v]` would parse as Element).
+--- in_cx
+[t :table[name tags]
+  alice [admin, user,]
+  bob [user,]
+]
+--- out_cx
+[t :table[name tags]
+  alice [admin, user]
+  bob [user]
+]
+
+=== test: tab-013-map-cells
+level: core
+tags: table cells collection-literal ADR-0017 ADR-0018
+# Map cells per ADR 0018 §D4 + ADR 0017 §D1. Lossless round-trip
+# preserves input key order (this is `cx fmt` semantics). The
+# strict-canonical hash path per ADR 0017 §D14 sorts keys lex —
+# tested separately via `cx hash` / `cx canonical` fixtures, not
+# here.
+--- in_cx
+[t :table[name attrs]
+  alice {role: admin, age: 30}
+  bob {role: user, age: 25}
+]
+--- out_cx
+[t :table[name attrs]
+  alice {role: admin, age: 30}
+  bob {role: user, age: 25}
+]
+
+=== test: tab-014-sequence-cells
+level: core
+tags: table cells collection-literal ADR-0017 ADR-0018
+--- in_cx
+[t :table[name ports]
+  web (80, 443)
+  db (5432, 6379)
+]
+--- out_cx
+[t :table[name ports]
+  web (80, 443)
+  db (5432, 6379)
+]
+
+=== test: tab-015-mixed-scalar-and-collection-cells
+level: core
+tags: table cells mixed
+# A column can hold a scalar in one row and a collection in
+# another. The column's type_name is informational; the cell's
+# concrete representation is what's emitted.
+--- in_cx
+[t :table[name value]
+  count 42
+  tags [admin, user,]
+  meta {k: v}
+]
+--- out_cx
+[t :table[name value]
+  count 42
+  tags [admin, user]
+  meta {k: v}
+]
