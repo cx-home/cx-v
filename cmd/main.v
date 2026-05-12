@@ -3,7 +3,7 @@ module main
 import os
 import cx
 
-const version = '0.6.0'
+const version = '0.6.1'
 
 fn main() {
 	args := os.args[1..]
