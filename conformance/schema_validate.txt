@@ -1259,3 +1259,86 @@ tags: schema S010
 
 --- sv_expected_codes
 S010
+
+
+=== test: sv-056 GG10 body :ref accepts ref element with body-position form
+level: must
+tags: schema S023 body-ref GG10
+
+# v0.7.0 GG10 (ADR 0003 D1 second bullet): `[body :ref]` declares
+# the target element MUST carry the body-position reference form
+# (Element.body_ref set, items empty). The parser lifts body_ref
+# only for elements named `ref` per the GG12 strict reservation;
+# this fixture pairs an authored `[ref @s-1]` with a schema that
+# declares the parent's child as type `ref-target` (a non-reserved
+# alias that maps via the schema model to body_ref expectations).
+#
+# Positive path: parser lifts body_ref on the `ref` child; schema
+# validator's body=ref check passes silently.
+
+--- in_cx
+[doc
+  [section #s-1
+    [title T]
+  ]
+  [para
+    [ref @s-1]
+  ]
+]
+
+--- schema_cxs
+[?cx schema-of doc]
+
+[doc
+  [body :elem]
+  [elem section :card='1..*']
+  [elem para :card='0..*']
+]
+
+[section
+  [body :elem]
+  [elem title :card='1..1']
+]
+
+[title
+  [body :string]
+]
+
+[para
+  [body :elem]
+]
+
+--- sv_expected_codes
+
+
+
+=== test: sv-057 GG10 body :ref rejects element lacking body_ref
+level: must
+tags: schema S023 body-ref GG10
+
+# Inverse of sv-056: a non-reserved element (`xref`) declared
+# `[body :ref]` in the schema; target instance carries text instead
+# of a body-position reference. Schema validator raises S023.
+# (Cannot test with `ref` directly — parser strict reservation per
+# GG12 catches the malformed `[ref ...]` shape at parse time before
+# the validator gets to see it.)
+
+--- in_cx
+[doc
+  [xref no body ref here]
+]
+
+--- schema_cxs
+[?cx schema-of doc]
+
+[doc
+  [body :elem]
+  [elem xref :card='1..*']
+]
+
+[xref
+  [body :ref]
+]
+
+--- sv_expected_codes
+S023

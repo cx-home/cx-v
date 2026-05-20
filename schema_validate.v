@@ -29,6 +29,7 @@ import strconv
 //   S018 — length violation (:len='M..N' — byte length)
 //   S019 — required content missing
 //   S020 — schema-version unsupported
+//   S023 — body :ref shape mismatch (v0.7.0 GG10 / ADR 0003 D1)
 //
 // The validator reads its rules from the unified SchemaModel (defined
 // in data_bin_schema_driven.v); no second AST walk happens here.
@@ -475,6 +476,26 @@ fn validate_element(e Element, type_name string, sm SchemaModel, mut diags []Dia
 	// apply to the item count, not byte length.
 	if st.body.declared && is_container_collection_kind(st.body.kind) {
 		validate_container_body(e, st.body, mut diags)
+	}
+
+	// v0.7.0 GG10 (ADR 0003 D1 second bullet): `body :ref` declares
+	// that the element must use the `[<name> @<id>]` body-position
+	// reference form — Element.body_ref is set and Element.items is
+	// empty. S023 fires when the element lacks body_ref OR has
+	// non-empty items.
+	if st.body.declared && st.body.kind == 'ref' {
+		has_body_ref := e.body_ref != none
+		if !has_body_ref {
+			diags << Diagnostic{
+				code:    'S023'
+				message: 'body of <${e.name}>: declared :ref but element has no body-position reference (expected `[${e.name} @<id>]` form)'
+			}
+		} else if e.items.len > 0 {
+			diags << Diagnostic{
+				code:    'S023'
+				message: 'body of <${e.name}>: declared :ref but element has both body_ref and child items'
+			}
+		}
 	}
 
 	// S015 — child-element order under strict ordering policy

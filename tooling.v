@@ -65,6 +65,32 @@ pub fn cx_text_eq(a string, b string) !bool {
 	return ca == cb
 }
 
+// cx_data_bin_hash returns the lowercase hex SHA-256 of the strict
+// canonical text bytes of a CXDB binary input. Compression-invariant
+// per spec/data_bin.md §3.12.2: row groups wrapped in body-tag 0x90
+// are decompressed by parse_data_bin, the resulting Document is run
+// through the same canonical pipeline as cx_text_hash, and the
+// canonical text bytes are hashed. zstd-1 / zstd-19 / plain
+// encodings of the same logical table produce identical hashes
+// because parse_data_bin yields the same Document for each, and
+// canonical text is a function of Document content only.
+//
+// HH1 (v0.7.0) — closes the §3.12.2 promise documented but unwired
+// at v0.6.0. The pipeline composes the chunked decoder (which
+// already decompresses 0x90 wrappers internally) with the existing
+// canonical pipeline, so no new decompression code path lands; the
+// surface is purely an entry-point composition.
+pub fn cx_data_bin_hash(input []u8) !string {
+	doc := parse_data_bin(input)!
+	mut stripped := canonicalize_doc(doc)
+	canonicalize_namespaces(mut stripped)
+	canonicalize_ids(mut stripped)
+	canonicalize_collection_literals(mut stripped)
+	canonical_text := emit_cx(stripped)
+	digest := sha256.sum256(canonical_text.bytes())
+	return digest.hex()
+}
+
 // canonicalize_doc returns a new Document with presentation-only
 // nodes stripped: Comment, RawText, CXDirective, XMLDecl, BlockContent.
 // Anchor/merge metadata on Elements is also dropped (v0 — see note at

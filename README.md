@@ -1,5 +1,10 @@
 # cx
 
+> **V package distribution** of CX. This repo is the `v install` channel.
+> For the spec, all 10 language bindings, conformance suite, and full
+> documentation, see **[github.com/cx-home/cx](https://github.com/cx-home/cx)**
+> or the docs site at **[cx-home.github.io/cx](https://cx-home.github.io/cx/)**.
+
 CX is a bracket-based markup and configuration format. This is the native V
 implementation — no C dependencies, pure V.
 

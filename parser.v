@@ -20,7 +20,7 @@ mut:
 	// during parsing. Used by parse_pi_or_decl to distinguish template-
 	// call invocations `[?template-name args]` (parse as EvalDirective)
 	// from foreign processing instructions like `[?php …]` (parse as
-	// PI). Per spec/cxl.md §3.7 templates must be declared before use;
+	// PI). Per spec/eval.md §3.7 templates must be declared before use;
 	// this set is populated as ?def directives are encountered. ADR
 	// 0020 §D3 + §D6.
 	declared_templates map[string]bool
@@ -84,6 +84,77 @@ fn (mut p Parser) skip_ws() {
 			break
 		}
 	}
+}
+
+// peek_skip_ws returns the next non-whitespace byte without advancing
+// the parser position. Returns 0 if only whitespace remains. Used to
+// classify document content before deciding whether to enter node-
+// parsing mode or bare-text mode (v0.7.0 doc-top rule).
+fn (mut p Parser) peek_skip_ws() u8 {
+	mut i := p.pos
+	for i < p.src.len {
+		b := p.src[i]
+		if b == ` ` || b == `\t` || b == `\r` || b == `\n` { i++ } else { return b }
+	}
+	return 0
+}
+
+// read_quoted_for_doc reads a top-level quoted-scalar (single, double,
+// or triple-quoted). Position is at the opening quote. Returns the
+// string value.
+fn (mut p Parser) read_quoted_for_doc() !string {
+	if p.pos + 2 < p.src.len && p.src[p.pos] == `'` && p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
+		return p.read_triple_quoted_str()!
+	}
+	return p.read_quoted()!
+}
+
+// read_top_text_run consumes input verbatim from the current position
+// until: a `[` (node start), `&` (entity-ref start), `---` document
+// separator at line start, or EOF. Returns the bytes read and the
+// terminator that stopped the read (`[`, `&`, `-`, or 0 for EOF).
+//
+// When the stop reason is EOF or `---`, strips exactly one trailing
+// newline (editor convention — same as the legacy bare-text-document
+// rule). When the stop reason is `[` or `&`, no stripping: the author
+// placed those bytes as deliberate separators between text and node.
+//
+// Used by parse_document to support both bare-text documents (v0.7.0
+// doc-top rule) and CXL programs that interleave literal text with
+// `[?=…]` / `[?Name …]` forms at the top level (spec/eval.md §2.1).
+fn (mut p Parser) read_top_text_run() (string, u8) {
+	start := p.pos
+	mut end := p.pos
+	mut line_start := p.pos == 0 || (p.pos > 0 && p.src[p.pos-1] == `\n`)
+	mut terminator := u8(0)
+	for end < p.src.len {
+		b := p.src[end]
+		if b == `[` || b == `&` {
+			terminator = b
+			break
+		}
+		if line_start && end + 3 <= p.src.len
+			&& p.src[end] == `-` && p.src[end+1] == `-` && p.src[end+2] == `-` {
+			terminator = `-`
+			break
+		}
+		line_start = b == `\n`
+		end++
+	}
+	// Advance parser position so callers see updated line/col.
+	for p.pos < end {
+		p.advance()
+	}
+	mut out := p.src[start..end].bytestr()
+	// Only strip when the run reached EOF or a doc separator. A `[`/`&`
+	// terminator means more program nodes follow; preserve the trailing
+	// newline so it lands in the rendered output between Text and node.
+	if terminator != `[` && terminator != `&` {
+		if out.len > 0 && out[out.len - 1] == `\n` {
+			out = out[..out.len - 1]
+		}
+	}
+	return out, terminator
 }
 
 // skip_ws_and_line_comments skips whitespace AND v3.4 line comments
@@ -206,6 +277,13 @@ fn (mut p Parser) parse_document() !Document {
 	mut prolog := []Node{}
 	mut doctype := ?DoctypeDecl(none)
 	mut elements := []Node{}
+	// Tracks whether top-level text-runs are admitted (CXL mixed mode).
+	// Declared up here so the prolog loop can switch the document into
+	// mixed mode when the first non-prolog node is itself a CXL marker
+	// (e.g. `[?=…] AFTER` — the prolog loop captures the interpolation
+	// as elements[0] then breaks; without this flag the unified loop
+	// below would reject the trailing prose).
+	mut allow_top_text := false
 
 	p.skip_ws_and_line_comments()
 
@@ -226,6 +304,9 @@ fn (mut p Parser) parse_document() !Document {
 					prolog << n
 				} else {
 					elements << n
+					if n is InterpolationNode || n is EvalDirectiveNode {
+						allow_top_text = true
+					}
 					break
 				}
 			}
@@ -264,7 +345,57 @@ fn (mut p Parser) parse_document() !Document {
 		return doc
 	}
 
+	// v0.7.0 doc-top: a document with no prolog/element content yet may
+	// begin with bare text (`hello world`, `1\n2\n3`), a quoted scalar
+	// (`'hi'`, `"hi"`, `'''hi'''`), `[`/`&` node-start bytes, or EOF.
+	// Quoted-scalar openers produce a single-node scalar document.
+	// Non-bracket prose engages "mixed-text mode" — top-level Text runs
+	// may interleave with bracketed nodes per spec/eval.md §2.1.
+	if elements.len == 0 && !p.at_end() {
+		b := p.peek_skip_ws()
+		if b == `'` || b == `"` {
+			p.skip_ws()
+			val := p.read_quoted_for_doc()!
+			elements << Node(ScalarNode{
+				data_type: ScalarType.string_type
+				value: ScalarValue(val)
+			})
+		} else if b != `[` && b != `&` && b != 0 {
+			// Leading bare text — collect run up to first `[`/`&`/`---`/EOF.
+			text, _ := p.read_top_text_run()
+			if text.len > 0 {
+				elements << Node(TextNode{ value: text })
+			}
+			allow_top_text = true
+		}
+	}
+
 	for {
+		if p.at_end() { break }
+		// `---` separator: strict mode skips leading ws first (matches
+		// legacy v3.x behavior); mixed mode requires line-start (text-run
+		// already would have stopped there).
+		if allow_top_text {
+			if p.pos + 3 <= p.src.len
+				&& (p.pos == 0 || p.src[p.pos-1] == `\n`)
+				&& p.src[p.pos] == `-` && p.src[p.pos+1] == `-` && p.src[p.pos+2] == `-` {
+				break
+			}
+			c := p.peek()
+			if c == `[` || c == `&` {
+				n := p.parse_node()!
+				elements << n
+			} else {
+				text, _ := p.read_top_text_run()
+				if text.len > 0 {
+					elements << Node(TextNode{ value: text })
+				}
+			}
+			continue
+		}
+		// Strict mode: ws/comments between bracketed nodes; non-bracket
+		// trailing content is a parse error (preserves data-CX invariant
+		// from v3.x).
 		p.skip_ws_and_line_comments()
 		if p.at_end() { break }
 		if p.pos + 3 <= p.src.len && p.src[p.pos] == `-` && p.src[p.pos+1] == `-` && p.src[p.pos+2] == `-` {
@@ -272,6 +403,12 @@ fn (mut p Parser) parse_document() !Document {
 		}
 		n := p.parse_node()!
 		elements << n
+		// A `[?=…]` interpolation or `[?Name …]` eval-directive at top
+		// level signals a CXL program; switch to mixed mode so any
+		// following prose attaches as Text rather than erroring.
+		if n is InterpolationNode || n is EvalDirectiveNode {
+			allow_top_text = true
+		}
 	}
 
 	mut doc := Document{ prolog: prolog, doctype: doctype, elements: elements }
@@ -384,12 +521,45 @@ fn (mut p Parser) read_table_cell(col_type string) !TableCellValue {
 		// Quoted; check for triple-quoted form first.
 		if p.pos + 3 <= p.src.len && p.src[p.pos] == `'`
 			&& p.src[p.pos + 1] == `'` && p.src[p.pos + 2] == `'` {
-			s := p.read_triple_quoted()!
-			if s is TextNode { return TableCellValue((s as TextNode).value) }
-			return TableCellValue('')
+			s := p.read_triple_quoted_str()!
+			return TableCellValue(s)
 		}
 		s := p.read_quoted_text()!
 		return TableCellValue(s)
+	}
+	if b == `"` {
+		// v0.7.0: double-quoted cell value (spec [29e] amendment —
+		// previously only single-quoted was recognised, an asymmetry
+		// with the rest of CX's QuotedText surface).
+		s := p.read_quoted()!
+		return TableCellValue(s)
+	}
+	// v0.7.0: hash-raw `[# … #]` and pipe-block `[| … |]` as cell values.
+	// Both produce a string-typed cell containing the literal bytes
+	// (hash-raw) or whitespace-preserved structured content (pipe-block,
+	// rendered as text for cell representation). Type discipline: only
+	// permitted in `:string` columns (or untyped, which defaults to
+	// string). Numeric / bool columns reject these forms — the bare path
+	// would auto-coerce `[# raw #]` as a literal token and fail typing.
+	if b == `[` && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `#`
+		&& (col_type == '' || col_type == 'string' || col_type == 's') {
+		s := p.read_raw_text_str()!
+		return TableCellValue(s)
+	}
+	if b == `[` && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `|`
+		&& (col_type == '' || col_type == 'string' || col_type == 's') {
+		p.advance() // consume '['
+		node := p.parse_block_content()!
+		// Render the block-content items as a single string for the
+		// cell value (newlines preserved per parse_block_content's
+		// whitespace policy).
+		mut s := []u8{}
+		for item in (node as BlockContentNode).items {
+			if item is TextNode {
+				s << (item as TextNode).value.bytes()
+			}
+		}
+		return TableCellValue(s.bytestr())
 	}
 	if b == `[` {
 		// :table cell `[...]` always parses as an Array literal,
@@ -830,16 +1000,17 @@ fn (mut p Parser) parse_pi_or_decl() !Node {
 // nodes; evaluators dispatch the subset their declared CXL version
 // supports and error on the rest.
 //
-// Control-flow directives (CXL 1.0, spec/cxl.md §3): `if`, `for`,
+// Control-flow directives (CXL 1.0, spec/eval.md §3): `if`, `for`,
 // `with`, `cond`, `include`, `def`, `use`.
-// Built-in filter directives (CXL 1.0, spec/cxl.md §4): the frozen
+// Built-in filter directives (CXL 1.0, spec/eval.md §4): the frozen
 // filter set is reserved as EvalNames because filter invocations use
 // the `?`-prefixed bracket form (`[?upper x]`, `[?trim x]`).
 // CXL 3.1 control-flow (v0.9.0+): `let`, `fn`, `match`, `try`.
 fn is_cxl_eval_name(name string) bool {
 	return match name {
-		// CXL 1.0 control-flow
-		'if', 'for', 'with', 'cond', 'include', 'def', 'use',
+		// CXL 1.0 control-flow + A13/A14 FLWOR windows
+		'if', 'for', 'for-tumbling', 'for-sliding',
+		'with', 'cond', 'include', 'def', 'use',
 		// CXL 1.0 string filters (§4.1)
 		'upper', 'lower', 'trim', 'length', 'concat', 'join', 'replace',
 		// CXL 1.0 numeric filters (§4.2)
@@ -847,12 +1018,121 @@ fn is_cxl_eval_name(name string) bool {
 		// CXL 1.0 sequence filters (§4.3)
 		'empty', 'first', 'last', 'rest', 'take', 'drop', 'reverse',
 		'distinct', 'where',
-		// CXL 1.0 temporal filters (§4.4)
-		'format-date', 'format-datetime',
+		// CXL 1.0 temporal filters (§4.4) + C14/C15 date/time fns (XQuery 4.0)
+		'format-date', 'format-datetime', 'format-dateTime', 'format-time',
+		'current-date', 'current-dateTime', 'current-time',
+		'year-from-dateTime', 'month-from-dateTime', 'day-from-dateTime',
+		'hours-from-dateTime', 'minutes-from-dateTime', 'seconds-from-dateTime',
+		'year-from-date', 'month-from-date', 'day-from-date',
+		'hours-from-time', 'minutes-from-time', 'seconds-from-time',
 		// CXL 1.0 type filters (§4.5)
 		'type-of', 'default',
 		// CXL 1.0 encoding filters (§4.6)
-		'escape-html', 'escape-url', 'raw',
+		'escape-html', 'escape-url', 'safe-url', 'raw',
+		// CXL 3.1 aggregate filters (per ADR 0022 §D2)
+		'sum', 'count', 'min', 'max', 'avg',
+		// XQuery 4.0 standard fn: namespace (per ADR 0022 §D2 + xquery_40_parity.md §C)
+		'ceiling', 'floor', 'round-half-to-even',
+		'contains', 'starts-with', 'ends-with', 'substring',
+		'substring-before', 'substring-after', 'string-length', 'string',
+		'normalize-space',
+		// C5 String regex (XQuery 4.0 §F.6)
+		'matches', 'tokenize', 'regex-replace',
+		'string-join', 'translate',
+		'distinct-values', 'exists', 'head', 'tail', 'items-at',
+		'zero-or-one', 'one-or-more', 'exactly-one',
+		'subsequence', 'index-of', 'insert-before', 'remove',
+		'slice', 'replicate', 'characters', 'all-different', 'partition',
+		'format-number',
+		'codepoints-to-string', 'string-to-codepoints',
+		'compare', 'codepoint-equal',
+		'encode-for-uri', 'iri-to-uri', 'escape-html-uri',
+		'char', 'intersperse', 'sequence-join',
+		'unordered', 'sort', 'data',
+		'has-children', 'innermost', 'outermost',
+		'deep-equal',
+		'string-pad', 'string-pad-left',
+		// CXL 3.1 higher-order functions (C11, per ADR 0022 §D2)
+		'for-each', 'filter', 'fold-left', 'fold-right',
+		'apply', 'function-arity', 'function-name', 'for-each-pair',
+		'function-lookup', 'function-identity', 'scan-left',
+		// fn:error / fn:trace (C17, error namespace per ADR 0022 §D9-E1)
+		'error',
+		// A22 named function references (XQuery 3.0)
+		'fn-ref',
+		// A23 partial application (left-curry + middle-position `_`)
+		'partial', '__partial_invoke', '_',
+		// A24 focus functions — sugar for [?fn :params [_] …]
+		'focus',
+		// A44 node comparisons (XPath 4.0 §4.10.3)
+		'node-is', 'node-before', 'node-after',
+		// A39/A40 string templates + constructors (XPath 4.0 §4.9.2/§4.9.3)
+		'str-template', 'str',
+		// A30 quantified some/every + A41 range (XPath 1.0+)
+		'some', 'every', 'range',
+		// A28 simple map / A38 string concat helpers
+		'simple-map', 'concat-string',
+		// A26 pipeline / A27 arrow as directives (canonical operator syntax later)
+		'pipe', 'arrow',
+		// Misc utility functions
+		'generate-id',
+		// xs: constructor functions (C18, XPath 1.0+ type system)
+		'xs:int', 'xs:integer', 'xs:long', 'xs:short', 'xs:byte',
+		'xs:double', 'xs:float', 'xs:decimal',
+		'xs:string', 'xs:boolean',
+		'xs:nonNegativeInteger', 'xs:positiveInteger',
+		// A32-A36 SequenceType expressions (XPath 2.0+ type system)
+		'instance-of', 'cast-as', 'castable-as', 'treat-as',
+		// A29 switch / A37 typeswitch (XPath 3.0+)
+		'switch', 'typeswitch',
+		// A43 verbose comparison operators (XPath 2.0)
+		'eq', 'ne', 'lt', 'le', 'gt', 'ge',
+		// A42 sequence intersect/except
+		'intersect', 'except',
+		// A31 otherwise
+		'otherwise',
+		// C19 JSON namespace (XPath 4.0)
+		'parse-json', 'serialize-json',
+		'json-to-xml', 'xml-to-json', 'json-doc',
+		// C22 serialization
+		'serialize', 'parse-xml', 'parse-xml-fragment',
+		// C21 I/O
+		'doc-available', 'doc',
+		// C20 QName helpers
+		'prefix-from-QName', 'local-name-from-QName', 'namespace-uri-from-QName',
+		'boolean', 'true', 'false', 'not',
+		'name', 'local-name', 'namespace-uri', 'root',
+		'node-name', 'base-uri', 'document-uri', 'lang',
+		'sort-by', 'normalize-unicode',
+		'QName', 'namespace-uri-for-prefix', 'in-scope-prefixes',
+		'collection', 'uri-collection',
+		'available-environment-variables', 'environment-variable',
+		'random-number-generator',
+		// math: namespace (XPath 3.0)
+		'math:pi', 'math:e', 'math:exp', 'math:exp10', 'math:log',
+		'math:log10', 'math:sqrt', 'math:sin', 'math:cos', 'math:tan',
+		'math:asin', 'math:acos', 'math:atan', 'math:atan2', 'math:pow',
+		// map: namespace (XPath 3.1, D1)
+		'map:get', 'map:put', 'map:keys', 'map:size', 'map:contains',
+		'map:entry', 'map:merge', 'map:remove', 'map:for-each',
+		// array: namespace (XPath 3.1, D2)
+		'array:size', 'array:get', 'array:append', 'array:head',
+		'array:tail', 'array:reverse', 'array:subarray', 'array:put',
+		'array:remove', 'array:insert-before', 'array:flatten',
+		'array:join', 'array:filter', 'array:for-each',
+		'array:fold-left', 'array:fold-right', 'array:sort',
+		// cx: self-host module (v0.7.0, ADR 0023 §D1 DD1–DD22)
+		'cx:parse', 'cx:serialize', 'cx:canonical', 'cx:hash',
+		'cx:diff', 'cx:patch', 'cx:to-format', 'cx:from-format',
+		'cx:equal', 'cx:select',
+		'cx:eval', 'cx:render', 'cx:schema-of', 'cx:validate',
+		'cx:anchors', 'cx:ids', 'cx:references', 'cx:resolve-includes',
+		'cx:merge', 'cx:strip-comments', 'cx:strip-attrs', 'cx:pretty-print',
+		// log: structured-logging module (v0.7.0, ADR 0023 §D10 FF1–FF7)
+		'log:trace', 'log:debug', 'log:info', 'log:warn', 'log:error',
+		'log:level', 'log:with-context',
+		// inspect: module-discovery (v0.7.0, ADR 0023 §D4-revised DD13/EE7)
+		'inspect:module-available', 'inspect:module-version', 'inspect:functions',
 		// CXL 3.1 control-flow
 		'let', 'fn', 'match', 'try' { true }
 		else { false }
@@ -947,13 +1227,20 @@ fn (mut p Parser) parse_eval_directive(name string) !Node {
 // §D7 (?def is 3-slot [name, params, body] with legacy 2-slot
 // auto-expanded). No-op for directives other than ?def.
 fn record_declared_template(mut p Parser, directive_name string, items []Node) {
-	if directive_name != 'def' { return }
+	// ?def — records the template name so subsequent [?<name> args]
+	// parses as EvalDirective per ADR 0020 §D3.
+	// ?let — records the bound variable name similarly; the let-bound
+	// value at runtime might be a function (CXLFunction) which the
+	// evaluator dispatches as a call (per ADR 0022 §D2 A20). False
+	// positives at parse time (let-bound to a non-function value)
+	// produce a clean runtime error in dispatch_eval_directive.
+	if directive_name != 'def' && directive_name != 'let' { return }
 	if items.len == 0 { return }
 	arg_array := items[0]
 	if arg_array !is ArrayNode { return }
 	arr_items := (arg_array as ArrayNode).items
 	if arr_items.len == 0 { return }
-	// Slot 0 is the template name (TextNode/ScalarNode/Element-single-name).
+	// Slot 0 is the template name (?def) or the let-binding name (?let).
 	name_node := arr_items[0]
 	tmpl_name := match name_node {
 		TextNode   { (name_node as TextNode).value.trim_space() }
@@ -1010,6 +1297,26 @@ fn (mut p Parser) parse_labeled_form(name string) !ArrayNode {
 	// the first `:label` or `]`). Each item in the result is one
 	// positional bare-head arg per the directive's documented shape.
 	bare_head := p.parse_labeled_slot_body()!
+	// Eager binding registration (per ADR 0022 §D2 A20). For `?let`
+	// and `?def` labeled forms, the bare-head is the binding name
+	// (1-element); register it in declared_templates BEFORE parsing
+	// the remaining slots, so that `:return` / `:body` slots that
+	// reference the binding via `[?<name> args]` parse correctly as
+	// EvalDirective rather than as a PI fallback.
+	if (name == 'let' || name == 'def') && bare_head.len > 0 {
+		head_name := match bare_head[0] {
+			TextNode   { (bare_head[0] as TextNode).value.trim_space() }
+			ScalarNode { scalar_value_str((bare_head[0] as ScalarNode).value).trim_space() }
+			Element    {
+				el := bare_head[0] as Element
+				if el.attrs.len == 0 && el.items.len == 0 { el.name } else { '' }
+			}
+			else       { '' }
+		}
+		if head_name != '' {
+			p.declared_templates[head_name] = true
+		}
+	}
 	mut labels := []LabeledSlotEntry{}
 	for !p.at_end() {
 		p.skip_ws_and_line_comments()
@@ -1019,6 +1326,15 @@ fn (mut p Parser) parse_labeled_form(name string) !ArrayNode {
 		if p.peek() == `]` { break }
 		if p.peek_is_slot_label() {
 			label_name := p.parse_slot_label()!
+			// Reject pre-ADR-0017 attribute-slot form `:label=value`.
+			// The uniform-shape grammar (ADR 0017 §D6 / §D23) uses
+			// whitespace-separated slot values, not `=`-bound. A bare
+			// `=` immediately after a slot label is the legacy form
+			// and must surface as a parse error rather than silently
+			// becoming literal content in the slot value.
+			if !p.at_end() && p.peek() == `=` {
+				return error(p.make_error('legacy attribute-slot form `:${label_name}=...` is not accepted; use whitespace-separated slot value `:${label_name} value` (ADR 0017 §D6 / argument array)'))
+			}
 			p.skip_ws_and_line_comments()
 			value := p.parse_labeled_slot_value()!
 			labels << LabeledSlotEntry{ name: label_name, value: value }
@@ -1039,9 +1355,16 @@ fn (mut p Parser) parse_labeled_form(name string) !ArrayNode {
 // label `:` followed by a lowercase ASCII letter (per grammar [59d]
 // SlotLabel rule). Used to distinguish slot labels from CXPath axis
 // separators `::` and other `:` usages.
+//
+// `::` axis separator handling (B-row): if the previous char is `:`
+// we're at the second colon of a `::` (axis separator like
+// `parent::*`); if the next char after `:` is `:` we're at the first
+// colon. Either way, not a slot label.
 fn (p Parser) peek_is_slot_label() bool {
 	if p.pos + 1 >= p.src.len { return false }
 	if p.src[p.pos] != `:` { return false }
+	if p.pos > 0 && p.src[p.pos - 1] == `:` { return false }
+	if p.src[p.pos + 1] == `:` { return false }
 	next := p.src[p.pos+1]
 	return next >= `a` && next <= `z`
 }
@@ -1138,6 +1461,12 @@ fn (mut p Parser) parse_labeled_slot_body() ![]Node {
 				&& p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
 				n := p.read_triple_quoted()!
 				items << n
+			} else if b == `"` {
+				// v0.7.0: double-quoted in collection-item / slot-body
+				// position (previously fell through to bare-token,
+				// producing the literal `"…"` characters as the value).
+				quoted := p.read_quoted()!
+				items << TextNode{ value: quoted }
 			} else {
 				quoted := p.read_quoted_text()!
 				items << TextNode{ value: quoted }
@@ -1240,7 +1569,7 @@ fn (mut p Parser) read_labeled_slot_token() !string {
 
 // desugar_labeled_to_positional maps a labeled-form parse result to
 // the directive's canonical positional ArgArray per ADR 0017 §D23
-// per-directive label tables (spec/cxl.md §3.0.1).
+// per-directive label tables (spec/eval.md §3.0.1).
 //
 // For directives outside the known control-flow set (filters, user-
 // defined templates per ADR 0020, and any names the evaluator
@@ -1254,9 +1583,15 @@ fn desugar_labeled_to_positional(name string, bare_head []Node, labels []Labeled
 	return match name {
 		'if'    { desugar_if_labeled(bare_head, labels)! }
 		'for'   { desugar_for_labeled(bare_head, labels)! }
+		'for-tumbling' { desugar_for_tumbling_labeled(bare_head, labels)! }
+		'for-sliding'  { desugar_for_sliding_labeled(bare_head, labels)! }
 		'with'  { desugar_with_labeled(bare_head, labels)! }
 		'def'   { desugar_def_labeled(bare_head, labels)! }
 		'use'   { desugar_use_labeled(bare_head, labels)! }
+		'let'   { desugar_let_labeled(bare_head, labels)! }
+		'try'   { desugar_try_labeled(bare_head, labels)! }
+		'fn'    { desugar_fn_labeled(bare_head, labels)! }
+		'focus' { desugar_focus_labeled(bare_head, labels)! }
 		else {
 			// Generic pass-through for filters / templates / unknown.
 			// Labels are W021 errors; bare-head-only becomes ArgArray.
@@ -1306,11 +1641,29 @@ fn desugar_if_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
 
 fn desugar_for_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
 	// [?for v :in xs :return body]  →  [?for [v, xs, body]]
+	//
+	// FLWOR extension (CXL 3.1, per ADR 0022 §D2): `:let` and `:where`
+	// clauses between :in and :return are desugared to nested ?let and
+	// ?if directives wrapping the body. Source order is preserved —
+	// the clause closest to :return wraps body innermost.
+	//   [?for x :in xs :let [y, expr] :where cond :return body]
+	//     → [?for [x, xs, [?let [y, expr, [?if [cond, body]]]]]]
+	//
+	// `:order-by` and `:group-by` are deferred — they require collect-
+	// and-sort semantics, not just inline desugar (per ADR 0022 §D8).
 	if bare_head.len != 1 {
-		return error('[?for] labeled form requires exactly 1 bare-head item (var), got ${bare_head.len}')
+		return error('[?for] labeled form requires exactly 1 bare-head item (var), got ${bare_head.len} — use the labeled-slot argument array `[?for var :in expr :return body]` (ADR 0017 §D6 / §D23); the pre-ADR-0017 positional-text form `[?for v in expr body]` is no longer accepted')
 	}
 	mut iter := Node(SequenceNode{ items: []Node{} })
 	mut body := Node(SequenceNode{ items: []Node{} })
+	mut clauses := []LabeledSlotEntry{}   // :let / :where in source order
+	mut count_var := ''                   // :count <name> — empty if absent
+	mut while_value := Node(SequenceNode{ items: []Node{} })
+	mut has_while := false
+	mut order_by_value := Node(SequenceNode{ items: []Node{} })
+	mut has_order_by := false
+	mut group_by_pair := ArrayNode{ items: []Node{} }
+	mut has_group_by := false
 	mut has_in := false
 	mut has_return := false
 	for lbl in labels {
@@ -1325,14 +1678,308 @@ fn desugar_for_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
 				body = lbl.value
 				has_return = true
 			}
+			'let', 'where' {
+				clauses << lbl
+			}
+			'count' {
+				if count_var != '' { return error('[?for] duplicate :count slot') }
+				count_var = slot_value_to_ident(lbl.value) or {
+					return error('[?for] :count value must be a bare identifier (counter name)')
+				}
+			}
+			'while' {
+				if has_while { return error('[?for] duplicate :while slot') }
+				while_value = lbl.value
+				has_while = true
+			}
+			'order-by' {
+				if has_order_by { return error('[?for] duplicate :order-by slot') }
+				order_by_value = lbl.value
+				has_order_by = true
+			}
+			'group-by' {
+				if has_group_by { return error('[?for] duplicate :group-by slot') }
+				if lbl.value !is ArrayNode {
+					return error('[?for] :group-by value must be an array literal [key-var, key-expr]')
+				}
+				gb_arr := lbl.value as ArrayNode
+				if gb_arr.items.len != 2 {
+					return error('[?for] :group-by expects [key-var, key-expr], got ${gb_arr.items.len} items')
+				}
+				group_by_pair = gb_arr
+				has_group_by = true
+			}
 			else {
-				return error('W021: unknown slot label `:${lbl.name}` on [?for]; expected :in or :return')
+				return error('W021: unknown slot label `:${lbl.name}` on [?for]; expected :in, :let, :where, :count, :while, :order-by, :group-by, or :return')
 			}
 		}
 	}
 	if !has_in    { return error('W017: [?for] labeled form requires :in slot') }
 	if !has_return { return error('W017: [?for] labeled form requires :return slot') }
+	// A10 :group-by — initial v0.7.0 cut is :group-by alone (with :in
+	// and :return). Combination with :let/:where/:order-by/:count/:while
+	// requires resolving clause-ordering semantics first.
+	if has_group_by {
+		if clauses.len > 0 || count_var != '' || has_while || has_order_by {
+			return error('[?for] :group-by cannot combine with :let, :where, :order-by, :count, or :while in v0.7.0 (A10 initial scope)')
+		}
+		// 7-slot AST: [var, iter, body, _, _, _, group_pair]
+		return ArrayNode{ items: [bare_head[0], iter, body,
+			Node(TextNode{ value: '' }),
+			Node(SequenceNode{ items: []Node{} }),
+			Node(SequenceNode{ items: []Node{} }),
+			Node(group_by_pair)] }
+	}
+	// Wrap body inside-out: last clause is innermost wrap.
+	for i := clauses.len - 1; i >= 0; i-- {
+		c := clauses[i]
+		match c.name {
+			'let' {
+				// `:let [var, expr]` — value is ArrayNode of 2 items.
+				if c.value !is ArrayNode {
+					return error('[?for] :let value must be an array literal [var, expr]')
+				}
+				let_arr := c.value as ArrayNode
+				if let_arr.items.len != 2 {
+					return error('[?for] :let expects [var, expr], got ${let_arr.items.len} items')
+				}
+				inner := ArrayNode{ items: [let_arr.items[0], let_arr.items[1], body] }
+				body = Node(EvalDirectiveNode{ name: 'let', attrs: []Attribute{}, items: [Node(inner)] })
+			}
+			'where' {
+				// `:where cond` — wrap body in 2-slot [?if [cond, body]].
+				inner := ArrayNode{ items: [c.value, body] }
+				body = Node(EvalDirectiveNode{ name: 'if', attrs: []Attribute{}, items: [Node(inner)] })
+			}
+			else {} // unreachable; collected only :let / :where
+		}
+	}
+	// FLWOR :count / :while / :order-by clauses — append slots in fixed
+	// positions when present. eval_for detects the extended variants:
+	//   3-slot: [var, iter, body]
+	//   4-slot: [var, iter, body, count_var]
+	//   5-slot: [var, iter, body, count_var-or-empty, while_expr]
+	//   6-slot: [var, iter, body, count_var-or-empty, while_expr-or-empty, order_expr]
+	if has_order_by {
+		count_text := if count_var == '' { '' } else { count_var }
+		return ArrayNode{ items: [bare_head[0], iter, body,
+			Node(TextNode{ value: count_text }),
+			while_value,
+			order_by_value] }
+	}
+	if has_while {
+		count_text := if count_var == '' { '' } else { count_var }
+		return ArrayNode{ items: [bare_head[0], iter, body,
+			Node(TextNode{ value: count_text }),
+			while_value] }
+	}
+	if count_var != '' {
+		return ArrayNode{ items: [bare_head[0], iter, body, Node(TextNode{ value: count_var })] }
+	}
 	return ArrayNode{ items: [bare_head[0], iter, body] }
+}
+
+// slot_value_to_ident extracts a bare identifier from a labeled-slot
+// value. Used by :count for the counter variable name.
+fn slot_value_to_ident(value Node) ?string {
+	if value is TextNode {
+		t := (value as TextNode).value.trim_space()
+		if t != '' { return t }
+	}
+	if value is Element {
+		el := value as Element
+		if el.attrs.len == 0 && el.items.len == 0 && el.name != '' {
+			return el.name
+		}
+	}
+	if value is ScalarNode {
+		return scalar_value_str((value as ScalarNode).value).trim_space()
+	}
+	return none
+}
+
+fn desugar_fn_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
+	// [?fn :params [x, y] :body body]  →  [?fn [[x, y], body]]
+	// Anonymous function value form per CXL 3.1 / XPath 3.0 inline
+	// function expressions (per ADR 0022 §D2). Bare-head must be empty;
+	// both clauses live in named slots.
+	if bare_head.len != 0 {
+		return error('[?fn] labeled form takes no bare-head items, got ${bare_head.len}')
+	}
+	mut params := Node(ArrayNode{ items: []Node{} })
+	mut body := Node(SequenceNode{ items: []Node{} })
+	mut has_params := false
+	mut has_body := false
+	for lbl in labels {
+		match lbl.name {
+			'params' {
+				if has_params { return error('[?fn] duplicate :params slot') }
+				params = normalize_params_slot(lbl.value) or {
+					return error('[?fn] :params slot — ${err.msg()}')
+				}
+				has_params = true
+			}
+			'body' {
+				if has_body { return error('[?fn] duplicate :body slot') }
+				body = lbl.value
+				has_body = true
+			}
+			else {
+				return error('W021: unknown slot label `:${lbl.name}` on [?fn]; expected :params or :body')
+			}
+		}
+	}
+	if !has_body { return error('W017: [?fn] labeled form requires :body slot') }
+	// `:params` is optional and defaults to empty (nullary fn).
+	return ArrayNode{ items: [params, body] }
+}
+
+// A13 — desugar `[?for-tumbling w :in xs :size N :return body]`
+//        → `[?for-tumbling [w, xs, N, body]]`.
+fn desugar_for_tumbling_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
+	if bare_head.len != 1 {
+		return error('[?for-tumbling] labeled form requires 1 bare-head item (var), got ${bare_head.len}')
+	}
+	mut iter := Node(SequenceNode{ items: []Node{} })
+	mut size := Node(SequenceNode{ items: []Node{} })
+	mut body := Node(SequenceNode{ items: []Node{} })
+	mut has_in := false
+	mut has_size := false
+	mut has_return := false
+	for lbl in labels {
+		match lbl.name {
+			'in'     { iter = lbl.value; has_in = true }
+			'size'   { size = lbl.value; has_size = true }
+			'return' { body = lbl.value; has_return = true }
+			else     { return error('W021: unknown slot label `:${lbl.name}` on [?for-tumbling]; expected :in, :size, :return') }
+		}
+	}
+	if !has_in     { return error('[?for-tumbling] requires :in slot') }
+	if !has_size   { return error('[?for-tumbling] requires :size slot') }
+	if !has_return { return error('[?for-tumbling] requires :return slot') }
+	return ArrayNode{ items: [bare_head[0], iter, size, body] }
+}
+
+// A14 — desugar `[?for-sliding w :in xs :size N :step S :return body]`
+//        → `[?for-sliding [w, xs, N, S, body]]`.
+fn desugar_for_sliding_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
+	if bare_head.len != 1 {
+		return error('[?for-sliding] labeled form requires 1 bare-head item (var), got ${bare_head.len}')
+	}
+	mut iter := Node(SequenceNode{ items: []Node{} })
+	mut size := Node(SequenceNode{ items: []Node{} })
+	mut step := Node(SequenceNode{ items: []Node{} })
+	mut body := Node(SequenceNode{ items: []Node{} })
+	mut has_in := false
+	mut has_size := false
+	mut has_step := false
+	mut has_return := false
+	for lbl in labels {
+		match lbl.name {
+			'in'     { iter = lbl.value; has_in = true }
+			'size'   { size = lbl.value; has_size = true }
+			'step'   { step = lbl.value; has_step = true }
+			'return' { body = lbl.value; has_return = true }
+			else     { return error('W021: unknown slot label `:${lbl.name}` on [?for-sliding]; expected :in, :size, :step, :return') }
+		}
+	}
+	if !has_in     { return error('[?for-sliding] requires :in slot') }
+	if !has_size   { return error('[?for-sliding] requires :size slot') }
+	if !has_step   { return error('[?for-sliding] requires :step slot') }
+	if !has_return { return error('[?for-sliding] requires :return slot') }
+	return ArrayNode{ items: [bare_head[0], iter, size, step, body] }
+}
+
+fn desugar_focus_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
+	// [?focus :body body]  →  [?focus [body]]  (A24 focus-fn sugar).
+	// Equivalent to [?fn :params [_] :body body]; the underscore param
+	// name is the implicit focus binding. Bare-head must be empty.
+	if bare_head.len != 0 {
+		return error('[?focus] labeled form takes no bare-head items, got ${bare_head.len}')
+	}
+	mut body := Node(SequenceNode{ items: []Node{} })
+	mut has_body := false
+	for lbl in labels {
+		match lbl.name {
+			'body' {
+				if has_body { return error('[?focus] duplicate :body slot') }
+				body = lbl.value
+				has_body = true
+			}
+			else {
+				return error('W021: unknown slot label `:${lbl.name}` on [?focus]; expected :body')
+			}
+		}
+	}
+	if !has_body { return error('W017: [?focus] labeled form requires :body slot') }
+	return ArrayNode{ items: [body] }
+}
+
+fn desugar_try_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
+	// [?try :do body :catch fallback]  →  [?try [body, fallback]]
+	// Per CXL 3.1 try-expression semantics. The bare-head must be
+	// empty; both clauses live in named slots.
+	if bare_head.len != 0 {
+		return error('[?try] labeled form takes no bare-head items, got ${bare_head.len}')
+	}
+	mut body := Node(SequenceNode{ items: []Node{} })
+	mut catch_body := Node(SequenceNode{ items: []Node{} })
+	mut has_do := false
+	mut has_catch := false
+	for lbl in labels {
+		match lbl.name {
+			'do' {
+				if has_do { return error('[?try] duplicate :do slot') }
+				body = lbl.value
+				has_do = true
+			}
+			'catch' {
+				if has_catch { return error('[?try] duplicate :catch slot') }
+				catch_body = lbl.value
+				has_catch = true
+			}
+			else {
+				return error('W021: unknown slot label `:${lbl.name}` on [?try]; expected :do or :catch')
+			}
+		}
+	}
+	if !has_do    { return error('W017: [?try] labeled form requires :do slot') }
+	if !has_catch { return error('W017: [?try] labeled form requires :catch slot') }
+	return ArrayNode{ items: [body, catch_body] }
+}
+
+fn desugar_let_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
+	// [?let var :be expr :return body]  →  [?let [var, expr, body]]
+	// Per CXL 3.1 / XQuery 3.1 let-expression semantics: bind `var` to
+	// the value of `expr` for the duration of `body`'s evaluation, then
+	// emit body's output. Shadowing per ADR 0020 §D2 (parameter scope).
+	if bare_head.len != 1 {
+		return error('[?let] labeled form requires exactly 1 bare-head item (var), got ${bare_head.len}')
+	}
+	mut expr := Node(SequenceNode{ items: []Node{} })
+	mut body := Node(SequenceNode{ items: []Node{} })
+	mut has_be := false
+	mut has_return := false
+	for lbl in labels {
+		match lbl.name {
+			'be' {
+				if has_be { return error('[?let] duplicate :be slot') }
+				expr = lbl.value
+				has_be = true
+			}
+			'return' {
+				if has_return { return error('[?let] duplicate :return slot') }
+				body = lbl.value
+				has_return = true
+			}
+			else {
+				return error('W021: unknown slot label `:${lbl.name}` on [?let]; expected :be or :return')
+			}
+		}
+	}
+	if !has_be    { return error('W017: [?let] labeled form requires :be slot') }
+	if !has_return { return error('W017: [?let] labeled form requires :return slot') }
+	return ArrayNode{ items: [bare_head[0], expr, body] }
 }
 
 fn desugar_with_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
@@ -1464,6 +2111,34 @@ fn desugar_use_labeled(bare_head []Node, labels []LabeledSlotEntry) !ArrayNode {
 fn (mut p Parser) read_attr_with_optional_body(name string) !Attribute {
 	if p.at_end() { return error(p.make_error('expected attr value')) }
 	if p.peek() == `[` {
+		// v0.7.0: dispatch `[#` → hash-raw and `[|` → pipe-block to their
+		// dedicated parsers BEFORE the generic BracketBody path. Without
+		// this, `val=[| ... |]` would parse as BracketBody with text
+		// content containing literal `|` chars, losing the BlockContent
+		// AST shape; `val=[# ... #]` would loop forever because the inner
+		// `#` would be read as a line comment.
+		if p.pos + 1 < p.src.len {
+			next := p.src[p.pos+1]
+			if next == `#` {
+				node := p.parse_raw_text_value()!
+				return Attribute{
+					name: name
+					value: ScalarValue('')
+					data_type: ?ScalarType(none)
+					body: ?[]Node([node])
+				}
+			}
+			if next == `|` {
+				p.advance() // consume '['
+				node := p.parse_block_content()!
+				return Attribute{
+					name: name
+					value: ScalarValue('')
+					data_type: ?ScalarType(none)
+					body: ?[]Node([node])
+				}
+			}
+		}
 		p.advance() // consume '['
 		body_items := p.parse_body(none)!
 		p.expect(`]`)!
@@ -1476,6 +2151,15 @@ fn (mut p Parser) read_attr_with_optional_body(name string) !Attribute {
 	}
 	val, dt := p.read_attr_value_typed()!
 	return Attribute{ name: name, value: val, data_type: dt }
+}
+
+// parse_raw_text_value parses a `[# … #]` raw-text literal from the
+// current position (at the opening `[`) and returns it as a RawTextNode.
+// Wraps the byte-level read_raw_text_str helper. v0.7.0 attribute-value
+// hash-raw direct path.
+fn (mut p Parser) parse_raw_text_value() !Node {
+	value := p.read_raw_text_str()!
+	return RawTextNode{ value: value }
 }
 
 fn (mut p Parser) parse_xml_decl() !Node {
@@ -1880,7 +2564,11 @@ fn (mut p Parser) parse_element() !Node {
 	mut merge := ?string(none)
 	mut id := ?string(none)
 	mut data_type := ?string(none)
-	mut attrs := []Attribute{}
+	// cap: 4 — typical element has 1-6 attributes; pre-sizing eliminates
+	// the 0→2→4 growth churn on every element. Profile showed
+	// array_ensure_cap_noscan + array_push_noscan together were ~14% of
+	// parse self-time at 1 MB.
+	mut attrs := []Attribute{cap: 4}
 
 	for {
 		// ElementMeta position: skip plain whitespace only. `#` is the
@@ -1931,11 +2619,20 @@ fn (mut p Parser) parse_element() !Node {
 		// ElementMeta position (after element name, before attributes
 		// and body) declares this element's stable ID. Distinct from
 		// raw-text blocks `[#...#]` (different position) and from
-		// line comments (recognized only in body / between-element
-		// position via skip_ws_and_line_comments). Duplicate IDs
-		// across the document are a parse error caught by the
-		// resolve_ids() post-pass; here we only store the declaration.
+		// line comments. Duplicate IDs across the document are a parse
+		// error caught by the resolve_ids() post-pass; here we only
+		// store the declaration.
+		//
+		// `# ...` (hash followed by whitespace) is a line comment per
+		// grammar [30b], even at ElementMeta position — the test
+		// suite covers this in v34_line_comments_test.v. Disambiguation
+		// is purely lookahead: `#name` → ID, `# anything` → comment.
 		if b == `#` {
+			next := if p.pos + 1 < p.src.len { p.src[p.pos + 1] } else { u8(0) }
+			if next == ` ` || next == `\t` || next == `\n` || next == `\r` || next == 0 {
+				p.skip_line_comment()
+				continue
+			}
 			saved_pos3 := p.pos
 			saved_line3 := p.line
 			saved_col3 := p.col
@@ -2017,6 +2714,45 @@ fn (mut p Parser) parse_element() !Node {
 						return error(p.make_error("reference '${rname}' must not contain ':' (per ADR 0003 D2)"))
 					}
 					attrs << Attribute{ name: tok, value: ScalarValue(rname), is_ref: true }
+				} else if !p.at_end() && p.peek() == `[`
+					&& p.pos + 2 < p.src.len && p.src[p.pos + 1] == `?`
+					&& p.src[p.pos + 2] == `=` {
+					// J0 (v0.7.0): `attr=[?=expr]` — capture the full
+					// `[?=…]` span as the attribute value string. Emitter
+					// scans for `[?=…]` substrings and substitutes. This
+					// branch sits before the BracketBody path because
+					// BracketBody wraps content in literal `[…]`, which
+					// is wrong for interpolation.
+					val, dt := p.read_attr_value_typed()!
+					attrs << Attribute{ name: tok, value: val, data_type: dt }
+				} else if !p.at_end() && p.peek() == `[` && p.pos + 1 < p.src.len && p.src[p.pos+1] == `#` {
+					// v0.7.0 (this commit): `attr=[# … #]` — hash-raw
+					// direct as attribute value. The byte content lives
+					// in a single RawTextNode in the attribute body so
+					// emitters round-trip it as `[# … #]`. Without this
+					// peek, the generic BracketBody path below consumes
+					// `[`, then reads `#` as a line comment, then EOF.
+					node := p.parse_raw_text_value()!
+					attrs << Attribute{
+						name: tok
+						value: ScalarValue('')
+						data_type: ?ScalarType(none)
+						body: ?[]Node([node])
+					}
+				} else if !p.at_end() && p.peek() == `[` && p.pos + 1 < p.src.len && p.src[p.pos+1] == `|` {
+					// v0.7.0 (this commit): `attr=[| … |]` — pipe-block
+					// direct as attribute value. Produces a real
+					// BlockContentNode (with newline preservation) rather
+					// than BracketBody-wrapping the pipe-and-content as
+					// literal text.
+					p.advance() // consume '['
+					node := p.parse_block_content()!
+					attrs << Attribute{
+						name: tok
+						value: ScalarValue('')
+						data_type: ?ScalarType(none)
+						body: ?[]Node([node])
+					}
 				} else if !p.at_end() && p.peek() == `[` {
 					// v3.5 (ADR 0016): BracketBody attribute value
 					// `name=[BodyItem*]`. Grammar [55c]. Inert
@@ -2068,27 +2804,44 @@ fn (mut p Parser) parse_element() !Node {
 	// of the form '@<name>' for the bare-@id token; lift it into
 	// Element.body_ref so the validator can check it and the emitter
 	// can re-render the syntactic form on round-trip.
+	//
+	// v0.7.0 (GG12 — strict reservation per ADR 0003 D1): the `ref`
+	// element name is reserved when used in element-body position.
+	// Any `[ref ...]` shape OTHER than the exact `[ref @<Name>]`
+	// body-position form is now a parse error (E207). v0.6.0 left
+	// non-conforming shapes as regular elements for back-compat;
+	// v0.7.0 tightens to the spec text. The `cx upgrade-config` tool
+	// (status row I1) provides mechanical migration for callers who
+	// had been relying on the soft behavior. See
+	// `docs/migrations/v0.6-to-v0.7.md §M7` for the migration note.
 	mut body_ref := ?string(none)
-	if name == 'ref' && attrs.len == 0 && items.len == 1 {
-		first := items[0]
-		if first is TextNode {
-			tv := first.value.trim_space()
-			if tv.len > 1 && tv[0] == `@` {
-				rname := tv[1..]
-				if rname.len > 0 && is_name_start(rname[0]) && !rname.contains(':') {
-					mut all_name := true
-					for i in 1 .. rname.len {
-						if !is_name_char(rname[i]) {
-							all_name = false
-							break
+	if name == 'ref' {
+		mut matched := false
+		if attrs.len == 0 && items.len == 1 {
+			first := items[0]
+			if first is TextNode {
+				tv := first.value.trim_space()
+				if tv.len > 1 && tv[0] == `@` {
+					rname := tv[1..]
+					if rname.len > 0 && is_name_start(rname[0]) && !rname.contains(':') {
+						mut all_name := true
+						for i in 1 .. rname.len {
+							if !is_name_char(rname[i]) {
+								all_name = false
+								break
+							}
 						}
-					}
-					if all_name {
-						body_ref = rname
-						items = []
+						if all_name {
+							body_ref = rname
+							items = []
+							matched = true
+						}
 					}
 				}
 			}
+		}
+		if !matched {
+			return error('E207: cx-err: `ref` is reserved at v0.7.0 — only `[ref @<Name>]` body-position form is admitted (ADR 0003 D1 second bullet, strict at v0.7.0 / GG12); migration: rename to `[reference …]` or wrap content in a non-reserved element. See `docs/migrations/v0.6-to-v0.7.md §M7`.')
 		}
 	}
 
@@ -2126,7 +2879,9 @@ fn expand_type_alias(s string) string {
 // ── Body parser ───────────────────────────────────────────────────────────────
 
 fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
-	mut items := []Node{}
+	// cap: 4 — typical element body has 0-5 children (mixed text + child
+	// elements). Pre-sizing avoids 2-3 reallocs on most elements.
+	mut items := []Node{cap: 4}
 	is_inferred_array := if ta := type_ann { ta == '[]' } else { false }
 	is_array := if ta := type_ann { !is_inferred_array && ta.ends_with('[]') } else { false }
 	elem_type := if is_array {
@@ -2135,7 +2890,7 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 		'string'
 	}
 
-	mut text_buf := []u8{}
+	mut text_buf := []u8{cap: 64}
 	mut has_child_element := false
 	mut after_non_text := false
 
@@ -2178,14 +2933,21 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 			continue
 		}
 
-		if b == `'` {
+		if b == `'` || b == `"` {
 			if text_buf.len > 0 {
 				items << TextNode{ value: text_buf.bytestr() }
 				text_buf = []u8{}
 			}
-			if p.pos + 3 <= p.src.len && p.src[p.pos] == `'` && p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
+			if b == `'` && p.pos + 3 <= p.src.len && p.src[p.pos] == `'` && p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
 				n := p.read_triple_quoted()!
 				items << n
+			} else if b == `"` {
+				// v0.7.0: double-quoted in element-body position
+				// (previously only single-quoted was recognised here,
+				// an asymmetry with collection-literal items and
+				// attribute values).
+				quoted := p.read_quoted()!
+				items << TextNode{ value: quoted }
 			} else {
 				quoted := p.read_quoted_text()!
 				items << TextNode{ value: quoted }
@@ -2582,7 +3344,11 @@ fn is_name_char(b u8) bool {
 // ── Low-level readers ─────────────────────────────────────────────────────────
 
 fn (mut p Parser) read_name() !string {
-	mut s := []u8{}
+	// cap: 16 — typical name (id, name, attr-key) is 4-12 chars; pre-sizing
+	// eliminates 2-3 array_ensure_cap reallocs per call. Profile showed
+	// read_name + array_ensure_cap_noscan were ~14% of parse self-time at
+	// 1 MB. 17.7M calls × 2 saves each → ~30M fewer ensure_cap hits.
+	mut s := []u8{cap: 16}
 	for !p.at_end() {
 		b := p.peek()
 		if is_name_char(b) {
@@ -2599,7 +3365,7 @@ fn (mut p Parser) read_name() !string {
 }
 
 fn (mut p Parser) try_read_name() ?string {
-	mut s := []u8{}
+	mut s := []u8{cap: 16}
 	for !p.at_end() {
 		b := p.peek()
 		if is_name_char(b) {
@@ -2627,7 +3393,9 @@ fn (mut p Parser) try_read_name() ?string {
 //     read_token, so the bracket-depth path here only applies to
 //     mid-token brackets like `:enum=[...]`.
 fn (mut p Parser) read_token() !string {
-	mut s := []u8{}
+	// cap: 16 — same rationale as read_name; tokens are short (ports, names,
+	// numeric values). 16M calls in the 1 MB bench.
+	mut s := []u8{cap: 16}
 	mut in_quote := u8(0)
 	mut bracket_depth := 0
 	for !p.at_end() {
@@ -2664,9 +3432,15 @@ fn (mut p Parser) read_token() !string {
 		if b == `[` && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `?` {
 			break
 		}
-		if b == `'` || b == `"` {
-			in_quote = b
-		} else if b == `[` {
+		// Mid-token `'` and `"` stay as literal bytes — bare prose like
+		// "it's broken" or 'foo "bar" baz' must not engage quote-string
+		// scanning, which would run to EOF on an unmatched apostrophe.
+		// `'…'` at a body-item boundary is caught upstream in parse_body
+		// (line 2936) before this point; reaching here means the quote
+		// sits inside an existing token. The bracket_depth > 0 path
+		// above still tracks quote nesting so predicate args like
+		// `//x[name='foo']` keep their `'…'` regions atomic.
+		if b == `[` {
 			bracket_depth = 1
 		}
 		s << b
@@ -2735,7 +3509,7 @@ fn (mut p Parser) read_quoted() !string {
 		return error(p.make_error('expected quote'))
 	}
 	p.advance()
-	mut s := []u8{}
+	mut s := []u8{cap: 32}
 	for {
 		if p.at_end() { return error(p.make_error('unterminated string')) }
 		b := p.peek()
@@ -2775,24 +3549,125 @@ fn (mut p Parser) read_attr_list_until(stop u8) ![]Attribute {
 fn (mut p Parser) read_attr_value() !string {
 	if p.at_end() { return error(p.make_error('expected attr value')) }
 	b := p.peek()
+	// v0.7.0: triquote `'''…'''` is permitted in attribute value position
+	// (spec [55a] amendment lifting the [10b] ban). Detect by peeking the
+	// third quote BEFORE the regular quoted path so `attr='''…'''` reads
+	// as one triquote scalar instead of two empty squote strings + body.
+	if b == `'` && p.pos + 2 < p.src.len && p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
+		return p.read_triple_quoted_str()!
+	}
 	if b == `'` || b == `"` {
 		return p.read_quoted()!
 	}
-	return p.read_token()!
+	// v0.7.0: hash-raw `[# … #]` is permitted directly as an attribute
+	// value (spec [55a] addition). Detect `[#` so `attr=[# raw #]`
+	// produces the literal content without requiring a BracketBody wrap.
+	if b == `[` && p.pos + 1 < p.src.len && p.src[p.pos+1] == `#` {
+		return p.read_raw_text_str()!
+	}
+	return p.read_token_for_attr()!
 }
 
 fn (mut p Parser) read_attr_value_typed() !(ScalarValue, ?ScalarType) {
 	if p.at_end() { return error(p.make_error('expected attr value')), none }
 	b := p.peek()
+	// v0.7.0: triquote in attribute position — peek for `'''` before
+	// dispatching to the normal squote path.
+	if b == `'` && p.pos + 2 < p.src.len && p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
+		s := p.read_triple_quoted_str()!
+		return ScalarValue(s), ?ScalarType(none)
+	}
 	if b == `'` || b == `"` {
 		s := p.read_quoted()!
 		return ScalarValue(s), ?ScalarType(none)
 	}
-	tok := p.read_token()!
+	// v0.7.0: hash-raw direct in attribute position.
+	if b == `[` && p.pos + 1 < p.src.len && p.src[p.pos+1] == `#` {
+		s := p.read_raw_text_str()!
+		return ScalarValue(s), ?ScalarType(none)
+	}
+	tok := p.read_token_for_attr()!
 	if scalar := try_autotype(tok) {
 		return scalar.value, ?ScalarType(scalar.data_type)
 	}
 	return ScalarValue(tok), ?ScalarType(none)
+}
+
+// read_raw_text_str consumes a `[# … #]` raw-text literal from the
+// current position (which must be at the opening `[`) and returns the
+// literal content string. Shared between attribute-value position
+// (v0.7.0 spec [55a] addition) and other contexts that need just the
+// raw bytes (vs the RawTextNode produced by parse_raw_text).
+fn (mut p Parser) read_raw_text_str() !string {
+	p.advance() // consume '['
+	p.advance() // consume '#'
+	mut s := []u8{}
+	for {
+		if p.at_end() { return error(p.make_error('unterminated raw text')) }
+		b := p.peek()
+		p.advance()
+		if b == `#` && !p.at_end() && p.peek() == `]` {
+			p.advance() // consume ']'
+			return s.bytestr()
+		}
+		s << b
+	}
+	return error('unreachable')
+}
+
+// read_token_for_attr is read_token's attribute-value sibling. Differs
+// only by absorbing `[?=…]` spans into the token instead of breaking
+// on them — needed so `attr=[?=expr]` parses as an attribute whose
+// string value carries the interpolation marker for emit-time
+// substitution (J0 / attribute-value interpolation, v0.7.0). The
+// emitter scans attribute strings for `[?=…]` substrings and evaluates
+// them at output time; the parser doesn't build an AST node for them.
+fn (mut p Parser) read_token_for_attr() !string {
+	mut s := []u8{cap: 16}
+	mut in_quote := u8(0)
+	mut bracket_depth := 0
+	for !p.at_end() {
+		b := p.peek()
+		if in_quote != 0 {
+			s << b
+			p.advance()
+			if b == in_quote { in_quote = 0 }
+			continue
+		}
+		if bracket_depth > 0 {
+			if b == `[` {
+				bracket_depth++
+			} else if b == `]` {
+				bracket_depth--
+				s << b
+				p.advance()
+				// J0: depth-0 means the interpolation closed. Don't
+				// break — keep reading so `/u/[?=cid]/p/[?=name]`
+				// captures both interpolations into one token.
+				continue
+			} else if b == `'` || b == `"` {
+				in_quote = b
+			}
+			s << b
+			p.advance()
+			continue
+		}
+		if is_ws(b) || b == `]` { break }
+		// J0 (v0.7.0): unlike read_token, do NOT break on `[?`. Absorb
+		// the full balanced-bracket span so `value=[?=c/@name]` reads
+		// as the token `[?=c/@name]`.
+		if b == `'` || b == `"` {
+			in_quote = b
+		} else if b == `[` {
+			bracket_depth = 1
+		}
+		s << b
+		p.advance()
+	}
+	if s.len == 0 {
+		return error(p.make_error('expected token'))
+	}
+	return s.bytestr()
 }
 
 fn (mut p Parser) read_until_close() !string {
@@ -2938,6 +3813,16 @@ fn (mut p Parser) parse_block_content() !Node {
 // ── ''' triple-quoted string ──────────────────────────────────────────────────
 
 fn (mut p Parser) read_triple_quoted() !Node {
+	value := p.read_triple_quoted_str()!
+	return TextNode{ value: value }
+}
+
+// read_triple_quoted_str reads a triple-quoted literal and returns just
+// the string value (post-dedent). Position must be at the first quote
+// of the opening `'''`. Used by both `read_triple_quoted` (Node-
+// producing) and the v0.7.0 doc-top scalar-doc path / AttValue triquote
+// path / TableCell + CollectionItem triquote paths.
+fn (mut p Parser) read_triple_quoted_str() !string {
 	p.advance() // consume first '
 	p.advance() // consume second '
 	p.advance() // consume third '
@@ -2953,8 +3838,7 @@ fn (mut p Parser) read_triple_quoted() !Node {
 		s << b
 		p.advance()
 	}
-	value := strip_common_indent(s.bytestr())
-	return TextNode{ value: value }
+	return strip_common_indent(s.bytestr())
 }
 
 fn strip_common_indent(s string) string {
@@ -3011,41 +3895,68 @@ fn strip_common_indent(s string) string {
 // Returns true for ArrayLiteral (including empty `[]`); false for
 // Element. Tracks nested brackets / parens / braces and quoted regions
 // so internal separators at non-zero depth don't confuse the scan.
+// peek_is_array_literal disambiguates `[…]` between Element and
+// Array literal per ADR 0017 §D1 (amended 2026-05-19 — see the
+// "Amendment 2026-05-19" subsection in the ADR for full rationale).
+//
+// Rule (first-item-followed-by-comma):
+//   1. Skip leading whitespace and quick-detect empty `[]` → array.
+//   2. Inspect the first byte: if it's not a valid element-name
+//      start (not letter / not `_`), it's an array literal. Covers
+//      `[1, 2, 3]`, `['a', 'b']`, `[*, default]` (§D8 sentinel),
+//      `[(seq, lit)]`, and any other shape that can't be an
+//      element name.
+//   3. Otherwise scan forward looking for the boundary character:
+//        - `,` before any whitespace/`=`/`]` → array literal (the
+//          first item is the bare-name-shaped token).
+//        - `=` → element with attribute (today's attribute form).
+//        - `]` → element with empty body, e.g. `[name]`.
+//        - whitespace → element. The first whitespace inside the
+//          bracket marks the boundary between the element name
+//          and the body; commas appearing *after* the name are
+//          body content, not separators. This is the load-bearing
+//          change vs. the pre-amendment rule.
+//        - a non-name char that's also non-ws / non-`,` / non-`=` /
+//          non-`]` (e.g. `*` in `[FOAR*, math]` try-catch globs, or
+//          `:` not at name-token position) → array literal. The
+//          would-be element name isn't a clean Name shape, so the
+//          bracket can't be an element-head and must be an array.
+//
+// Quote / bracket interiors don't appear in the first-item-prefix
+// scan because the rule decides on the first non-name boundary
+// character it sees — well before any nested content. This is
+// strictly local: O(first-token-length) lookahead, no full-body
+// scan.
 fn (p &Parser) peek_is_array_literal() bool {
 	mut i := p.pos
 	for i < p.src.len && is_ws(p.src[i]) { i++ }
 	if i >= p.src.len { return false }
 	if p.src[i] == `]` { return true } // empty [] → empty array
-	mut depth := 0
-	mut quote := u8(0)
+	first := p.src[i]
+	// Element-side sigils with dual roles: `*` (alias / md / sentinel),
+	// `\`` `>` `~` `^` (Markdown shorthand elements). The §D8 array
+	// sentinel form `[*, default]` and any literal-array shape using
+	// these glyphs as item-0 values must still parse as array, so the
+	// disambiguator peeks the next non-ws char: a comma marks the
+	// array form, anything else (including end-of-input) stays with
+	// the element-side dispatch in parse_bracket_node's match.
+	if first == `*` || first == `\`` || first == `>` || first == `~` || first == `^` {
+		mut k := i + 1
+		for k < p.src.len && is_ws(p.src[k]) { k++ }
+		return k < p.src.len && p.src[k] == `,`
+	}
+	// First char that can't lead an element name → must be array
+	// literal (or a structural sigil already handled by parse_bracket_node).
+	if !is_name_start(first) { return true }
+	// First char IS name_start. Walk through the candidate name
+	// looking for the boundary that decides element vs array.
 	for i < p.src.len {
 		b := p.src[i]
-		if quote != 0 {
-			if b == `\\` && i + 1 < p.src.len { i += 2; continue }
-			if b == quote { quote = 0 }
-			i++
-			continue
-		}
-		if b == `'` || b == `"` {
-			quote = b
-			i++
-			continue
-		}
-		if depth == 0 {
-			if b == `,` { return true }
-			if b == `=` { return false }
-			if b == `]` { return false }
-		}
-		if b == `[` || b == `(` || b == `{` {
-			depth++
-			i++
-			continue
-		}
-		if b == `]` || b == `)` || b == `}` {
-			if depth > 0 { depth-- }
-			i++
-			continue
-		}
+		if b == `,` { return true }
+		if b == `=` { return false }
+		if b == `]` { return false }
+		if is_ws(b) { return false }
+		if !is_name_char(b) { return true }
 		i++
 	}
 	return false
@@ -3339,6 +4250,12 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 				&& p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
 				n := p.read_triple_quoted()!
 				items << n
+			} else if b == `"` {
+				// v0.7.0: double-quoted in collection-item / slot-body
+				// position (previously fell through to bare-token,
+				// producing the literal `"…"` characters as the value).
+				quoted := p.read_quoted()!
+				items << TextNode{ value: quoted }
 			} else {
 				quoted := p.read_quoted_text()!
 				items << TextNode{ value: quoted }
@@ -3406,7 +4323,7 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 		// Single bare-token slot — autotype if the buffer is exactly
 		// one scalar literal. Multi-token / mixed-content slots keep
 		// the raw text run (the CXL evaluator parses it as CXPath at
-		// eval time per spec/cxl.md §7).
+		// eval time per spec/eval.md §7).
 		if !has_child && items.len == 0 {
 			if scalar := try_autotype(text_val) {
 				items << scalar

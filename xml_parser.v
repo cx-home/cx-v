@@ -390,6 +390,7 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	mut cx_merge := ?string(none)
 	mut cx_type := ?string(none)
 	mut cx_id := ?string(none)
+	mut cx_body_ref := ?string(none)
 	mut attrs := []Attribute{}
 
 	// Read attributes
@@ -407,6 +408,15 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 		if aname == 'cx:anchor' { cx_anchor = aval }
 		else if aname == 'cx:merge' { cx_merge = aval }
 		else if aname == 'cx:type' { cx_type = aval }
+		else if aname == 'cx:body-ref' {
+			// v0.7.0 (ADR 0003 D1 second bullet / GG7): the
+			// emitter writes body_ref as `cx:body-ref="<id>"`;
+			// the XML import path consumes the attribute and
+			// reconstructs Element.body_ref. The CX emitter
+			// reproduces the `[ref @id]` body-position form from
+			// the field.
+			cx_body_ref = aval
+		}
 		else if aname == 'xml:id' {
 			// v3.4 (ADR 0003 D6): xml:id (XML built-in URI ns) hoists
 			// to Element.id. The attribute is consumed; the bare CX
@@ -437,7 +447,7 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	if b == `/` {
 		p.advance() // '/'
 		p.xml_expect(`>`)!
-		return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, id: cx_id, attrs: attrs, items: [] }
+		return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, id: cx_id, body_ref: cx_body_ref, attrs: attrs, items: [] }
 	}
 
 	p.xml_expect(`>`)!
@@ -447,7 +457,7 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	p.parse_xml_content(name, cx_type, mut items)!
 
 	// If cx_type is an array type, items should already be Scalar nodes
-	return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, id: cx_id, attrs: attrs, items: items }
+	return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, id: cx_id, body_ref: cx_body_ref, attrs: attrs, items: items }
 }
 
 fn (mut p XmlParser) parse_xml_content(parent_name string, cx_type ?string, mut items []Node) ! {

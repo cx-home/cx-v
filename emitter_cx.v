@@ -283,7 +283,29 @@ fn cx_build_meta(e Element) string {
 	for a in e.attrs {
 		// v3.5 (ADR 0016): BracketBody attribute values round-trip as
 		// `name=[body]`. The body is emitted inline as a body sequence.
+		// v0.7.0 (multi-line-text symmetry): single-item body whose
+		// node is RawTextNode or BlockContentNode emits as the direct
+		// form `name=[# ... #]` / `name=[| ... |]` — dropping the
+		// redundant outer BracketBody wrap. Parses back to the same AST.
 		if body_items := a.body {
+			if body_items.len == 1 {
+				it := body_items[0]
+				if it is RawTextNode {
+					s += ' ${a.name}=[#${(it as RawTextNode).value}#]'
+					continue
+				}
+				if it is BlockContentNode {
+					block := it as BlockContentNode
+					mut inner := []string{}
+					for sub in block.items {
+						if sub is TextNode {
+							inner << (sub as TextNode).value
+						}
+					}
+					s += ' ${a.name}=[|${inner.join('')}|]'
+					continue
+				}
+			}
 			body_str := cx_build_inline_body(body_items, true)
 			s += ' ${a.name}=[${body_str}]'
 			continue
@@ -385,6 +407,13 @@ fn cx_would_autotype(s string) bool {
 }
 
 fn cx_quote_attr_if_needed(s string) string {
+	// v0.7.0 (multi-line-text symmetry): newline-bearing string values
+	// cannot be emitted as bare / single-quote / double-quote (all
+	// single-line) without invalidating the round-trip. Triquote is
+	// now valid in AttValue position per [55a] amendment, so use it.
+	if s.contains('\n') {
+		return "'''${s}'''"
+	}
 	if s.contains(' ') || s.contains("'") || s.contains('"') || s.len == 0 {
 		return "'${s}'"
 	}
@@ -397,6 +426,67 @@ fn cx_quote_attr_if_needed(s string) string {
 		return "'${s}'"
 	}
 	return s
+}
+
+// cx_quote_body_if_needed wraps a substituted scalar that is about to
+// be emitted into element-body position with the cheapest quote form
+// that survives a re-parse. CXL's `[?=]` and filter directives emit
+// their result text into the surrounding element body, and downstream
+// tools (e.g. `cx --md`, `cx --xml`) re-parse the emit; bytes like
+// `[` `]` `'` `"` or a leading sigil would re-tokenize as structure
+// instead of staying as text. Bare-safe strings are returned verbatim
+// so the common case (`[h2 [?= sec/@id]]` → `[h2 first]`) does not
+// noise up the output with redundant quotes.
+fn cx_quote_body_if_needed(s string) string {
+	if s.len == 0 {
+		return s
+	}
+	// Structural delimiters anywhere in the value would re-parse as
+	// child elements or quoted-string items. Newlines collapse to
+	// inter-token whitespace in a bare body and only survive inside a
+	// triple-quoted scalar — so multi-line values count as hazardous
+	// even when no other structural byte is present. `#` at any
+	// position triggers a line-comment scan that eats through the
+	// next newline — including a trailing `]` — so a value like
+	// `cx hash menu.cx # comment` re-parses as a runaway comment.
+	mut needs := s.contains('[') || s.contains(']') || s.contains("'") ||
+		s.contains('"') || s.contains('\n') || s.contains('#') ||
+		s.contains('&')
+	if !needs {
+		// Sigil at the start would re-parse as ref / anchor / merge /
+		// id / data-type marker (`@id`, `&a`, `*m`, `#i`, `:t`).
+		c := s[0]
+		if c == `@` || c == `&` || c == `*` || c == `#` || c == `:` {
+			needs = true
+		}
+	}
+	if !needs {
+		// `name=value` at the head re-parses as an attribute on the
+		// containing element. Detect a leading bare-ident followed by
+		// `=` and treat it as hazardous.
+		mut i := 0
+		for i < s.len && (is_ident_cont_byte(s[i])) { i++ }
+		if i > 0 && i < s.len && s[i] == `=` {
+			needs = true
+		}
+	}
+	if !needs {
+		return s
+	}
+	if s.contains('\n') || s.contains("'") {
+		return "'''${s}'''"
+	}
+	return "'${s}'"
+}
+
+// Local byte-classifier matching the CX identifier-continue set,
+// scoped to this helper. Keeping it private avoids tangling with the
+// parser's identifier scanner in another module.
+fn is_ident_cont_byte(c u8) bool {
+	if c >= `a` && c <= `z` { return true }
+	if c >= `A` && c <= `Z` { return true }
+	if c >= `0` && c <= `9` { return true }
+	return c == `_` || c == `-` || c == `.`
 }
 
 fn cx_scalar(s ScalarNode) string {

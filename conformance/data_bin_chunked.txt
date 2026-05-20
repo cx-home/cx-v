@@ -110,22 +110,24 @@ tags: data_bin chunked canonical
 
 === test: ch-005-chunked-canonical-2-pow-20
 level: extended
-tags: data_bin chunked canonical_chunk_size
-pending: phase-7.74c+ (1M+ row synthesized corpus + per-group inspection
-# DSL: the streaming Table reader landed in 7.74a can decode such a
-# corpus row-group-by-row-group, but the runner currently lacks the
-# corpus-synthesis hook and per-group assertion vocabulary)
+tags: data_bin chunked canonical_chunk_size synth
+# HH3 (v0.7.0): synthesized 1M+ row corpus + per-group inspection
+# via the new `synth_table_rows` / `assert_group_row_counts` DSL.
 # Strict-canonical chunk size is 2^20 rows (D1). A million-row table
 # emits as exactly one row group of 2^20 rows. A 2-million-row table
 # emits as two groups of 2^20 each. A 2.5-million-row table emits as
 # three groups: 2^20, 2^20, 0.5M.
 #
 # Test value: row count = 2^20 + 1; expected groups = 2 (sizes 2^20 and 1).
---- in_cx
-# (synthesized at runtime; not authored inline)
---- assertion
-strict_canonical(input).group_count == 2
-strict_canonical(input).row_counts == [1048576, 1]
+chunk_at: 1048576
+--- synth_table_schema
+[t :table[id:int v:string]]
+--- synth_table_rows
+1048577
+--- assert_group_count
+2
+--- assert_group_row_counts
+1048576 1
 
 === test: ch-006-chunked-datetime-column-zulu
 level: extended

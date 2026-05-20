@@ -5,7 +5,7 @@ import cx
 
 // ── CXL conformance runner ───────────────────────────────────────────────────
 //
-// Runs the fixtures in conformance/cxl.txt (and other CXL suites)
+// Runs the fixtures in conformance/eval.txt (and other CXL suites)
 // through the V reference evaluator. Pattern mirrors
 // `tests/runners/conformance/conformance_run.v` but with the CXL-
 // specific fixture shape:
@@ -15,7 +15,7 @@ import cx
 //   --- out_text    expected byte-exact rendered output (PASS path)
 //   --- out_err     expected error-message substring (error path)
 //
-// Per spec/cxl.md §9 (Conformance fixture layout) and ADR 0016 R8
+// Per spec/eval.md §9 (Conformance fixture layout) and ADR 0016 R8
 // (V reference is the conformance target; per-binding evaluators
 // MUST produce byte-identical output). New in v0.6.0 as part of
 // ADR 0020 V-reference rollout.
@@ -175,7 +175,7 @@ fn main() {
 	suites := if args.len > 0 {
 		args
 	} else {
-		['../conformance/cxl.txt']
+		['../conformance/eval.txt']
 	}
 	mut all_pass := true
 	for suite in suites {

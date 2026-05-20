@@ -76,6 +76,25 @@ pub mut:
 	// (Phase 7.70 bumped 2 → 3); bindings expose `body_ref` (or the
 	// language-idiomatic spelling) on their Element type.
 	body_ref  ?string
+	// v0.7.0 Z-row: in-scope BCP 47 language tag per spec/i18n.md §1.3.
+	// Populated by resolve_languages() in the post-parse pass.
+	//   none     — no cx:lang in scope at this Element
+	//   Some("") — explicit cx:lang="" shadowing an ancestor (per §1.4)
+	//   Some(t)  — the locally-declared tag, or the nearest ancestor's
+	//              tag when this Element has no own cx:lang
+	// Element.lang() (below) is the public accessor.
+	lang_resolved ?string
+}
+
+// lang returns the BCP 47 language tag in scope at this Element, per
+// spec/i18n.md §1.3 inherited-scope semantics. Returns "" when no
+// cx:lang is in scope (no ancestor has declared one, or an ancestor's
+// declaration was shadowed by an explicit cx:lang="" on this subtree).
+// To distinguish "no scope" from "explicitly empty", check
+// `el.lang_resolved` directly — the accessor flattens both to "" for
+// the common case of "this element has no language association".
+pub fn (e Element) lang() string {
+	return e.lang_resolved or { '' }
 }
 
 // TableColumn describes one column of a :table block.
@@ -221,7 +240,7 @@ pub mut:
 	// v3.5 (ADR 0016): BracketBody attribute value — `name=[BodyItem*]`.
 	// When set, `value` is empty/unused and the attribute's content is
 	// the parsed body sequence. Used by CXL evaluation directives like
-	// `[?if cond :then=[BODY] :else=[BODY]]` (spec/cxl.md §3.2). Auto-
+	// `[?if cond :then=[BODY] :else=[BODY]]` (spec/eval.md §3.2). Auto-
 	// typing rules do not apply. Inert outside CXL evaluation context;
 	// round-trips as opaque structure (ADR 0016 R5).
 	body      ?[]Node

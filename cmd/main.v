@@ -37,6 +37,8 @@ fn main() {
 		'scaffold' { run_scaffold(args[1..]); return }
 		'eval' { run_eval(args[1..]); return }
 		'select' { run_select(args[1..]); return }
+		'upgrade-config' { run_upgrade_config(args[1..]); return }
+		'lsp' { run_lsp(args[1..]); return }
 		else {} // fall through to legacy --flag form
 	}
 
@@ -63,6 +65,7 @@ fn main() {
 	mut explicit_from := false
 	mut from_fmt := 'cx'
 	mut to_fmt := 'cx'
+	mut include_root := ''
 	for arg in args {
 		if arg == '--ast' { mode = 'ast' }
 		else if arg == '--cx' { mode = 'cx' }
@@ -78,6 +81,20 @@ fn main() {
 		else if arg == '--compact' { compact = true }
 		else if arg.starts_with('--from=') { from_fmt = arg[7..]; explicit_from = true }
 		else if arg.starts_with('--to=') { to_fmt = arg[5..] }
+		else if arg.starts_with('--include-root=') { include_root = arg[15..] }
+	}
+
+	// When --include-root is supplied, resolve `[?cx include=…]`
+	// directives in the input before format conversion. Done by
+	// pre-parsing through the include resolver and re-emitting as
+	// CX text, which the downstream pipeline then re-parses normally.
+	// One extra round-trip in exchange for not duplicating every
+	// to_* entry point.
+	if include_root != '' && from_fmt == 'cx' {
+		input = resolve_includes_text(input, include_root) or {
+			eprintln('error resolving includes: ${err}')
+			exit(1)
+		}
 	}
 
 	// Auto-detect input format from file extension if not explicit
@@ -424,6 +441,21 @@ fn discover_cxlint_config(start_dir string) string {
 		dir = parent
 	}
 	return ''
+}
+
+// resolve_includes_text parses the given CX source with include
+// resolution enabled against `root`, then emits the resolved AST
+// back to canonical CX text. Used by the legacy format-dispatch
+// and `cx eval` to bolt `--include-root` onto entry points whose
+// downstream library calls only accept raw text. Round-trip cost
+// is one extra parse + emit; acceptable for the doc-gen + ad-hoc
+// CLI use cases that need this flag.
+fn resolve_includes_text(src string, root string) !string {
+	if root == '' {
+		return src
+	}
+	doc := cx.parse_with_include_root(src, root)!
+	return cx.emit_cx(doc)
 }
 
 fn read_one_input(args []string, cmd string) string {

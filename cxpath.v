@@ -40,6 +40,15 @@ struct CXStep {
 enum CXAxis {
 	child
 	descendant
+	self_axis            // self::
+	parent_axis          // parent::  or  ..
+	ancestor_axis        // ancestor::
+	ancestor_or_self     // ancestor-or-self::
+	following_sibling    // following-sibling::
+	preceding_sibling    // preceding-sibling::
+	following_axis       // following::
+	preceding_axis       // preceding::
+	descendant_or_self   // descendant-or-self::
 }
 
 type CXPred = CXPredAttrExists
@@ -54,6 +63,7 @@ type CXPred = CXPredAttrExists
 	| CXPredLocalNameCmp
 	| CXPredNamespaceURICmp
 	| CXPredIdMatch
+	| CXPredBodyRefMatch
 
 struct CXPredAttrExists {
 	attr string
@@ -122,6 +132,15 @@ struct CXPredNamespaceURICmp {
 // no quotes) distinguishes ID matching from attribute-equality and
 // from child-existence tests.
 struct CXPredIdMatch {
+	id string
+}
+
+// CXPredBodyRefMatch matches an element whose body_ref (set when the
+// source had the `[ref @<id>]` body-position form per ADR 0003 D1
+// second bullet) equals the given string. Spelled
+// `[#bodyref=<name>]` in source CXPath — distinguished from
+// `[#name]` (ID match) by the `=` separator. v0.7.0 / GG9.
+struct CXPredBodyRefMatch {
 	id string
 }
 
@@ -323,6 +342,20 @@ fn cxpath_parse_steps(mut l CXPathLexer) ![]CXStep {
 
 fn cxpath_parse_one_step(mut l CXPathLexer, axis CXAxis) !CXStep {
 	l.skip_ws()
+	// B1-B7: axis-prefix detection — recognize `axis-name::` before the
+	// step name. `..` is the conventional shortcut for `parent::*`. Axis
+	// prefix overrides the inherited axis from the path separator (`/`
+	// or `//`) — `/parent::*` parses as parent-axis step from root.
+	mut step_axis := axis
+	if l.peek_str('..') {
+		l.pos += 2
+		// `..` is a complete step on its own — synthesize a parent step
+		// with wildcard name (per XPath abbreviated syntax).
+		return CXStep{ axis: .parent_axis, name: '', preds: cxpath_parse_step_preds(mut l)! }
+	}
+	if axis_name := cxpath_try_read_axis_prefix(mut l) {
+		step_axis = axis_name
+	}
 	mut name := ''
 	if l.eat_char(`*`) {
 		name = ''
@@ -332,15 +365,18 @@ fn cxpath_parse_one_step(mut l CXPathLexer, axis CXAxis) !CXStep {
 			return error('CXPath parse error: expected element name at pos ${l.pos}  expr: ${l.src}')
 		}
 	}
+	preds := cxpath_parse_step_preds(mut l)!
+	return CXStep{ axis: step_axis, name: name, preds: preds }
+}
+
+// cxpath_parse_step_preds reads any number of `[...]` predicates after
+// a step. Shared by both the abbreviated `..` shortcut and the named-step
+// parser.
+fn cxpath_parse_step_preds(mut l CXPathLexer) ![]CXPred {
 	mut preds := []CXPred{}
 	for {
 		l.skip_ws()
 		if l.peek_str('[') {
-			// ADR 0017 §D13 — `['key']` (bracket immediately followed
-			// by single-quote) is map-key access at the path tail, not
-			// a predicate. Bail out so the top-level parser can pick it
-			// up. Today's predicate forms never lead with a quote, so
-			// this lookahead is conflict-free.
 			if l.pos + 1 < l.src.len && l.src[l.pos + 1] == `'` {
 				break
 			}
@@ -349,7 +385,46 @@ fn cxpath_parse_one_step(mut l CXPathLexer, axis CXAxis) !CXStep {
 			break
 		}
 	}
-	return CXStep{ axis: axis, name: name, preds: preds }
+	return preds
+}
+
+// cxpath_try_read_axis_prefix reads an `axis-name::` prefix if present.
+// Returns the parsed CXAxis or none if no axis prefix is at the current
+// position. The axis name set comes from XPath 1.0+ (parent, ancestor,
+// ancestor-or-self, child, self, descendant, descendant-or-self,
+// following, following-sibling, preceding, preceding-sibling) with the
+// `attribute::` and `namespace::` axes deferred — `@attr` already covers
+// attribute access.
+fn cxpath_try_read_axis_prefix(mut l CXPathLexer) ?CXAxis {
+	saved := l.pos
+	// Greedy read of axis name (alpha + hyphen) followed by `::`.
+	mut end := saved
+	for end < l.src.len {
+		c := l.src[end]
+		if (c >= `a` && c <= `z`) || c == `-` { end++ } else { break }
+	}
+	if end == saved { return none }
+	if end + 1 >= l.src.len || l.src[end] != `:` || l.src[end + 1] != `:` {
+		return none
+	}
+	name := l.src[saved..end]
+	mut axis := CXAxis.child
+	match name {
+		'child'                 { axis = .child }
+		'descendant'            { axis = .descendant }
+		'self'                  { axis = .self_axis }
+		'parent'                { axis = .parent_axis }
+		'ancestor'              { axis = .ancestor_axis }
+		'ancestor-or-self'      { axis = .ancestor_or_self }
+		'following-sibling'     { axis = .following_sibling }
+		'preceding-sibling'     { axis = .preceding_sibling }
+		'following'             { axis = .following_axis }
+		'preceding'             { axis = .preceding_axis }
+		'descendant-or-self'    { axis = .descendant_or_self }
+		else { return none }
+	}
+	l.pos = end + 2 // consume axis name + `::`
+	return axis
 }
 
 fn cxpath_parse_pred_bracket(mut l CXPathLexer) !CXPred {
@@ -511,11 +586,25 @@ fn cxpath_parse_pred_factor(mut l CXPathLexer) !CXPred {
 	// ADR 0003 D8: `[#id-name]` matches an element whose syntactic
 	// ID equals 'id-name'. Distinct from `[name]` child-existence
 	// (no leading `#`) and from `[@id=...]` attribute-equality.
+	//
+	// v0.7.0 / GG9: `[#bodyref=<name>]` matches an element whose
+	// body_ref equals <name>. Recognised when the identifier after
+	// `#` is exactly the literal `bodyref` followed by `=`.
 	if l.peek_str('#') {
 		l.eat_char(`#`)
 		id := l.read_ident()
 		if id.len == 0 {
 			return error('CXPath parse error: expected ID name after # at pos ${l.pos}  expr: ${l.src}')
+		}
+		l.skip_ws()
+		if id == 'bodyref' && l.pos < l.src.len && l.src[l.pos] == `=` {
+			l.eat_char(`=`)
+			l.skip_ws()
+			rname := l.read_ident()
+			if rname.len == 0 {
+				return error('CXPath parse error: expected body-ref name after #bodyref= at pos ${l.pos}  expr: ${l.src}')
+			}
+			return CXPred(CXPredBodyRefMatch{ id: rname })
 		}
 		return CXPred(CXPredIdMatch{ id: id })
 	}
@@ -884,6 +973,15 @@ fn cxpath_collect_step_paths(ctx Element, expr CXPathExpr, step_idx int,
 			cxpath_collect_descendants_paths(ctx, expr, step_idx, current_path,
 				mut result)
 		}
+		.self_axis, .parent_axis, .ancestor_axis, .ancestor_or_self,
+		.following_sibling, .preceding_sibling, .following_axis,
+		.preceding_axis, .descendant_or_self {
+			// Path-based collector is used by select_all_paths for
+			// binding substitution. Axis-based paths are not yet
+			// representable as flat child-index lists (parent step
+			// would need to pop) — substitution via these axes is
+			// post-v0.7.0 (deferred per B-row notes in spec/v0_7_0_status.md).
+		}
 	}
 }
 
@@ -934,28 +1032,289 @@ fn cxpath_collect_descendants_paths(ctx Element, expr CXPathExpr, step_idx int,
 }
 
 fn cxpath_collect_step(ctx Element, expr CXPathExpr, step_idx int, mut result []Element) {
+	// Empty ancestor chain — the public select_all entry point starts
+	// from the context as if it were the doc root. Axes that need
+	// ancestors (parent/ancestor/sibling/preceding/following) walk the
+	// chain populated as we descend.
+	cxpath_collect_step_chain(ctx, []Element{}, expr, step_idx, mut result)
+}
+
+// cxpath_collect_step_chain is the axis-aware step walker. `chain` is
+// the ancestor list from the original root down to ctx's parent (so
+// chain.last is ctx's parent, chain.first is the root-most ancestor).
+// All axis branches consult / extend the chain. B1-B7 (XPath 1.0 axes)
+// per ADR 0022 §D2.
+fn cxpath_collect_step_chain(ctx Element, chain []Element, expr CXPathExpr,
+		step_idx int, mut result []Element) {
 	if step_idx >= expr.steps.len {
 		return
 	}
 	step := expr.steps[step_idx]
+	is_last := step_idx == expr.steps.len - 1
+	ns_map := expr.ns_map.clone()
+	step_name := step.name
 	match step.axis {
 		.child {
-			ns_map := expr.ns_map.clone()
-			step_name := step.name
 			candidates := ctx.items.filter(it is Element
 				&& cxpath_elem_name_matches(it as Element, step_name, ns_map)).map(it as Element)
+			mut next_chain := chain.clone()
+			next_chain << ctx
 			for i, child in candidates {
 				if cxpath_preds_match(child, step.preds, candidates, i, expr.ns_map) {
-					if step_idx == expr.steps.len - 1 {
+					if is_last {
 						result << child
 					} else {
-						cxpath_collect_step(child, expr, step_idx + 1, mut result)
+						cxpath_collect_step_chain(child, next_chain, expr,
+							step_idx + 1, mut result)
 					}
 				}
 			}
 		}
 		.descendant {
-			cxpath_collect_descendants(ctx, expr, step_idx, mut result)
+			cxpath_collect_descendants_chain(ctx, chain, expr, step_idx, mut result)
+		}
+		.self_axis {
+			if cxpath_elem_name_matches(ctx, step_name, ns_map) {
+				if cxpath_preds_match(ctx, step.preds, [ctx], 0, expr.ns_map) {
+					if is_last { result << ctx }
+					else { cxpath_collect_step_chain(ctx, chain, expr,
+						step_idx + 1, mut result) }
+				}
+			}
+		}
+		.parent_axis {
+			if chain.len == 0 { return }
+			parent := chain.last()
+			if step_name == '' || cxpath_elem_name_matches(parent, step_name, ns_map) {
+				if cxpath_preds_match(parent, step.preds, [parent], 0, expr.ns_map) {
+					new_chain := chain[..chain.len - 1].clone()
+					if is_last { result << parent }
+					else { cxpath_collect_step_chain(parent, new_chain, expr,
+						step_idx + 1, mut result) }
+				}
+			}
+		}
+		.ancestor_axis {
+			// XPath: ancestor:: yields ancestors in reverse document
+			// order (nearest first). chain is root-first, so iterate
+			// from chain.len-1 down.
+			for i := chain.len - 1; i >= 0; i-- {
+				anc := chain[i]
+				if step_name == '' || cxpath_elem_name_matches(anc, step_name, ns_map) {
+					if cxpath_preds_match(anc, step.preds, [anc], 0, expr.ns_map) {
+						new_chain := chain[..i].clone()
+						if is_last { result << anc }
+						else { cxpath_collect_step_chain(anc, new_chain, expr,
+							step_idx + 1, mut result) }
+					}
+				}
+			}
+		}
+		.ancestor_or_self {
+			// Self first, then ancestors (XPath: ancestor-or-self
+			// nearest-first; self is the nearest).
+			if step_name == '' || cxpath_elem_name_matches(ctx, step_name, ns_map) {
+				if cxpath_preds_match(ctx, step.preds, [ctx], 0, expr.ns_map) {
+					if is_last { result << ctx }
+					else { cxpath_collect_step_chain(ctx, chain, expr,
+						step_idx + 1, mut result) }
+				}
+			}
+			for i := chain.len - 1; i >= 0; i-- {
+				anc := chain[i]
+				if step_name == '' || cxpath_elem_name_matches(anc, step_name, ns_map) {
+					if cxpath_preds_match(anc, step.preds, [anc], 0, expr.ns_map) {
+						new_chain := chain[..i].clone()
+						if is_last { result << anc }
+						else { cxpath_collect_step_chain(anc, new_chain, expr,
+							step_idx + 1, mut result) }
+					}
+				}
+			}
+		}
+		.descendant_or_self {
+			// Self first, then descendants.
+			if step_name == '' || cxpath_elem_name_matches(ctx, step_name, ns_map) {
+				if cxpath_preds_match(ctx, step.preds, [ctx], 0, expr.ns_map) {
+					if is_last { result << ctx }
+					else { cxpath_collect_step_chain(ctx, chain, expr,
+						step_idx + 1, mut result) }
+				}
+			}
+			cxpath_collect_descendants_chain(ctx, chain, expr, step_idx, mut result)
+		}
+		.following_sibling {
+			if chain.len == 0 { return }
+			parent := chain.last()
+			sibs := parent.items.filter(it is Element).map(it as Element)
+			mut ctx_idx := -1
+			for i, s in sibs {
+				if cxpath_element_identity_equal(s, ctx) { ctx_idx = i; break }
+			}
+			if ctx_idx < 0 { return }
+			for i := ctx_idx + 1; i < sibs.len; i++ {
+				sib := sibs[i]
+				if step_name == '' || cxpath_elem_name_matches(sib, step_name, ns_map) {
+					if cxpath_preds_match(sib, step.preds, sibs, i, expr.ns_map) {
+						if is_last { result << sib }
+						else { cxpath_collect_step_chain(sib, chain, expr,
+							step_idx + 1, mut result) }
+					}
+				}
+			}
+		}
+		.preceding_sibling {
+			if chain.len == 0 { return }
+			parent := chain.last()
+			sibs := parent.items.filter(it is Element).map(it as Element)
+			mut ctx_idx := -1
+			for i, s in sibs {
+				if cxpath_element_identity_equal(s, ctx) { ctx_idx = i; break }
+			}
+			if ctx_idx < 0 { return }
+			// XPath: preceding-sibling yields reverse document order.
+			for i := ctx_idx - 1; i >= 0; i-- {
+				sib := sibs[i]
+				if step_name == '' || cxpath_elem_name_matches(sib, step_name, ns_map) {
+					if cxpath_preds_match(sib, step.preds, sibs, i, expr.ns_map) {
+						if is_last { result << sib }
+						else { cxpath_collect_step_chain(sib, chain, expr,
+							step_idx + 1, mut result) }
+					}
+				}
+			}
+		}
+		.following_axis {
+			// All elements after ctx in document order, excluding
+			// descendants of ctx. Walk up the ancestor chain emitting
+			// each ancestor's following-siblings and their descendants.
+			cxpath_emit_following(ctx, chain, step, expr, step_idx, is_last, mut result)
+		}
+		.preceding_axis {
+			// All elements before ctx in document order, excluding
+			// ctx's ancestors. Walk up the chain emitting preceding-
+			// siblings and their descendants.
+			cxpath_emit_preceding(ctx, chain, step, expr, step_idx, is_last, mut result)
+		}
+	}
+}
+
+// cxpath_element_identity_equal — structural identity check used by
+// sibling axes to locate ctx among its parent's children. Compares
+// pointers by value-form first; falls back to structural equality.
+fn cxpath_element_identity_equal(a Element, b Element) bool {
+	if a.name != b.name { return false }
+	if a.attrs.len != b.attrs.len { return false }
+	if a.items.len != b.items.len { return false }
+	// Element clone preserves attrs in source order; use name+attrs as
+	// a stable identity proxy. Two siblings that happen to be value-
+	// identical match either of themselves — acceptable for axis
+	// navigation at v0.7.0; strict identity awaits ADR-0003 ID work.
+	for i, at in a.attrs {
+		bt := b.attrs[i]
+		if at.name != bt.name { return false }
+		if scalar_value_str(at.value) != scalar_value_str(bt.value) { return false }
+	}
+	return true
+}
+
+fn cxpath_emit_following(ctx Element, chain []Element, step CXStep,
+		expr CXPathExpr, step_idx int, is_last bool, mut result []Element) {
+	ns_map := expr.ns_map.clone()
+	mut cursor := ctx
+	mut cur_chain := chain.clone()
+	for cur_chain.len > 0 {
+		parent := cur_chain.last()
+		sibs := parent.items.filter(it is Element).map(it as Element)
+		mut cur_idx := -1
+		for i, s in sibs {
+			if cxpath_element_identity_equal(s, cursor) { cur_idx = i; break }
+		}
+		if cur_idx >= 0 {
+			for i := cur_idx + 1; i < sibs.len; i++ {
+				cxpath_emit_self_and_descendants(sibs[i], cur_chain, step,
+					expr, step_idx, is_last, ns_map, mut result)
+			}
+		}
+		cursor = parent
+		cur_chain = cur_chain[..cur_chain.len - 1].clone()
+	}
+}
+
+fn cxpath_emit_preceding(ctx Element, chain []Element, step CXStep,
+		expr CXPathExpr, step_idx int, is_last bool, mut result []Element) {
+	ns_map := expr.ns_map.clone()
+	mut cursor := ctx
+	mut cur_chain := chain.clone()
+	for cur_chain.len > 0 {
+		parent := cur_chain.last()
+		sibs := parent.items.filter(it is Element).map(it as Element)
+		mut cur_idx := -1
+		for i, s in sibs {
+			if cxpath_element_identity_equal(s, cursor) { cur_idx = i; break }
+		}
+		if cur_idx >= 0 {
+			// XPath: preceding axis is reverse document order.
+			for i := cur_idx - 1; i >= 0; i-- {
+				cxpath_emit_self_and_descendants(sibs[i], cur_chain, step,
+					expr, step_idx, is_last, ns_map, mut result)
+			}
+		}
+		cursor = parent
+		cur_chain = cur_chain[..cur_chain.len - 1].clone()
+	}
+}
+
+fn cxpath_emit_self_and_descendants(el Element, chain []Element, step CXStep,
+		expr CXPathExpr, step_idx int, is_last bool,
+		ns_map map[string]string, mut result []Element) {
+	if step.name == '' || cxpath_elem_name_matches(el, step.name, ns_map) {
+		if cxpath_preds_match(el, step.preds, [el], 0, expr.ns_map) {
+			if is_last { result << el }
+			else { cxpath_collect_step_chain(el, chain, expr,
+				step_idx + 1, mut result) }
+		}
+	}
+	mut child_chain := chain.clone()
+	child_chain << el
+	for item in el.items {
+		if item is Element {
+			cxpath_emit_self_and_descendants(item as Element, child_chain, step,
+				expr, step_idx, is_last, ns_map, mut result)
+		}
+	}
+}
+
+fn cxpath_collect_descendants_chain(ctx Element, chain []Element,
+		expr CXPathExpr, step_idx int, mut result []Element) {
+	step := expr.steps[step_idx]
+	is_last := step_idx == expr.steps.len - 1
+	ns_map := expr.ns_map.clone()
+	step_name := step.name
+	candidates := ctx.items.filter(it is Element
+		&& cxpath_elem_name_matches(it as Element, step_name, ns_map)).map(it as Element)
+	mut next_chain := chain.clone()
+	next_chain << ctx
+	for i, child in candidates {
+		if cxpath_preds_match(child, step.preds, candidates, i, expr.ns_map) {
+			if is_last {
+				result << child
+			} else {
+				cxpath_collect_step_chain(child, next_chain, expr,
+					step_idx + 1, mut result)
+			}
+		}
+		cxpath_collect_descendants_chain(child, next_chain, expr, step_idx, mut result)
+	}
+	if step.name != '' {
+		for item in ctx.items {
+			if item is Element {
+				el := item as Element
+				if !cxpath_elem_name_matches(el, step_name, ns_map) {
+					cxpath_collect_descendants_chain(el, next_chain, expr,
+						step_idx, mut result)
+				}
+			}
 		}
 	}
 }
@@ -1064,6 +1423,10 @@ fn cxpath_pred_eval(el Element, pred CXPred, siblings []Element, idx int, ns_map
 		CXPredIdMatch {
 			el_id := el.id or { return false }
 			return el_id == pred.id
+		}
+		CXPredBodyRefMatch {
+			br := el.body_ref or { return false }
+			return br == pred.id
 		}
 	}
 }

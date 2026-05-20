@@ -10,7 +10,7 @@ import cx
 // mismatch, and `?use` rejection of parameterized templates per
 // ADR 0020 §R4.
 //
-// Per spec/cxl.md §3.7. The 3-slot positional form `[?def [name,
+// Per spec/eval.md §3.7. The 3-slot positional form `[?def [name,
 // params, body]]` is canonical; labeled form `[?def name :params
 // [args] :body BODY]` desugars at parse time. Both shapes round-trip
 // through the same AST and exercise the same evaluator path here.

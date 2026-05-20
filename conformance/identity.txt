@@ -302,19 +302,81 @@ tags: identity reference body-position canonical
   [para 'See ' [ref @id-1] ' for details.']
 ]
 
-=== test: id-020-body-position-ref-non-id-element-name-untouched
+=== test: id-020-body-position-ref-non-conforming-rejected
 level: core
-tags: identity reference body-position
-# Elements named `ref` whose body is NOT exactly a single `@id`
-# token are left as regular elements (back-compat for v0). Only
-# the exact `[ref @<Name>]` shape is treated as a syntactic ref.
+tags: identity reference body-position strict-reservation GG12
+# v0.7.0 (GG12 / ADR 0003 D1 strict): elements named `ref` whose body
+# is NOT exactly `@<Name>` are now a parse error. v0.6.0 admitted
+# them as regular elements for back-compat; v0.7.0 tightens to the
+# spec's reserved-name commitment. Migration: rename to a non-
+# reserved element name or use `cx upgrade-config` (status row I1)
+# to mechanize the fix. See `docs/migrations/v0.6-to-v0.7.md §M7`.
+--- in_cx
+[doc [ref note=hi]]
+--- out_err
+E207
+
+=== test: id-021-body-ref-xml-emits-cx-body-ref-attribute
+level: core
+tags: identity reference body-position xml round-trip
+# Per ADR 0003 D1 second bullet (GG7 row at spec/v0_7_0_status.md):
+# the `[ref @id]` body-position form round-trips through XML as the
+# `cx:body-ref="<id>"` attribute. xml:id carries the declaration
+# side; cx:body-ref carries the reference side.
 --- in_cx
 [doc
-  [ref note=hi]
-  [ref text content]
+  [section #s-1
+    [title Intro]
+  ]
+  [para See [ref @s-1] for context.]
 ]
+--- out_xml
+<doc>
+  <section xml:id="s-1">
+    <title>Intro</title>
+  </section>
+  <para>See <ref cx:body-ref="s-1"/> for context.</para>
+</doc>
+
+=== test: id-022-body-ref-xml-import-reconstructs-body-position-form
+level: core
+tags: identity reference body-position xml import
+# Inverse of id-021: XML import with `cx:body-ref="<id>"` reconstructs
+# Element.body_ref so the bare CX emitter writes `[ref @id]` body form.
+--- in_xml
+<doc>
+  <section xml:id="s-1">
+    <title>Intro</title>
+  </section>
+  <para>See <ref cx:body-ref="s-1"/> for context.</para>
+</doc>
 --- out_cx
 [doc
-  [ref note=hi]
-  [ref text content]
+  [section #s-1
+    [title Intro]
+  ]
+  [para 'See ' [ref @s-1] ' for context.']
 ]
+
+=== test: id-023-body-ref-json-semantic-emit
+level: extended
+tags: identity reference body-position json semantic
+# Per spec/conversions.md §1.1 (GG8 row): body-position [ref @id]
+# projects to JSON's `{"$ref": "<id>"}` shape in semantic-emit. This
+# matches the JSON Pointer convention and gives YAML/TOML/MD a
+# cross-format consensus shape.
+--- in_cx
+[doc [section #s-1 [title T]] [para [ref @s-1]]]
+--- out_json
+{
+  "doc": {
+    "section": {
+      "title": "T"
+    },
+    "para": {
+      "ref": {
+        "$ref": "s-1"
+      }
+    }
+  }
+}

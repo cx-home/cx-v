@@ -896,3 +896,23 @@ tags: dtd conditional close-bracket regression
   [!ELEMENT x EMPTY]
 ]]]
 [root]
+
+=== test: 035-apostrophe-in-bare-prose
+level: core
+tags: parser bare-prose apostrophe contractions
+# Mid-word apostrophes in bare element body must stay as literal
+# text bytes, not engage quoted-string scanning. Pre-fix the body
+# tokenizer treated any `'` as a string-literal opener and ran to
+# EOF looking for the matching `'` — bare prose like "it's broken"
+# or "the binding's API" panicked the parser on every contraction.
+# Sibling class with cxl-066 (commas / em-dash / `=` in bare prose
+# stay Element body, ADR 0017 §D1) and cxl-072 (SequenceNode walked
+# by element_text_content). Fix: read_token's bare-token path drops
+# the `'` / `"` quote-engagement; boundary `'…'` at the head of a
+# body item is still caught by parse_body upstream, and quote
+# tracking inside CXPath predicates (the bracket_depth > 0 path)
+# is unchanged so `//x[@name='foo']` still works.
+--- in_cx
+[prose it's broken when binding's API uses Bob's name.]
+--- out_cx
+[prose it's broken when binding's API uses Bob's name.]

@@ -28,6 +28,10 @@ fn event_type_name(e cx.StreamEvent) string {
 		cx.StreamEntityRef    { 'EntityRef' }
 		cx.StreamRawText      { 'RawText' }
 		cx.StreamAlias        { 'Alias' }
+		// Chunked-table events (ADR 0015 / Phase 7.74c).
+		cx.StreamStartTable   { 'StartTable' }
+		cx.StreamRowGroup     { 'RowGroup' }
+		cx.StreamEndTable     { 'EndTable' }
 	}
 }
 

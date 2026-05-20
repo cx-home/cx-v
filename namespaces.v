@@ -27,6 +27,11 @@ pub const cx_namespace_uri  = 'https://cx-home.org/ns/cx'
 // produces the same result. Called automatically by parse(),
 // parse_xml(), parse_json(), parse_yaml(), parse_toml(),
 // parse_markdown(), and the ast_bin decoder.
+//
+// v0.7.0 Z2: also resolves inherited cx:lang scope per spec/i18n.md
+// §1.3 — each Element's `lang_resolved` field is populated with the
+// nearest in-scope BCP 47 language tag (or empty Option when no
+// cx:lang is in scope, or Some("") when explicitly shadowed).
 pub fn resolve_namespaces(mut doc Document) {
 	mut scope := []map[string]string{}
 	for i := 0; i < doc.elements.len; i++ {
@@ -36,6 +41,50 @@ pub fn resolve_namespaces(mut doc Document) {
 			doc.elements[i] = n
 		}
 	}
+	// Language-scope pass. Independent of the namespace pass because
+	// cx:lang inheritance follows element nesting only, with no
+	// xmlns-scope interactions.
+	mut lang_stack := []?string{}
+	for i := 0; i < doc.elements.len; i++ {
+		mut n := doc.elements[i]
+		if mut n is Element {
+			resolve_element_lang(mut n, mut lang_stack)
+			doc.elements[i] = n
+		}
+	}
+}
+
+// resolve_element_lang propagates the in-scope cx:lang per
+// spec/i18n.md §1.3. Stack holds the lang tags of strict ancestors
+// (innermost-on-top); on entry we look for an own `cx:lang` attribute
+// and otherwise inherit the top-of-stack value.
+fn resolve_element_lang(mut e Element, mut stack []?string) {
+	mut own_lang := ?string(none)
+	mut declared := false
+	for a in e.attrs {
+		if a.name == 'cx:lang' {
+			own_lang = scalar_value_str(a.value)
+			declared = true
+			break
+		}
+	}
+	resolved := if declared {
+		own_lang
+	} else if stack.len > 0 {
+		stack[stack.len - 1]
+	} else {
+		?string(none)
+	}
+	e.lang_resolved = resolved
+	stack << resolved
+	for i := 0; i < e.items.len; i++ {
+		mut item := e.items[i]
+		if mut item is Element {
+			resolve_element_lang(mut item, mut stack)
+			e.items[i] = item
+		}
+	}
+	stack.delete_last()
 }
 
 fn resolve_element(mut e Element, mut scope []map[string]string) {

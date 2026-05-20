@@ -83,6 +83,17 @@ pub fn (d Document) resolve_id(id string) ?Element {
 	}
 }
 
+// resolve_body_ref returns the Element targeted by `e.body_ref` in
+// this document, or none when body_ref is unset or the target ID is
+// undeclared. v0.7.0 (ADR 0003 D1 second bullet / GG13 row at
+// spec/v0_7_0_status.md).
+pub fn (d Document) resolve_body_ref(e Element) ?Element {
+	if br := e.body_ref {
+		return d.resolve_id(br)
+	}
+	return none
+}
+
 fn find_element_by_id(nodes []Node, id string) ?Element {
 	for n in nodes {
 		if n is Element {

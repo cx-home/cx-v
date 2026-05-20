@@ -10,7 +10,7 @@ import cx
 // before the CXL evaluator rewrite (§F-evaluator) ratifies them
 // behaviorally.
 //
-// Companion specs: ADR 0017 §D5/§D6/§D7, spec/cxl.md §3.0.
+// Companion specs: ADR 0017 §D5/§D6/§D7, spec/eval.md §3.0.
 
 fn parse_one(src string) cx.Node {
 	d := cx.parse(src) or { panic('parse: ${err}') }

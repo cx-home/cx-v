@@ -1,0 +1,983 @@
+# CX Language (CXL) Conformance Suite
+Version: 0.4 — 2026-05-12 (V reference evaluator rewritten under
+ADR 0017 §D6/§D7 uniform directive shape per §F. Conformance fixture
+runner extended in V + TypeScript with `in_cxl` / `out_text` /
+`out_err` drivers; remaining bindings + native evaluators land in
+follow-up phases.)
+
+This file is the conformance home for CXL — the CX Language per
+[spec/eval.md](../spec/eval.md), normative under [ADR 0016](../spec/decisions/0016-templates-queries-cx-expression-family.md)
+with the v0.6.0 syntax rewrite per [ADR 0017](../spec/decisions/0017-collection-literals-and-cxl-refactor.md).
+
+CXL 1.0 ships at CX release **v0.6.0** under the ADR 0017 §D7
+uniform directive shape `[?Name [arg1, arg2, …]]`. The pre-0017
+attribute-slot form (`:then=…/:else=…`), the `?cond` directive, the
+bare positional-text form (`[?for v in expr body]`), and the
+quoted-string-as-body-marker convention are dropped per §D17 — no
+adopters yet, no migration required.
+
+---
+
+## Status at v0.6.0
+
+- Grammar v3.6 (ADR 0017): ArgArray production [56b] forces the
+  first `[…]` body item of any `[?Name …]` directive to parse as an
+  Array literal. Slot bodies are CX body fragments per §D5 / §D7,
+  terminating at the next depth-0 `,` `]` `)` `}`. Single-item slots
+  return their lone item; multi-item slots wrap in SequenceNode.
+- AST: `InterpolationNode` + `EvalDirectiveNode` carry one optional
+  ArgArray (ArrayNode) child. `Attribute.body` BracketBody attribute
+  values remain valid on regular Elements (no longer on EvalDirective
+  attrs — §D7 drops the attribute-slot convention).
+- ABI v2: `cx_eval_cxl` and `cx_eval_cxl_with_len` are fully
+  implemented at the V core (`vcx/cx/cabi.v`); `cx_eval_cxl_streaming`
+  returns `W012` (stub).
+- Capability bits 28 (CXL) and 29 (collection literals) set in
+  `cx_features`.
+- The V reference evaluator (`vcx/cx/cxl.v`) implements:
+  - Interpolation `[?=EXPR]` with bare-attribute (`@name`), path
+    (`//service`), path-attr (`//service/@name`), and variable-
+    reference (`v`, `v/@attr`) expression forms.
+  - `[?if [cond, then-body, else-body?]]` two-/three-slot conditional
+    (§3.2) with EBV per cxdm.md §4.5 and numeric / string / bool
+    comparison ops `=`, `!=`, `<`, `<=`, `>`, `>=` per cxdm.md §8.
+  - `[?if [[c1, b1], [c2, b2], [*, default]]]` multi-branch (§3.3)
+    with `*` wildcard sentinel for the unconditional fallback (§D8).
+  - `[?for [var, iterable, body]]` iteration with lexical scope (§3.4).
+  - `[?with [context, body]]` context shift (§3.5).
+  - `[?def [name, body]]` / `[?use [name, ctx?]]` named blocks
+    (§3.7/§3.8).
+  - Frozen filter set §4.1/4.3/4.5/4.6: `upper`, `lower`, `trim`,
+    `length`, `concat`, `join`, `replace`, `default`, `first`,
+    `rest`, `empty`, `reverse`, `escape-html`, `escape-url`, `raw`.
+    Filter calls take an ArgArray of positional slots:
+    `[?upper [@name]]`, `[?join [SEP, XS]]`. Composition by bracket
+    nesting: `[?upper [[?trim [@name]]]]`.
+  - Output targets: `text` (default, no auto-escape), `cx` (round-
+    trip), `html` (auto-escape on `[?=…]`).
+  - Top-of-file `[?cx output-target=…]` / `[?cx output-strict]`
+    configuration directives (attribute-pair form retained for `?cx`
+    — see §5.1 reconciliation note).
+- The `.cxl` file extension is reserved per governance §12.3.
+
+## Open gaps (CXL 1.0 not yet at full §3/§4 coverage)
+
+- `[?include]` resolution depends on ADR 0014 include pass; pending.
+- Numeric / temporal / sequence-filter completeness — `abs`, `round`,
+  `format-decimal`, `format-percent`, `take`, `drop`, `distinct`,
+  `where`, `format-date`, `format-datetime`, `last`, `type-of` —
+  parse as EvalDirective but evaluator-side implementation pending.
+- Output targets `markdown` / `json` / `yaml` / `xml` / `csv` / `tsv`
+  / shape-emitter — parse-only at v0.6.0; emission per
+  spec/eval.md §6 pending.
+- Whitespace-trim markers `[?-= … -]` and block-form newline
+  consumption per cxl.md §2.4 — pending.
+- Per-binding native evaluators (parity with V reference per ADR 0016
+  D9) — pending; bindings can still call the C ABI symbols today.
+- Conformance fixture runner extension — landed for V
+  (`lang/v/conformance.v`) and TypeScript (`lang/typescript/conformance.ts`).
+  Python / Go / Ruby / Rust / Java / Kotlin / C# / Swift runners
+  still need the `in_cxl` / `out_text` / `out_err` drivers (each
+  binding also needs an `eval_cxl` wrapper around the C ABI symbol).
+- `[?cx [{output-target: 'html'}]]` map-arg config form (ADR 0017
+  §D7 table) — parser reconciliation pending; v0.6.0 keeps the
+  attribute-pair form `[?cx output-target=html]` from spec/eval.md
+  §5.1. Either the spec §5.1 attribute form is retained as the
+  canonical config shape, or the parser dispatches `?cx` with a
+  `[…]` body item to the new shape. Decided in §F follow-up.
+
+## Format
+
+Each fixture is a four-section block (one leading-equals header, an
+optional metadata block, then `--- in_cxl` / `--- in_cx` / `--- out_text`
+section dividers).
+
+Error-path fixtures use `--- out_err` instead of `--- out_text`,
+carrying an error-message substring that must appear in the evaluator's
+returned error. CX-to-CX transformation fixtures use `--- out_cx`
+carrying the expected CX output (compared after canonicalization per
+spec/canonical.md).
+
+## Categories
+
+1. **basic** — `[?=EXPR]` interpolation, literal text, simple CXPath
+2. **control-flow** — `[?if]` two-/three-slot, `[?if]` multi-branch,
+   `[?for]`, `[?with]` semantics
+3. **filters** — frozen built-in filter set per cxl.md §4
+4. **composition** — nested directives, embedded CXPath, `[?def]` /
+   `[?use]` blocks
+5. **partials** — `[?include]` resolution per ADR 0014 (pending include
+   resolution work)
+6. **whitespace** — block-form newline rules, `[?-= ... -]` trim markers
+   (pending)
+7. **escaping** — target-aware auto-escape per cxl.md §6
+8. **errors** — unbound variable, bad CXPath, type mismatch, recursive
+   include, future-version EvalName at older evaluator, pre-0017
+   syntax forms (`?cond`, `:then=…`, bare positional for)
+
+Under the no-shortcuts v0.6.0 lock, **every** public-ABI feature ships
+to all 10 bindings at v0.6.0 — there is no Tier 1 / Tier 2 / Tier 3
+phasing for CXL.
+
+---
+
+## Fixtures
+
+The fixtures below mirror the V-core unit tests in
+[`vcx/tests/cxl_test.v`](../vcx/tests/cxl_test.v). They become
+executable as soon as the conformance runner gains an `in_cxl` +
+`out_text` driver.
+
+=== test: cxl-001-interp-attr
+level: core
+tags: basic interpolation
+--- in_cx
+[product name=Pocket price=12]
+--- in_cxl
+[?=@name]
+--- out_text
+Pocket
+
+=== test: cxl-002-interp-path-attr
+level: core
+tags: basic interpolation path
+--- in_cx
+[product [variant sku=PN-A]]
+--- in_cxl
+[?=//variant/@sku]
+--- out_text
+PN-A
+
+=== test: cxl-003-if-true
+level: core
+tags: control-flow if
+--- in_cx
+[product stock=10]
+--- in_cxl
+[?if [@stock > 0, in stock, out]]
+--- out_text
+in stock
+
+=== test: cxl-004-if-false
+level: core
+tags: control-flow if
+--- in_cx
+[product stock=0]
+--- in_cxl
+[?if [@stock > 0, in stock, out]]
+--- out_text
+out
+
+=== test: cxl-005-if-existence
+level: core
+tags: control-flow if existence
+--- in_cx
+[product [tags]]
+--- in_cxl
+[?if [//tags, yes, no]]
+--- out_text
+yes
+
+=== test: cxl-006-for-iteration
+level: core
+tags: control-flow for
+--- in_cx
+[product [v sku=A] [v sku=B] [v sku=C]]
+--- in_cxl
+[?for [x, //v, [?=x/@sku];]]
+--- out_text
+A;B;C;
+
+=== test: cxl-007-with-context
+level: core
+tags: control-flow with
+--- in_cx
+[product [meta owner=alice region=us]]
+--- in_cxl
+[?with [//meta, [?=@owner]/[?=@region]]]
+--- out_text
+alice/us
+
+=== test: cxl-008-filter-upper
+level: core
+tags: filters string
+--- in_cx
+[p name=hello]
+--- in_cxl
+[?=[?upper [@name]]]
+--- out_text
+HELLO
+
+=== test: cxl-009-filter-default-missing
+level: core
+tags: filters type
+--- in_cx
+[p]
+--- in_cxl
+[?=[?default [@absent, 0]]]
+--- out_text
+0
+
+=== test: cxl-010-html-auto-escape
+level: core
+tags: escaping html
+--- in_cx
+[p name='<script>alert(1)</script>']
+--- in_cxl
+[?cx output-target=html][?=@name]
+--- out_text
+&lt;script&gt;alert(1)&lt;/script&gt;
+
+=== test: cxl-011-if-multi-branch
+level: core
+tags: control-flow if multi-branch
+--- in_cx
+[p stock=15]
+--- in_cxl
+[?if [[@stock > 100, Plenty], [@stock > 10, Some], [@stock > 0, Low], [*, None]]]
+--- out_text
+Some
+
+=== test: cxl-012-if-multi-branch-fallback
+level: core
+tags: control-flow if multi-branch wildcard
+--- in_cx
+[p stock=-1]
+--- in_cxl
+[?if [[@stock > 100, Plenty], [*, None]]]
+--- out_text
+None
+
+=== test: cxl-013-filter-trim-upper-compose
+level: core
+tags: filters composition
+--- in_cx
+[p name='  alice  ']
+--- in_cxl
+[?=[?upper [[?trim [@name]]]]]
+--- out_text
+ALICE
+
+=== test: cxl-014-labeled-if
+level: core
+tags: labeled-form if
+--- in_cx
+[product stock=42]
+--- in_cxl
+[?if @stock > 0 :then in stock :else out of stock]
+--- out_text
+in stock
+
+=== test: cxl-015-labeled-if-no-else
+level: core
+tags: labeled-form if
+--- in_cx
+[product stock=0]
+--- in_cxl
+[?if @stock > 0 :then visible]
+--- out_text
+
+
+=== test: cxl-016-labeled-for
+level: core
+tags: labeled-form for
+--- in_cx
+[product [v sku=A] [v sku=B] [v sku=C]]
+--- in_cxl
+[?for x :in //v :return [?=x/@sku];]
+--- out_text
+A;B;C;
+
+=== test: cxl-017-labeled-with
+level: core
+tags: labeled-form with
+--- in_cx
+[product [meta owner=alice region=us]]
+--- in_cxl
+[?with //meta :return [?=@owner]/[?=@region]]
+--- out_text
+alice/us
+
+=== test: cxl-018-labeled-def-use-zero-param
+level: core
+tags: labeled-form def use
+--- in_cx
+[product name=alice]
+--- in_cxl
+[?def greet :body Hello [?=@name]!][?use greet]
+--- out_text
+Hello alice!
+
+=== test: cxl-019-positional-def-legacy-2slot-still-works
+level: core
+tags: backward-compat def
+--- in_cx
+[product name=alice]
+--- in_cxl
+[?def [greet, Hello [?=@name]!]][?use [greet]]
+--- out_text
+Hello alice!
+
+=== test: cxl-020-positional-def-3slot-empty-params
+level: core
+tags: def 3-slot
+--- in_cx
+[product name=alice]
+--- in_cxl
+[?def [greet, [], Hello [?=@name]!]][?use [greet]]
+--- out_text
+Hello alice!
+
+=== test: cxl-021-labeled-def-single-param
+level: core
+tags: labeled-form def params
+--- in_cx
+[p]
+--- in_cxl
+[?def shout :params [x] :body LOUD: [?=x]!][?shout 'hi']
+--- out_text
+LOUD: hi!
+
+=== test: cxl-022-labeled-def-multi-param
+level: core
+tags: labeled-form def params
+--- in_cx
+[p]
+--- in_cxl
+[?def pair :params [a, b] :body [?=a]/[?=b]][?pair 'left' 'right']
+--- out_text
+left/right
+
+=== test: cxl-023-positional-def-3slot-with-params
+level: core
+tags: positional def params 3-slot
+--- in_cx
+[product]
+--- in_cxl
+[?def [greet, [name,], Hello [?=name]!]][?greet 'world']
+--- out_text
+Hello world!
+
+=== test: cxl-024-param-with-cxpath
+level: core
+tags: labeled-form def params cxpath
+--- in_cx
+[product [v sku=PN-A] [v sku=PN-B]]
+--- in_cxl
+[?def line :params [item] :body sku=[?=item/@sku];][?for x :in //v :return [?line x]]
+--- out_text
+sku=PN-A;sku=PN-B;
+
+=== test: cxl-025-w018-arg-count-mismatch
+level: core
+tags: errors params W018
+--- in_cx
+[p]
+--- in_cxl
+[?def f :params [a, b] :body x][?f 'one']
+--- out_err
+W018
+
+=== test: cxl-026-use-of-parameterized-errors
+level: core
+tags: errors params R4
+--- in_cx
+[p]
+--- in_cxl
+[?def f :params [a] :body x][?use f]
+--- out_err
+parameter
+
+=== test: cxl-027-template-shadows-builtin
+level: core
+tags: shadowing filters D6
+--- in_cx
+[p]
+--- in_cxl
+[?def upper :params [s] :body SHADOWED-[?=s]][?upper 'hi']
+--- out_text
+SHADOWED-hi
+
+=== test: cxl-028-param-unbinds-between-calls
+level: core
+tags: lexical-scope params
+--- in_cx
+[p]
+--- in_cxl
+[?def f :params [tmp] :body <[?=tmp]>][?f 'A'][?f 'B']
+--- out_text
+<A><B>
+
+=== test: cxl-029-let-positional
+level: extended
+tags: let
+--- in_cx
+[product price=12]
+--- in_cxl
+[?let [v, @price, [?=v]]]
+--- out_text
+12
+
+=== test: cxl-030-let-labeled
+level: extended
+tags: let labeled-form
+--- in_cx
+[product name=Pocket]
+--- in_cxl
+[?let g :be @name :return [?=g]]
+--- out_text
+Pocket
+
+=== test: cxl-031-flwor-where
+level: extended
+tags: flwor where
+--- in_cx
+[p [v s=A in=1] [v s=B in=0] [v s=C in=2]]
+--- in_cxl
+[?for x :in //v :where x/@in > 0 :return [?=x/@s];]
+--- out_text
+A;C;
+
+=== test: cxl-032-flwor-count
+level: extended
+tags: flwor count
+--- in_cx
+[p [v s=A] [v s=B] [v s=C]]
+--- in_cxl
+[?for x :in //v :count i :return [?=i]:[?=x/@s];]
+--- out_text
+1:A;2:B;3:C;
+
+=== test: cxl-033-flwor-order-by
+level: extended
+tags: flwor order-by
+--- in_cx
+[p [v s=C] [v s=A] [v s=B]]
+--- in_cxl
+[?for x :in //v :order-by x/@s :return [?=x/@s];]
+--- out_text
+A;B;C;
+
+=== test: cxl-034-flwor-group-by
+level: extended
+tags: flwor group-by
+--- in_cx
+[p [v c=red n=1] [v c=blue n=2] [v c=red n=3] [v c=blue n=4]]
+--- in_cxl
+[?for x :in //v :group-by [k, x/@c] :return [g [?=k]:[?for y :in x :return [?=y/@n];]] ]
+--- out_text
+[g red:1;3;][g blue:2;4;]
+
+=== test: cxl-035-flwor-tumbling
+level: extended
+tags: flwor windowing
+--- in_cx
+[r [v n=1] [v n=2] [v n=3] [v n=4] [v n=5]]
+--- in_cxl
+[?for-tumbling w :in //v :size 2 :return [?for x :in w :return [?=x/@n]];]
+--- out_text
+12;34;5;
+
+=== test: cxl-036-flwor-sliding
+level: extended
+tags: flwor windowing
+--- in_cx
+[r [v n=1] [v n=2] [v n=3] [v n=4]]
+--- in_cxl
+[?for-sliding w :in //v :size 2 :step 1 :return [?for x :in w :return [?=x/@n]];]
+--- out_text
+12;23;34;4;
+
+=== test: cxl-037-fn-and-apply
+level: extended
+tags: fn higher-order
+--- in_cx
+[p]
+--- in_cxl
+[?let dbl :be [?fn :params [n] :body [?=n][?=n]] :return [?=[?apply [dbl, 'X']]]]
+--- out_text
+XX
+
+=== test: cxl-038-partial-left-curry
+level: extended
+tags: fn partial
+--- in_cx
+[p name=World]
+--- in_cxl
+[?let greet :be [?partial [[?fn-ref [concat, 2]], 'Hello, ']] :return [?=[?apply [greet, @name]]]]
+--- out_text
+Hello, World
+
+=== test: cxl-039-partial-middle-placeholder
+level: extended
+tags: fn partial placeholder
+--- in_cx
+[p]
+--- in_cxl
+[?let f :be [?partial [[?fn-ref [concat, 2]], [?_], '!']] :return [?=[?apply [f, 'hi']]]]
+--- out_text
+hi!
+
+=== test: cxl-040-try-multi-catch-glob
+level: extended
+tags: try error
+--- in_cx
+[p]
+--- in_cxl
+[?try [[?error ['FORG0006', 'wrong type']], [FOAR*, math], [FORG*, generic], [*, other]]]
+--- out_text
+generic
+
+=== test: cxl-041-try-err-bindings
+level: extended
+tags: try error err-bindings
+--- in_cx
+[p]
+--- in_cxl
+[?try [[?error ['FOAR0001', 'oops']], [?=err-code]]]
+--- out_text
+FOAR0001
+
+=== test: cxl-042-match-value
+level: extended
+tags: match
+--- in_cx
+[p kind=admin]
+--- in_cxl
+[?match [@kind, [admin, A], [user, U], [*, ?]]]
+--- out_text
+A
+
+=== test: cxl-043-fn-string-template
+level: extended
+tags: fn-library string
+--- in_cx
+[u name=Alice age=30]
+--- in_cxl
+[?=[?str-template 'Hello [?=@name], age [?=@age]']]
+--- out_text
+Hello Alice, age 30
+
+=== test: cxl-044-fn-matches-regex
+level: extended
+tags: fn-library regex
+--- in_cx
+[p s='hello42']
+--- in_cxl
+[?=[?matches ['[a-z]+[0-9]+', @s]]]
+--- out_text
+true
+
+=== test: cxl-045-fn-current-date-not-empty
+level: extended
+tags: fn-library date
+--- in_cx
+[p]
+--- in_cxl
+[?=[?string-length [[?current-date]]]]
+--- out_text
+10
+
+=== test: cxl-046-cxpath-parent-axis
+level: extended
+tags: cxpath axis
+--- in_cx
+[root [outer tag=O [inner n=42]]]
+--- in_cxl
+[?for x :in //inner/parent::* :return [?=x/@tag];]
+--- out_text
+O;
+
+=== test: cxl-047-cxpath-ancestor-axis
+level: extended
+tags: cxpath axis
+--- in_cx
+[r [a tag=A [b tag=B [c n=1]]]]
+--- in_cxl
+[?for x :in //c/ancestor::* :return [?=x/@tag];]
+--- out_text
+B;A;;
+
+=== test: cxl-048-cxpath-following-sibling
+level: extended
+tags: cxpath axis
+--- in_cx
+[r [a n=1] [b n=2] [c n=3]]
+--- in_cxl
+[?for x :in //a/following-sibling::* :return [?=x/@n];]
+--- out_text
+2;3;
+
+=== test: cxl-049-op-pipeline
+level: extended
+tags: operator pipeline
+--- in_cx
+[p name=alice]
+--- in_cxl
+[?=@name |> upper]
+--- out_text
+ALICE
+
+=== test: cxl-050-op-arrow
+level: extended
+tags: operator arrow
+--- in_cx
+[p name=ALICE]
+--- in_cxl
+[?=@name => lower()]
+--- out_text
+alice
+
+=== test: cxl-051-op-string-concat
+level: extended
+tags: operator string-concat
+--- in_cx
+[u first=Alice last=Smith]
+--- in_cxl
+[?=@first || '-' || @last]
+--- out_text
+Alice-Smith
+
+=== test: cxl-052-op-to-range
+level: extended
+tags: operator range
+--- in_cx
+[p]
+--- in_cxl
+[?for x :in 1 to 4 :return [?=x];]
+--- out_text
+1;2;3;4;
+
+=== test: cxl-053-attr-value-interpolation
+level: extended
+tags: j0 attr-interp
+--- in_cx
+[p [c cid=42 name=Joe]]
+--- in_cxl
+[?for c :in //c :return [a href=/u/[?=c/@cid]/p/[?=c/@name]]]
+--- out_text
+[a href=/u/42/p/Joe]
+
+=== test: cxl-054-focus-function
+level: extended
+tags: fn focus
+--- in_cx
+[p [v n=5]]
+--- in_cxl
+[?let dbl :be [?focus :body [?=_]] :return [?for x :in //v :return [?=[?apply [dbl, x/@n]]]]]
+--- out_text
+5
+
+=== test: cxl-055-body-ref-passes-through-template
+level: core
+tags: body-position-ref pass-through identity GG11
+# Per ADR 0016 Amendment 2026-05-18 (GG11): `[ref @id]` body-position
+# references in CXL templates pass through to output verbatim — no
+# auto-resolution to the target's content. Templates carry the
+# reference as part of their rendered shape (e.g. "see [ref @s-3]
+# for details").
+--- in_cx
+[input]
+--- in_cxl
+[output [section #s-1 [title T]] [link [ref @s-1]]]
+--- out_text
+[output [section #s-1 [title T]][link [ref @s-1]]]
+
+=== test: cxl-056-triquote-in-then-slot
+level: core
+tags: v0.7.0 multi-line-symmetry triquote slot-body
+# Spec [10b] amendment + [55a] addition: triquote is valid in any
+# value position, including CXL slot bodies.
+--- in_cx
+[ctx]
+--- in_cxl
+[?if 1 :then '''multi
+line value''' :else fallback]
+--- out_text
+multi
+line value
+
+=== test: cxl-057-triquote-in-let-be
+level: core
+tags: v0.7.0 multi-line-symmetry triquote ?let
+--- in_cx
+[ctx]
+--- in_cxl
+[?let v :be '''hello
+world''' :return [?=v]]
+--- out_text
+hello
+world
+
+=== test: cxl-058-hash-raw-in-def-body
+level: core
+tags: v0.7.0 multi-line-symmetry hash-raw ?def ?use
+# RawText in a slot body must render its literal content (v0.7.0).
+# Previously the evaluator dropped RawText nodes silently.
+--- in_cx
+[ctx]
+--- in_cxl
+[?def msg :body [# raw [literal] text #]][?use msg]
+--- out_text
+ raw [literal] text 
+
+=== test: cxl-059-pipe-block-in-def-body
+level: core
+tags: v0.7.0 multi-line-symmetry pipe-block ?def ?use
+# BlockContent in a slot body renders its inner text items.
+--- in_cx
+[ctx]
+--- in_cxl
+[?def msg :body [| pipe content |]][?use msg]
+--- out_text
+ pipe content 
+
+=== test: cxl-060-bare-text-program
+level: core
+tags: v0.7.0 multi-line-symmetry doc-top bare-text
+# Bare-text programs render to verbatim text — the program IS the value.
+--- in_cx
+[ctx]
+--- in_cxl
+plain text program
+--- out_text
+plain text program
+
+=== test: cxl-061-var-rooted-attr-after-chained-step
+level: core
+tags: v0.7.0 cxpath variable-root attr-step
+# Variable-rooted relative path with /@attr after one or more child
+# steps. Underscore + hyphen in element names work in chained
+# positions (lexer accepts both, was a wiring bug in
+# eval_path_from_value that lost the trailing /@attr split).
+# `[?=]` runs at top level here, so the substituted bytes emit
+# verbatim (option (d) body-position auto-quoting only fires inside
+# an enclosing element body — see cxl-071).
+--- in_cx
+[doc [example [in_cx src='[pizza]']]]
+--- in_cxl
+[?for ex :in //example :return [?= ex/in_cx/@src]]
+--- out_text
+[pizza]
+
+=== test: cxl-062-var-rooted-hyphen-in-chained-step
+level: core
+tags: v0.7.0 cxpath variable-root hyphen
+# Hyphen variant of cxl-061 — element name `in-cx` after a child step
+# from a variable-rooted path. Top-level `[?=]` emits the bytes
+# verbatim; see cxl-071 for the body-position case.
+--- in_cx
+[doc [example [in-cx src='[burger]']]]
+--- in_cxl
+[?for ex :in //example :return [?= ex/in-cx/@src]]
+--- out_text
+[burger]
+
+=== test: cxl-063-where-outer-var-attr-equality
+level: core
+tags: v0.7.0 flwor :where outer-scope comparison
+# :where predicate referencing an outer-?for variable on the RHS of
+# the comparison. parse_rhs_literal was stringifying the variable-
+# rooted path as a literal; now it evaluates as a path when the
+# leading identifier is in env.bindings.
+--- in_cx
+[doc
+  [exref id='atom']
+  [example id='atom' [body 'hit']]
+  [example id='other' [body 'miss']]
+]
+--- in_cxl
+[?for ref :in //exref :return
+  [?for ex :in //example :where ex/@id = ref/@id :return
+    [HIT [?= ex/body]]]]
+--- out_text
+[HIT hit]
+
+=== test: cxl-064-let-binding-in-where-predicate
+level: core
+tags: v0.7.0 flwor :let :where comparison
+# Same shape as cxl-063 but the comparison RHS is a `:let`-bound
+# variable rather than an outer ?for binding.
+--- in_cx
+[doc
+  [exref id='atom']
+  [example id='atom' [body 'hit']]
+  [example id='other' [body 'miss']]
+]
+--- in_cxl
+[?for ref :in //exref :return
+  [?let rid :be ref/@id :return
+    [?for ex :in //example :where ex/@id = rid :return
+      [HIT [?= ex/body]]]]]
+--- out_text
+[HIT hit]
+
+=== test: cxl-065-path-vs-path-equality-self
+level: core
+tags: v0.7.0 comparison path-vs-path
+# Sanity check that path-vs-path equality works in the simplest
+# case: variable compared to itself. Before the fix, the RHS was
+# treated as the literal string "ex/@id" and the comparison
+# always returned false.
+--- in_cx
+[doc [example id='a']]
+--- in_cxl
+[?for ex :in //example :return [?if [ex/@id = ex/@id, YES, NO]]]
+--- out_text
+YES
+
+=== test: cxl-066-prose-body-with-commas-stays-element
+level: core
+tags: v0.7.0 adr-0017 disambiguation prose
+# ADR 0017 §D1 amendment 2026-05-19: bare prose containing commas
+# parses as an Element body, not as an ArrayLiteral. Pre-amendment
+# the parser saw the comma anywhere in the body and routed the
+# bracket through array-literal parsing, silently vaporising the
+# element name. Both proses now resolve via //prose.
+--- in_cx
+[doc
+  [prose A line, with commas, has no body.]
+  [prose 'A line, with commas, survives if single-quoted.']
+]
+--- in_cxl
+[?for p :in //prose :return [P [?= p]]]
+--- out_text
+[P A line, with commas, has no body.][P A line, with commas, survives if single-quoted.]
+
+=== test: cxl-067-multibranch-if-with-sentinel
+level: core
+tags: v0.7.0 adr-0017 multi-branch sentinel
+# ADR 0017 §D8 multi-branch ?if with `[*, default]` sentinel. The
+# `*` first-char dual-role (alias vs sentinel) is decided by the
+# next non-ws char: `,` → array (sentinel), else → element.
+--- in_cx
+[ctx x=3]
+--- in_cxl
+[?if [[@x > 5, big], [*, small]]]
+--- out_text
+small
+
+=== test: cxl-068-try-catch-glob-token-stays-array
+level: core
+tags: v0.7.0 adr-0017 try-catch glob
+# `[FOAR*, math]` — first token contains `*` mid-name. The
+# candidate isn't a clean element-name shape, so the bracket
+# routes through array-literal parsing (the try-catch pair form).
+--- in_cx
+[p]
+--- in_cxl
+[?try [[?error ['FORG0006', 'wrong type']], [FOAR*, math], [FORG*, generic], [*, other]]]
+--- out_text
+generic
+
+=== test: cxl-069-text-then-interp-top-level
+level: core
+tags: v0.7.0 doc-top mixed-text interpolation
+# Top-level CXL program may interleave literal text with `[?=…]`
+# interpolations (spec/eval.md §2.1). Pre-fix the parser entered
+# bare-text-document mode on first non-bracket char and consumed
+# the rest of the input verbatim — the interpolation passed through
+# as literal "[?= //prose]". Fix: read_top_text_run stops at `[`/`&`
+# so the document is parsed as Text + Interpolation + Text.
+--- in_cx
+[doc [prose hi]]
+--- in_cxl
+PREFIX [?= //prose] SUFFIX
+--- out_text
+PREFIX hi SUFFIX
+
+=== test: cxl-070-interp-then-text-top-level
+level: core
+tags: v0.7.0 doc-top mixed-text interpolation
+# Mirror of cxl-069 — leading interpolation followed by literal
+# text. Pre-fix the prolog loop parsed `[?=…]` into elements[0]
+# and broke out, leaving the unified loop in strict mode; the
+# trailing ` AFTER` triggered "expected node". Fix: the prolog
+# loop sets allow_top_text when the first non-prolog node is an
+# Interpolation or EvalDirective.
+--- in_cx
+[doc [prose hi]]
+--- in_cxl
+[?= //prose] AFTER
+--- out_text
+hi AFTER
+
+=== test: cxl-071-interp-body-position-auto-quote
+level: core
+tags: v0.7.0 interpolation body-quote round-trip
+# `[?=]` semantics are context-sensitive (option (d), v0.7.0):
+# - Top level / attr-value: emit substituted bytes verbatim. This
+#   is the cxmod-001..n contract — `cx:parse`, `cx:serialize`,
+#   `cx:canonical` chain through `[?=…]` and depend on the bytes
+#   reaching stdout unchanged.
+# - Inside element body (or attr *body* — the `[name=[…]]` form):
+#   wrap the substituted bytes in the cheapest quote form that
+#   survives a downstream re-parse (`cx --md`, `cx --xml`, …),
+#   when the value contains `[` `]` `'` `"`, starts with a sigil,
+#   or begins `name=…`. Bare-safe values pass through verbatim so
+#   `[h2 [?= sec/@id]]` → `[h2 first]` stays unquoted.
+# Pairs with the docs pipeline at scripts/gen_docs/build.cxl which
+# substitutes example sources into [p] bodies and pipes the eval
+# output through `cx --md`. Pre-fix the pipeline had to wrap every
+# substitution in `[?concat ["'", x, "'"]]`; now `[?= x]` is enough.
+--- in_cx
+[doc
+  [item id='plain' v='first']
+  [item id='bracket' v='[pizza size=large]']
+  [item id='json' v='{"pizza":{"@size":"large"}}']
+  [item id='sigil' v='@alice']
+  [item id='attr' v='size=large']
+  [item id='quoted' v='''has 'an' inner quote''']
+  [item id='multi' v='''line one
+line two''']
+  [item id='hash' v='cx hash menu.cx # SHA-256']
+]
+--- in_cxl
+[?for it :in //item :return
+  [row id=[?= it/@id] [?= it/@v]]]
+--- out_text
+[row id=plain first][row id=bracket '[pizza size=large]'][row id=json '{"pizza":{"@size":"large"}}'][row id=sigil '@alice'][row id=attr 'size=large'][row id=quoted '''has 'an' inner quote'''][row id=multi '''line one
+line two'''][row id=hash 'cx hash menu.cx # SHA-256']
+
+=== test: cxl-072-element-text-content-includes-sequence
+level: core
+tags: v0.7.0 element-text-content adr-0017 sequence-literal
+# element_text_content (the XPath string(.) helper invoked by
+# `[?= //prose]`) walks Text / ScalarNode / Element children. Before
+# this fix it dropped ADR 0017 SequenceNode children silently, which
+# bit bare-prose authors who used parens-with-commas as a parenthetical
+# aside: `[prose hi (a, b, c) yo]` parses as Text + Sequence + Text
+# and the Sequence content vanished on substitution. Fix walks
+# Sequence items, space-joining (XPath fn:string() semantics), and
+# reinstates a single space when the parser consumed the inter-token
+# whitespace before `(`. Output is `hi a b c yo` — content preserved
+# even though the source commas are not (they were structural to the
+# sequence-literal, not text bytes).
+--- in_cx
+[doc [prose hi (a, b, c) yo]]
+--- in_cxl
+[?for pr :in //prose :return [p [?= pr]]]
+--- out_text
+[p hi a b c yo]
+
+=== test: cxl-073-include-without-root-errors
+level: core
+tags: v0.7.0 include directive CXER0014
+# `[?include path]` (ADR 0017 §D8, deferred-then-shipped at v0.7.0)
+# is the eval-time runtime-include directive. It reads the file
+# under env.include_root, parses it (resolving any nested
+# `[?cx include=…]` directives via the GG1 parser-time resolver),
+# and evaluates the result inline at the directive site.
+# When the caller has not supplied an include_root (no
+# `--include-root=` CLI flag and no eval_cxl_with_include_root
+# entry-point usage), the directive errors with CXER0014 to make
+# the configuration miss obvious — rather than silently failing
+# with a not-found / not-readable error. The functional file-I/O
+# path is covered by V-level integration tests since the
+# conformance eval runner has no `--- file_<path>` sentinel.
+--- in_cx
+[p]
+--- in_cxl
+[?include 'anything.cxl']
+--- out_err
+CXER0014

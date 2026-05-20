@@ -15,48 +15,98 @@
 === test: cmp-001-uncompressed-vs-zstd1-equal-hash
 level: extended
 tags: data_bin compression hash_invariance
-pending: phase-7.74b+ (cx_hash compression-invariance: requires the
-# hash entry point to decompress 0x90 wrappers before hashing, per
-# spec/data_bin.md §3.12.2; the streaming Table V core can produce
-# all three encodings, but the hash-side change lives elsewhere)
+# HH1 (v0.7.0): cx_data_bin_hash is compression-invariant per
+# spec/data_bin.md §3.12.2. The fixture encodes the input in three
+# ways (plain row group, zstd-1, zstd-19) and asserts that all
+# three produce identical hashes. Payload is 80 rows of redundant
+# data so zstd actually compresses; size_lt sanity-checks that
+# compression took effect.
 --- in_cx
-[logs :table[ts :datetime level :string msg :string]
-  2026-05-09T10:00:00Z info  'request received'
-  2026-05-09T10:00:01Z warn  'slow query'
-  2026-05-09T10:00:02Z error 'database timeout'
+[logs :table[ts:datetime level:string msg:string]
+  2026-05-09T10:00:00Z info  'request received from upstream'
+  2026-05-09T10:00:01Z warn  'slow database query on users table'
+  2026-05-09T10:00:02Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:03Z info  'request received from upstream'
+  2026-05-09T10:00:04Z warn  'slow database query on users table'
+  2026-05-09T10:00:05Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:06Z info  'request received from upstream'
+  2026-05-09T10:00:07Z warn  'slow database query on users table'
+  2026-05-09T10:00:08Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:09Z info  'request received from upstream'
+  2026-05-09T10:00:10Z warn  'slow database query on users table'
+  2026-05-09T10:00:11Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:12Z info  'request received from upstream'
+  2026-05-09T10:00:13Z warn  'slow database query on users table'
+  2026-05-09T10:00:14Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:15Z info  'request received from upstream'
+  2026-05-09T10:00:16Z warn  'slow database query on users table'
+  2026-05-09T10:00:17Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:18Z info  'request received from upstream'
+  2026-05-09T10:00:19Z warn  'slow database query on users table'
+  2026-05-09T10:00:20Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:21Z info  'request received from upstream'
+  2026-05-09T10:00:22Z warn  'slow database query on users table'
+  2026-05-09T10:00:23Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:24Z info  'request received from upstream'
+  2026-05-09T10:00:25Z warn  'slow database query on users table'
+  2026-05-09T10:00:26Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:27Z info  'request received from upstream'
+  2026-05-09T10:00:28Z warn  'slow database query on users table'
+  2026-05-09T10:00:29Z error 'database timeout — connection pool exhausted'
 ]
---- out_data_bin_hex_plain
-# Plain row group; body-tag 0x01.
-# (Full hex elided for brevity; canonical writer emits the
-# §3.11.2 plain-body form, no compression.)
-PLAIN
---- out_data_bin_hex_zstd1
-# Same data as a single compressed row group; body-tag 0x90, codec 0x01.
-COMPRESSED_ZSTD_LEVEL_1
---- out_data_bin_hex_zstd19
-# Same data, max-compression zstd; body-tag 0x90, codec 0x01.
-COMPRESSED_ZSTD_LEVEL_19
---- assertion
-hash(out_data_bin_hex_plain)  == hash(out_data_bin_hex_zstd1)
-hash(out_data_bin_hex_zstd1)  == hash(out_data_bin_hex_zstd19)
-sizeof(out_data_bin_hex_zstd1) < sizeof(out_data_bin_hex_plain)
+--- assert_hash_compression_invariance
+plain zstd1 zstd19
+--- assert_compressed_size_lt
+zstd1 plain
 
 === test: cmp-002-mixed-plain-and-compressed-row-groups
 level: extended
 tags: data_bin compression mixed
-pending: phase-7.74b+ (cx_hash compression-invariance — same gating
-# as cmp-001; mixed plain/compressed row groups in a single table
-# also require the writer to expose per-group codec selection,
-# currently opaque behind ChunkedEmitOptions.compress = .auto)
-# A chunked table with two row groups: group 0 plain, group 1 compressed.
-# Hash is computed over the canonical UNCOMPRESSED form of each group;
-# the file hash matches a fully-plain or fully-compressed encoding of
-# the same data, modulo the chunk-boundary canonicality rule (D1).
+# HH1 (v0.7.0): a chunked table whose row groups mix plain and
+# compressed bodies has the same hash as the all-plain or
+# all-compressed encoding of the same data, modulo chunk-boundary
+# canonicality (ADR 0015 D1). 60 rows at chunk_size=30 produces
+# 2 row groups; with compress=.auto and per-group threshold
+# (chunked_compress_threshold_bytes), one group lands plain and
+# the other compressed depending on size. Hash is computed over
+# the canonical uncompressed form of each group, so the wrapper
+# choice is invisible to cx_data_bin_hash.
+chunk_at: 30
 --- in_cx
-# (3 + 3 = 6 rows; runner generates input)
---- assertion
-hash(mixed) == hash(all_plain_same_chunking)
-hash(mixed) == hash(all_compressed_same_chunking)
+[logs :table[ts:datetime level:string msg:string]
+  2026-05-09T10:00:00Z info  'request received from upstream'
+  2026-05-09T10:00:01Z warn  'slow database query on users table'
+  2026-05-09T10:00:02Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:03Z info  'request received from upstream'
+  2026-05-09T10:00:04Z warn  'slow database query on users table'
+  2026-05-09T10:00:05Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:06Z info  'request received from upstream'
+  2026-05-09T10:00:07Z warn  'slow database query on users table'
+  2026-05-09T10:00:08Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:09Z info  'request received from upstream'
+  2026-05-09T10:00:10Z warn  'slow database query on users table'
+  2026-05-09T10:00:11Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:12Z info  'request received from upstream'
+  2026-05-09T10:00:13Z warn  'slow database query on users table'
+  2026-05-09T10:00:14Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:15Z info  'request received from upstream'
+  2026-05-09T10:00:16Z warn  'slow database query on users table'
+  2026-05-09T10:00:17Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:18Z info  'request received from upstream'
+  2026-05-09T10:00:19Z warn  'slow database query on users table'
+  2026-05-09T10:00:20Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:21Z info  'request received from upstream'
+  2026-05-09T10:00:22Z warn  'slow database query on users table'
+  2026-05-09T10:00:23Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:24Z info  'request received from upstream'
+  2026-05-09T10:00:25Z warn  'slow database query on users table'
+  2026-05-09T10:00:26Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:27Z info  'request received from upstream'
+  2026-05-09T10:00:28Z warn  'slow database query on users table'
+  2026-05-09T10:00:29Z error 'database timeout — connection pool exhausted'
+]
+--- assert_hash_compression_invariance
+plain auto zstd1 zstd19
 
 === test: cmp-003-unknown-codec-rejected
 level: extended
@@ -99,16 +149,18 @@ D006: codec id 0x00 reserved; use plain body-tag 0x01 for uncompressed row group
 
 === test: cmp-005-fd-streaming-write-bounded-memory
 level: extended
-tags: data_bin compression streaming fd
-pending: phase-7.74c+ (memory-property test: requires either a V-side
-# RSS-snapshot harness via getrusage() or a binding-side equivalent;
-# the streaming Table writer fd path landed in 7.74a but the harness
-# infrastructure to measure peak resident bytes across emit calls is
-# orthogonal to the API itself)
-# Property test: cx_table_writer_open_fd emitting 100M rows via
-# 2^20-row groups maintains constant memory (writer holds at most
-# one row group at a time, plus a zstd compression context). Validates
-# at impl time via heap-snapshot ratio between row 0 and row 100M.
---- assertion
-peak_resident_bytes(writer_after_100M_rows) <
-  peak_resident_bytes(writer_after_1M_rows) * 1.10
+tags: data_bin compression streaming fd synth
+# HH4 (v0.7.0): cx_table_writer_open_fd memory is bounded as N row
+# groups are emitted. Writer holds at most one row group + zstd
+# compression state at a time, so RSS should plateau quickly after
+# the first row group. Spec target: 100M rows / 2^20-row groups
+# with ratio < 1.10 — gated on opt-in BENCH_STRESS=1. CI scale-down
+# below uses 64K-row groups × (1 warmup + 100 stress) ≈ 6.4M rows,
+# enough to expose accumulator leaks while completing in <30s.
+chunk_at: 65536
+--- synth_table_schema
+[t :table[id:int v:string]]
+--- synth_table_rows
+1
+--- assert_streaming_write_bounded_memory
+65536 1 100 1.50

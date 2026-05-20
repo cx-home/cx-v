@@ -142,14 +142,11 @@ fn test_w013_end_table_without_start() {
 	assert false, 'expected W013 error'
 }
 
-fn test_w011_shape_engine_not_implemented() {
-	shape := [u8(`a`), u8(`b`)]
-	cx.new_events_writer_shaped('cx', shape) or {
-		assert err.msg().contains('W011'), 'expected W011; got "${err.msg()}"'
-		return
-	}
-	assert false, 'expected W011 error'
-}
+// `test_w011_shape_engine_not_implemented` was removed when ADR 0010
+// was superseded by ADR 0016 (2026-05-10) — the declarative shape-
+// rewrite engine and its `new_events_writer_shaped` entry point were
+// deleted. CXL 1.0 is the sole output-shape mechanism; shape-engine
+// W011 no longer exists as an error code.
 
 fn test_chunked_table_round_trip_through_writer() {
 	// Build one chunked-table event sequence end-to-end and assert the

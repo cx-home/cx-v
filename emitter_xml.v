@@ -147,6 +147,11 @@ fn emit_xml_element(e Element, depth int, mut out []string) {
 	if m := e.merge    { attr_str += ' cx:merge="${m}"' }
 	// v3.4 (ADR 0003 D6): #id round-trips as xml:id (XML built-in URI ns).
 	if id := e.id      { attr_str += ' xml:id="${xml_escape_attr(id)}"' }
+	// v0.7.0 (ADR 0003 D1 second bullet / GG7): body-position `[ref @id]`
+	// form round-trips as a `cx:body-ref` attribute carrying the target
+	// id. XML import (xml_parser.v) recognises the inverse shape and
+	// reconstructs Element.body_ref.
+	if br := e.body_ref { attr_str += ' cx:body-ref="${xml_escape_attr(br)}"' }
 	if dt := e.data_type { attr_str += ' cx:type="${dt}"' }
 	for a in e.attrs {
 		// v3.4 (ADR 0002): xmlns / xmlns:foo declarations round-trip

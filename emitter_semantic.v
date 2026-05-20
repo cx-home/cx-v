@@ -33,6 +33,17 @@ fn sem_document(doc Document) JsonVal {
 }
 
 fn sem_element(e Element) JsonVal {
+	// v0.7.0 (ADR 0003 D1 second bullet / GG8): body-position [ref @id]
+	// projects to the semantic-emit `$ref` shape, matching the JSON
+	// Pointer / JSON Schema convention. YAML / TOML / MD round-trip
+	// through this shape (lossy direction — JSON Pointer-style refs
+	// are the cross-format consensus). Documented in spec/conversions.md.
+	if br := e.body_ref {
+		mut ref_obj := map[string]JsonVal{}
+		ref_obj['\$ref'] = JsonVal(br)
+		return JsonVal(ref_obj)
+	}
+
 	content := e.items.filter(
 		!(it is CommentNode) && !(it is PINode) && !(it is XMLDeclNode) && !(it is CXDirectiveNode)
 		&& !(it is InterpolationNode) && !(it is EvalDirectiveNode)

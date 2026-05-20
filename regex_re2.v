@@ -31,6 +31,12 @@ pub struct C.cx_re2 {}
 
 fn C.cx_re2_compile(pattern &char) &C.cx_re2
 fn C.cx_re2_full_match(re &C.cx_re2, text &char, text_len u64) int
+fn C.cx_re2_partial_match(re &C.cx_re2, text &char, text_len u64) int
+fn C.cx_re2_find(re &C.cx_re2, text &char, text_len u64, start_offset u64,
+	out_start &u64, out_end &u64) int
+fn C.cx_re2_replace_all(re &C.cx_re2, text &char, text_len u64,
+	replacement &char, replacement_len u64) &char
+fn C.cx_re2_free_string(s &char)
 fn C.cx_re2_destroy(re &C.cx_re2)
 
 // re2_full_match returns true when `text` fully matches `pattern`
@@ -61,4 +67,80 @@ pub fn re2_compiles(pattern string) bool {
 	if re == unsafe { nil } { return false }
 	C.cx_re2_destroy(re)
 	return true
+}
+
+// ── XPath 4.0 fn:matches / fn:tokenize / fn:replace backings (C5) ────────────
+// These wrap the v0.7.0 shim additions (partial-match, find, replace-
+// all) so cx evaluator's [?matches] / [?tokenize] / [?regex-replace]
+// directives go through libcx-vendored RE2 — same engine as schema
+// :pat=, identical semantics across all bindings.
+
+// re2_partial_match: returns true when `pattern` matches anywhere in
+// `text`. Backs fn:matches semantics. Errors on bad pattern surface
+// to the caller as a compile failure (returns ? / error).
+pub fn re2_partial_match(pattern string, text string) !bool {
+	if pattern == '' { return true }
+	re := C.cx_re2_compile(pattern.str)
+	if re == unsafe { nil } {
+		return error('cx-err:FORX0002:invalid regex pattern: ${pattern}')
+	}
+	defer { C.cx_re2_destroy(re) }
+	rc := C.cx_re2_partial_match(re, text.str, u64(text.len))
+	return rc == 1
+}
+
+// re2_tokenize: split `text` on each non-overlapping match of
+// `pattern`. Mirrors XQuery fn:tokenize 2-arg form. Empty matches
+// at the same position advance one char to avoid infinite loops
+// (RE2's standard fix for `()` / `\b` empty-match patterns).
+pub fn re2_tokenize(pattern string, text string) ![]string {
+	if pattern == '' {
+		return error('cx-err:FORX0003:tokenize pattern must not be empty (would match between every character)')
+	}
+	re := C.cx_re2_compile(pattern.str)
+	if re == unsafe { nil } {
+		return error('cx-err:FORX0002:invalid regex pattern: ${pattern}')
+	}
+	defer { C.cx_re2_destroy(re) }
+	mut parts := []string{}
+	mut cursor := u64(0)
+	tlen := u64(text.len)
+	for cursor <= tlen {
+		mut match_start := u64(0)
+		mut match_end := u64(0)
+		found := C.cx_re2_find(re, text.str, tlen, cursor, &match_start, &match_end)
+		if found != 1 {
+			parts << text[int(cursor)..text.len]
+			break
+		}
+		parts << text[int(cursor)..int(match_start)]
+		if match_end == match_start {
+			// Empty match — advance one char to avoid spinning.
+			cursor = match_start + 1
+			if cursor > tlen {
+				break
+			}
+		} else {
+			cursor = match_end
+		}
+	}
+	return parts
+}
+
+// re2_replace_all: replace every non-overlapping match of `pattern`
+// with `replacement`. RE2 replacement syntax — `\1`..`\9` for capture
+// back-refs. Backs XQuery fn:replace 3-arg form.
+pub fn re2_replace_all(pattern string, replacement string, text string) !string {
+	re := C.cx_re2_compile(pattern.str)
+	if re == unsafe { nil } {
+		return error('cx-err:FORX0002:invalid regex pattern: ${pattern}')
+	}
+	defer { C.cx_re2_destroy(re) }
+	out := C.cx_re2_replace_all(re, text.str, u64(text.len),
+		replacement.str, u64(replacement.len))
+	if out == unsafe { nil } {
+		return error('cx-err:CXER0003:RE2 replace_all internal failure (likely OOM)')
+	}
+	defer { C.cx_re2_free_string(out) }
+	return unsafe { cstring_to_vstring(out) }
 }

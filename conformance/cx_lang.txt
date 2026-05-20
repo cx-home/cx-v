@@ -1,0 +1,88 @@
+# CX cx:lang conformance suite
+# Version: 1.0 — 2026-05-19 (Z4 per spec/v0_7_0_status.md)
+#
+# spec/i18n.md §1 cx:lang attribute + inherited-scope semantics.
+# Bindings resolve in-scope cx:lang per Element via the
+# `resolve_languages` post-parse pass; the public accessor is
+# `Element.lang()` (V) / `.lang()` / `.Lang()` / `.lang()` across
+# the 5 active bindings.
+#
+# These fixtures verify the cross-binding emission of cx:lang
+# through the CXL evaluator's locale-aware function library
+# (Z3 row): the input doc carries cx:lang on its root, and
+# format-number renders with locale-appropriate group + decimal
+# separators.
+#
+# Cross-binding byte-identity is the discipline: every fixture
+# must produce byte-identical output across V + Python + Go +
+# Rust + TypeScript via the eval_cxl C ABI.
+
+=== test: cxlang-001-format-number-en-default
+level: core
+tags: cx-lang i18n format-number en cross-binding Z3 Z4
+--- in_cx
+[doc cx:lang=en]
+--- in_cxl
+[?=[?format-number [1234567.89, '#,##0.00']]]
+--- out_text
+1,234,567.89
+
+=== test: cxlang-002-format-number-de-locale
+level: core
+tags: cx-lang i18n format-number de cross-binding Z3 Z4
+--- in_cx
+[doc cx:lang=de]
+--- in_cxl
+[?=[?format-number [1234567.89, '#,##0.00']]]
+--- out_text
+1.234.567,89
+
+=== test: cxlang-003-format-number-fr-locale
+level: core
+tags: cx-lang i18n format-number fr cross-binding Z3 Z4
+--- in_cx
+[doc cx:lang=fr]
+--- in_cxl
+[?=[?format-number [1234567.89, '#,##0.00']]]
+--- out_text
+1 234 567,89
+
+=== test: cxlang-004-format-number-explicit-lang-arg
+level: core
+tags: cx-lang i18n format-number explicit-arg cross-binding Z3 Z4
+--- in_cx
+[doc cx:lang=en]
+--- in_cxl
+[?=[?format-number [1234.5, '#,##0.0', 'de']]]
+--- out_text
+1.234,5
+
+=== test: cxlang-005-format-number-unknown-lang-falls-back
+level: core
+tags: cx-lang i18n format-number fallback cross-binding Z3 Z4
+--- in_cx
+[doc cx:lang=zh-Hans]
+--- in_cxl
+[?=[?format-number [1000, '#,##0']]]
+--- out_text
+1,000
+
+=== test: cxlang-006-format-number-negative-en
+level: core
+tags: cx-lang i18n format-number negative cross-binding Z3 Z4
+--- in_cx
+[doc cx:lang=en]
+--- in_cxl
+[?=[?format-number [-1234.5, '#,##0.00']]]
+--- out_text
+-1,234.50
+
+=== test: cxlang-007-format-number-no-group-picture
+level: core
+tags: cx-lang i18n format-number no-group cross-binding Z3 Z4
+--- in_cx
+[doc cx:lang=en]
+--- in_cxl
+[?=[?format-number [12345.678, '0.000']]]
+--- out_text
+12345.678

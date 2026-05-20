@@ -1012,3 +1012,95 @@ tags: cxl eval-directive for v3.6 adr-0017
 [?for [v, //variant, [card [?=v/@sku]]]]
 --- out_cx
 [?for [v, //variant, [card [?=v/@sku]]]]
+
+=== test: 035-bare-text-doc-single-token
+level: extended
+tags: v0.7.0 doc-top bare-text
+# v0.7.0 multi-line text symmetry pass starts here — 5 changes
+# restoring the position-validity matrix to a single rule:
+# "any non-bare value form is valid in every value position."
+--- in_cx
+a
+--- out_ast
+{"type":"Document","elements":[{"type":"Text","value":"a"}]}
+
+=== test: 036-bare-text-doc-multi-line-verbatim
+level: extended
+tags: v0.7.0 doc-top bare-text verbatim
+--- in_cx
+1
+2
+3
+--- out_ast
+{"type":"Document","elements":[{"type":"Text","value":"1\n2\n3"}]}
+
+=== test: 037-doc-top-double-quoted-scalar
+level: extended
+tags: v0.7.0 doc-top quoted-scalar
+--- in_cx
+"hello"
+--- out_ast
+{"type":"Document","elements":[{"type":"Scalar","dataType":"string","value":"hello"}]}
+
+=== test: 038-doc-top-triquote-scalar
+level: extended
+tags: v0.7.0 doc-top triquote
+--- in_cx
+'''multi
+line'''
+--- out_ast
+{"type":"Document","elements":[{"type":"Scalar","dataType":"string","value":"multi\nline"}]}
+
+=== test: 039-attr-triquote
+level: extended
+tags: v0.7.0 attribute triquote
+--- in_cx
+[message body='''hello
+world''']
+--- out_ast
+{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","value":"hello\nworld"}]}]}
+--- out_cx
+[message body='''hello
+world''']
+
+=== test: 040-attr-hash-raw-direct
+level: extended
+tags: v0.7.0 attribute hash-raw
+--- in_cx
+[message body=[# raw [literal] content #]]
+--- out_ast
+{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","body":[{"type":"RawText","value":" raw [literal] content "}]}]}]}
+--- out_cx
+[message body=[# raw [literal] content #]]
+
+=== test: 041-attr-pipe-block-direct
+level: extended
+tags: v0.7.0 attribute pipe-block
+--- in_cx
+[message body=[| hello world |]]
+--- out_ast
+{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","body":[{"type":"BlockContent","items":[{"type":"Text","value":" hello world "}]}]}]}]}
+--- out_cx
+[message body=[| hello world |]]
+
+=== test: 042-table-cell-double-quoted
+level: extended
+tags: v0.7.0 table-cell dquote
+--- in_cx
+[users :table[name:string]
+  "alice"
+  bob
+]
+--- out_cx
+[users :table[name:string]
+  alice
+  bob
+]
+
+=== test: 043-collection-item-double-quoted
+level: extended
+tags: v0.7.0 collection-item dquote
+--- in_cx
+[tags :string[] "first" bare "third"]
+--- out_ast
+{"type":"Document","elements":[{"type":"Element","name":"tags","dataType":"string[]","items":[{"type":"Text","value":"first"},{"type":"Scalar","dataType":"string","value":"bare"},{"type":"Text","value":"third"}]}]}

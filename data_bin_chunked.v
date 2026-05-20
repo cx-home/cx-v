@@ -485,6 +485,144 @@ fn (mut r BinReader) read_strict_cell(code u8) !ScalarValue {
 	}
 }
 
+// build_synthesized_plain_row_group constructs a deterministic
+// plain-body row-group payload (§3.11.2 strict columnar) for HH4
+// (v0.7.0) RSS-bounded-write tests. Column values are synthesized
+// from the row index via the same rule synth_table_document uses
+// (int/i64/i32 → row index; f32/f64 → row index as float; bool →
+// i % 2 == 0; everything else → "r_<i>"). Returns the plain-body
+// bytes: uvarint(row_count) + per-column payload column-major,
+// suitable for direct hand-off to CxTableWriter.emit_row_group_payload.
+pub fn build_synthesized_plain_row_group(cols []TableColumn, n_rows int) ![]u8 {
+	if n_rows <= 0 {
+		return error('build_synthesized_plain_row_group: n_rows must be > 0')
+	}
+	if cols.len == 0 {
+		return error('build_synthesized_plain_row_group: cols must have at least one column')
+	}
+	mut buf := []u8{cap: 16 + n_rows * cols.len * 4}
+	encode_uvarint(mut buf, u64(n_rows))
+	for col in cols {
+		code := column_type_code(col.type_name)
+		t := col.type_name
+		for i in 0 .. n_rows {
+			v := if t == 'int' || t == 'i64' || t == 'i32' {
+				ScalarValue(i64(i))
+			} else if t == 'float' || t == 'f64' || t == 'f32' {
+				ScalarValue(f64(i))
+			} else if t == 'bool' {
+				ScalarValue(i % 2 == 0)
+			} else {
+				ScalarValue('r_${i}')
+			}
+			encode_strict_cell(v, code, mut buf)!
+		}
+	}
+	return buf
+}
+
+// chunked_group_row_counts walks the row-group structure of a
+// chunked-table (`0x63`) byte stream and returns the row counts of
+// each group in source order. Used by HH3 (v0.7.0) per-group
+// inspection assertions; lets million-row corpus tests verify group
+// boundaries without materialising cell contents (and without
+// tripping the chunked_reader_max_inline_rows cap on the regular
+// decode path).
+//
+// Decompresses 0x90 wrappers to read the row_count uvarint at the
+// start of each group body. Skips cell payloads.
+//
+// Input is framed bytes (4-byte length prefix + CXDB header + payload).
+// For single-root chunked-table emissions where the root is wrapped
+// in a 1-entry map (`single_table_root_with_name` puts a name on the
+// chunked table), the map wrapper is skipped before the 0x63 tag is
+// found.
+pub fn chunked_group_row_counts(framed []u8) ![]int {
+	if framed.len < 4 {
+		return error('cxdb chunked: input too short for size header')
+	}
+	payload_size := u32(framed[0]) | (u32(framed[1]) << 8)
+		| (u32(framed[2]) << 16) | (u32(framed[3]) << 24)
+	if 4 + int(payload_size) > framed.len {
+		return error('cxdb chunked: declared payload (${payload_size}) exceeds input')
+	}
+	mut r := BinReader{
+		buf:       unsafe { framed[4 .. 4 + int(payload_size)] }
+		pos:       0
+		depth:     0
+		max_depth: int(cxdb_default_depth)
+	}
+	// CXDB header is 12 bytes (4 magic + 1 version + 1 flags + 4
+	// max_depth_u32 + 2 reserved). Validate magic but skip the
+	// per-field check — chunked_group_row_counts is an inspection
+	// helper, not a strict-decode entry point.
+	r.read_header()!
+	tag := r.take_u8()!
+	// Optional single-entry map wrapper from single_table_root_with_name.
+	if tag == tag_map {
+		entries := r.read_uvarint()!
+		if entries != 1 {
+			return error('cxdb chunked: expected single-entry map wrapper, got entries=${entries}')
+		}
+		key_tag := r.take_u8()!
+		if key_tag != tag_string {
+			return error('cxdb chunked: map-key tag must be 0x30, got 0x${key_tag:02x}')
+		}
+		_ := r.read_string_payload()!
+		// Now expect the chunked-table tag.
+		inner_tag := r.take_u8()!
+		if inner_tag != tag_table_chunked {
+			return error('cxdb chunked: map wrapper does not contain a chunked table (got tag 0x${inner_tag:02x})')
+		}
+	} else if tag != tag_table_chunked {
+		return error('cxdb chunked: root is not a chunked table (got tag 0x${tag:02x})')
+	}
+	// col-spec
+	col_count := r.read_uvarint()!
+	if col_count == 0 {
+		return error('cxdb chunked: chunked table with col_count=0')
+	}
+	for _ in 0 .. int(col_count) {
+		key_tag := r.take_u8()!
+		if key_tag != tag_string {
+			return error('cxdb chunked: column name must be string (tag 0x30); got 0x${key_tag:02x}')
+		}
+		_ := r.read_string_payload()!
+		_ := r.take_u8()!  // col_type_byte
+	}
+	// row groups
+	mut row_counts := []int{}
+	for {
+		body_byte_len := r.read_uvarint()!
+		if body_byte_len == 0 {
+			break // end-of-table marker
+		}
+		if body_byte_len > u64(r.buf.len - r.pos) {
+			return error('cxdb chunked: row-group body_byte_len ${body_byte_len} exceeds remaining input')
+		}
+		body_tag := r.take_u8()!
+		body_bytes_remaining := int(body_byte_len) - 1
+		body_bytes := match body_tag {
+			body_tag_plain {
+				bytes := r.take(body_bytes_remaining)!
+				bytes
+			}
+			body_tag_zstd {
+				wrapper := r.take(body_bytes_remaining)!
+				decompress_row_group(wrapper)!
+			}
+			else {
+				return error('cxdb chunked: reserved body-tag 0x${body_tag:02x}')
+			}
+		}
+		// First uvarint of the group body is the row count.
+		mut br := BinReader{ buf: body_bytes, pos: 0, depth: 0, max_depth: int(cxdb_default_depth) }
+		rc := br.read_uvarint()!
+		row_counts << int(rc)
+	}
+	return row_counts
+}
+
 fn decompress_row_group(wrapper []u8) ![]u8 {
 	// Layout per §3.12.1: <codec_id(1)> <uvarint uncomp_len> <uvarint comp_len> <frame>.
 	if wrapper.len == 0 {

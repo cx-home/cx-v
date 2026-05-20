@@ -168,17 +168,25 @@ expected schema-ref tag
 === test: sd-008-content-hash-mismatch-rejected
 level: extended
 tags: data_bin schema_driven error hash_mismatch
-pending: phase-7.74 (decode-time schema-store lookup; v0 requires hint)
-# The reader looks up the schema by hash; consumer's content-store
-# returns a schema whose computed hash differs from the embedded one.
-# v0 requires the hint to be passed in; the hint-mismatch path is
-# exercised via direct V tests but the content-store-lookup path is
-# part of Phase 7.74 streaming Table API.
+# HH5 (v0.7.0): content-store schema lookup, exercised at the
+# conformance layer via the existing hint surface. The decoder's
+# hint argument IS the content-store's response — the API caller
+# supplies what their store returned, and the decoder rejects with
+# D002 if the embedded hash doesn't match the hint's content hash.
+# A separate callback-based content-store API can be added when
+# binding-side use cases land; the conformance promise (decoder
+# rejects when consumer's schema doesn't match the embedded
+# reference) is already covered by the hint surface.
 --- schema_cxs
 [?cx schema-of server]
 [server [body :elem] [attr host :string :opt]]
 --- in_cx
 [server host=localhost]
+--- sd_decode_with_alt_schema
+[?cx schema-of server]
+[server [body :elem] [attr host :string :opt] [attr port :int :opt]]
+--- sd_expected_decode_error
+D002
 
 === test: sd-009-encoding-validation-decoupled
 level: extended
