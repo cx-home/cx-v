@@ -1004,4 +1004,4 @@ fn validate_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?c
 // dispatch), which has the env to invoke a user `[?def]` / resolve a `[?const]`.
 // NOTE: this const is $embed_file-d from stdlib/validate.cx — edit that file.
 
-const stdlib_src_validate = $embed_file('../../stdlib/validate.cx').to_string()
+const stdlib_src_validate = $embed_file('../stdlib/validate.cx').to_string()

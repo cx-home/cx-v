@@ -1,0 +1,170 @@
+[- cx-stdlib/prof — in-program profiling (spec/std-lib/prof.md).
+
+   Full v0.8.0 public surface per §3. Bodies forward to native primitives
+   (vcx/code/stdlib_prof.v): timing reads, memory snapshots, named counters,
+   HDR histograms, structured trace events, and flamegraph emission cannot be
+   pure CX (they observe / mutate process state). All are :impure.
+
+   CAPABILITIES (§7): timing reads (now-ns, now-cpu-ns, time-fn,
+   time-and-trace, trace) consult the host clock and require `clock`; under
+   deny-by-default they raise CXER0271 at the effect point. counter-*,
+   histogram-*, mem-snapshot, gc-trigger, flamegraph-emit, trace-flush,
+   prof-configure are in-process and need no capability.
+
+   time-fn / time-and-trace take a $thunk ([?fn] closure) applied with the
+   evaluator env in scope (prof_stdlib_builtin_env). Errors are values
+   (CXER2100..CXER2103, §5).
+
+   NOTE: this const and stdlib/prof.cx are the same source — edit both. -]
+
+[- §3.1 timing -]
+[?def time-fn     scope=public impure [returns element] ($label::string $thunk::any $opts={}) [$prof-time-fn $label $thunk $opts]]
+[?def now-ns      scope=public impure [returns int]     ()                                          [$prof-now-ns]]
+[?def now-cpu-ns  scope=public impure [returns int]     ()                                          [$prof-now-cpu-ns]]
+
+[- §3.2 memory -]
+[?def mem-snapshot scope=public impure [returns element] () [$prof-mem-snapshot]]
+[?def gc-trigger   scope=public impure [returns null]    () [$prof-gc-trigger]]
+
+[- §3.3 counters -]
+[?def counter-inc   scope=public impure [returns null] ($name::string)               [$prof-counter-inc $name]]
+[?def counter-add   scope=public impure [returns null] ($name::string $delta::int)  [$prof-counter-add $name $delta]]
+[?def counter-get   scope=public impure [returns int]  ($name::string)               [$prof-counter-get $name]]
+[?def counter-reset scope=public impure [returns null] ($name::string)               [$prof-counter-reset $name]]
+[?def counter-all   scope=public impure [returns map]  ()                             [$prof-counter-all]]
+
+[- §3.4 histograms -]
+[?def histogram-observe scope=public impure [returns null]    ($name::string $value::float) [$prof-histogram-observe $name $value]]
+[?def histogram-stats   scope=public impure [returns element] ($name::string)                [$prof-histogram-stats $name]]
+[?def histogram-reset   scope=public impure [returns null]    ($name::string)                [$prof-histogram-reset $name]]
+
+[- §3.5 trace events -]
+[?def trace          scope=public impure [returns null] ($event::string $fields::map) [$prof-trace $event $fields]]
+[?def trace-flush    scope=public impure [returns null] ()                              [$prof-trace-flush]]
+[?def prof-configure scope=public impure [returns null] ($config::map)                 [$prof-prof-configure $config]]
+
+[- §3.6 time-and-trace -]
+[?def time-and-trace scope=public impure [returns element] ($event::string $thunk::any) [$prof-time-and-trace $event $thunk]]
+
+[- §3.7 flamegraph -]
+[?def flamegraph-emit scope=public impure [returns string] ($path='') [$prof-flamegraph-emit $path]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=prof
+  [scope """In-program profiling, callable directly from CX code. Provides timing measurement, memory snapshots, named counters, HDR histograms, structured trace events, and flamegraph emission — for the cases where a program measures itself and acts on the result. Timer, counter, histogram, and trace are the four primitives; all are impure because they observe or mutate process state."""]]
+[fn-doc name=time-fn scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Run a thunk and return a timing element carrying its elapsed time and return value."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:time-fn "work" [?fn () 42]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=now-ns scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Return a monotonic-clock reading in nanoseconds."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:now-ns]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=now-cpu-ns scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Return the process CPU-time clock value in nanoseconds."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:now-cpu-ns]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=mem-snapshot scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Capture current process memory state, always carrying rss-bytes and a timestamp."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[?let [= $s [$prof:mem-snapshot]]
+  [> $s@rss-bytes 0]]"""] [expect """true"""]]
+]
+[fn-doc name=gc-trigger scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Request a garbage-collection cycle, best-effort; the underlying GC may decline."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:gc-trigger]"""] [expect """null"""]]
+]
+[fn-doc name=counter-inc scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Atomically add one to the named process-global counter."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:counter-inc "prof-007-hits"]"""] [expect """null"""]]
+]
+[fn-doc name=counter-add scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Atomically add a delta to the named process-global counter."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:counter-add "prof-009-bytes" 5]]
+  [$prof:counter-get "prof-009-bytes"]]"""] [expect """5"""]]
+]
+[fn-doc name=counter-get scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Read the current value of the named counter."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:counter-inc "prof-008-hits"]]
+  [$prof:counter-get "prof-008-hits"]]"""] [expect """1"""]]
+]
+[fn-doc name=counter-reset scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Reset the named counter back to zero."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:counter-add "prof-011-x" 9]] [= $__ [$prof:counter-reset "prof-011-x"]]
+  [$prof:counter-get "prof-011-x"]]"""] [expect """0"""]]
+]
+[fn-doc name=counter-all scope=public purity=impure
+  [sig """-> map"""]
+  [summary """Return a map of every counter name to its current value."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:counter-add "prof-012-only" 3]]
+  [$prof:counter-all]]"""] [expect """{prof-012-only: 3}"""]]
+]
+[fn-doc name=histogram-observe scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Record one observation into the named histogram, creating it on first observe."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:histogram-observe "prof-013-lat" 8.1]"""] [expect """null"""]]
+]
+[fn-doc name=histogram-stats scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return count, percentiles, min, max, and mean for the named histogram."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[?let [= $a [$prof:histogram-observe "prof-014-lat" 1.0]] [= $b [$prof:histogram-observe "prof-014-lat" 2.0]] [= $c [$prof:histogram-observe "prof-014-lat" 3.0]] [= $s [$prof:histogram-stats "prof-014-lat"]]
+  $s@count]"""] [expect """3"""]]
+]
+[fn-doc name=histogram-reset scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Discard the named histogram's observations while keeping the name."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:histogram-observe "prof-016-lat" 5.0]]
+  [$prof:histogram-reset "prof-016-lat"]]"""] [expect """null"""]]
+]
+[fn-doc name=trace scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Emit a structured trace event with the given fields to the buffer."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:trace "request" {request-id="abc"}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=trace-flush scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Flush buffered trace events to the configured sink."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:prof-configure {trace-sink: "none"}]]
+  [$prof:trace-flush]]"""] [expect """null"""]]
+]
+[fn-doc name=prof-configure scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Configure the trace sink, buffer size, and counter enablement."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:prof-configure {trace-sink: "none"}]"""] [expect """null"""]]
+]
+[fn-doc name=time-and-trace scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Time a thunk, emit a trace event with its duration, and return the timing element."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:time-and-trace "work" [?fn () 42]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=flamegraph-emit scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Fold buffered trace events into flamegraph.pl folded-stack output, returned or written to a path."""]
+  [example [code """[?lib 'cx-stdlib/prof']
+[$prof:flamegraph-emit]"""] [expect """''"""]]
+]

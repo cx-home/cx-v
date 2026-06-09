@@ -39,7 +39,7 @@ import encoding.base64
 // random_stdlib_builtin below. This const is $embed_file-d from
 // stdlib/random.cx — edit that file.
 
-const stdlib_src_random = $embed_file('../../stdlib/random.cx').to_string()
+const stdlib_src_random = $embed_file('../stdlib/random.cx').to_string()
 
 // ── xoshiro256++ core (Vigna 2019) ──────────────────────────────────
 //

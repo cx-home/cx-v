@@ -1,0 +1,181 @@
+[- cx-stdlib/re — regular expressions backed by libcx-vendored RE2
+   (same engine as schema-validator pattern matching, spec/abi.md
+   cap bit 25).
+
+   Full v0.8.0 surface per spec/std-lib/re.md §4. Bodies forward to native
+   primitives (vcx/code/stdlib_re.v); regex matching is not expressible in
+   pure CX. RE2 guarantees linear-time matching (§1): no backreferences /
+   lookbehind. Compiled patterns are opaque [regex …] values (§3); matches
+   are opaque [match …] values whose accessors are group / group-named /
+   groups-all / groups-map (§4.3).
+
+   replace-fn (§4.4) is the one body composed in CX: it maps the callable
+   over find-all matches (core [$map]) and splices the results at the
+   match byte-offsets (re-match-spans + re-replace-splice). This keeps the
+   per-match callable application inside the evaluator while the splice
+   stays native.
+
+   NOTE: this const and stdlib/re.cx are the same source — edit both. -]
+
+[- §4.1 compilation -]
+[?def compile            scope=public pure [returns element] ($pattern::string)            [$re-compile $pattern]]
+[?def compile-with-flags scope=public pure [returns element] ($pattern::string $flags::map) [$re-compile-with-flags $pattern $flags]]
+
+[- §4.2 matching -]
+[?def matches   scope=public pure [returns bool]               ($re::element $s::string)            [$re-matches $re $s]]
+[?def find      scope=public pure [returns element]            ($re::element $s::string)            [$re-find $re $s]]
+[?def find-from scope=public pure [returns element]            ($re::element $s::string $from::int) [$re-find-from $re $s $from]]
+[?def find-all  scope=public pure [returns [sequence element]] ($re::element $s::string)            [$re-find-all $re $s]]
+[?def find-iter scope=public pure [returns [iterator element]] ($re::element $s::string)            [$re-find-iter $re $s]]
+
+[- §4.3 groups -]
+[?def group       scope=public pure [returns string]            ($m::element $i::int)      [$re-group $m $i]]
+[?def group-named scope=public pure [returns string]            ($m::element $name::string) [$re-group-named $m $name]]
+[?def groups-all  scope=public pure [returns [sequence string]] ($m::element)              [$re-groups-all $m]]
+[?def groups-map  scope=public pure [returns map]               ($m::element)              [$re-groups-map $m]]
+
+[- §4.4 replace -]
+[?def replace       scope=public pure [returns string] ($re::element $s::string $template::string) [$re-replace $re $s $template]]
+[?def replace-first scope=public pure [returns string] ($re::element $s::string $template::string) [$re-replace-first $re $s $template]]
+[?def replace-fn    scope=public pure [returns string] ($re::element $s::string $f::any)            [$re-replace-splice $s [$re-match-spans $re $s] [$map [$re-find-all $re $s] $f]]]
+
+[- §4.5 split -]
+[?def split       scope=public pure [returns [sequence string]] ($re::element $s::string)          [$re-split $re $s]]
+[?def split-limit scope=public pure [returns [sequence string]] ($re::element $s::string $max::int) [$re-split-limit $re $s $max]]
+
+[- §4.6 inspection -]
+[?def group-count   scope=public pure [returns int]               ($re::element) [$re-group-count $re]]
+[?def group-names   scope=public pure [returns [sequence string]] ($re::element) [$re-group-names $re]]
+[?def pattern-text  scope=public pure [returns string]            ($re::element) [$re-pattern-text $re]]
+[?def pattern-flags scope=public pure [returns map]               ($re::element) [$re-pattern-flags $re]]
+[?def escape        scope=public pure [returns string]            ($s::string)   [$re-escape $s]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=re
+  [scope """Regular expressions backed by the RE2 engine, guaranteeing linear-time matching against any input with no catastrophic backtracking. The cost is that some PCRE features are unavailable — notably backreferences and lookbehind. Provides pattern compilation; match, find, find-all, and lazy find-iter; literal and function-based replace; split; named and numbered capture groups; and pattern inspection."""]]
+[fn-doc name=compile scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Compile a pattern string into an opaque reusable regex value using default flags."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:pattern-text [$re:compile "a.b"]]"""] [expect """'a.b'"""]]
+]
+[fn-doc name=compile-with-flags scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Compile a pattern with a flags map (case-insensitive, multiline, dotall, unicode, literal, match-byte limit)."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile-with-flags "abc" {"case-insensitive": true}] "ABC"]"""] [expect """true"""]]
+]
+[fn-doc name=matches scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether the pattern matches the entire string."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile "a+"] "aaa"]"""] [expect """true"""]]
+]
+[fn-doc name=find scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Find the first match, returning a match element with start, end, text, and groups — or [no-match]."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:group [$re:find [$re:compile "[0-9]+"] "abc123def"] 0]"""] [expect """'123'"""]]
+]
+[fn-doc name=find-from scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Find the first match at or after the given byte position."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:group [$re:find-from [$re:compile "ab"] "abab" 2] 0]"""] [expect """'ab'"""]]
+]
+[fn-doc name=find-all scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Find all non-overlapping matches as a materialized sequence of match elements."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$count [$re:find-all [$re:compile "ab"] "abXabYab"]]"""] [expect """3"""]]
+]
+[fn-doc name=find-iter scope=public purity=pure
+  [sig """-> [iterator element]"""]
+  [summary """Lazily iterate over non-overlapping matches, yielding each match element on demand."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$count [$re:find-iter [$re:compile "ab"] "abXabYab"]]"""] [expect """3"""]]
+]
+[fn-doc name=group scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the text of numbered capture group i in a match, where 0 is the full match."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:group [$re:find [$re:compile "[0-9]+"] "abc123def"] 0]"""] [expect """'123'"""]]
+]
+[fn-doc name=group-named scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the text of a named capture group in a match."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:group-named [$re:find [$re:compile "(?P<year>[0-9]{4})"] "y2026"] "year"]"""] [expect """'2026'"""]]
+]
+[fn-doc name=groups-all scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Return all capture groups of a match as a sequence, starting with the full match."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:groups-all [$re:find [$re:compile "(a+)(b+)"] "aabbb"]]"""] [expect """('aabbb', 'aa', 'bbb')"""]]
+]
+[fn-doc name=groups-map scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Return the named capture groups of a match as a name-to-text map."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$map-get [$re:groups-map [$re:find [$re:compile "(?P<year>[0-9]{4})"] "y2026"]] "year"]"""] [expect """'2026'"""]]
+]
+[fn-doc name=replace scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Replace all matches using a template string with $0, $1, ${name}, and $$ substitutions."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:replace [$re:compile "[0-9]+"] "a1b22c333" "<$0>"]"""] [expect """'a<1>b<22>c<333>'"""]]
+]
+[fn-doc name=replace-first scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Replace only the first match using a template string."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:replace-first [$re:compile "[0-9]+"] "a1b2c3" "<$0>"]"""] [expect """'a<1>b2c3'"""]]
+]
+[fn-doc name=replace-fn scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Replace each match with the result of a callable invoked on that match element."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:replace-fn [$re:compile "[0-9]+"] "a1b22c" [?fn ($m) [$re:group $m 0]]]"""] [expect """'a1b22c'"""]]
+]
+[fn-doc name=split scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Split a string into segments around every match of the pattern."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:split [$re:compile ","] "a,b,c"]"""] [expect """('a', 'b', 'c')"""]]
+]
+[fn-doc name=split-limit scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Split a string on the pattern into at most max+1 segments."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:split-limit [$re:compile ","] "a,b,c,d" 1]"""] [expect """('a', 'b,c,d')"""]]
+]
+[fn-doc name=group-count scope=public purity=pure
+  [sig """-> int"""]
+  [summary """Return the number of capture groups in a compiled pattern."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:group-count [$re:compile "(a)(b)"]]"""] [expect """2"""]]
+]
+[fn-doc name=group-names scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Return the names of the named capture groups in a compiled pattern."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:group-names [$re:compile "(?P<year>[0-9]{4})-(?P<month>[0-9]{2})"]]"""] [expect """('year', 'month')"""]]
+]
+[fn-doc name=pattern-text scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the original source pattern string of a compiled regex."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:pattern-text [$re:compile "a.b"]]"""] [expect """'a.b'"""]]
+]
+[fn-doc name=pattern-flags scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Return the resolved compilation flags of a compiled regex as a map."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$map-get [$re:pattern-flags [$re:compile-with-flags "abc" {"case-insensitive": true}]] "case-insensitive"]"""] [expect """true"""]]
+]
+[fn-doc name=escape scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Escape regex metacharacters in a string (RE2 QuoteMeta) so it matches as a verbatim literal."""]
+  [example [code """[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile [$re:escape "a.b*c"]] "a.b*c"]"""] [expect """true"""]]
+]

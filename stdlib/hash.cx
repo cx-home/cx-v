@@ -1,0 +1,176 @@
+[- cx-stdlib/hash — content-addressable hashing.
+
+   Full v0.8.0 surface per spec/stdlib_hash.md §3. Bodies call native
+   primitives (vcx/code/stdlib_hash.v) since digest / encoding logic is
+   not expressible in pure CX. Bridges spec/identity.md and the lockfile
+   SRI format (spec/lockfile.md §4.4). -]
+
+[- §3.1 single-shot hashers -]
+[?def sha256     scope=public pure [returns bytes] ($input::bytes) [$hash-sha256 $input]]
+[?def sha384     scope=public pure [returns bytes] ($input::bytes) [$hash-sha384 $input]]
+[?def sha512     scope=public pure [returns bytes] ($input::bytes) [$hash-sha512 $input]]
+[?def blake3     scope=public pure [returns bytes] ($input::bytes) [$hash-blake3 $input]]
+[?def blake3-xof scope=public pure [returns bytes] ($input::bytes $out-length::int) [$hash-blake3-xof $input $out-length]]
+
+[- §3.2 string convenience -]
+[?def sha256-hex    scope=public pure [returns string] ($input::bytes)  [$hash-sha256-hex $input]]
+[?def sha384-hex    scope=public pure [returns string] ($input::bytes)  [$hash-sha384-hex $input]]
+[?def sha512-hex    scope=public pure [returns string] ($input::bytes)  [$hash-sha512-hex $input]]
+[?def blake3-hex    scope=public pure [returns string] ($input::bytes)  [$hash-blake3-hex $input]]
+[?def sha256-string scope=public pure [returns bytes]  ($input::string) [$hash-sha256-string $input]]
+[?def blake3-string scope=public pure [returns bytes]  ($input::string) [$hash-blake3-string $input]]
+
+[- §3.3 streaming hashers -]
+[?def hasher-new      scope=public pure [returns element] ($algo::string)             [$hash-hasher-new $algo]]
+[?def hasher-update   scope=public pure [returns element] ($h::element $chunk::bytes)  [$hash-hasher-update $h $chunk]]
+[?def hasher-finalize scope=public pure [returns bytes]   ($h::element)               [$hash-hasher-finalize $h]]
+
+[- §3.4 format conversion -]
+[?def format-hex        scope=public pure [returns string] ($digest::bytes) [$hash-format-hex $digest]]
+[?def format-base64-url scope=public pure [returns string] ($digest::bytes) [$hash-format-base64-url $digest]]
+[?def format-base32     scope=public pure [returns string] ($digest::bytes) [$hash-format-base32 $digest]]
+[?def parse-hex         scope=public pure [returns bytes]  ($s::string)     [$hash-parse-hex $s]]
+[?def parse-base64-url  scope=public pure [returns bytes]  ($s::string)     [$hash-parse-base64-url $s]]
+
+[- §3.5 comparison -]
+[?def equals scope=public pure [returns bool] ($a::bytes $b::bytes) [$hash-equals $a $b]]
+
+[- §3.6 SRI helpers -]
+[?def sri-format scope=public pure [returns string]  ($digest::bytes $algo::string) [$hash-sri-format $digest $algo]]
+[?def sri-parse  scope=public pure [returns element] ($s::string)                  [$hash-sri-parse $s]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=hash
+  [scope """Content-addressable hashing — fixed-length digests of arbitrary byte payloads. Four algorithms at v0.8.0: SHA-256 (the content-addressing default), SHA-384, SHA-512, and BLAKE3 (with arbitrary-length XOF output). Covers integrity and content addressing, not password hashing or keyed operations — those belong to `cx-stdlib/crypto`. Digests convert to lowercase hex, URL-safe base64, or base32, and carry SRI helpers for module-lockfile integrity."""]]
+[fn-doc name=sha256 scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Compute the SHA-256 digest (32 bytes) of the input — the CX content-addressing default."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:sha256 "abc"]]"""] [expect """'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'"""]]
+]
+[fn-doc name=sha384 scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Compute the SHA-384 digest (48 bytes) of the input."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:sri-format [$hash:sha384 "hi"] "sha384"]"""] [expect """'sha384-B5EAbfgShHckT1PQ/c4hDbgfVXV1EOJqzuNcGKa86qKNzbv9bcBBubTcextU439S'"""]]
+]
+[fn-doc name=sha512 scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Compute the SHA-512 digest (64 bytes) of the input."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:sha512 "abc"]]"""] [expect """'ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f'"""]]
+]
+[fn-doc name=blake3 scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Compute the BLAKE3 digest (32-byte default) of the input."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:blake3-string "abc"] [$hash:blake3 "abc"]]"""] [expect """true"""]]
+]
+[fn-doc name=blake3-xof scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Compute a BLAKE3 digest of arbitrary length (XOF mode), producing `out-length` bytes."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:blake3-xof "abc" 1]]"""] [expect """'64'"""]]
+]
+[fn-doc name=sha256-hex scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Compute the SHA-256 digest and return it directly as a lowercase hex string."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:sha256-hex ""]"""] [expect """'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'"""]]
+]
+[fn-doc name=sha384-hex scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Compute the SHA-384 digest and return it directly as a lowercase hex string."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:sha384-hex ""]"""] [expect """'38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b'"""]]
+]
+[fn-doc name=sha512-hex scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Compute the SHA-512 digest and return it directly as a lowercase hex string."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:sha512-hex ""]"""] [expect """'cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e'"""]]
+]
+[fn-doc name=blake3-hex scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Compute the BLAKE3 digest and return it directly as a lowercase hex string."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:blake3-hex ""]"""] [expect """'af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262'"""]]
+]
+[fn-doc name=sha256-string scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Compute the SHA-256 digest of UTF-8 string input."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:sha256-string "abc"] [$hash:sha256 "abc"]]"""] [expect """true"""]]
+]
+[fn-doc name=blake3-string scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Compute the BLAKE3 digest of UTF-8 string input."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:blake3-string "abc"] [$hash:blake3 "abc"]]"""] [expect """true"""]]
+]
+[fn-doc name=hasher-new scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Create a streaming hasher for the named algorithm (sha256/sha384/sha512/blake3)."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:hasher-finalize [$hash:hasher-update [$hash:hasher-update [$hash:hasher-new "sha256"] "ab"] "c"]]]"""] [expect """'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'"""]]
+]
+[fn-doc name=hasher-update scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Feed a chunk into a streaming hasher, returning a new hasher with the chunk absorbed."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:hasher-finalize [$hash:hasher-update [$hash:hasher-update [$hash:hasher-new "sha256"] "ab"] "c"]]]"""] [expect """'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'"""]]
+]
+[fn-doc name=hasher-finalize scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Finish a streaming hasher and return the digest of all absorbed chunks."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:hasher-finalize [$hash:hasher-update [$hash:hasher-update [$hash:hasher-new "sha256"] "ab"] "c"]]]"""] [expect """'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'"""]]
+]
+[fn-doc name=format-hex scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Encode a digest as a lowercase hex string."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:sha256 "abc"]]"""] [expect """'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'"""]]
+]
+[fn-doc name=format-base64-url scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Encode a digest as URL-safe base64 with no padding."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-base64-url [$hash:parse-hex "deadbeef"]]"""] [expect """'3q2-7w'"""]]
+]
+[fn-doc name=format-base32 scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Encode a digest as RFC 4648 uppercase base32."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:format-base32 [$hash:parse-hex "deadbeef"]]"""] [expect """'32W353Y='"""]]
+]
+[fn-doc name=parse-hex scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Decode a hex string to bytes, accepting either case."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:blake3-xof "abc" 1] [$hash:parse-hex "64"]]"""] [expect """true"""]]
+]
+[fn-doc name=parse-base64-url scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Decode a URL-safe base64 string to bytes."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[?let [= $d [$hash:sha256 "payload"]] [$hash:equals [$hash:parse-base64-url [$hash:format-base64-url $d]] $d]]"""] [expect """true"""]]
+]
+[fn-doc name=equals scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Compare two byte sequences for equality in constant time, resisting timing attacks."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:sha256-string "abc"] [$hash:sha256 "abc"]]"""] [expect """true"""]]
+]
+[fn-doc name=sri-format scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Format a digest as a W3C Subresource Integrity string (`<algo>-<base64>`)."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[$hash:sri-format [$hash:sha384 "hi"] "sha384"]"""] [expect """'sha384-B5EAbfgShHckT1PQ/c4hDbgfVXV1EOJqzuNcGKa86qKNzbv9bcBBubTcextU439S'"""]]
+]
+[fn-doc name=sri-parse scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Parse a W3C SRI string into an `[sri algo=… digest=…]` element."""]
+  [example [code """[?lib 'cx-stdlib/hash']
+[?let [= $p [$hash:sri-parse [$hash:sri-format [$hash:sha384 "hi"] "sha384"]]] $p@algo]"""] [expect """'sha384'"""]]
+]

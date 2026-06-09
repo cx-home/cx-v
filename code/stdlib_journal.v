@@ -2443,4 +2443,4 @@ fn jrn_fold_from(args []cx.Node, mut env MatchEnv) ?cx.Node {
 // via the eval.v env-hook (journal_stdlib_builtin_env); the rest reach the
 // env-free journal_stdlib_builtin chain.
 
-const stdlib_src_journal = $embed_file('../../stdlib/journal.cx').to_string()
+const stdlib_src_journal = $embed_file('../stdlib/journal.cx').to_string()

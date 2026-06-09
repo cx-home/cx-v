@@ -1,0 +1,72 @@
+[- cx-xap — the XAP orchestrator subsystem (spec/03-approved/xap/xap.md). Composes the
+   cx-stdlib primitives (bus/journal/authz/session/sched). component/surface/
+   panel are pure constructors; render is the materializer; run/emit/state/on/
+   dial/why-allowed are the runtime. cx-xap is its OWN bundled package, not a
+   cx-stdlib module. -]
+
+[?def component   scope=public pure   [returns element] ($name $opts::map {})              [$xap-component $name $opts]]
+[?def surface     scope=public pure   [returns element] ($name $panels $opts::map {})      [$xap-surface $name $panels]]
+[?def panel       scope=public pure   [returns element] ($component $opts::map {})         [$xap-panel $component $opts]]
+[?def render      scope=public impure [returns element] ($surface::element $opts::map {})  [$xap-render $surface $opts]]
+[?def run         scope=public impure [returns element] ($opts::map {})                    [$xap-run $opts]]
+[?def serve       scope=public impure [returns element] ($url::string $opts::map {})        [$xap-serve $url $opts]]
+[?def emit        scope=public impure [returns element] ($runtime::element $intent::element $opts::map {}) [$xap-emit $runtime $intent $opts]]
+[?def on          scope=public impure [returns null]    ($runtime::element $pattern::element $handler)     [$xap-on $runtime $pattern $handler]]
+[?def state       scope=public impure [returns element] ($runtime::element $cxpath::string) [$xap-state $runtime $cxpath]]
+[?def dial        scope=public impure [returns element] ($runtime::element $scope::element $setting::element) [$xap-dial $runtime $scope $setting]]
+[?def why-allowed scope=public impure [returns element] ($runtime::element $intent::element $opts::map {})    [$xap-why-allowed $runtime $intent $opts]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=xap
+  [scope """The XAP orchestrator — the experience layer at the top of the CX web
+   stack. It composes the general-purpose primitives (bus, journal, authz, session)
+   into a single runtime: pure constructors build components, surfaces, and panels;
+   render materializes a surface for HTML or agent consumption; and run, emit, on,
+   state, dial, and why-allowed drive the committed cascade, journal-folded state,
+   and authority-delegation surface. cx-xap is its own bundled package reached via
+   [?lib 'cx-xap'], not a cx-stdlib module — it layers above stdlib and adds no
+   authority, transport, or markup logic of its own."""]]
+[fn-doc name=component scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Construct a named component — the typed state/intent/view triple — as pure data."""]
+]
+[fn-doc name=surface scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Construct a named surface — a composition of placed panels — as pure data."""]
+]
+[fn-doc name=panel scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Place a registered component into a surface as a panel — pure data."""]
+]
+[fn-doc name=render scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Materialize a surface for one medium — an HTML fragment or the application/cx view tree."""]
+]
+[fn-doc name=run scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Wire a single-tenant runtime and register its components, surfaces, and handlers."""]
+]
+[fn-doc name=serve scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Run a runtime over a real socket by bootstrapping the [?http-service] engine."""]
+]
+[fn-doc name=emit scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Run the committed cascade for one intent — PEP check, journal append, ordered dispatch."""]
+]
+[fn-doc name=on scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Register a handler for intents matching a pattern, under the cascade discipline."""]
+]
+[fn-doc name=state scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the journal-folded state slice selected by a CXPath — the server-authoritative truth now."""]
+]
+[fn-doc name=dial scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Set the operational-control mode at a scope by issuing a scoped authz delegation."""]
+]
+[fn-doc name=why-allowed scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Explain why an actor can or cannot emit a given intent — a query over the authority model."""]
+]

@@ -1,0 +1,226 @@
+[- cx-stdlib/session — (principal, tenant) web sessions for the XAP web
+   stack (spec/02-inprogress/xap/stdlib_session.md). The THIN seam between
+   authentication (external IdP → verified token, done by cx-stdlib/crypto)
+   and authorization (cx-stdlib/authz, the PEP). It COMPOSES the shipped
+   modules and adds NO crypto and NO transport of its own (§0).
+
+   - Token verification is delegated ENTIRELY to [$crypto:jwt-verify]
+     (cx-stdlib/crypto §3.10): attach reads the Bearer token, calls
+     jwt-verify, and acts only on the verified [claims …] / fault — session
+     adds no signature / exp / aud logic (§2.2 / N-SESSION-1).
+   - Request reads (Authorization / Cookie headers) + Set-Cookie writes go
+     through cx-stdlib/http's message model (§0 / §2.8).
+   - Bodies forward to native primitives (vcx/code/stdlib_session.v): the
+     server-held session registry (mirrored attach, by-id/by-client/of),
+     the opaque session id + CSRF token CSPRNG minting, and the
+     constant-time CSRF compare are not expressible in pure CX.
+
+   CAPABILITY: session is itself CAPABILITY-FREE (§5) — the only network
+   reach is the JWKS fetch INSIDE crypto, gated by crypto's `net`. A
+   literal in-memory jwks key-set needs NO net. session adds no new
+   capability (mirrors http's pure-by-default posture; no effect_alignment
+   entry).
+
+   FAIL-CLOSED (§2.2): attach runs verify → map → bind → mirror-attach
+   all-or-nothing; any verification ambiguity REJECTS and never establishes
+   a half-session.
+
+   ERROR BAND: session owns cx-err:CXER4800–CXER4849 (§8): 4801 token-reject
+   (carries the verbatim crypto fault) / 4802 no-tenant / 4803 no-principal
+   / 4804 invalid-or-detached-session-op / 4805 rebind-refused / 4806
+   insecure-transport / 4807 no-token / 4808 csrf-missing / 4809
+   csrf-mismatch / 4810 cookie-insecure-context / 4811 cookie-unsafe-flags.
+
+   The trailing $opts::map {} / $cfg::map {} / $client::map {} are
+   DEFAULTED positional parameters (grammar.ebnf [153b]).
+
+   NOTE: this const and stdlib/session.cx are the same source — edit both. -]
+
+[- §3.2 lifecycle — attach / detach (impure) -]
+[?def attach        scope=public impure [returns element] ($req::element $cfg::map)                  [$session-attach $req $cfg]]
+[?def attach-token  scope=public impure [returns element] ($token::string $cfg::map $client::map {}) [$session-attach-token $token $cfg $client]]
+[?def attach-cookie scope=public impure [returns element] ($req::element $cfg::map)                  [$session-attach-cookie $req $cfg]]
+[?def detach        scope=public impure [returns null]    ($session::element)                        [$session-detach $session]]
+[?def detach-client scope=public impure [returns element] ($session::element $client-id::string)     [$session-detach-client $session $client-id]]
+[?def touch         scope=public impure [returns element] ($session::element $client-id::string)     [$session-touch $session $client-id]]
+
+[- §3.3 resolve (impure read of server state) -]
+[?def of        scope=public impure [returns element] ($req-or-conn::element) [$session-of $req-or-conn]]
+[?def by-id     scope=public impure [returns element] ($session-id::string)   [$session-by-id $session-id]]
+[?def by-client scope=public impure [returns element] ($client-id::string)    [$session-by-client $client-id]]
+
+[- §3.4 accessors (pure) -]
+[?def principal  scope=public pure [returns element]            ($session::element)             [$session-principal $session]]
+[?def tenant     scope=public pure [returns element]            ($session::element)             [$session-tenant $session]]
+[?def clients    scope=public pure [returns [sequence element]] ($session::element)             [$session-clients $session]]
+[?def valid      scope=public pure [returns bool]               ($session::element)             [$session-valid $session]]
+[?def claims     scope=public pure [returns element]            ($session::element)             [$session-claims $session]]
+[?def map-claims scope=public pure [returns element]            ($claim-set::element $cfg::map) [$session-map-claims $claim-set $cfg]]
+
+[- §3.5 cookie transport + CSRF (the browser surface) -]
+[?def from-cookie  scope=public impure [returns element] ($req::element $cfg::map {})                 [$session-from-cookie $req $cfg]]
+[?def set-cookie   scope=public impure [returns element] ($session::element $cfg::map {})             [$session-set-cookie $session $cfg]]
+[?def clear-cookie scope=public pure   [returns element] ($cfg::map {})                                [$session-clear-cookie $cfg]]
+[?def rotate       scope=public impure [returns element] ($session::element)                          [$session-rotate $session]]
+[?def csrf-token   scope=public pure   [returns string]  ($session::element)                          [$session-csrf-token $session]]
+[?def csrf-verify  scope=public impure [returns element] ($req::element $session::element $cfg::map {}) [$session-csrf-verify $req $session $cfg]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=session
+  [scope """The server-held (principal, tenant) session for a web app. A small, durable association between a verified external identity and a tenant-scoped principal — established by attach, looked up by of, and torn down by detach. One session can carry multiple concurrent clients (a human's browser and their agent mirror-attach to it) and survives the death of any individual client. Two attach transports converge on one session model: Bearer tokens for agents and service clients, and an opaque-session-id cookie (with synchronizer-token CSRF defense) for browsers. It delegates all token verification to crypto and all transport to http, adding no cryptography or sockets of its own."""]]
+[fn-doc name=attach scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Verify the request's Bearer token and mirror-attach a client to its (principal, tenant) session."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]}]] [$session:principal $s]]"""] [expect """[principal id=user-1 [tenant id=my-api]]"""]]
+]
+[fn-doc name=attach-token scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Attach from a raw token rather than a request — the low-level path for channels and tests."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {tls: true}]] [$session:tenant $s]]"""] [expect """[tenant id=my-api]"""]]
+]
+[fn-doc name=attach-cookie scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Attach the browser path — same verify pipeline, returning the session paired with Set-Cookie directives."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $pair [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]}]] [?let [= $sc [$first [$tail $pair]]] [?let [= $cookie [$first $sc]] $cookie@name]]]"""] [expect """'__Host-cxsid'"""]]
+]
+[fn-doc name=detach scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Tear down the whole session, releasing all clients and clearing any cookie; idempotent."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {tls: true}]] [?let [= $d1 [$session:detach $s]] [$session:detach $s]]]"""] [expect """null"""]]
+]
+[fn-doc name=detach-client scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Remove one client; the session survives if others remain, and even at zero clients."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {id: "c-x" tls: true}]] [?let [= $s2 [$session:detach-client $s "c-x"]] [$session:valid $s2]]]"""] [expect """true"""]]
+]
+[fn-doc name=touch scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Refresh a client's last-seen mark for heartbeat liveness; unknown client yields absence."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {tls: true}]] [?else [$session:touch $s "c-unknown"] "ABSENT"]]"""] [expect """'ABSENT'"""]]
+]
+[fn-doc name=of scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Resolve the established session for a request or connection, or absence when none is attached."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?else [$session:of [request scheme="https"]] "ABSENT"]"""] [expect """'ABSENT'"""]]
+]
+[fn-doc name=by-id scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Look up a session directly by its id, or absence when unknown."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?else [$session:by-id "s-does-not-exist"] "ABSENT"]"""] [expect """'ABSENT'"""]]
+]
+[fn-doc name=by-client scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Look up the session owning a given client id, or absence when unknown."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?else [$session:by-client "c-nope"] "ABSENT"]"""] [expect """'ABSENT'"""]]
+]
+[fn-doc name=principal scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Return the session's bound principal — the actor-principal the authz PEP reads."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]}]] [$session:principal $s]]"""] [expect """[principal id=user-1 [tenant id=my-api]]"""]]
+]
+[fn-doc name=tenant scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Return the session's bound tenant — the hard-partition key."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {tls: true}]] [$session:tenant $s]]"""] [expect """[tenant id=my-api]"""]]
+]
+[fn-doc name=clients scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Return the session's attached clients in attach order; empty for a zero-client session."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s1 [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {channel: "cx" tls: true}]] [?let [= $s2 [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {channel: "http" tls: true}]] [$count [$session:clients $s2]]]]"""] [expect """2"""]]
+]
+[fn-doc name=valid scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether the session is attached and within its token validity window."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {tls: true}]] [$session:valid $s]]"""] [expect """true"""]]
+]
+[fn-doc name=claims scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Return the verified claim-set captured at attach; the raw token is never retained."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $s [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {tls: true}]] [$crypto:claim [$session:claims $s] "iss"]]"""] [expect """'https://idp.example'"""]]
+]
+[fn-doc name=map-claims scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Map a verified claim-set to its (principal, tenant) — the pure transform attach runs internally."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[$session:map-claims [claims tid="acme" sub="dana"] {}]"""] [expect """[principal id=dana [tenant id=acme]]"""]]
+]
+[fn-doc name=from-cookie scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Resolve the session from the request's session-id cookie, or absence when none is live."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/strings']
+[?let [= $pair [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]}]] [?let [= $s [$first $pair]] [?let [= $cv [$strings:join ("__Host-cxsid=", $s@id) ""]] [?let [= $req2 [request scheme="https" [headers [header name="Cookie" [?attr value $cv]]]]] [?let [= $p [$session:principal [$session:from-cookie $req2 {}]]] $p@id]]]]]"""] [expect """'user-1'"""]]
+]
+[fn-doc name=set-cookie scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Produce the Set-Cookie directives for a session — the session cookie plus its CSRF companion."""]
+]
+[fn-doc name=clear-cookie scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Produce a clearing Set-Cookie directive for the detach or expiry path."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?let [= $c [$first [$session:clear-cookie {}]]] $c@max-age]"""] [expect """'0'"""]]
+]
+[fn-doc name=rotate scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Mint a fresh session id and CSRF token (fixation defense), leaving the binding unchanged."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $pair [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]}]] [?let [= $s [$first $pair]] [?let [= $r [$session:rotate $s]] [?let [= $p [$session:principal $r]] $p@id]]]]"""] [expect """'user-1'"""]]
+]
+[fn-doc name=csrf-token scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the session's synchronizer CSRF token for the front-end to echo back."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/strings']
+[?let [= $pair [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]}]] [?let [= $s [$first $pair]] [$strings:is-empty [$session:csrf-token $s]]]]"""] [expect """false"""]]
+]
+[fn-doc name=csrf-verify scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Constant-time check the request's submitted CSRF token against the session's; a no-op pass for Bearer."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?let [= $pair [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]}]] [?let [= $s [$first $pair]] [?let [= $tok [$session:csrf-token $s]] [?let [= $req2 [request scheme="https" [headers [header name="X-CSRF-Token" [?attr value $tok]]]]] [?let [= $res [$session:csrf-verify $req2 $s {}]] $res@state]]]]]"""] [expect """'attached'"""]]
+]

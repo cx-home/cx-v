@@ -2007,4 +2007,4 @@ fn ft_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?cx.Node
 
 // ── bundled module source ────────────────────────────────────────────
 
-const stdlib_src_ft = $embed_file('../../stdlib/ft.cx').to_string()
+const stdlib_src_ft = $embed_file('../stdlib/ft.cx').to_string()

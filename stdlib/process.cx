@@ -1,0 +1,185 @@
+[- cx-stdlib/process — subprocess spawn / capture / pipelines / signals /
+   process-groups / pseudo-terminal control (spec/std-lib/process.md).
+
+   COMMAND MODEL — argv-array ONLY (§1.1): there is no shell-string form.
+   run / spawn / each pipeline stage takes argv::[sequence string];
+   argv[0] is the executable, argv[1..] are literal args passed verbatim
+   to exec. The structural command-injection defense.
+
+   Tier-B, necessarily impure: every public function is impure and EVERY
+   one operates on a spawned child, so EVERY effect point is gated on the
+   single subprocess capability (§7). Under the deny-by-default empty set
+   each raises cx-err:CXER0271. Bodies forward to native primitives
+   (vcx/code/stdlib_process.v) since process effects are not expressible
+   in pure CX. -]
+
+[- §3.1 one-shot run -]
+[?def run scope=public impure [returns element]
+  ($argv::[sequence string]
+   $env=null $env-clear=false $cwd=null $stdin=null
+   $timeout-ms=null $kill-on-timeout=true $capture=:both
+   $encoding="utf-8" $search-path=true $new-process-group=false
+   $check=false)
+  [$process-run $argv $env $env-clear $cwd $stdin $timeout-ms $kill-on-timeout $capture $encoding $search-path $new-process-group $check]]
+
+[- §3.2 streaming spawn + handle lifecycle -]
+[?def spawn scope=public impure [returns element]
+  ($argv::[sequence string]
+   $env=null $env-clear=false $cwd=null
+   $encoding="utf-8" $search-path=true $new-process-group=false)
+  [$process-spawn $argv $env $env-clear $cwd $encoding $search-path $new-process-group]]
+
+[?def stdin        scope=public impure [returns element]       ($handle::element) [$process-stdin $handle]]
+[?def stdout       scope=public impure [returns element]       ($handle::element) [$process-stdout $handle]]
+[?def stderr       scope=public impure [returns element]       ($handle::element) [$process-stderr $handle]]
+[?def pid          scope=public impure [returns int]           ($handle::element) [$process-pid $handle]]
+[?def wait         scope=public impure [returns int]           ($handle::element) [$process-wait $handle]]
+[?def wait-timeout scope=public impure [returns [or int [sequence int]]] ($handle::element $ms::int) [$process-wait-timeout $handle $ms]]
+[?def poll         scope=public impure [returns [or int [sequence int]]] ($handle::element) [$process-poll $handle]]
+[?def close        scope=public impure [returns null]          ($handle::element) [$process-close $handle]]
+
+[- §3.3 pipelines -]
+[?def pipeline scope=public impure [returns element]
+  ($stages::[sequence element]
+   $stdin=null $timeout-ms=null $kill-on-timeout=true
+   $encoding="utf-8" $env=null $env-clear=false $cwd=null
+   $check=false)
+  [$process-pipeline $stages $stdin $timeout-ms $kill-on-timeout $encoding $env $env-clear $cwd $check]]
+
+[- §3.4 signals -]
+[?def send-signal scope=public impure [returns null] ($handle::element $sig::atom) [$process-send-signal $handle $sig]]
+[?def terminate   scope=public impure [returns null] ($handle::element)            [$process-terminate $handle]]
+[?def kill        scope=public impure [returns null] ($handle::element)            [$process-kill $handle]]
+
+[- §3.5 process groups -]
+[?def kill-group  scope=public impure [returns null] ($handle::element $sig::atom) [$process-kill-group $handle $sig]]
+
+[- §3.6 pseudo-terminal -]
+[?def spawn-pty scope=public impure [returns element]
+  ($argv::[sequence string]
+   $env=null $env-clear=false $cwd=null
+   $encoding="utf-8" $search-path=true $new-process-group=false
+   $rows=24 $cols=80 $term="xterm-256color")
+  [$process-spawn-pty $argv $env $env-clear $cwd $encoding $search-path $new-process-group $rows $cols $term]]
+
+[?def pty             scope=public impure [returns element] ($handle::element) [$process-pty $handle]]
+[?def window-size     scope=public impure [returns element] ($handle::element) [$process-window-size $handle]]
+[?def set-window-size scope=public impure [returns null]    ($handle::element $rows::int $cols::int) [$process-set-window-size $handle $rows $cols]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=process
+  [scope """Run child processes: spawn them, capture their output, stream their stdio, connect them into pipelines, deliver signals, manage process groups, and drive pseudo-terminals. Every command is an argv array of strings — there is no shell-string form anywhere, which structurally rules out command injection. Child stdio reuses the io handle model, and a child's environment is set per-call rather than globally."""]]
+[fn-doc name=run scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Spawn an argv command, run it to completion, and return a proc-result with captured stdout, stderr, and exit code."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:run ("echo", "hello")]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=spawn scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Start an argv command and return a proc handle for streaming its stdio and managing its lifecycle."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:spawn ("tail", "-f", "/var/log/app.log")]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=stdin scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the child's writable stdin handle; closing it signals EOF to the child."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:stdin [$process:spawn ("cat")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=stdout scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the child's readable stdout handle for incremental consumption."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:stdout [$process:spawn ("echo", "hi")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=stderr scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the child's readable stderr handle for incremental consumption."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:stderr [$process:spawn ("echo", "hi")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=pid scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Return the child's operating-system process id."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:pid [$process:spawn ("sleep", "30")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=wait scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Block until the child exits, reap it, and return its exit code."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:wait [$process:spawn ("echo", "hi")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=wait-timeout scope=public purity=impure
+  [sig """-> [or int [sequence int]]"""]
+  [summary """Block up to ms for the child to exit, returning its exit code or absence if still running."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:wait-timeout [$process:spawn ("sleep", "30")] 100]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=poll scope=public purity=impure
+  [sig """-> [or int [sequence int]]"""]
+  [summary """Check without blocking, returning the child's exit code or absence if it is still running."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:poll [$process:spawn ("sleep", "30")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=close scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Release the handle, closing open stdio and reaping the child; idempotent and does not kill a running child."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:close [$process:spawn ("echo", "hi")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=pipeline scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Connect stages end-to-end and return a pipeline-result with a pipefail-aggregate exit code."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "printf" "a\nb\nERR\n"]], [stage [argv "grep" "ERR"]])]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=send-signal scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Deliver the named signal atom to the child; a no-op if it has already exited."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:send-signal [$process:spawn ("sleep", "30")] :hup]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=terminate scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Deliver SIGTERM to the child for polite, catchable termination."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:terminate [$process:spawn ("sleep", "30")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=kill scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Deliver SIGKILL to the child for forced termination."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:kill [$process:spawn ("sleep", "30")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=kill-group scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Signal the child's whole process group, reaching it and every descendant as a unit."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:kill-group [$process:spawn ("./serve.sh") new-process-group=true] :term]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=spawn-pty scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Start a command attached to a fresh pseudo-terminal so it sees a real tty."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:spawn-pty ("vi", "notes.txt")]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=pty scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the pty master, one bidirectional io handle for the child's combined stdio."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:pty [$process:spawn-pty ("vi", "notes.txt")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=window-size scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the pty's current window size as a size element with rows and cols."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:window-size [$process:spawn-pty ("vi", "notes.txt")]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=set-window-size scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Resize the pty's window and deliver SIGWINCH to the child."""]
+  [example [code """[?lib 'cx-stdlib/process']
+[$process:set-window-size [$process:spawn-pty ("vi", "notes.txt")] 40 120]"""] [expect """cx-err:CXER0271"""]]
+]

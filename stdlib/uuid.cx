@@ -1,0 +1,163 @@
+[- cx-stdlib/uuid — UUID generation, parsing, formatting, validation.
+
+   Full v0.8.0 surface per spec/stdlib_uuid.md §3. v4 (random) + v7
+   (time-ordered, intra-millisecond monotonic) generators; v5 (SHA-1)
+   + v3 (MD5) name-based deterministic generators; parse / format /
+   validate; variant / version inspection; nil-uuid + four predefined
+   namespace accessors. Bodies bottom out in native uuid-* primitives
+   (vcx/code/stdlib_uuid.v) — RFC bit-twiddling, CSPRNG randomness,
+   SHA-1 / MD5 mixing and the monotonic counter are not expressible in
+   pure CX.
+
+   parse is strict-canonical by default; pass a trailing `true` to opt
+   into the lenient forms (hyphen-less / urn:uuid: / brace-wrapped) per
+   spec §4. format never emits those relaxed forms.
+
+   NOTE: this const and stdlib/uuid.cx are the same source — edit both. -]
+
+[- §3.1 random / time-ordered generators (impure) -]
+[?def v4         scope=public impure [returns string]  ()                              [$uuid-v4]]
+[?def v7         scope=public impure [returns string]  ()                              [$uuid-v7]]
+[?def v4-bytes   scope=public impure [returns bytes]   ()                              [$uuid-v4-bytes]]
+[?def v7-bytes   scope=public impure [returns bytes]   ()                              [$uuid-v7-bytes]]
+
+[- §3.2 name-based generators (pure / deterministic) -]
+[?def v5         scope=public pure   [returns string]  ($namespace::bytes $name::string) [$uuid-v5 $namespace $name]]
+[?def v3         scope=public pure   [returns string]  ($namespace::bytes $name::string) [$uuid-v3 $namespace $name]]
+[?def v5-bytes   scope=public pure   [returns bytes]   ($namespace::bytes $name::string) [$uuid-v5-bytes $namespace $name]]
+[?def v3-bytes   scope=public pure   [returns bytes]   ($namespace::bytes $name::string) [$uuid-v3-bytes $namespace $name]]
+
+[- §3.3 parse and format -]
+[?def parse      scope=public pure   [returns bytes]   ($s::string *$opts)          [$uuid-parse $s $opts]]
+[?def format     scope=public pure   [returns string]  ($b::bytes)                      [$uuid-format $b]]
+
+[- §3.4 validation and inspection -]
+[?def validate   scope=public pure   [returns bool]    ($s::string)                     [$uuid-validate $s]]
+[?def variant    scope=public pure   [returns int]     ($b::bytes)                      [$uuid-variant $b]]
+[?def version    scope=public pure   [returns int]     ($b::bytes)                      [$uuid-version $b]]
+[?def nil-uuid   scope=public pure   [returns string]  ()                              [$uuid-nil]]
+
+[- §3.5 predefined namespace constants -]
+[?def ns-dns     scope=public pure   [returns bytes]   ()                              [$uuid-ns-dns]]
+[?def ns-url     scope=public pure   [returns bytes]   ()                              [$uuid-ns-url]]
+[?def ns-oid     scope=public pure   [returns bytes]   ()                              [$uuid-ns-oid]]
+[?def ns-x500    scope=public pure   [returns bytes]   ()                              [$uuid-ns-x500]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=uuid
+  [scope """Generate, parse, format, and validate Universally Unique Identifiers.
+   Four variants are supported: v4 (fully random), v7 (timestamp-ordered with an
+   intra-millisecond monotonic counter), and the name-based deterministic v5
+   (SHA-1) and v3 (MD5). Identifiers are 128-bit values carried as a canonical
+   lowercase 8-4-4-4-12 string or as 16 raw bytes, with helpers for variant /
+   version inspection, the nil UUID, and the four RFC 4122 namespace constants.
+   parse is strict-canonical by default; pass a trailing true to also accept the
+   lenient hyphen-less, urn:uuid:, and brace-wrapped forms."""]]
+[fn-doc name=v4 scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Generate a random (RFC 4122 v4) UUID as a canonical string, using CSPRNG entropy."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:validate [$uuid:v4]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=v7 scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Generate a timestamp-ordered (RFC 9562 v7) UUID string, monotonic within a millisecond."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:validate [$uuid:v7]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=v4-bytes scope=public purity=impure
+  [sig """-> bytes"""]
+  [summary """Generate a random (v4) UUID as the raw 16-byte value."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:v4-bytes]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=v7-bytes scope=public purity=impure
+  [sig """-> bytes"""]
+  [summary """Generate a timestamp-ordered (v7) UUID as the raw 16-byte value."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:variant [$uuid:v7-bytes]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=v5 scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Derive a deterministic name-based (SHA-1) UUID string from a namespace and name."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:v5 [$uuid:ns-url] "https://example.com"]"""] [expect """'4fd35a71-71ef-5a55-a9d9-aa75c889a6d0'"""]]
+]
+[fn-doc name=v3 scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Derive a deterministic name-based (MD5) UUID string from a namespace and name."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:v3 [$uuid:ns-dns] "www.example.com"]"""] [expect """'5df41881-3aed-3515-88a7-2f4a814cf09e'"""]]
+]
+[fn-doc name=v5-bytes scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Derive a name-based (SHA-1) UUID as the raw 16-byte value."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:v5-bytes [$uuid:ns-dns] "www.example.com"]]"""] [expect """'2ed6657d-e927-568b-95e1-2665a8aea6a2'"""]]
+]
+[fn-doc name=v3-bytes scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Derive a name-based (MD5) UUID as the raw 16-byte value."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:v3-bytes [$uuid:ns-dns] "x"]]"""] [expect """3"""]]
+]
+[fn-doc name=parse scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Parse a UUID string into 16 bytes — strict-canonical by default, lenient on opt-in."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:parse [$uuid:v4]]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=format scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Format 16 bytes as the canonical lowercase 8-4-4-4-12 hex string."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:parse "550e8400-e29b-41d4-a716-446655440000"]]"""] [expect """'550e8400-e29b-41d4-a716-446655440000'"""]]
+]
+[fn-doc name=validate scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a string is a well-formed canonical UUID."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:validate [$uuid:v4]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=variant scope=public purity=pure
+  [sig """-> int"""]
+  [summary """Report the RFC 4122 variant bits of a 16-byte UUID."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:variant [$uuid:parse [$uuid:v4]]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=version scope=public purity=pure
+  [sig """-> int"""]
+  [summary """Report the version number (1-8) of a 16-byte UUID."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:parse [$uuid:v4]]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=nil-uuid scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the all-zero nil UUID string."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:validate [$uuid:nil-uuid]]"""] [expect """true"""]]
+]
+[fn-doc name=ns-dns scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Return the RFC 4122 DNS namespace UUID as 16 bytes."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:ns-dns]]"""] [expect """'6ba7b810-9dad-11d1-80b4-00c04fd430c8'"""]]
+]
+[fn-doc name=ns-url scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Return the RFC 4122 URL namespace UUID as 16 bytes."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:ns-url]]"""] [expect """'6ba7b811-9dad-11d1-80b4-00c04fd430c8'"""]]
+]
+[fn-doc name=ns-oid scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Return the RFC 4122 ISO OID namespace UUID as 16 bytes."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:ns-oid]]"""] [expect """'6ba7b812-9dad-11d1-80b4-00c04fd430c8'"""]]
+]
+[fn-doc name=ns-x500 scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Return the RFC 4122 X.500 DN namespace UUID as 16 bytes."""]
+  [example [code """[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:ns-x500]]"""] [expect """'6ba7b814-9dad-11d1-80b4-00c04fd430c8'"""]]
+]

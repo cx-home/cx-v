@@ -1,0 +1,70 @@
+[- cx-stdlib/format — canonical-form emission + pretty-print +
+   indent / wrap controls. Bridges spec/canonical.md.
+
+   Full v0.8.0 surface per spec/stdlib_format.md §3. Bodies call native
+   primitives (vcx/code/stdlib_format.v) since CX-value text emission
+   (canonical / pretty / compact / diff-friendly / streaming) reuses the
+   V renderer (vcx/code/render.v) and is not expressible in pure CX. -]
+
+[- §3.1 single-shot formatters -]
+[?def canonical scope=public pure [returns string] ($value::any) [$format-canonical $value]]
+[?def pretty    scope=public pure [returns string] ($value::any) [$format-pretty $value]]
+[?def compact   scope=public pure [returns string] ($value::any) [$format-compact $value]]
+
+[- §3.2 pretty-print options -]
+[?def pretty-with-opts scope=public pure [returns string] ($value::any $opts::map) [$format-pretty-with-opts $value $opts]]
+
+[- §3.3 canonical with reasoning hooks -]
+[?def canonical-with-context scope=public pure [returns element] ($value::any) [$format-canonical-with-context $value]]
+
+[- §3.4 diff-friendly emission -]
+[?def diff-friendly scope=public pure [returns string] ($value::any) [$format-diff-friendly $value]]
+
+[- §3.5 streaming emission -]
+[?def emit-stream scope=public pure [returns [sequence string]] ($value::any $opts::map) [$format-emit-stream $value $opts]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=format
+  [scope """Emit CX values back to CX text in four forms: canonical, pretty, compact, and diff-friendly.
+
+   Canonical is the byte-stable hash preimage used for hashing, diffing, and content addressing; pretty is human-readable with indentation and wrapping; compact minimizes whitespace for transport; diff-friendly is a version-stable, one-element-per-line form for snapshots and version control. This is CX-to-CX text only — cross-format conversion lives in modules like json and csv. Every form round-trips: parsing the output is structurally equal to the original value."""]]
+[fn-doc name=canonical scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Emit the byte-stable canonical form of a value — the hash preimage for content addressing."""]
+]
+[fn-doc name=pretty scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Emit a human-readable form with indentation and line wrapping; not version-stable."""]
+  [example [code """[?lib 'cx-stdlib/format']
+[$format:pretty [user]]"""] [expect """'[user]'"""]]
+]
+[fn-doc name=compact scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Emit a minimum-whitespace form for transport over text channels."""]
+  [example [code """[?lib 'cx-stdlib/format']
+[$format:compact [a [b [c]]]]"""] [expect """'[a [b [c]]]'"""]]
+]
+[fn-doc name=pretty-with-opts scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Pretty-print with an options map controlling indent, line width, attribute sorting, and depth."""]
+  [example [code """[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts [a [b [c]]] {indent: "    "}]"""] [expect """'[a [b [c] ] ]'"""]]
+]
+[fn-doc name=canonical-with-context scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Emit the canonical text together with its derived hash, length, and token count."""]
+  [example [code """[?lib 'cx-stdlib/format']
+[?let [= $r [$format:canonical-with-context [a 1]]] $r@length]"""] [expect """5"""]]
+]
+[fn-doc name=diff-friendly scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Emit a version-stable, one-element-per-line form with sorted attributes for snapshots and diffs."""]
+  [example [code """[?lib 'cx-stdlib/format']
+[$format:diff-friendly [user role="admin" id="7"]]"""] [expect """'[user id="7" role="admin"]'"""]]
+]
+[fn-doc name=emit-stream scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Emit a value as a sequence of chunks whose concatenation equals pretty-with-opts."""]
+  [example [code """[?lib 'cx-stdlib/format']
+[$format:emit-stream [user] {}]"""] [expect """([user])"""]]
+]

@@ -959,4 +959,4 @@ fn store_migrate(args []cx.Node) ?cx.Node {
 // The canonical cx-stdlib/store surface. Bodies forward to the native
 // primitives above. Registered into the module table by stdlib_bundle.v.
 
-const stdlib_src_store = $embed_file('../../stdlib/store.cx').to_string()
+const stdlib_src_store = $embed_file('../stdlib/store.cx').to_string()

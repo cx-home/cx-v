@@ -1,0 +1,192 @@
+[- cx-stdlib/path — filesystem path manipulation. Distinct from the
+   CXPath value kind (spec/cxpath.md) — this is OS-path territory.
+
+   Full v0.8.0 surface per spec/stdlib_path.md §3. Bodies call native
+   primitives (vcx/code/stdlib_path.v) since path logic (normalize,
+   relative, glob, containment) is not expressible in pure CX. -]
+
+[- Co-located documentation per spec/02-inprogress/stdlib_colocated_docs.md.
+   [module-doc] + [fn-doc] are plain (non-directive) elements; the loader
+   ignores them and the doc projection reads them via [$cx:parse] + CXPath. -]
+[module-doc name=path
+  [scope """Filesystem path manipulation — splitting, joining, normalizing, and comparing OS paths. Distinct from the CXPath value kind (spec/cxpath.md): this is OS-path territory. Most operations are lexical and pure; the few that touch the filesystem (`absolute`, `canonical`) are marked impure. Path logic such as normalization, relative-path computation, globbing, and containment is implemented in native primitives since it is not expressible in pure CX."""]]
+
+[- §3.1 component extraction -]
+[?def dirname   scope=public pure [returns string] ($p::string)              [$path-dirname $p]]
+[fn-doc name=dirname scope=public purity=pure
+  [sig """($p::string) -> string"""]
+  [summary """Return the directory portion of a path — everything up to (but not including) the final separator."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:dirname "/a/b/c.txt"]"""] [expect """'/a/b'"""]]]
+[?def basename  scope=public pure [returns string] ($p::string)              [$path-basename $p]]
+[fn-doc name=basename scope=public purity=pure
+  [sig """($p::string) -> string"""]
+  [summary """Return the final component of a path (the part after the last separator)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:basename "/a/b/c.txt"]"""] [expect """'c.txt'"""]]]
+[?def extension scope=public pure [returns string] ($p::string)              [$path-extension $p]]
+[fn-doc name=extension scope=public purity=pure
+  [sig """($p::string) -> string"""]
+  [summary """Return the file extension of the final component, including the leading dot; empty if none."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:extension "/a/b/c.txt"]"""] [expect """'.txt'"""]]]
+[?def stem      scope=public pure [returns string] ($p::string)              [$path-stem $p]]
+[fn-doc name=stem scope=public purity=pure
+  [sig """($p::string) -> string"""]
+  [summary """Return the final component with its extension removed."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:stem "/a/b/c.txt"]"""] [expect """'c'"""]]]
+[?def parent    scope=public pure [returns string] ($p::string)              [$path-parent $p]]
+[fn-doc name=parent scope=public purity=pure
+  [sig """($p::string) -> string"""]
+  [summary """Return the parent directory of a path (its dirname)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:parent "/a/b/c.txt"]"""] [expect """'/a/b'"""]]]
+[?def parts     scope=public pure [returns [sequence string]] ($p::string)   [$path-parts $p]]
+[fn-doc name=parts scope=public purity=pure
+  [sig """($p::string) -> [sequence string]"""]
+  [summary """Split a path into its component segments, in order."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:parts "/a/b/c.txt"]"""] [expect """('a', 'b', 'c.txt')"""]]]
+
+[- §3.2 composition -]
+[?def join      scope=public pure [returns string] (*$parts::string)    [$path-join $parts]]
+[fn-doc name=join scope=public purity=pure
+  [sig """(*$parts::string) -> string"""]
+  [summary """Join path segments with the platform separator, collapsing redundant separators."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:join "a" "b" "c"]"""] [expect """'a/b/c'"""]]]
+[?def join-seq  scope=public pure [returns string] ($parts::[sequence string]) [$path-join-seq $parts]]
+[fn-doc name=join-seq scope=public purity=pure
+  [sig """($parts::[sequence string]) -> string"""]
+  [summary """Join a sequence of path segments with the platform separator (the list form of `join`)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:join-seq ("a/", "/b/", "/c")]"""] [expect """'a/b/c'"""]]]
+
+[- §3.3 normalization -]
+[?def normalize scope=public pure   [returns string] ($p::string)            [$path-normalize $p]]
+[fn-doc name=normalize scope=public purity=pure
+  [sig """($p::string) -> string"""]
+  [summary """Lexically normalize a path: resolve '.' and '..' segments and collapse redundant separators, without touching the filesystem."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:normalize "a/./b/../c"]"""] [expect """'a/c'"""]]]
+[?def absolute  scope=public impure [returns string] ($p::string)            [$path-absolute $p]]
+[fn-doc name=absolute scope=public purity=impure
+  [sig """($p::string) -> string"""]
+  [summary """Resolve a path to an absolute one against the current working directory (does not require the path to exist)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:is-absolute [$path:absolute "x"]]"""] [expect """true"""]]]
+[?def relative  scope=public pure   [returns string] ($from::string $to::string) [$path-relative $from $to]]
+[fn-doc name=relative scope=public purity=pure
+  [sig """($from::string $to::string) -> string"""]
+  [summary """Compute the relative path from `$from` to `$to`."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:relative "/a/b" "/a/c/d"]"""] [expect """'../c/d'"""]]]
+[?def canonical scope=public impure [returns string] ($p::string)            [$path-canonical $p]]
+[fn-doc name=canonical scope=public purity=impure
+  [sig """($p::string) -> string"""]
+  [summary """Resolve a path to its real absolute form on disk, following symlinks; raises CXER2600 if it does not exist."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:canonical "/no/such/path/abcxyz-does-not-exist-12345"]"""] [expect """cx-err:CXER2600"""]]]
+
+[- §3.4 predicates -]
+[?def is-absolute      scope=public pure [returns bool] ($p::string)         [$path-is-absolute $p]]
+[fn-doc name=is-absolute scope=public purity=pure
+  [sig """($p::string) -> bool"""]
+  [summary """Report whether a path is absolute (rooted)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:is-absolute "/foo"]"""] [expect """true"""]]]
+[?def is-relative      scope=public pure [returns bool] ($p::string)         [$path-is-relative $p]]
+[fn-doc name=is-relative scope=public purity=pure
+  [sig """($p::string) -> bool"""]
+  [summary """Report whether a path is relative (not rooted)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:is-relative "foo"]"""] [expect """true"""]]]
+[?def is-posix-style   scope=public pure [returns bool] ($p::string)         [$path-is-posix-style $p]]
+[fn-doc name=is-posix-style scope=public purity=pure
+  [sig """($p::string) -> bool"""]
+  [summary """Report whether a path uses POSIX (forward-slash) separators."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:is-posix-style "/foo/bar"]"""] [expect """true"""]]]
+[?def is-windows-style scope=public pure [returns bool] ($p::string)         [$path-is-windows-style $p]]
+[fn-doc name=is-windows-style scope=public purity=pure
+  [sig """($p::string) -> bool"""]
+  [summary """Report whether a path uses Windows-style separators or a drive letter."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:is-windows-style "C:\\foo\\bar"]"""] [expect """true"""]]]
+[?def has-extension    scope=public pure [returns bool] ($p::string)         [$path-has-extension $p]]
+[fn-doc name=has-extension scope=public purity=pure
+  [sig """($p::string) -> bool"""]
+  [summary """Report whether the final component has a file extension."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:has-extension "a.txt"]"""] [expect """true"""]]]
+
+[- §3.5 manipulation -]
+[?def with-extension scope=public pure [returns string] ($p::string $ext::string)  [$path-with-extension $p $ext]]
+[fn-doc name=with-extension scope=public purity=pure
+  [sig """($p::string $ext::string) -> string"""]
+  [summary """Return the path with its extension replaced by $ext (a leading dot is optional)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:with-extension "a.txt" ".md"]"""] [expect """'a.md'"""]]]
+[?def with-stem      scope=public pure [returns string] ($p::string $stem::string) [$path-with-stem $p $stem]]
+[fn-doc name=with-stem scope=public purity=pure
+  [sig """($p::string $stem::string) -> string"""]
+  [summary """Return the path with its stem (the name without its extension) replaced."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:with-stem "a/b.txt" "c"]"""] [expect """'a/c.txt'"""]]]
+[?def with-name      scope=public pure [returns string] ($p::string $name::string) [$path-with-name $p $name]]
+[fn-doc name=with-name scope=public purity=pure
+  [sig """($p::string $name::string) -> string"""]
+  [summary """Return the path with its final component replaced."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:with-name "a/b.txt" "c.md"]"""] [expect """'a/c.md'"""]]]
+[?def append         scope=public pure [returns string] ($p::string $suffix::string) [$path-append $p $suffix]]
+[fn-doc name=append scope=public purity=pure
+  [sig """($p::string $suffix::string) -> string"""]
+  [summary """Append a suffix path onto a base path, collapsing redundant separators."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:append "a/b" "/c"]"""] [expect """'a/b/c'"""]]]
+
+[- §3.6 globbing -]
+[?def match-glob scope=public pure [returns bool] ($pattern::string $p::string) [$path-match-glob $pattern $p]]
+[fn-doc name=match-glob scope=public purity=pure
+  [sig """($pattern::string $p::string) -> bool"""]
+  [summary """Report whether a path matches a glob pattern (`*`, `?`, `[…]`, `**`); raises CXER2602 on a malformed pattern."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:match-glob "**/*.cx" "a/b/c.cx"]"""] [expect """true"""]]]
+
+[- §3.7 cross-platform separator -]
+[?def separator      scope=public pure [returns string] () [$path-separator]]
+[fn-doc name=separator scope=public purity=pure
+  [sig """() -> string"""]
+  [summary """Return the platform path separator (`/` on POSIX)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:separator]"""] [expect """'/'"""]]]
+[?def list-separator scope=public pure [returns string] () [$path-list-separator]]
+[fn-doc name=list-separator scope=public purity=pure
+  [sig """() -> string"""]
+  [summary """Return the platform path-list separator used in variables like PATH (`:` on POSIX)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:list-separator]"""] [expect """':'"""]]]
+
+[- §3.8 path-safety -]
+[?def is-within scope=public pure [returns bool]   ($dir::string $candidate::string)  [$path-is-within $dir $candidate]]
+[fn-doc name=is-within scope=public purity=pure
+  [sig """($dir::string $candidate::string) -> bool"""]
+  [summary """Report whether a candidate path lies within a directory after normalization (no `..` escape)."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:is-within "/srv/www" "/srv/www/../etc/passwd"]"""] [expect """false"""]]]
+[?def safe-join scope=public pure [returns string] ($base::string $untrusted::string) [$path-safe-join $base $untrusted]]
+[fn-doc name=safe-join scope=public purity=pure
+  [sig """($base::string $untrusted::string) -> string"""]
+  [summary """Join an untrusted segment onto a trusted base, raising CXER2603 if the result would escape the base."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:safe-join "/srv/www" "a/b.txt"]"""] [expect """'/srv/www/a/b.txt'"""]]]
+
+[- §4.5 case-insensitive comparison -]
+[?def equals-case-insensitive scope=public pure [returns bool] ($a::string $b::string) [$path-equals-ci $a $b]]
+[fn-doc name=equals-case-insensitive scope=public purity=pure
+  [sig """($a::string $b::string) -> bool"""]
+  [summary """Compare two paths for equality, ignoring case."""]
+  [example [code """[?lib 'cx-stdlib/path']
+[$path:equals-case-insensitive "/A/B" "/a/b"]"""] [expect """true"""]]]

@@ -1,0 +1,96 @@
+[- cx-stdlib/validate — runtime DATA-RECORD schema validation
+   (JSON-Schema / pydantic-shaped) per spec/std-lib/validate.md.
+
+   validate-shape validates a CX data record (map / element / scalar) against
+   an inline [schema [field …] …] element, returning [ok $value] or
+   [err [violation …] …]. Scalar constraints (type / pattern / min / max /
+   min-length / max-length / enum / required / optional) and structural
+   keywords (strict / nested schema= / extends=) forward to native
+   primitives (vcx/code/stdlib_validate.v); the record-field walk and RE2
+   pattern matching are not expressible in pure CX.
+
+   NOTE: this const and stdlib/validate.cx are the same source — edit both. -]
+
+[- §3.1 / §3.2 validation -]
+[?def validate-shape   scope=public pure [returns element] ($value::any $schema::element)        [$validate-shape $value $schema]]
+[?def validate-against scope=public pure [returns element] ($value::any $schema-ref::string)      [$validate-against $value $schema-ref]]
+
+[- §3.3 result inspection -]
+[?def is-ok     scope=public pure [returns bool]              ($result::element) [$validate-is-ok $result]]
+[?def errors-of scope=public pure [returns [sequence element]] ($result::element) [$validate-errors-of $result]]
+
+[- §3.4 projections -]
+[?def violation-paths    scope=public pure [returns [sequence string]] ($result::element) [$validate-violation-paths $result]]
+[?def violation-messages scope=public pure [returns [sequence string]] ($result::element) [$validate-violation-messages $result]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=validate
+  [scope """Validate a CX data record against a record-schema at runtime, in the
+   JSON-Schema / pydantic style. validate-shape checks a map, element, or scalar
+   against an inline [schema [field …] …], returning [ok $value] on success or an
+   inspectable [invalid [violation …] …] report on failure — failure is data the
+   caller iterates, never a thrown error. The vocabulary covers scalar constraints
+   (type, pattern, min / max, min-length / max-length, enum, required / optional)
+   and structural keywords (strict, nested schema=, extends=, validate-with=), with
+   patterns matched under RE2. This is the data-record sibling of the document-tree
+   validator in spec/core/schema.md, sharing one scalar-constraint vocabulary."""]]
+[fn-doc name=validate-shape scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Validate a value against an inline schema, returning [ok $value] or [invalid …]."""]
+  [example [code """[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [user [email "alice@example.com"] [score 87]]
+    [schema
+      [field name="email" type="string" pattern=".+@.+\\..+"]
+      [field name="score" type="int" min=0 max=100]]]]"""] [expect """true"""]]
+]
+[fn-doc name=validate-against scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Validate a value against a registered named schema, referenced by string."""]
+  [example [code """[?lib 'cx-stdlib/validate']
+[$validate:validate-against
+  [rec [email "a@b.co"]]
+  "LEAD_SCHEMA"]"""] [expect """cx-err:CXER1600"""]]
+]
+[fn-doc name=is-ok scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a validation result is [ok …] rather than [invalid …]."""]
+  [example [code """[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [user [email "alice@example.com"] [score 87]]
+    [schema
+      [field name="email" type="string" pattern=".+@.+\\..+"]
+      [field name="score" type="int" min=0 max=100]]]]"""] [expect """true"""]]
+]
+[fn-doc name=errors-of scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Return the sequence of [violation …] children of a result, empty for [ok …]."""]
+  [example [code """[?lib 'cx-stdlib/validate']
+[$count
+  [$validate:errors-of
+    [$validate:validate-shape
+      [rec [email "bad"] [score "abc"]]
+      [schema
+        [field name="email" type="string" pattern=".+@.+\\..+"]
+        [field name="score" type="int"]]]]]"""] [expect """2"""]]
+]
+[fn-doc name=violation-paths scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Project the CXPath path= of each violation in a result."""]
+  [example [code """[?lib 'cx-stdlib/validate']
+[$validate:violation-paths
+  [$validate:validate-shape
+    [rec [address [zip "abc"]]]
+    [schema [field name="address" type="element" schema=[schema
+      [field name="zip" type="string" pattern="^\\d{5}(-\\d{4})?$"]]]]]]"""] [expect """('/address/zip')"""]]
+]
+[fn-doc name=violation-messages scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Project the human-readable message= of each violation in a result."""]
+  [example [code """[?lib 'cx-stdlib/validate']
+[$validate:violation-messages
+  [invalid [violation code="TYPE_MISMATCH" path="/score"
+                  message="score: expected int, got \"abc\""]]]"""] [expect """('score: expected int, got "abc"')"""]]
+]

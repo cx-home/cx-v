@@ -1,0 +1,195 @@
+[- cx-stdlib/locale — locale-aware collation, number / date / currency
+   formatting, BCP-47 introspection, and locale-aware case mapping per
+   spec/std-lib/locale.md §3. Bodies forward to native primitives
+   (vcx/code/stdlib_locale.v): the UCA-subset collation weights, CLDR-subset
+   number / currency / calendar data, ICU/LDML pattern engine, and Turkish /
+   German case rules are not expressible in pure CX.
+
+   Collation returns int (-1/0/1); collate-key opaque UCA bytes. Number /
+   date / currency formatters return strings; parse-number-locale a float;
+   parse-date-locale a date. is-supported a bool; text-direction an atom
+   (:ltr / :rtl). Errors are values (CXER3500..3504, §5): data-unavailable,
+   invalid BCP-47 tag, invalid ICU pattern, invalid ISO-4217 currency,
+   number-parse failure.
+
+   NOTE: this const and stdlib/locale.cx are the same source — edit both. -]
+
+[- §3.1 collation -]
+[?def collate           scope=public pure [returns int]   ($a::string $b::string $locale::string) [$locale-collate $a $b $locale]]
+[?def collate-with-opts scope=public pure [returns int]   ($a::string $b::string $opts::map)       [$locale-collate-with-opts $a $b $opts]]
+[?def collate-key       scope=public pure [returns bytes] ($s::string $locale::string)              [$locale-collate-key $s $locale]]
+
+[- §3.2 number formatting -]
+[?def format-number           scope=public pure [returns string] ($n::any $locale::string) [$locale-format-number $n $locale]]
+[?def format-number-with-opts scope=public pure [returns string] ($n::any $opts::map)       [$locale-format-number-with-opts $n $opts]]
+[?def parse-number-locale     scope=public pure [returns number] ($s::string $locale::string) [$locale-parse-number-locale $s $locale]]
+
+[- §3.3 date / time formatting -]
+[?def format-date       scope=public pure [returns string] ($d::date $locale::string $pattern::string)     [$locale-format-date $d $locale $pattern]]
+[?def format-datetime   scope=public pure [returns string] ($dt::datetime $locale::string $pattern::string) [$locale-format-datetime $dt $locale $pattern]]
+[?def format-date-style scope=public pure [returns string] ($d::date $locale::string $style::atom)         [$locale-format-date-style $d $locale $style]]
+[?def parse-date-locale scope=public pure [returns date]   ($s::string $locale::string $pattern::string)   [$locale-parse-date-locale $s $locale $pattern]]
+
+[- §3.4 currency formatting -]
+[?def format-currency scope=public pure [returns string] ($n::any $currency::string $locale::string) [$locale-format-currency $n $currency $locale]]
+[?def currency-symbol scope=public pure [returns string] ($currency::string $locale::string)          [$locale-currency-symbol $currency $locale]]
+
+[- §3.5 locale information -]
+[?def list-locales   scope=public pure   [returns [sequence string]] ()                                   [$locale-list-locales]]
+[?def is-supported   scope=public pure   [returns bool]   ($locale::string)                              [$locale-is-supported $locale]]
+[?def default-locale scope=public impure [returns string] ()                                              [$locale-default-locale]]
+[?def locale-name    scope=public pure   [returns string] ($locale::string $display-locale::string)      [$locale-locale-name $locale $display-locale]]
+[?def language-of    scope=public pure   [returns string] ($locale::string)                              [$locale-language-of $locale]]
+[?def country-of     scope=public pure   [returns string] ($locale::string)                              [$locale-country-of $locale]]
+[?def script-of      scope=public pure   [returns string] ($locale::string)                              [$locale-script-of $locale]]
+[?def text-direction scope=public pure   [returns atom]   ($locale::string)                              [$locale-text-direction $locale]]
+
+[- §3.6 locale-aware case mapping -]
+[?def upper-locale scope=public pure [returns string] ($s::string $locale::string) [$locale-upper-locale $s $locale]]
+[?def lower-locale scope=public pure [returns string] ($s::string $locale::string) [$locale-lower-locale $s $locale]]
+[?def title-locale scope=public pure [returns string] ($s::string $locale::string) [$locale-title-locale $s $locale]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=locale
+  [scope """The primitives layer of CX's internationalization surface. Provides locale-aware string collation (Unicode Collation Algorithm with per-locale tailorings), number, date, time, and currency formatting, BCP 47 locale introspection, and locale-aware case mapping such as Turkish dotted-i and German sharp-s. Ships a CLDR-subset offline catalog as a zero-dependency fallback. Message catalogs, translation, and ICU MessageFormat live in the sibling module cx-stdlib/i18n, which depends one-way on this one; RTL bidi operations are deferred."""]]
+[fn-doc name=collate scope=public purity=pure
+  [sig """-> int"""]
+  [summary """Compare two strings in a locale's sort order, returning -1, 0, or 1."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:collate "a" "b" "en-US"]"""] [expect """-1"""]]
+]
+[fn-doc name=collate-with-opts scope=public purity=pure
+  [sig """-> int"""]
+  [summary """Compare two strings with collation options (strength, case-first, numeric, ignore-punctuation)."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:collate-with-opts "ä" "a" {locale: "de-DE", strength: "primary"}]"""] [expect """0"""]]
+]
+[fn-doc name=collate-key scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Produce a persistable UCA sort key whose byte order matches collate's ordering."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:collate-key "abc" "@@bad-tag@@"]"""] [expect """cx-err:CXER3501"""]]
+]
+[fn-doc name=format-number scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Format a number per a locale's grouping and decimal conventions."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:format-number 1234567.89 "en-US"]"""] [expect """'1,234,567.89'"""]]
+]
+[fn-doc name=format-number-with-opts scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Format a number with options for fraction digits, grouping, and notation."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:format-number-with-opts 1234567 {locale: "en-US", notation: "compact"}]"""] [expect """'1.2M'"""]]
+]
+[fn-doc name=parse-number-locale scope=public purity=pure
+  [sig """-> number"""]
+  [summary """Parse a number from a string written in a locale's conventions."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:parse-number-locale "1,234,567.89" "en-US"]"""] [expect """1234567.89"""]]
+]
+[fn-doc name=format-date scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Format a date for a locale using an ICU/LDML pattern."""]
+  [example [code """[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date [$time:parse-date "2026-05-26"] "fr-FR" "EEEE d MMMM yyyy"]"""] [expect """'mardi 26 mai 2026'"""]]
+]
+[fn-doc name=format-datetime scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Format a datetime for a locale using an ICU/LDML pattern."""]
+  [example [code """[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-datetime [$time:parse-datetime "2026-05-26T14:30:00Z"] "en-US" "yyyy-MM-dd HH:mm:ss"]"""] [expect """'2026-05-26 14:30:00'"""]]
+]
+[fn-doc name=format-date-style scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Format a date in a locale's conventional short, medium, long, or full style."""]
+  [example [code """[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date-style [$time:parse-date "2026-05-26"] "en-US" :full]"""] [expect """'Tuesday, May 26, 2026'"""]]
+]
+[fn-doc name=parse-date-locale scope=public purity=pure
+  [sig """-> date"""]
+  [summary """Parse a date from a string for a locale using an ICU/LDML pattern."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:parse-date-locale "2026-05-26" "en-US" "yyyy-MM-dd"]"""] [expect """'2026-05-26'"""]]
+]
+[fn-doc name=format-currency scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Format an amount as a currency for a locale, honoring ISO 4217 minor units."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:format-currency 1234.56 "USD" "en-US"]"""] [expect """'$1,234.56'"""]]
+]
+[fn-doc name=currency-symbol scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the symbol for a currency as written in a locale."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:currency-symbol "USD" "en-US"]"""] [expect """'$'"""]]
+]
+[fn-doc name=list-locales scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """List the locale tags the module has data for."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:is-supported [$first [$locale:list-locales]]]"""] [expect """true"""]]
+]
+[fn-doc name=is-supported scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a locale tag resolves to available data at any fallback level."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:is-supported [$first [$locale:list-locales]]]"""] [expect """true"""]]
+]
+[fn-doc name=default-locale scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Return the system's default locale from the environment."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:is-supported [$locale:default-locale]]"""] [expect """true"""]]
+]
+[fn-doc name=locale-name scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Render a locale's display name in a requested display locale."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:locale-name "de-DE" "en-US"]"""] [expect """'German (Germany)'"""]]
+]
+[fn-doc name=language-of scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Extract the language subtag from a locale tag."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:language-of "zh-Hans-CN"]"""] [expect """'zh'"""]]
+]
+[fn-doc name=country-of scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Extract the region/country subtag from a locale tag."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:country-of "en-US"]"""] [expect """'US'"""]]
+]
+[fn-doc name=script-of scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Extract the script subtag from a locale tag."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:script-of "zh-Hans-CN"]"""] [expect """'Hans'"""]]
+]
+[fn-doc name=text-direction scope=public purity=pure
+  [sig """-> atom"""]
+  [summary """Return a locale's writing direction as :ltr or :rtl."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:text-direction "en-US"]"""] [expect """:ltr"""]]
+]
+[fn-doc name=upper-locale scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Uppercase a string under a locale's case rules."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:upper-locale "i" "tr-TR"]"""] [expect """'İ'"""]]
+]
+[fn-doc name=lower-locale scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Lowercase a string under a locale's case rules."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:lower-locale "I" "tr-TR"]"""] [expect """'ı'"""]]
+]
+[fn-doc name=title-locale scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Title-case each word of a string under a locale's case rules."""]
+  [example [code """[?lib 'cx-stdlib/locale']
+[$locale:title-locale "hello world" "en-US"]"""] [expect """'Hello World'"""]]
+]

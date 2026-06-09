@@ -1,0 +1,105 @@
+[- cx-stdlib/i18n — message catalogs, translation, ICU MessageFormat.
+
+   Full v0.8.0 public surface per spec/std-lib/i18n.md §3. Bodies forward
+   to native primitives (vcx/code/stdlib_i18n.v): catalog construction /
+   merge / inspection, locale-fallback message resolution, the ICU
+   MessageFormat evaluator (interpolation / plural / select / selectordinal
+   / nested / typed-arg), and CLDR cardinal + ordinal plural-category data
+   are not expressible in pure CX. Catalogs are opaque [catalog …]
+   elements; message / format-message return strings; plural-category /
+   -ordinal return atoms; catalog-locales / -keys return string sequences.
+   Errors are values (CXER3800..3805, §5); load-catalog is the one
+   capability-gated function (read, §7) and raises CXER0271 under
+   deny-by-default. i18n depends one-way on cx-stdlib/locale for typed-arg
+   formatting (§1).
+
+   NOTE: this const and stdlib/i18n.cx are the same source — edit both. -]
+
+[- §3.1 catalogs -]
+[?def catalog-from-map  scope=public pure   [returns element]            ($m::map)                  [$i18n-catalog-from-map $m]]
+[?def load-catalog      scope=public impure [returns element]            ($path::string)            [$i18n-load-catalog $path]]
+[?def catalog-merge     scope=public pure   [returns element]            (*$catalogs::element)      [$i18n-catalog-merge $catalogs]]
+[?def catalog-merge-seq scope=public pure   [returns element]            ($catalogs::[sequence element]) [$i18n-catalog-merge-seq $catalogs]]
+[?def catalog-locales   scope=public pure   [returns [sequence string]]  ($catalog::element)        [$i18n-catalog-locales $catalog]]
+[?def catalog-keys      scope=public pure   [returns [sequence string]]  ($catalog::element)        [$i18n-catalog-keys $catalog]]
+
+[- §3.2 message resolution -]
+[?def message    scope=public pure [returns string] ($catalog::element $key::string $locale::string $args::map)                  [$i18n-message $catalog $key $locale $args]]
+[?def message-or scope=public pure [returns string] ($catalog::element $key::string $locale::string $args::map $fallback::string) [$i18n-message-or $catalog $key $locale $args $fallback]]
+
+[- §3.3 direct MessageFormat -]
+[?def format-message scope=public pure [returns string] ($msgformat::string $locale::string $args::map) [$i18n-format-message $msgformat $locale $args]]
+
+[- §3.5 CLDR plural data -]
+[?def plural-category         scope=public pure [returns atom] ($n::number $locale::string) [$i18n-plural-category $n $locale]]
+[?def plural-category-ordinal scope=public pure [returns atom] ($n::number $locale::string) [$i18n-plural-category-ordinal $n $locale]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=i18n
+  [scope """The message and translation layer of CX's internationalization surface. Build, merge, and inspect message catalogs that map a key to per-locale ICU MessageFormat strings; resolve a key for a target locale through a fallback chain; and evaluate MessageFormat templates with interpolation, CLDR plurals, select, selectordinal, nested forms, and typed args. A locale's CLDR plural category for a number is also exposed. Depends one-way on cx-stdlib/locale for all number, date, and currency formatting; locale arguments are BCP 47 tags."""]]
+[fn-doc name=catalog-from-map scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Build a catalog element from a map of key to per-locale MessageFormat strings."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-locales [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}]]"""] [expect """('en', 'fr')"""]]
+]
+[fn-doc name=load-catalog scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Read a catalog from its on-disk CX-document form; requires the read capability."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:load-catalog "conformance/data/i18n/messages.cx"]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=catalog-merge scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Merge catalogs left-to-right, last-writer-wins."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-merge [$i18n:catalog-from-map {"k": {"en": "A"}}] [$i18n:catalog-from-map {"k": {"en": "B"}}]] "k" "en" {}]"""] [expect """B"""]]
+]
+[fn-doc name=catalog-merge-seq scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Merge a runtime-assembled sequence of catalogs, last-writer-wins."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-merge-seq ([$i18n:catalog-from-map {"k": {"en": "A"}}], [$i18n:catalog-from-map {"k": {"en": "B"}}])] "k" "en" {}]"""] [expect """B"""]]
+]
+[fn-doc name=catalog-locales scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """List the distinct locales present across a catalog's entries."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-locales [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}]]"""] [expect """('en', 'fr')"""]]
+]
+[fn-doc name=catalog-keys scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """List the message keys defined in a catalog."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-keys [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}, "farewell": {"en": "Bye, {name}!"}}]]"""] [expect """('greeting', 'farewell')"""]]
+]
+[fn-doc name=message scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Resolve a key for a locale through the fallback chain and evaluate it against args; raises on an unknown key."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-from-map {"default": "en", "greeting": {"en": "Hello, {name}!"}}] "greeting" "de" {"name": "Ada"}]"""] [expect """Hello, Ada!"""]]
+]
+[fn-doc name=message-or scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Like message, but evaluate the fallback string instead of raising on an unknown key."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:message-or [$i18n:catalog-from-map {"greeting": {"en": "Hi"}}] "missing.key" "en" {"name": "Ada"} "Hello, {name}!"]"""] [expect """Hello, Ada!"""]]
+]
+[fn-doc name=format-message scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Evaluate a MessageFormat string against args for a locale, with no catalog."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{count, plural, =0 {no items} one {# item} other {# items}}" "en" {"count": 0}]"""] [expect """no items"""]]
+]
+[fn-doc name=plural-category scope=public purity=pure
+  [sig """-> atom"""]
+  [summary """Return the CLDR cardinal plural category for a number in a locale."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category 1 "en"]"""] [expect """:one"""]]
+]
+[fn-doc name=plural-category-ordinal scope=public purity=pure
+  [sig """-> atom"""]
+  [summary """Return the CLDR ordinal plural category for a number in a locale."""]
+  [example [code """[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category-ordinal 1 "en"]"""] [expect """:one"""]]
+]

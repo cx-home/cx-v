@@ -1,0 +1,117 @@
+[- cx-stdlib/json — JSON (RFC 8259) parse / emit; round-trips CXDM
+   Scalar / Array / Map per spec/std-lib/json.md §2 and elements via the
+   lossless `named` encoding. Bodies forward to native primitives
+   (vcx/code/stdlib_json.v) since a JSON parser/emitter is not expressible
+   in pure CX. NOTE: this const and stdlib/json.cx are the same source —
+   edit both. -]
+
+[- §3.1 parsing -]
+[?def parse           scope=public pure [returns any] ($s::string)                 [$json-parse $s]]
+[?def parse-with-opts scope=public pure [returns any] ($s::string $opts::map)      [$json-parse-with-opts $s $opts]]
+[?def parse-bytes     scope=public pure [returns any] ($b::bytes)                  [$json-parse-bytes $b]]
+
+[- §3.2 emitting -]
+[?def emit            scope=public pure [returns string] ($value::any)             [$json-emit $value]]
+[?def emit-pretty     scope=public pure [returns string] ($value::any)             [$json-emit-pretty $value]]
+[?def emit-with-opts  scope=public pure [returns string] ($value::any $opts::map)  [$json-emit-with-opts $value $opts]]
+[?def emit-bytes      scope=public pure [returns bytes]  ($value::any)             [$json-emit-bytes $value]]
+
+[- §3.3 streaming -]
+[?def parse-stream    scope=public pure [returns [sequence any]]    ($input::[sequence string]) [$json-parse-stream $input]]
+[?def parse-many      scope=public pure [returns [sequence any]]    ($s::string)                [$json-parse-many $s]]
+[?def emit-stream     scope=public pure [returns [sequence string]] ($values::[sequence any])   [$json-emit-stream $values]]
+
+[- §3.4 validation -]
+[?def is-valid        scope=public pure [returns bool] ($s::string)               [$json-is-valid $s]]
+
+[- `encode` is the entry-file re-export of the package surface
+   (spec/code.md §12.4.4): canonical CX serialization via the core
+   `$format-canonical` builtin (used by the module-system conformance
+   fixtures, not part of the json §3 surface). -]
+[?def encode scope=public pure [returns string] ($v::any) [$format-canonical $v]]
+
+[- `encoder-not-reexported` is module-private (no scope=public): reachable
+   internally but NOT re-exported, so a cross-module reference raises
+   CXER0216 (§12.4.4 / §12.6) — additive-no-leak discipline. -]
+[?def encoder-not-reexported ($v::any) [$format-canonical $v]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=json
+  [scope """Parse JSON (RFC 8259) into CXDM values and emit CXDM values back to JSON. Supports two parse modes (strict and lenient) and three emit modes (canonical, pretty, compact). The data subset round-trips losslessly; CX elements emit idiomatically by default or via a lossless `named` encoding on demand. Distinct from the cross-format CLI conversion path — this is the in-program library form."""]]
+[fn-doc name=parse scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Strictly parse a JSON string into a CXDM value, rejecting trailing commas, comments, and NaN/Infinity."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[$json:parse "42"]"""] [expect """42"""]]
+]
+[fn-doc name=parse-with-opts scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Parse a JSON string with options controlling leniency, number mode, and depth/byte limits."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[$json:parse-with-opts "[1, 2,]" {lenient: true}]"""] [expect """[1, 2]"""]]
+]
+[fn-doc name=parse-bytes scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Parse JSON from a byte buffer, stripping a UTF-8 BOM and auto-detecting UTF-16 with BOM."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[?lib 'cx-stdlib/bytes']
+[$json:parse-bytes [$bytes:from-string-utf8 "42"]]"""] [expect """42"""]]
+]
+[fn-doc name=emit scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Emit a CXDM value as canonical JSON: compact, with map keys sorted for deterministic output."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[$json:emit 42]"""] [expect """'42'"""]]
+]
+[fn-doc name=emit-pretty scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Emit a CXDM value as pretty-printed JSON with two-space indent, preserving map insertion order."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[$json:emit-pretty {a: 1}]"""] [expect """'{ "a": 1 }'"""]]
+]
+[fn-doc name=emit-with-opts scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Emit a CXDM value to JSON with options for indent, key sorting, ASCII escaping, lossless elements, and NaN handling."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[$json:emit-with-opts [empty] {lossless: true}]"""] [expect """'{"$tag":"empty","$attrs":{},"$children":[]}'"""]]
+]
+[fn-doc name=emit-bytes scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Emit a CXDM value as canonical JSON encoded to a UTF-8 byte buffer."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$json:emit-bytes 42]]"""] [expect """'42'"""]]
+]
+[fn-doc name=parse-stream scope=public purity=pure
+  [sig """-> [sequence any]"""]
+  [summary """Parse a JSONL/NDJSON stream where each input element is one complete JSON value, yielding parsed values."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[$json:parse-stream ("1", "2", "3")]"""] [expect """(1, 2, 3)"""]]
+]
+[fn-doc name=parse-many scope=public purity=pure
+  [sig """-> [sequence any]"""]
+  [summary """Parse multiple whitespace-separated JSON values from one string using JSON-aware boundary detection."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[$json:parse-many "1 2 3"]"""] [expect """(1, 2, 3)"""]]
+]
+[fn-doc name=emit-stream scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Emit a sequence of CXDM values as JSONL, yielding one newline-terminated record per value."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[?let [= $r [$json:emit-stream (1, 2)]] [$count $r]]"""] [expect """2"""]]
+]
+[fn-doc name=is-valid scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a string is valid JSON in strict mode, without building a value tree."""]
+  [example [code """[?lib 'cx-stdlib/json']
+[$json:is-valid "{\"a\": 1}"]"""] [expect """true"""]]
+]
+[fn-doc name=encode scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Serialize a value to canonical CX form (not JSON) — a module re-export scaffold outside the json surface."""]
+  [example [code """# json:encode = CX canonical form via $format-canonical (NOT JSON); a §12.4.4
+# module re-export scaffold (paired with the private encoder-not-reexported),
+# not part of the json §3 surface — also exercised by conformance/code.cxd.
+[?lib 'cx-stdlib/json']
+[$json:encode {a: 1}]"""] [expect """'{a: 1}'"""]]
+]

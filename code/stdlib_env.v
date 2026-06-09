@@ -32,7 +32,7 @@ fn C.abort()
 // accessors (`flag` / `positional` / `remaining` / `usage`) operate on
 // the parsed-args / spec element shapes and are fully deterministic.
 
-const stdlib_src_env = $embed_file('../../stdlib/env.cx').to_string()
+const stdlib_src_env = $embed_file('../stdlib/env.cx').to_string()
 
 // ── error codes (spec §5) ────────────────────────────────────────────
 

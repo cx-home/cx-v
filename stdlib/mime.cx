@@ -1,0 +1,217 @@
+[- cx-stdlib/mime — MIME type registry + Content-Type / Content-Disposition
+   parsing, multipart-boundary generation, type classification, and Accept
+   content negotiation.
+
+   Full v0.8.0 public surface per spec/std-lib/mime.md §3. Bodies forward to
+   native primitives (vcx/code/stdlib_mime.v): the header tokenizer / quoting,
+   RFC 5987 extended-parameter decode, the ~200-extension registry, and the
+   q-ranked Accept sort are not expressible in pure CX. parse* return an
+   [content-type …] / [content-disposition …] element or a q-ranked sequence
+   of [accept …] elements; lookups / classification return strings or bools.
+   Errors are values (CXER2800..CXER2804, §5).
+
+   Only load-mime-types touches the filesystem (requires read, §7); register
+   -type / multipart-boundary / lookups / parsing operate in memory.
+
+   NOTE: this const and stdlib/mime.cx are the same source — edit both. -]
+
+[- §3.1 type lookup -]
+[?def type-for-extension      scope=public pure   [returns string]            ($ext::string)                  [$mime-type-for-extension $ext]]
+[?def extension-for-type      scope=public pure   [returns string]            ($mime-type::string)            [$mime-extension-for-type $mime-type]]
+[?def all-extensions-for-type scope=public pure   [returns [sequence string]] ($mime-type::string)            [$mime-all-extensions-for-type $mime-type]]
+[?def register-type           scope=public impure [returns null]              ($ext::string $mime-type::string) [$mime-register-type $ext $mime-type]]
+[?def load-mime-types         scope=public impure [returns int]               ($path::string)                 [$mime-load-mime-types $path]]
+
+[- §3.2 content-type -]
+[?def parse-content-type  scope=public pure [returns element] ($header-value::string)    [$mime-parse-content-type $header-value]]
+[?def format-content-type scope=public pure [returns string]  ($parsed::element)         [$mime-format-content-type $parsed]]
+[?def get-parameter       scope=public pure [returns string]  ($parsed::element $name::string) [$mime-get-parameter $parsed $name]]
+
+[- §3.3 content-disposition -]
+[?def parse-content-disposition  scope=public pure [returns element] ($header-value::string) [$mime-parse-content-disposition $header-value]]
+[?def format-content-disposition scope=public pure [returns string]  ($parsed::element)      [$mime-format-content-disposition $parsed]]
+[?def disposition-filename       scope=public pure [returns string]  ($parsed::element)      [$mime-disposition-filename $parsed]]
+
+[- §3.4 multipart boundary -]
+[?def multipart-boundary scope=public impure [returns string] ()          [$mime-multipart-boundary]]
+[?def is-valid-boundary  scope=public pure   [returns bool]   ($s::string) [$mime-is-valid-boundary $s]]
+
+[- §3.5 type classification -]
+[?def is-text-type         scope=public pure [returns bool]   ($mime-type::string) [$mime-is-text-type $mime-type]]
+[?def is-binary-type       scope=public pure [returns bool]   ($mime-type::string) [$mime-is-binary-type $mime-type]]
+[?def is-image-type        scope=public pure [returns bool]   ($mime-type::string) [$mime-is-image-type $mime-type]]
+[?def is-audio-type        scope=public pure [returns bool]   ($mime-type::string) [$mime-is-audio-type $mime-type]]
+[?def is-video-type        scope=public pure [returns bool]   ($mime-type::string) [$mime-is-video-type $mime-type]]
+[?def is-message-type      scope=public pure [returns bool]   ($mime-type::string) [$mime-is-message-type $mime-type]]
+[?def is-multipart-type    scope=public pure [returns bool]   ($mime-type::string) [$mime-is-multipart-type $mime-type]]
+[?def is-application-type  scope=public pure [returns bool]   ($mime-type::string) [$mime-is-application-type $mime-type]]
+[?def is-structured-syntax scope=public pure [returns string] ($mime-type::string) [$mime-is-structured-syntax $mime-type]]
+
+[- §3.6 charset -]
+[?def charset-of   scope=public pure [returns string]  ($parsed::element)            [$mime-charset-of $parsed]]
+[?def with-charset scope=public pure [returns element] ($parsed::element $charset::string) [$mime-with-charset $parsed $charset]]
+
+[- §3.7 accept negotiation -]
+[?def parse-accept scope=public pure [returns [sequence element]] ($header-value::string)                    [$mime-parse-accept $header-value]]
+[?def match-accept scope=public pure [returns string]             ($header-value::string $offered::[sequence string]) [$mime-match-accept $header-value $offered]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=mime
+  [scope """MIME data-shape handling: a built-in extension-to-type registry, Content-Type and Content-Disposition parsing, multipart boundary generation, type classification, and Accept-header content negotiation. The registry covers ~200 common extensions offline and is extensible at runtime. The data-shape companion to cx-stdlib/url, composing with cx-stdlib/email for multipart messages."""]]
+[fn-doc name=type-for-extension scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Look up the canonical MIME type for a file extension (dot optional); 'application/octet-stream' if unknown."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:type-for-extension ".txt"]"""] [expect """'text/plain'"""]]
+]
+[fn-doc name=extension-for-type scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the most common file extension for a MIME type; empty string if unknown."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:extension-for-type "image/jpeg"]"""] [expect """'.jpg'"""]]
+]
+[fn-doc name=all-extensions-for-type scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Return every known file extension for a MIME type."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$count [$mime:all-extensions-for-type "image/jpeg"]]"""] [expect """2"""]]
+]
+[fn-doc name=register-type scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Add one extension-to-type mapping to the process-wide registry, overriding any built-in."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[?let [= $_ [$mime:register-type ".avif" "image/avif"]] [$mime:type-for-extension ".avif"]]"""] [expect """'image/avif'"""]]
+]
+[fn-doc name=load-mime-types scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Merge a mime.types file into the registry and return the count loaded; raises CXER2804 on a missing or malformed file."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:load-mime-types "/no/such/mime.types/file/xyz"]"""] [expect """cx-err:CXER2804"""]]
+]
+[fn-doc name=parse-content-type scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Parse a Content-Type header into a [content-type] element; raises CXER2800 on parse failure."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[?let [= $p [$mime:parse-content-type "text/html; charset=utf-8"]] $p/@type]"""] [expect """'text'"""]]
+]
+[fn-doc name=format-content-type scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Serialize a parsed content-type back to a header string, quoting values where required."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:format-content-type [$mime:parse-content-type "text/html"]]"""] [expect """'text/html'"""]]
+]
+[fn-doc name=get-parameter scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return a named parameter's value from a parsed content-type; empty string if absent."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:get-parameter [$mime:parse-content-type "text/html; charset=\"UTF-8\""] "charset"]"""] [expect """'UTF-8'"""]]
+]
+[fn-doc name=parse-content-disposition scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Parse a Content-Disposition header into a [content-disposition] element; raises CXER2801 on parse failure."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[?let [= $p [$mime:parse-content-disposition "attachment; filename=\"report.pdf\""]] $p/@type]"""] [expect """'attachment'"""]]
+]
+[fn-doc name=format-content-disposition scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Serialize a parsed content-disposition, emitting an RFC 5987 filename* plus ASCII fallback for non-ASCII names."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:disposition-filename [$mime:parse-content-disposition [$mime:format-content-disposition [$mime:parse-content-disposition "attachment; filename=\"report.pdf\""]]]]"""] [expect """'report.pdf'"""]]
+]
+[fn-doc name=disposition-filename scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the decoded filename, preferring filename* over filename; raises CXER2803 on a malformed filename*."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:disposition-filename [$mime:parse-content-disposition "attachment; filename=\"report.pdf\""]]"""] [expect """'report.pdf'"""]]
+]
+[fn-doc name=multipart-boundary scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Generate a fresh 24-char multipart boundary ('=_Part_' prefix plus 17 random hex chars)."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[?lib 'cx-stdlib/strings']
+[$strings:starts-with [$mime:multipart-boundary] "=_Part_"]"""] [expect """true"""]]
+]
+[fn-doc name=is-valid-boundary scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a string is a valid multipart boundary per RFC 2046 (1-70 chars, restricted set)."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-valid-boundary "----=_Part_12345"]"""] [expect """true"""]]
+]
+[fn-doc name=is-text-type scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a MIME type has the text top-level type."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-text-type "text/html"]"""] [expect """true"""]]
+]
+[fn-doc name=is-binary-type scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a MIME type denotes binary (non-text) content."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-binary-type "application/pdf"]"""] [expect """true"""]]
+]
+[fn-doc name=is-image-type scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a MIME type has the image top-level type."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-image-type "image/svg+xml"]"""] [expect """true"""]]
+]
+[fn-doc name=is-audio-type scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a MIME type has the audio top-level type."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-audio-type "audio/mpeg"]"""] [expect """true"""]]
+]
+[fn-doc name=is-video-type scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a MIME type has the video top-level type."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-video-type "video/mp4"]"""] [expect """true"""]]
+]
+[fn-doc name=is-message-type scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a MIME type has the message top-level type."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-message-type "message/rfc822"]"""] [expect """true"""]]
+]
+[fn-doc name=is-multipart-type scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a MIME type has the multipart top-level type."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-multipart-type "multipart/mixed"]"""] [expect """true"""]]
+]
+[fn-doc name=is-application-type scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a MIME type has the application top-level type."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-application-type "application/pdf"]"""] [expect """true"""]]
+]
+[fn-doc name=is-structured-syntax scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the structured-syntax suffix per RFC 6838 (svg+xml gives 'xml'); empty string if none."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:is-structured-syntax "image/svg+xml"]"""] [expect """'xml'"""]]
+]
+[fn-doc name=charset-of scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Extract the charset parameter from a parsed content-type; empty string if absent."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:charset-of [$mime:parse-content-type "text/html; charset=utf-8"]]"""] [expect """'utf-8'"""]]
+]
+[fn-doc name=with-charset scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Return a new content-type element with the charset parameter set, replacing any existing."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:charset-of [$mime:with-charset [$mime:parse-content-type "text/html"] "iso-8859-1"]]"""] [expect """'iso-8859-1'"""]]
+]
+[fn-doc name=parse-accept scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Parse an Accept header into [accept] elements sorted by q-value then specificity."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$count [$mime:parse-accept "text/html;q=0.9, */*;q=0.8"]]"""] [expect """2"""]]
+]
+[fn-doc name=match-accept scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the best-matching offered MIME type for an Accept header per RFC 7231; empty if none acceptable."""]
+  [example [code """[?lib 'cx-stdlib/mime']
+[$mime:match-accept "text/*;q=0.5, text/html;q=0.9" ["text/plain", "text/html"]]"""] [expect """'text/html'"""]]
+]

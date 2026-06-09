@@ -1,0 +1,340 @@
+[- cx-stdlib/net — L4 networking: sockets, transports, TLS/DTLS.
+
+   Full surface per spec/02-inprogress/stdlib_net.md §3. Bodies forward to
+   native primitives (vcx/code/stdlib_net.v) since socket/resolver effects
+   are not expressible in pure CX. Tier-B, necessarily impure: every socket
+   /resolver function is impure and gated on the `net` capability (§5) —
+   under the deny-by-default empty set each gated effect point raises
+   cx-err:CXER0271. parse-addr / addr->string are PURE + capability-free.
+
+   ERROR BAND: net owns cx-err:CXER4500–CXER4524 (E_NET_*) — allocated above
+   cx-stdlib/fp's CXER4400–4409 (the rev-7 draft's 4400-band was a stale
+   registry read; fp landed there afterward). See spec §8 + governance §9.6.
+
+   NOTE: this const (vcx/code/stdlib_bundle.v stdlib_src_net) and
+   stdlib/net.cx are the same source — edit both. -]
+
+[- §3.1 resolution & addresses -]
+[?def parse-addr   scope=public pure   [returns element]            ($s::string)               [$net-parse-addr $s]]
+[?def addr-to-string scope=public pure [returns string]             ($a::element)              [$net-addr-to-string $a]]
+[?def resolve      scope=public impure [returns [sequence element]] ($host::string $opts::map) [$net-resolve $host $opts]]
+
+[- §3.2 dial (client) -]
+[?def dial      scope=public impure [returns element] ($url::string $opts::map)  [$net-dial $url $opts]]
+[?def dial-tcp  scope=public impure [returns element] ($url::string $opts::map)  [$net-dial-tcp $url $opts]]
+[?def dial-tls  scope=public impure [returns element] ($url::string $opts::map)  [$net-dial-tls $url $opts]]
+[?def dial-udp  scope=public impure [returns element] ($url::string $opts::map)  [$net-dial-udp $url $opts]]
+[?def dial-dtls scope=public impure [returns element] ($url::string $opts::map)  [$net-dial-dtls $url $opts]]
+[?def dial-unix scope=public impure [returns element] ($path::string $opts::map) [$net-dial-unix $path $opts]]
+
+[- §3.3 listen / accept (server) -]
+[?def listen      scope=public impure [returns element]            ($url::string $opts::map)  [$net-listen $url $opts]]
+[?def listen-tcp  scope=public impure [returns element]            ($url::string $opts::map)  [$net-listen-tcp $url $opts]]
+[?def listen-tls  scope=public impure [returns element]            ($url::string $opts::map)  [$net-listen-tls $url $opts]]
+[?def listen-udp  scope=public impure [returns element]            ($url::string $opts::map)  [$net-listen-udp $url $opts]]
+[?def listen-dtls scope=public impure [returns element]            ($url::string $opts::map)  [$net-listen-dtls $url $opts]]
+[?def listen-unix scope=public impure [returns element]            ($path::string $opts::map) [$net-listen-unix $path $opts]]
+[?def accept      scope=public impure [returns element]            ($listener::element)       [$net-accept $listener]]
+[?def accept-iter scope=public impure [returns [iterator element]] ($listener::element)       [$net-accept-iter $listener]]
+
+[- §3.4 stream I/O — UTF-8 text contract -]
+[?def read-bytes     scope=public impure [returns bytes]             ($sock::element $n::int)    [$net-read-bytes $sock $n]]
+[?def read-exact     scope=public impure [returns bytes]             ($sock::element $n::int)    [$net-read-exact $sock $n]]
+[?def read-line      scope=public impure [returns string]            ($sock::element)            [$net-read-line $sock]]
+[?def read-all       scope=public impure [returns string]            ($sock::element $opts::map) [$net-read-all $sock $opts]]
+[?def read-all-bytes scope=public impure [returns bytes]             ($sock::element $opts::map) [$net-read-all-bytes $sock $opts]]
+[?def write-bytes    scope=public impure [returns null]              ($sock::element $b::bytes)  [$net-write-bytes $sock $b]]
+[?def write-string   scope=public impure [returns null]              ($sock::element $s::string) [$net-write-string $sock $s]]
+[?def write-line     scope=public impure [returns null]              ($sock::element $s::string) [$net-write-line $sock $s]]
+[?def flush          scope=public impure [returns null]              ($sock::element)            [$net-flush $sock]]
+[?def is-eof         scope=public impure [returns bool]              ($sock::element)            [$net-is-eof $sock]]
+[?def line-iter      scope=public impure [returns [iterator string]] ($sock::element)            [$net-line-iter $sock]]
+[?def chunk-iter     scope=public impure [returns [iterator bytes]]  ($sock::element $chunk::int) [$net-chunk-iter $sock $chunk]]
+
+[- §3.5 datagram I/O (UDP / Unix-datagram) -]
+[?def send-to   scope=public impure [returns int]     ($sock::element $data $to::element) [$net-send-to $sock $data $to]]
+[?def recv-from scope=public impure [returns element] ($sock::element $n::int)            [$net-recv-from $sock $n]]
+[?def send      scope=public impure [returns int]     ($sock::element $data)              [$net-send $sock $data]]
+[?def recv      scope=public impure [returns bytes]   ($sock::element $n::int)            [$net-recv $sock $n]]
+
+[- §3.6 TLS — client + server upgrade -]
+[?def tls-wrap   scope=public impure [returns element] ($sock::element $opts::map) [$net-tls-wrap $sock $opts]]
+[?def tls-accept scope=public impure [returns element] ($sock::element $opts::map) [$net-tls-accept $sock $opts]]
+[?def peer-cert  scope=public impure [returns element] ($sock::element)            [$net-peer-cert $sock]]
+[?def tls-info   scope=public impure [returns element] ($sock::element)            [$net-tls-info $sock]]
+
+[- §3.7 lifecycle, deadlines, options, introspection -]
+[?def close        scope=public impure [returns null]               ($handle::element)            [$net-close $handle]]
+[?def shutdown     scope=public impure [returns null]               ($sock::element $dir::string) [$net-shutdown $sock $dir]]
+[?def set-deadline scope=public impure [returns null]               ($sock::element $opts::map)   [$net-set-deadline $sock $opts]]
+[?def set-opt      scope=public impure [returns null]               ($sock::element $opts::map)   [$net-set-opt $sock $opts]]
+[?def local-addr   scope=public impure [returns [sequence element]] ($handle::element)            [$net-local-addr $handle]]
+[?def remote-addr  scope=public impure [returns element]            ($sock::element)              [$net-remote-addr $sock]]
+[?def is-open      scope=public impure [returns bool]               ($handle::element)            [$net-is-open $handle]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=net
+  [scope """Transport-level (L4) networking: opening and accepting stream connections (TCP, Unix-stream, TLS), exchanging datagrams (UDP, Unix-datagram, DTLS), name resolution, and TLS upgrade or termination. The layer a database driver, custom binary protocol, WebSocket stack, or HTTP implementation is built on top of. Socket and resolver operations are impure and gated by the net capability under deny-by-default; parse-addr and addr-to-string are pure and capability-free. HTTP semantics live in cx-stdlib/http, not here."""]]
+[fn-doc name=parse-addr scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Parse a restricted transport URL or bare host:port into an [addr] element; raises CXER4500 on a malformed URL."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://example.com:443']"""] [expect """[addr host='example.com' port=443 family=ipv4]"""]]
+]
+[fn-doc name=addr-to-string scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Render an [addr] element to its canonical string form, round-tripping with parse-addr."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:addr-to-string [$net:parse-addr 'tcp://example.com:443']]"""] [expect """'example.com:443'"""]]
+]
+[fn-doc name=resolve scope=public purity=impure
+  [sig """-> [sequence element]"""]
+  [summary """Resolve a hostname to RFC 6724-ordered [addr]s; no record raises CXER4502, timeout CXER4503."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:resolve 'example.com' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=dial scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a client connection, dispatching on the URL scheme (tcp/tls/udp/dtls/unix)."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:dial 'tcp://example.com:443' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=dial-tcp scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a TCP client connection; rejects a non-tcp scheme with CXER4501."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:dial-tcp 'tcp://example.com:443' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=dial-tls scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a TLS client connection, performing the handshake; server-name defaults to the dialed host."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:dial-tls 'tls://example.com:443' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=dial-udp scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a connected UDP datagram socket; rejects a non-udp scheme with CXER4501."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:dial-udp 'udp://example.com:9000' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=dial-dtls scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a connected UDP socket and perform the client DTLS handshake, yielding a secure datagram socket."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:dial-dtls 'dtls://example.com:8443' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=dial-unix scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Connect to a Unix-domain stream socket by filesystem or abstract-namespace path."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:dial-unix '/run/db.sock' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=listen scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Bind and listen for connections, dispatching on the URL scheme; a hostname binds all resolved addresses."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:listen 'tcp://0.0.0.0:8080' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=listen-tcp scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Bind and listen for TCP connections; rejects a non-tcp scheme with CXER4501."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:listen-tcp 'tcp://0.0.0.0:8080' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=listen-tls scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Bind and listen for TLS connections; accept performs the server handshake using the stored config."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:listen-tls 'tls://0.0.0.0:8443' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=listen-udp scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Bind a UDP datagram socket; rejects a non-udp scheme with CXER4501."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:listen-udp 'udp://0.0.0.0:9000' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=listen-dtls scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Bind a DTLS listener; accept runs the mandatory stateless cookie exchange plus server handshake."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:listen-dtls 'dtls://0.0.0.0:8443' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=listen-unix scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Bind a Unix-domain stream listener by filesystem or abstract-namespace path."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:listen-unix '/run/srv.sock' {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=accept scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Accept one incoming connection from a listener, performing any TLS/DTLS handshake."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:accept [listener fd=6 transport='tcp' state='listening']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=accept-iter scope=public purity=impure
+  [sig """-> [iterator element]"""]
+  [summary """Iterate accepted connections, skipping transient per-client failures and stopping on listener-fatal errors."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:accept-iter [listener fd=6 transport='tcp' state='listening']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=read-bytes scope=public purity=impure
+  [sig """-> bytes"""]
+  [summary """Read up to n bytes from a stream socket; n must be at least 1 else CXER4522."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:read-bytes [socket fd=7 transport='tcp' state='open'] 4096]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=read-exact scope=public purity=impure
+  [sig """-> bytes"""]
+  [summary """Read exactly n bytes (a fixed frame); EOF before n raises CXER4509."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:read-exact [socket fd=7 transport='tcp' state='open'] 16]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=read-line scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Read one UTF-8 line, stripping the trailing newline; invalid UTF-8 raises CXER4523."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:read-line [socket fd=7 transport='tcp' state='open']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=read-all scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Read the whole stream as UTF-8 text up to max-bytes (default 64 MiB); over raises CXER4510."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:read-all [socket fd=7 transport='tcp' state='open'] {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=read-all-bytes scope=public purity=impure
+  [sig """-> bytes"""]
+  [summary """Read the whole stream as raw bytes up to max-bytes (default 64 MiB); over raises CXER4510."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:read-all-bytes [socket fd=7 transport='tcp' state='open'] {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=write-bytes scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Write the whole byte payload to a stream socket, all-or-raise with bytes-written observability."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[?lib 'cx-stdlib/bytes']
+[$net:write-bytes [socket fd=7 transport='tcp' state='open'] [$bytes:from-string-utf8 'ping']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=write-string scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Write a UTF-8 string to a stream socket, all-or-raise with bytes-written observability."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:write-string [socket fd=7 transport='tcp' state='open'] 'hello']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=write-line scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Write a UTF-8 string followed by the socket's line terminator."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:write-line [socket fd=7 transport='tcp' state='open'] 'GET / HTTP/1.0']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=flush scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Flush any buffered outbound data on a stream socket."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:flush [socket fd=7 transport='tcp' state='open']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=is-eof scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Report whether the most recent read observed orderly end-of-stream; performs no I/O."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:is-eof [socket fd=7 transport='tcp' state='open']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=line-iter scope=public purity=impure
+  [sig """-> [iterator string]"""]
+  [summary """Iterate the stream as UTF-8 lines until end-of-stream."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:line-iter [socket fd=7 transport='tcp' state='open']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=chunk-iter scope=public purity=impure
+  [sig """-> [iterator bytes]"""]
+  [summary """Iterate the stream as fixed-size byte chunks until end-of-stream."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:chunk-iter [socket fd=7 transport='tcp' state='open'] 4096]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=send-to scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Send one datagram to a target address (a gated effect point); returns the datagram length."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:send-to [socket fd=9 transport='udp' state='bound'] 'ping' [addr host='10.0.0.5' port=9000 family='ipv4']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=recv-from scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Receive one datagram into an n-byte buffer, returning a [datagram] with bytes and sender address."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:recv-from [socket fd=9 transport='udp' state='bound'] 2048]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=send scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Send one datagram on a connected socket; unconnected raises CXER4522."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:send [socket fd=9 transport='udp' state='connected'] 'ping']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=recv scope=public purity=impure
+  [sig """-> bytes"""]
+  [summary """Receive one datagram on a connected socket into an n-byte buffer; oversize raises CXER4511."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:recv [socket fd=9 transport='udp' state='connected'] 2048]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=tls-wrap scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Perform a client TLS (or DTLS) handshake over an existing socket, consuming it for a secure one."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:tls-wrap [socket fd=7 transport='tcp' state='open'] {server-name: 'example.com'}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=tls-accept scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Perform a server TLS (or DTLS) handshake over an existing socket, consuming it for a secure one."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:tls-accept [socket fd=7 transport='tcp' state='open'] {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=peer-cert scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the peer's certificate as a [cert] element, or the empty node-set if none."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:peer-cert [socket fd=7 transport='tls' state='open']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=tls-info scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the negotiated TLS/DTLS version, cipher, and ALPN as a [tls] element."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:tls-info [socket fd=7 transport='tls' state='open']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=close scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Close a socket or listener (idempotent), cancelling and joining any in-flight operation."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:close [socket fd=7 transport='tcp' state='open']]"""] [expect """null"""]]
+]
+[fn-doc name=shutdown scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Half-close a stream in the read, write, or both direction (TLS sends close_notify)."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:shutdown [socket fd=7 transport='tcp' state='open'] 'write']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=set-deadline scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Set relative or absolute read/write deadlines on a socket; a lapsed deadline raises CXER4507."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:set-deadline [socket fd=7 transport='tcp' state='open'] {both: 30}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=set-opt scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Set a per-transport socket option (nodelay, keepalive, line-terminator, etc.); unsupported raises CXER4521."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:set-opt [socket fd=7 transport='tcp' state='open'] {nodelay: true}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=local-addr scope=public purity=impure
+  [sig """-> [sequence element]"""]
+  [summary """Return the bound local address(es) as a sequence of [addr]; valid even after close (cached)."""]
+]
+[fn-doc name=remote-addr scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the peer address as an [addr], or the empty node-set if never connected; valid after close."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:remote-addr [socket fd=999 transport='udp' state='bound']]"""] [expect """()"""]]
+]
+[fn-doc name=is-open scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Report whether a socket or listener handle is still open."""]
+  [example [code """[?lib 'cx-stdlib/net']
+[$net:is-open [socket fd=999 transport='tcp' state='closed']]"""] [expect """false"""]]
+]

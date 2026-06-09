@@ -1,0 +1,117 @@
+[- cx-stdlib/url — RFC 3986 URL parse / build / encode / decode.
+
+   Full v0.8.0 public surface per spec/std-lib/url.md §3. Bodies forward
+   to native primitives (vcx/code/stdlib_url.v): percent-encoding,
+   RFC 3986 reference resolution, WHATWG / lenient parse modes, and the
+   canonicalizing build (default-port strip, scheme/host lowercasing,
+   percent-encoding normalization) are not expressible in pure CX.
+
+   parse* return an [url …] element; build / build-raw / normalize /
+   encode / decode / join return a string; is-absolute a bool;
+   query-parse a map; query-encode a string. Errors are values
+   (CXER1400 / 1401 / 1402 / 1403, §5).
+
+   NOTE: this const and stdlib/url.cx are the same source — edit both. -]
+
+[- §3.1 parse and build -]
+[?def parse           scope=public pure [returns element] ($s::string)               [$url-parse $s]]
+[?def parse-lenient   scope=public pure [returns element] ($s::string)               [$url-parse-lenient $s]]
+[?def parse-whatwg    scope=public pure [returns element] ($s::string)               [$url-parse-whatwg $s]]
+[?def parse-with-opts scope=public pure [returns element] ($s::string $opts::map)     [$url-parse-with-opts $s $opts]]
+[?def build           scope=public pure [returns string]  ($parts::element)          [$url-build $parts]]
+[?def build-raw       scope=public pure [returns string]  ($parts::element)          [$url-build-raw $parts]]
+[?def normalize       scope=public pure [returns string]  ($s::string)               [$url-normalize $s]]
+
+[- §3.2 generic encode / decode -]
+[?def encode scope=public pure [returns string] ($s::string) [$url-encode $s]]
+[?def decode scope=public pure [returns string] ($s::string) [$url-decode $s]]
+
+[- §3.3 query strings -]
+[?def query-parse  scope=public pure [returns map]    ($s::string) [$url-query-parse $s]]
+[?def query-encode scope=public pure [returns string] ($m::map)    [$url-query-encode $m]]
+
+[- §3.4 composition -]
+[?def join        scope=public pure [returns string] ($base::string $ref::string) [$url-join $base $ref]]
+[?def is-absolute scope=public pure [returns bool]   ($s::string)                 [$url-is-absolute $s]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=url
+  [scope """RFC 3986 and WHATWG-URL-aligned URL parsing, building, and component encoding. Split URLs into named components, reconstruct them, percent-encode and decode arbitrary byte sequences, and parse or serialize query strings. The parse-then-build round-trip is canonical rather than byte-identical: it strips default ports, lowercases scheme and host, and normalizes percent-encoding. Transport is out of scope — this module produces URL strings and parsed components, not network requests."""]]
+[fn-doc name=parse scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Parse a URL string into its components, strict per RFC 3986 generic syntax."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:parse "https://example.com/path?q=1"]"""] [expect """[url [scheme 'https'] [host 'example.com'] [path '/path'] [query 'q=1']]"""]]
+]
+[fn-doc name=parse-lenient scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Parse a URL with best-effort recovery for messy real-world input."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:build [$url:parse-lenient "https://example.com\\path"]]"""] [expect """'https://example.com/path'"""]]
+]
+[fn-doc name=parse-whatwg scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Parse a URL using the WHATWG model for browser-exact web-URL behavior."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:build [$url:parse-whatwg "https://example.com\\path"]]"""] [expect """'https://example.com/path'"""]]
+]
+[fn-doc name=parse-with-opts scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Parse a URL with explicit options for parsing model and default scheme."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:build [$url:parse-with-opts "example.com/path" {"default-scheme": "https"}]]"""] [expect """'https://example.com/path'"""]]
+]
+[fn-doc name=build scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Assemble a URL string from components, auto-encoding raw values and canonicalizing."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:build [$url:parse-lenient "https://example.com\\path"]]"""] [expect """'https://example.com/path'"""]]
+]
+[fn-doc name=build-raw scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Assemble a URL string from pre-encoded components without re-encoding their content."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:build-raw [url [scheme "https"] [host "api.example.com"] [path "/users/a%2Fb%20c/profile"]]]"""] [expect """'https://api.example.com/users/a%2Fb%20c/profile'"""]]
+]
+[fn-doc name=normalize scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Return the canonical form of a URL string — equivalent to parse then build."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:normalize "HTTPS://EXAMPLE.com:443/%2f"]"""] [expect """'https://example.com/%2F'"""]]
+]
+[fn-doc name=encode scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Percent-encode a string with the generic set, leaving unreserved characters alone."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:encode "a b/c"]"""] [expect """'a%20b%2Fc'"""]]
+]
+[fn-doc name=decode scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Percent-decode a string and return UTF-8, raising on malformed sequences."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:decode "a%20b%2Fc"]"""] [expect """'a b/c'"""]]
+]
+[fn-doc name=query-parse scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Parse a query string into a map, with repeated keys collected into a sequence."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:query-parse "a=1&b=2&a=3"]"""] [expect """{a: ('1', '3'), b: '2'}"""]]
+]
+[fn-doc name=query-encode scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Serialize a map into a query string, with sequence values producing repeated keys."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:query-encode [$url:query-parse "a=1&b=2&a=3"]]"""] [expect """'a=1&a=3&b=2'"""]]
+]
+[fn-doc name=join scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Resolve a reference relative to a base URL per RFC 3986."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:join "http://a/b/c/d;p?q" "g"]"""] [expect """'http://a/b/c/g'"""]]
+]
+[fn-doc name=is-absolute scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a URL is absolute — true iff it has a scheme component."""]
+  [example [code """[?lib 'cx-stdlib/url']
+[$url:is-absolute "https://example.com/x"]"""] [expect """true"""]]
+]

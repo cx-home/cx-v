@@ -36,7 +36,7 @@ import time as vtime
 // mirrors the spec's `cx.parse_program(s :lenient false)` strict-by-default surface
 // within the positional closure-call engine.
 
-const stdlib_src_uuid = $embed_file('../../stdlib/uuid.cx').to_string()
+const stdlib_src_uuid = $embed_file('../stdlib/uuid.cx').to_string()
 
 // CXER codes per spec/stdlib_uuid.md §5.
 const uuid_err_malformed     = 'cx-err:CXER1800'

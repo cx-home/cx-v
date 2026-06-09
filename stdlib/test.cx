@@ -1,0 +1,152 @@
+[- cx-stdlib/test — assertion / fixture / lifecycle helpers for
+   `[?def]`-style unit tests authored in CX, per spec/std-lib/test.md §3.
+   Distinct from the conformance harness (spec/core/code.md §11).
+
+   Full v0.8.0 public surface. Bodies forward to native primitives
+   (vcx/code/stdlib_test.v): every assertion is [returns null] — happy path
+   yields the null scalar, failure returns the CXER2200 failure VALUE.
+   assert-throws + the lifecycle hooks take a [?fn] thunk and need the
+   evaluator env, so they route through the env-aware hook
+   (test_stdlib_builtin_env, wired in eval.v::dispatch_call_l). assert-shape
+   reuses the cx-stdlib/validate schema engine; fixture-load is
+   capability-gated (read, §8) and denies under deny-by-default (CXER0271).
+
+   NOTE: this const and stdlib/test.cx are the same source — edit both. -]
+
+[- §3.1 assertions -]
+[?def assert           scope=public impure [returns null] ($predicate::bool $label="")              [$test-assert $predicate $label]]
+[?def assert-equal     scope=public impure [returns null] ($actual::any $expected::any)              [$test-assert-equal $actual $expected]]
+[?def assert-not-equal scope=public impure [returns null] ($actual::any $not-expected::any)          [$test-assert-not-equal $actual $not-expected]]
+[?def assert-shape     scope=public impure [returns null] ($value::any $schema::element)             [$test-assert-shape $value $schema]]
+[?def assert-throws    scope=public impure [returns null] ($thunk::any $err-code::string)            [$test-assert-throws $thunk $err-code]]
+[?def assert-near      scope=public impure [returns null] ($actual::float $expected::float $epsilon::float) [$test-assert-near $actual $expected $epsilon]]
+[?def assert-contains  scope=public impure [returns null] ($haystack::any $needle::any)              [$test-assert-contains $haystack $needle]]
+[?def assert-match     scope=public impure [returns null] ($value::any $pattern::element)            [$test-assert-match $value $pattern]]
+[?def assert-snapshot  scope=public impure [returns null] ($value::any $snapshot-key="")             [$test-assert-snapshot $value $snapshot-key]]
+[?def fail             scope=public impure [returns null] ($message::string)                          [$test-fail $message]]
+[?def skip             scope=public impure [returns null] ($reason::string)                           [$test-skip $reason]]
+
+[- §3.2 fixtures -]
+[?def fixture      scope=public pure   [returns element] ($name::string $rest::any) [$test-fixture $name $rest]]
+[?def fixture-load scope=public impure [returns any]     ($path::string)              [$test-fixture-load $path]]
+
+[- §3.3 lifecycle hooks -]
+[?def before-each scope=public impure [returns null] ($thunk::any) [$test-before-each $thunk]]
+[?def after-each  scope=public impure [returns null] ($thunk::any) [$test-after-each $thunk]]
+[?def before-all  scope=public impure [returns null] ($thunk::any) [$test-before-all $thunk]]
+[?def after-all   scope=public impure [returns null] ($thunk::any) [$test-after-all $thunk]]
+
+[- §3.4 configuration -]
+[?def configure scope=public impure [returns null] ($config::map) [$test-configure $config]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=test
+  [scope """Authoring primitives for unit-test-style programs written in CX: assertions, fixtures, lifecycle hooks, and structured reporting. This is the vocabulary you use when writing your own test programs, and is distinct from the conformance harness used to verify the spec. Failing assertions raise an error by default, or accumulate for end-of-run reporting under [$test:configure]."""]]
+[fn-doc name=assert scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Fail the test if the predicate is false; an optional label appears in the failure message."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert true]"""] [expect """null"""]]
+]
+[fn-doc name=assert-equal scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Fail unless the two values are structurally equal (exact equality, including floats)."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-equal 42 42]"""] [expect """null"""]]
+]
+[fn-doc name=assert-not-equal scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Fail if the two values are structurally equal."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-not-equal 1 2]"""] [expect """null"""]]
+]
+[fn-doc name=assert-shape scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Fail unless the value conforms to the given schema, via cx-stdlib/validate."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-shape [user [id 1] [name "Alice"]] [schema [field name="id" type="int" required=true] [field name="name" type="string" required=true]]]"""] [expect """null"""]]
+]
+[fn-doc name=assert-throws scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Fail unless invoking the thunk raises an error with the expected code."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-throws [?fn () [$test:fail "boom"]] "CXER2200"]"""] [expect """null"""]]
+]
+[fn-doc name=assert-near scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Fail if the actual and expected floats differ by more than epsilon."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-near 1.0001 1.0 0.001]"""] [expect """null"""]]
+]
+[fn-doc name=assert-contains scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Fail unless the haystack contains the needle — substring, element membership, or map key."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-contains "hello world" "world"]"""] [expect """null"""]]
+]
+[fn-doc name=assert-match scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Fail unless the value matches the given CX pattern."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-match [user id=1] [user id=1]]"""] [expect """null"""]]
+]
+[fn-doc name=assert-snapshot scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Compare the value against a recorded snapshot, raising on divergence outside update mode."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-snapshot [user id=1] $snapshot-key="user-shape"]"""] [expect """cx-err:CXER2203"""]]
+]
+[fn-doc name=fail scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Unconditionally fail the current test with a message."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:assert-throws [?fn () [$test:fail "boom"]] "CXER2200"]"""] [expect """null"""]]
+]
+[fn-doc name=skip scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Mark the current test skipped with a reason, reported separately from pass and fail."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:skip "not on windows"]"""] [expect """cx-err:CXER2202"""]]
+]
+[fn-doc name=fixture scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Collect the body elements into a named sequence value for use as a test fixture."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$count [$test:fixture "alice" [user id=1 email="alice@example.com" name="Alice"]]]"""] [expect """1"""]]
+]
+[fn-doc name=fixture-load scope=public purity=impure
+  [sig """-> any"""]
+  [summary """Load a fixture from a path resolved against the fixture directory or test-program location."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:fixture-load "fixtures/alice.cx"]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=before-each scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Register a thunk to run before each test (or each parameterized case)."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:before-each [?fn () true]]"""] [expect """null"""]]
+]
+[fn-doc name=after-each scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Register a thunk to run after each test (or each parameterized case)."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:after-each [?fn () true]]"""] [expect """null"""]]
+]
+[fn-doc name=before-all scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Register a thunk to run once before any test in the module."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:before-all [?fn () true]]"""] [expect """null"""]]
+]
+[fn-doc name=after-all scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Register a thunk to run once after all tests in the module."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:after-all [?fn () true]]"""] [expect """null"""]]
+]
+[fn-doc name=configure scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Set runner options — failure mode, reporter, and fixture or snapshot directories."""]
+  [example [code """[?lib 'cx-stdlib/test']
+[$test:configure [map on-fail="collect"]]"""] [expect """null"""]]
+]

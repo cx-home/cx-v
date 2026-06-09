@@ -1,0 +1,74 @@
+[- cx-stdlib/fp — functional composition over the value channels
+   (spec/std-lib/fp.md). The six-combinator protocol map / flat-map /
+   pure / traverse / sequence / fold dispatching on the HEAD TAG of the
+   container value (§1). A type is a Functor iff an instance is registered
+   for its head tag (duck-typed; no static kind system).
+
+   Instances (§1.1, closed built-in): sequence = Maybe (None=(), Some(x)=
+   (x)) + List; result = [ok]/[err] (flat-map = the [?pipe] railway
+   short-circuit). A tagged element with NO registered instance is opaque
+   and raises E_NO_INSTANCE = cx-err:CXER4400 (§5; the SAP draft's
+   CXER0244 was in the core Futures-reserved range — superseded).
+
+   Dispatch + callable-application is not expressible in pure CX (it must
+   classify the value AND apply a CX callable to interior values), so the
+   bodies forward to the fp-* primitives (vcx/code/stdlib_fp.v), reached
+   via the higher-order built-in dispatch path with the live env.
+
+   These combinators are value→value functions; all are :pure. The
+   err-boundary combinators (traverse / sequence / fold, §4) receive an
+   [err]-holding container as an inspectable value.
+
+   NOTE: this const and stdlib/fp.cx are the same source — edit both. -]
+
+[- §1 the six-combinator protocol (head-tag dispatch) -]
+[?def map      scope=public pure [returns any] ($f::any $fn::any)            [$fp-map $f $fn]]
+[?def flat-map scope=public pure [returns any] ($f::any $fn::any)            [$fp-flat-map $f $fn]]
+[?def pure     scope=public pure [returns any] ($x::any $tag=:sequence)       [$fp-pure $x $tag]]
+[?def fold     scope=public pure [returns any] ($f::any $init::any $fn::any) [$fp-fold $f $init $fn]]
+[?def sequence scope=public pure [returns any] ($f::any)                      [$fp-sequence $f]]
+[?def traverse scope=public pure [returns any] ($f::any $fn::any)            [$fp-traverse $f $fn]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=fp
+  [scope """Functional composition over the four value channels. A small closed protocol of six combinators — map, flat-map, pure, traverse, sequence, and fold — that dispatch on the head tag of the container value. A type is a functor when an instance is registered for its head tag (duck-typed; there is no static kind system). The built-in instances are sequence (Maybe and List in one: empty is None, a singleton is Some) and result ([ok]/[err], where flat-map is the railway short-circuit); user-defined tagged containers register their own arms."""]]
+[fn-doc name=map scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Apply a function inside the container, leaving its shape untouched (functor map)."""]
+  [example [code """[?lib 'cx-stdlib/fp']
+[?lib 'cx-stdlib/strings']
+[?def up ($s) [$strings:upper $s]]
+[$fp:map () $up]"""] [expect """()"""]]
+]
+[fn-doc name=flat-map scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Apply a container-returning function and remove one level of nesting (monad bind)."""]
+  [example [code """[?lib 'cx-stdlib/fp']
+[?def dup ($x) ($x, $x)]
+[$fp:flat-map (1, 2) $dup]"""] [expect """(1, 1, 2, 2)"""]]
+]
+[fn-doc name=pure scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Lift a value into a container — the sequence instance by default, or the instance named by tag=."""]
+  [example [code """[?lib 'cx-stdlib/fp']
+[$fp:pure 5]"""] [expect """(5)"""]]
+]
+[fn-doc name=fold scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Reduce a container to a single summary value from an initial accumulator."""]
+  [example [code """[?lib 'cx-stdlib/fp']
+[?def add ($acc $x) [+ $acc $x]]
+[$fp:fold (1, 2, 3, 4) 0 $add]"""] [expect """10"""]]
+]
+[fn-doc name=sequence scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Turn a structure of containers inside-out, swapping the two layers (traverse with identity)."""]
+  [example [code """[?lib 'cx-stdlib/fp']
+[$fp:sequence ([ok 1], [ok 2], [ok 3])]"""] [expect """[ok (1, 2, 3)]"""]]
+]
+[fn-doc name=traverse scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Map a container-returning function across a structure, swapping the two layers in the result."""]
+  [example [code """[?lib 'cx-stdlib/fp']
+[$fp:traverse (1, 2, 3) [?fn ($x) [ok $x]]]"""] [expect """[ok (1, 2, 3)]"""]]
+]

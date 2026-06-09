@@ -1,0 +1,90 @@
+[- cx-stdlib/html — HTML parse / sanitize / serialize.
+
+   Full v0.8.0 public surface per spec/std-lib/html.md §3. Bodies forward
+   to native primitives (vcx/code/stdlib_html.v): lenient WHATWG-style
+   parse into a CXDM element tree, HTML5 / XHTML serialization, the
+   safe-default + policy-driven sanitizer, and tag-stripping text
+   extraction are not expressible in pure CX.
+
+   parse returns an [html-document …] element tree (queryable via CXPath,
+   transformable via [?modify]); parse-fragment a [sequence element] with
+   no document wrapper; serialize / serialize-xhtml / sanitize / sanitize-
+   with-policy / extract-text a string; sanitize-tree / sanitize-tree-with-
+   policy an element tree. Errors are values (CXER3900 / 3901 / 3902, §5).
+
+   NOTE: this const and stdlib/html.cx are the same source — edit both. -]
+
+[- §3.1 parse -]
+[?def parse          scope=public pure [returns element]            ($html::string) [$html-parse $html]]
+[?def parse-fragment scope=public pure [returns [sequence element]] ($html::string) [$html-parse-fragment $html]]
+
+[- §3.2 sanitize -]
+[?def sanitize                  scope=public pure [returns string]  ($html::string)                   [$html-sanitize $html]]
+[?def sanitize-with-policy      scope=public pure [returns string]  ($html::string $policy::element)  [$html-sanitize-with-policy $html $policy]]
+[?def sanitize-tree             scope=public pure [returns element] ($tree::element)                  [$html-sanitize-tree $tree]]
+[?def sanitize-tree-with-policy scope=public pure [returns element] ($tree::element $policy::element) [$html-sanitize-tree-with-policy $tree $policy]]
+
+[- §3.3 serialize -]
+[?def serialize       scope=public pure [returns string] ($tree::element) [$html-serialize $tree]]
+[?def serialize-xhtml scope=public pure [returns string] ($tree::element) [$html-serialize-xhtml $tree]]
+
+[- §3.4 extract text -]
+[?def extract-text scope=public pure [returns string] ($html::string) [$html-extract-text $html]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=html
+  [scope """HTML as a first-class document format: parse, sanitize, serialize, and extract text. Lenient WHATWG HTML5 parsing turns real-world tag soup into an ordinary CXDM element tree, queryable with CXPath and transformable with `[?modify]` — there are no HTML-specific selectors. The sanitizer strips dangerous markup from attacker-controlled HTML via a conservative built-in policy or a customizable allowlist, the primary use being XSS-safe rendering of inbound email."""]]
+[fn-doc name=parse scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Leniently parse an HTML document into a CXDM element tree, recovering from malformed markup."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[?let [= $doc [$html:parse "<a href=\"https://e.com\">x</a>"]] $doc/a@href]"""] [expect """'https://e.com'"""]]
+]
+[fn-doc name=parse-fragment scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Parse an HTML fragment into its top-level nodes, with no implied document wrapper."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[$count [$html:parse-fragment "<li>a</li><li>b</li>"]]"""] [expect """2"""]]
+]
+[fn-doc name=sanitize scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Strip dangerous markup from HTML using the built-in safe-default policy, returning clean HTML."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[$html:sanitize "<script>alert(1)</script><p>hi</p>"]"""] [expect """'<p>hi</p>'"""]]
+]
+[fn-doc name=sanitize-with-policy scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Sanitize HTML against a custom `[html-policy …]` allowlist layered over the safe default."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[$html:sanitize-with-policy "<script>x</script><p>hi</p>" [html-policy]]"""] [expect """'<p>hi</p>'"""]]
+]
+[fn-doc name=sanitize-tree scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Sanitize an already-parsed element tree with the safe-default policy, returning a tree."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[$html:serialize [$html:sanitize-tree [$html:parse "<script>x</script><p>hi</p>"]]]"""] [expect """'<p>hi</p>'"""]]
+]
+[fn-doc name=sanitize-tree-with-policy scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Sanitize an already-parsed element tree against a custom `[html-policy …]`."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[$html:serialize [$html:sanitize-tree-with-policy [$html:parse "<p><img src=\"x\">hi</p>"] [html-policy [deny-tags img]]]]"""] [expect """'<p>hi</p>'"""]]
+]
+[fn-doc name=serialize scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Serialize a CXDM element tree back to HTML5."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[$html:serialize [$html:sanitize-tree [$html:parse "<script>x</script><p>hi</p>"]]]"""] [expect """'<p>hi</p>'"""]]
+]
+[fn-doc name=serialize-xhtml scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Serialize a CXDM element tree to XML-well-formed XHTML (void elements self-close)."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[$html:extract-text [$html:parse [$html:serialize-xhtml [$html:parse "<p>hi</p>"]]]]"""] [expect """'hi'"""]]
+]
+[fn-doc name=extract-text scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Strip all tags and decode entities to plain text, skipping script and style content."""]
+  [example [code """[?lib 'cx-stdlib/html']
+[$html:extract-text [$html:parse "<p>a<p>b<li>c"]]"""] [expect """'a b c'"""]]
+]

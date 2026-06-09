@@ -1,0 +1,103 @@
+[- cx-stdlib/log — structured logging (spec/std-lib/log.md).
+
+   Full v0.8.0 public surface per §3. Bodies forward to native primitives
+   (vcx/code/stdlib_log.v): leveled / generic emit format an event record
+   and write it to the active sink (process-global config set by
+   `configure`); `current-scope` reads the active [?with-scope] dynamic
+   context (core §8.10.8); `is-enabled` checks a level against the
+   configured minimum. The emit functions are impure and [returns null]
+   (§3.1/§3.2/§3.5) — their observable effect is the sink write, not a
+   return value. is-enabled is pure [returns bool] (§3.6).
+
+   Errors are values: CXER2400 (unknown sink) / CXER2402 (unknown level) /
+   CXER2403 (sink+sinks both, or malformed sink-config) / CXER2404
+   (invalid rotation, or rotation on a non-file sink) / CXER2405
+   (sample-rate out of 0.0–1.0), per §5.
+
+   NOTE: this const and stdlib/log.cx are the same source — edit both. -]
+
+[- §3.1 level-keyed emit -]
+[?def debug scope=public impure [returns null] ($message::string $fields={}) [$log-debug $message]]
+[?def info  scope=public impure [returns null] ($message::string $fields={}) [$log-info $message]]
+[?def warn  scope=public impure [returns null] ($message::string $fields={}) [$log-warn $message]]
+[?def error scope=public impure [returns null] ($message::string $fields={}) [$log-error $message]]
+[?def fatal scope=public impure [returns null] ($message::string $fields={}) [$log-fatal $message]]
+
+[- §3.2 generic emit -]
+[?def log scope=public impure [returns null] ($level::atom $message::string $fields={}) [$log-log $level $message]]
+
+[- §3.3 scope introspection -]
+[?def current-scope scope=public impure [returns map] () [$log-current-scope]]
+
+[- §3.4 configuration -]
+[?def configure scope=public impure [returns null] ($config::map) [$log-configure $config]]
+
+[- §3.5 direct sink emission -]
+[?def emit-raw scope=public impure [returns null] ($record::element) [$log-emit-raw $record]]
+
+[- §3.6 level check -]
+[?def is-enabled scope=public pure [returns bool] ($level::atom) [$log-is-enabled $level]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=log
+  [scope """Structured logging: leveled emit with arbitrary structured fields. Configurable sinks support single or multi-sink fan-out with optional async, rotation, and sampling. Dynamic contextual scopes attach fields automatically to every log call within their extent via the [?with-scope] directive. Each event is a record of level, message, timestamp, and a fields map."""]]
+[fn-doc name=debug scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Emit a log event at the :debug level (verbose internals, disabled by default)."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:debug "verbose internals"]"""] [expect """null"""]]
+]
+[fn-doc name=info scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Emit a log event at the :info level for normal operational milestones."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:info "operational milestone"]"""] [expect """null"""]]
+]
+[fn-doc name=warn scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Emit a log event at the :warn level for recoverable problems."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:warn "recoverable problem"]"""] [expect """null"""]]
+]
+[fn-doc name=error scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Emit a log event at the :error level for failed operations."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:error "failed operation"]"""] [expect """null"""]]
+]
+[fn-doc name=fatal scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Emit a log event at the :fatal level; does not terminate the process (that is the application's job)."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:fatal "unrecoverable"]"""] [expect """null"""]]
+]
+[fn-doc name=log scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Emit a log event at a level chosen programmatically from a level atom."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:log :info "programmatic level"]"""] [expect """null"""]]
+]
+[fn-doc name=current-scope scope=public purity=impure
+  [sig """-> map"""]
+  [summary """Return the merged active scope context as a map (empty when no scope is active)."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:current-scope]"""] [expect """{}"""]]
+]
+[fn-doc name=configure scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Set the process-global logging config: minimum level, sinks, format, rotation, async, and sampling."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:configure {level: :warn}]"""] [expect """null"""]]
+]
+[fn-doc name=emit-raw scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Emit a pre-shaped record directly to the sink, bypassing formatting."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:emit-raw [log-event level=:info message="pre-shaped"]]"""] [expect """null"""]]
+]
+[fn-doc name=is-enabled scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a level would produce output at some sink — a guard for expensive field construction."""]
+  [example [code """[?lib 'cx-stdlib/log']
+[$log:is-enabled :debug]"""] [expect """false"""]]
+]

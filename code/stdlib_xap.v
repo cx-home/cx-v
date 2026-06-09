@@ -502,4 +502,4 @@ fn xap_materialize(n cx.Node) cx.Node {
 
 // ── bundled module source (the public cx-xap surface) ────────────────────────
 
-const stdlib_src_xap = $embed_file('../../stdlib/xap.cx').to_string()
+const stdlib_src_xap = $embed_file('../stdlib/xap.cx').to_string()

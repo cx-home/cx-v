@@ -1752,4 +1752,4 @@ fn locale_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 // `locale-`-prefixed native primitives above. Per-module ownership: this
 // const lives here (mirrors stdlib_hash/env/validate). NOTE: this const is
 // $embed_file-d from stdlib/locale.cx — edit that file.
-const stdlib_src_locale = $embed_file('../../stdlib/locale.cx').to_string()
+const stdlib_src_locale = $embed_file('../stdlib/locale.cx').to_string()

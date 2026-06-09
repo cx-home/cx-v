@@ -1,0 +1,174 @@
+[- cx-stdlib/sched — scheduled events & timers: after / at / every
+   (fixed-delay|fixed-rate) / recur (a time [recurrence …] rule) / cron, cancel,
+   durable timers (journal-backed, survive restart via restore), a catch-up
+   policy (on-missed), and a controllable :manual test clock
+   (spec/02-working/stdlib_sched.md).
+
+   sched is a THIN module over the picoev timer wheel that COMPOSES three
+   shipped modules and adds NO calendar grammar, NO persistence mechanism, and
+   NO new capability of its own (§0/§5):
+     - cx-stdlib/time     — ::duration / ::datetime / [recurrence …] +
+       time-next-occurrence (re-arm) + time-parse-cron (cron → rule). sched does
+       NO date/calendar arithmetic.
+     - cx-stdlib/journal  — the `durable` opt persists [sched-intent …] via
+       journal-append; restore folds the journal to re-arm pending timers.
+       sched composes journal-over-store; it adds no store of its own.
+     - the picoev event loop — the LIVE held-open firing loop is the synthetic-
+       transport part (gate=pending). The DETERMINISTIC surface (compute next
+       fire from rule+now, the registry, due-set under a pinned now, the :manual
+       test-clock drain) is enforced here.
+
+   FOUR-CHANNEL MODEL (code.md §9.1.2): an armed/fired/canceled timer is a
+   present [timer] VALUE; a bad arg/mode/durable is an [err] in CXER4970-4989;
+   COUNT/UNTIL exhaustion is the NORMAL terminal "fired" transition (a value,
+   not a fault); an orphaned durable intent on restore is a present finding in
+   the [restore-report …] VALUE, never silently dropped. timer-state of a
+   present handle is a value; sched never returns null for absence.
+
+   FIRING is one of two effects chosen by $ev's shape (§2.1): a zero-arg
+   callable ([?fn [] …]) is invoked on the loop (return ignored); a [?channel]
+   value gets a tick posted. A raw effect in a fired callback without a live
+   grant hits cx-err:CXER0271 at the callback's effect point (§4.1) — sched
+   grants nothing. CANCELLATION of a scheduling op is the core cx-err:CXER0260
+   (§4.4); a [timer] is closeable (close ≡ cancel, idempotent, never CXER0108).
+
+   ERROR BAND CXER4970-4989 (§8): 4970 test-clock-under-wall, 4971 arg-invalid,
+   4972 mode/on-missed invalid, 4973 durable-no-name, 4974 durable-no-journal,
+   4975 restore-intent-corrupt. Shared: CXER0271 (effect denial), CXER0260
+   (cancellation); journal/store CXER11xx propagate unchanged.
+
+   The trailing $opts::map {} is a DEFAULTED positional parameter
+   (grammar.ebnf [153b]).
+
+   NOTE: this const is the loader source of truth for cx-stdlib/sched. -]
+
+[- §3.1 scheduling / cancellation / state -]
+[?def after        scope=public impure [returns element] ($dur::duration  $ev $opts::map {}) [$sched-after $dur $ev $opts]]
+[?def at           scope=public impure [returns element] ($when::datetime $ev $opts::map {}) [$sched-at $when $ev $opts]]
+[?def every        scope=public impure [returns element] ($dur::duration  $ev $opts::map {}) [$sched-every $dur $ev $opts]]
+[?def recur        scope=public impure [returns element] ($rule::element  $ev $opts::map {}) [$sched-recur $rule $ev $opts]]
+[?def cron         scope=public impure [returns element] ($expr::string   $ev $opts::map {}) [$sched-cron $expr $ev $opts]]
+[?def cancel       scope=public impure [returns bool]    ($timer::element)                     [$sched-cancel $timer]]
+[?def timer-state  scope=public pure   [returns string]  ($timer::element)                     [$sched-timer-state $timer]]
+
+[- §3.2 durable timers — persistence & restore -]
+[?def restore scope=public impure [returns element] ($journal::element $registry::map $opts::map {}) [$sched-restore $journal $registry $opts]]
+
+[- §3.3 the test clock — a controllable / fast-forward hook -]
+[?def test-clock-advance scope=public impure [returns null]   ($dur::duration) [$sched-test-clock-advance $dur]]
+[?def clock-mode         scope=public pure   [returns string] ()                [$sched-clock-mode]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=sched
+  [scope """Scheduled events and timers on the event loop. Arm a timer that fires a callback or posts a tick to a channel — after a relative duration, at an absolute tz-aware instant, on a recurring cadence (fixed-delay or fixed-rate), against a recurrence rule, or on a cron schedule — then cancel it or observe its state. Timers can be made durable so they survive a process restart (persisted to a journal and re-armed via restore), apply a catch-up policy for occurrences missed while down, and run under a manual test clock that advances virtual time deterministically. It composes time, journal, and the shared event loop, adding no calendar grammar, persistence mechanism, or new capability of its own."""]]
+[fn-doc name=after scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Fire an event once after a relative duration; returns a cancelable timer handle."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="ticks" buffer=4]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch]]
+[?let [= $s0 [$sched:timer-state $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq $s0 [$sched:timer-state $t] [?receive from=$ch]]]]]]"""] [expect """[seq 'armed' 'fired' [tick timer=timer-1]]"""]]
+]
+[fn-doc name=at scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Fire an event once at an absolute tz-aware instant; a past instant fires on the next loop turn."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:at [$time:datetime 1970 1 1 0 10 0] $ch]]
+[?let [= $s0 [$sched:timer-state $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq $s0 [$sched:timer-state $t] [?receive from=$ch]]]]]]"""] [expect """[seq 'armed' 'fired' [tick timer=timer-1]]"""]]
+]
+[fn-doc name=every scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Fire repeatedly on a recurring cadence (fixed-delay or fixed-rate) until canceled."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $t [$sched:every [$time:duration-m 1] $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[?let [= $c [?receive from=$ch]]
+[?let [= $d [?receive from=$ch]]
+[?let [= $e [?receive from=$ch]]
+[seq [$sched:timer-state $t] $a $b $c $d $e]]]]]]]]]"""] [expect """[seq 'armed' [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1]]"""]]
+]
+[fn-doc name=recur scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Fire on each occurrence of a time recurrence rule, stopping at its COUNT/UNTIL bound."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $r [$time:recurrence :daily '1970-01-01T00:00:00Z' 'UTC' {count: 3}]]
+[?let [= $t [$sched:recur $r $ch {on-missed: :fire-all}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-d 10]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[?let [= $c [?receive from=$ch]]
+[seq [$sched:timer-state $t] $a $b $c]]]]]]]]"""] [expect """[seq 'fired' [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1]]"""]]
+]
+[fn-doc name=cron scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Fire on a cron schedule by parsing the expression into a recurrence rule, then behaving as recur."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:cron "0 0 * * *" $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-d 1]]]
+[seq [$sched:timer-state $t] [?receive from=$ch]]]]]"""] [expect """[seq 'armed' [tick timer=timer-1]]"""]]
+]
+[fn-doc name=cancel scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Cancel an armed timer, returning true iff a fire was prevented; idempotent."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch]]
+[?let [= $c [$sched:cancel $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq $c [$sched:timer-state $t]]]]]]"""] [expect """[seq true 'canceled']"""]]
+]
+[fn-doc name=timer-state scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Read a timer's current state — armed, fired, or canceled."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="ticks" buffer=4]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch]]
+[?let [= $s0 [$sched:timer-state $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq $s0 [$sched:timer-state $t] [?receive from=$ch]]]]]]"""] [expect """[seq 'armed' 'fired' [tick timer=timer-1]]"""]]
+]
+[fn-doc name=restore scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Re-arm durable timers from a journal after a restart, binding fire values from a registry."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $jr [$journal:open "mem://sched" "tenant"]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch {name: 'win' durable: $jr}]]
+[$sched:restore $jr {'win': $ch}]]]]"""] [expect """[restore-report rearmed=1 skipped=0 orphaned=0]"""]]
+]
+[fn-doc name=test-clock-advance scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Advance the manual virtual clock and fire every timer now due, in deadline order."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="ticks" buffer=4]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch]]
+[?let [= $s0 [$sched:timer-state $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq $s0 [$sched:timer-state $t] [?receive from=$ch]]]]]]"""] [expect """[seq 'armed' 'fired' [tick timer=timer-1]]"""]]
+]
+[fn-doc name=clock-mode scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Read the loop's current clock source — wall or manual."""]
+  [example [code """[?lib 'cx-stdlib/sched']
+[$sched:clock-mode]"""] [expect """':manual'"""]]
+]

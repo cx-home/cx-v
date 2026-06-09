@@ -20,7 +20,7 @@ import encoding.base32
 // quoted V string, so the CX source contains NO single-quote characters
 // (comments use [- -], strings use double quotes).
 
-const stdlib_src_hash = $embed_file('../../stdlib/hash.cx').to_string()
+const stdlib_src_hash = $embed_file('../stdlib/hash.cx').to_string()
 
 // stdlib_hash.v — native primitives backing the `cx-stdlib/hash` module
 // (spec/stdlib_hash.md). Content-addressable hashing — SHA-256/384/512

@@ -1328,4 +1328,4 @@ fn html_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 // not expressible in pure CX. All nine functions are pure (§2.4).
 //
 // NOTE: this const is $embed_file-d from stdlib/html.cx — edit that file.
-const stdlib_src_html = $embed_file('../../stdlib/html.cx').to_string()
+const stdlib_src_html = $embed_file('../stdlib/html.cx').to_string()

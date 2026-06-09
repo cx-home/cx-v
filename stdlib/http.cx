@@ -1,0 +1,275 @@
+[- cx-stdlib/http — L7 HTTP/1.1 client + server, built ON net.
+
+   Full surface per spec/02-inprogress/stdlib_http.md §3. Bodies forward to
+   native primitives (vcx/code/stdlib_http.v): the network verbs reach the
+   network through cx-stdlib/net and are gated on the `net` capability (§5)
+   — http introduces NO new capability. Under the deny-by-default empty set
+   each network effect point raises cx-err:CXER0271. Message construction +
+   introspection (status/ok/header/headers/has-body/body-*) are PURE and
+   capability-free (§3.4).
+
+   The trailing $opts::map {} is a DEFAULTED positional parameter
+   (grammar.ebnf [153b]: a bare space-separated VALUE after the type), so
+   [$http:get $url] == [$http:get $url {}] and the bundled stub arities
+   are preserved exactly.
+
+   ERROR BAND: http owns cx-err:CXER4525–CXER4543 (E_HTTP_*) — the next free
+   block above cx-stdlib/net's CXER4500–4524 (governance §9.6). The rev-5
+   draft's proposed 4500-4518 collided with net's final band; spec §8 + the
+   registry + this impl use 4525-4543.
+
+   NOTE: this const (vcx/code/stdlib_bundle.v stdlib_src_http) and
+   stdlib/http.cx are the same source — edit both. -]
+
+[- §3.1 client construction (PURE — no net at construction) -]
+[?def client scope=public impure [returns element] ($opts::map {})    [$http-client $opts]]
+[?def close  scope=public impure [returns null]    ($handle::element) [$http-close $handle]]
+
+[- §3.2 one-shot verbs (URL-first; trailing $opts::map {} defaulted) -]
+[?def get     scope=public impure [returns element] ($url::string $opts::map {})        [$http-get $url $opts]]
+[?def post    scope=public impure [returns element] ($url::string $body $opts::map {})  [$http-post $url $body $opts]]
+[?def put     scope=public impure [returns element] ($url::string $body $opts::map {})  [$http-put $url $body $opts]]
+[?def del     scope=public impure [returns element] ($url::string $opts::map {})        [$http-del $url $opts]]
+[?def patch   scope=public impure [returns element] ($url::string $body $opts::map {})  [$http-patch $url $body $opts]]
+[?def head    scope=public impure [returns element] ($url::string $opts::map {})        [$http-head $url $opts]]
+[?def options scope=public impure [returns element] ($url::string $opts::map {})        [$http-options $url $opts]]
+[?def request scope=public impure [returns element] ($method::string $url::string $opts::map {}) [$http-request $method $url $opts]]
+
+[- §3.3 connection reuse — issue through a client -]
+[?def send scope=public impure [returns element] ($client::element $req::element) [$http-send $client $req]]
+
+[- §3.4 message introspection (PURE) -]
+[?def status         scope=public pure [returns int]                ($resp::element)            [$http-status $resp]]
+[?def ok             scope=public pure [returns bool]               ($resp::element)            [$http-ok $resp]]
+[?def header         scope=public pure [returns element]            ($msg::element $name::string) [$http-header $msg $name]]
+[?def headers        scope=public pure [returns [sequence element]] ($msg::element)            [$http-headers $msg]]
+[?def headers-named  scope=public pure [returns [sequence element]] ($msg::element $name::string) [$http-headers-named $msg $name]]
+[?def has-body       scope=public pure [returns bool]               ($msg::element)            [$http-has-body $msg]]
+[?def body-bytes     scope=public pure [returns bytes]              ($msg::element)            [$http-body-bytes $msg]]
+[?def body-bytes-wire scope=public pure [returns bytes]             ($msg::element)            [$http-body-bytes-wire $msg]]
+[?def body-text      scope=public pure [returns string]             ($msg::element)            [$http-body-text $msg]]
+
+[- §3.5 server — programmatic, built on net's listener -]
+[?def serve            scope=public impure [returns element]            ($url::string $handler $opts::map {}) [$http-serve $url $handler $opts]]
+[?def listen           scope=public impure [returns element]            ($url::string $opts::map {})          [$http-listen $url $opts]]
+[?def accept-iter      scope=public impure [returns [iterator element]] ($server::element)                    [$http-accept-iter $server]]
+[?def exchange-request scope=public impure [returns element]            ($exchange::element)                  [$http-exchange-request $exchange]]
+[?def respond          scope=public impure [returns null]               ($exchange::element $resp::element)   [$http-respond $exchange $resp]]
+[?def stop             scope=public impure [returns null]               ($server::element)                    [$http-stop $server]]
+
+[- §3.6 SSE / streaming — held-open server push + client read -]
+[?def sse           scope=public impure [returns element]            ($exchange::element $opts::map {}) [$http-sse $exchange $opts]]
+[?def send-event    scope=public impure [returns null]               ($stream::element $event::element) [$http-send-event $stream $event]]
+[?def heartbeat     scope=public impure [returns null]               ($stream::element)                 [$http-heartbeat $stream]]
+[?def stream-open   scope=public pure   [returns bool]               ($stream::element)                 [$http-stream-open $stream]]
+[?def sse-connect   scope=public impure [returns element]            ($url::string $opts::map {})       [$http-sse-connect $url $opts]]
+[?def sse-events    scope=public impure [returns [iterator element]] ($source::element)                 [$http-sse-events $source]]
+[?def source-open   scope=public pure   [returns bool]               ($source::element)                 [$http-source-open $source]]
+[?def last-event-id scope=public pure   [returns element]            ($source::element)                 [$http-last-event-id $source]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=http
+  [scope """HTTP/1.1 request/response semantics: a programmatic client and server built on the `cx-stdlib/net` transport. The client offers method verbs, headers, materialized bodies, redirects, content decoding, and connection pooling; the server drives an event-loop accept/respond loop with optional Server-Sent Events streaming. Network operations are gated by the `net` capability — http adds no capability of its own; message construction and introspection are pure. A non-2xx status is a value that flows, not a fault."""]]
+[fn-doc name=client scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Construct an `[http-client]` that pools connections under shared config — no network access yet."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:client]"""] [expect """[http-client state=open on-close='http/close']"""]]
+]
+[fn-doc name=close scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Close a client, server, or exchange handle, releasing its pooled sockets — idempotent."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:close [$http:client]]"""] [expect """null"""]]
+]
+[fn-doc name=get scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a one-shot GET to a URL and return the `[response]`."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:get 'http://example.com/']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=post scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a one-shot POST with a body to a URL and return the `[response]`."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:post 'http://example.com/' 'payload']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=put scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a one-shot PUT with a body to a URL and return the `[response]`."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:put 'http://example.com/' 'payload']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=del scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a one-shot DELETE to a URL and return the `[response]`."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:del 'http://example.com/']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=patch scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a one-shot PATCH with a body to a URL and return the `[response]`."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:patch 'http://example.com/' 'payload']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=head scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a one-shot HEAD to a URL and return the bodyless `[response]`."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:head 'http://example.com/']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=options scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a one-shot OPTIONS to a URL and return the `[response]`."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:options 'http://example.com/']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=request scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a one-shot request with an arbitrary method (including custom methods with bodies)."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:request 'PURGE' 'http://example.com/']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=send scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a built `[request]` through a pooled client and return its `[response]` — concurrency-safe."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:send [$http:client] [request method="GET" url="http://h/"]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=status scope=public purity=pure
+  [sig """-> int"""]
+  [summary """Return the HTTP status code of a response."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:status [response status=200]]"""] [expect """200"""]]
+]
+[fn-doc name=ok scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a response status is in the 200–299 success range."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:ok [response status=200]]"""] [expect """true"""]]
+]
+[fn-doc name=header scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Return the first header matching a name (case-insensitive), or absence if none."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:header [response status=200 [headers [header name="Content-Type" value="application/json"]]] 'content-type']"""] [expect """[header name=Content-Type value='application/json']"""]]
+]
+[fn-doc name=headers scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Return all headers in receive order, duplicates preserved."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:headers [response status=200 [headers [header name="A" value="1"] [header name="B" value="c"]]]]"""] [expect """([header name=A value='1'], [header name=B value=c])"""]]
+]
+[fn-doc name=headers-named scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Return all headers matching a name (case-insensitive) in receive order."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:headers-named [response status=200 [headers [header name="Set-Cookie" value="a"] [header name="Set-Cookie" value="b"]]] 'set-cookie']"""] [expect """([header name=Set-Cookie value=a], [header name=Set-Cookie value=b])"""]]
+]
+[fn-doc name=has-body scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a message structurally frames a body, distinguishing absent from empty."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:has-body [response status=200 [body 'hi']]]"""] [expect """true"""]]
+]
+[fn-doc name=body-bytes scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Return the message body octets, decoded if auto-decompress applied — total, empty if no body."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:body-bytes [response status=200 [body 'hi']]]"""] [expect """'hi'"""]]
+]
+[fn-doc name=body-bytes-wire scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Return the original on-the-wire body octets before any decompression."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:body-bytes-wire [response status=200 [body 'gz']]]"""] [expect """'gz'"""]]
+]
+[fn-doc name=body-text scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Decode the body to text using the Content-Type charset (default UTF-8)."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:body-text [response status=200 [body 'hello']]]"""] [expect """'hello'"""]]
+]
+[fn-doc name=serve scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Bind a listener and run an accept loop, calling a handler that maps each request to a response."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[?def h ($req::element) [response status=200]]
+[$http:serve 'tcp://0.0.0.0:8080' $h]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=listen scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Bind a listener for the low-level accept/respond path, returning an `[http-server]`."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:listen 'tcp://0.0.0.0:8080']"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=accept-iter scope=public purity=impure
+  [sig """-> [iterator element]"""]
+  [summary """Yield `[exchange]` handles for incoming requests as a single-use iterator."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:accept-iter [http-server url='tcp://0.0.0.0:8080' state=listening]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=exchange-request scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Return the parsed server-form `[request]` for an exchange."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:exchange-request [exchange state=open url='tcp://0.0.0.0:8080']]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=respond scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Write a response on an exchange's connection; interim 1xx may precede one final response."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:respond [exchange state=open url='tcp://0.0.0.0:8080'] [response status=200]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=stop scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Gracefully drain a server, answering new exchanges with 503 until the grace period elapses."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:stop [http-server url='tcp://0.0.0.0:8080' state=listening]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=sse scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Promote an open exchange to a held-open SSE stream, returning a `[sse-stream]` write handle."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:sse [exchange state=open] {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=send-event scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Frame and flush one `[event]` as a chunk on an SSE stream."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:send-event [sse-stream open=true] [event]]"""] [expect """cx-err:CXER4539"""]]
+]
+[fn-doc name=heartbeat scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Write one comment-only liveness frame to an SSE stream."""]
+]
+[fn-doc name=stream-open scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether an SSE write stream is still open — the producer-loop guard."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:stream-open [sse-stream open=true]]"""] [expect """true"""]]
+]
+[fn-doc name=sse-connect scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a streaming GET and return an `[sse-source]` read handle on a 2xx event stream."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:sse-connect "http://idp.test/stream" {}]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=sse-events scope=public purity=impure
+  [sig """-> [iterator element]"""]
+  [summary """Yield parsed `[event]`s from a source in arrival order as a single-use iterator."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:sse-events [sse-source open=true]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=source-open scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether an SSE read source is still open."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:source-open [sse-source open=false]]"""] [expect """false"""]]
+]
+[fn-doc name=last-event-id scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Return the last received event id from a source, or absence if none."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:last-event-id [sse-source last-event-id="42"]]"""] [expect """'42'"""]]
+]

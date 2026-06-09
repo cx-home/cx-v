@@ -16,7 +16,7 @@ module code
 //
 // The canonical, human-readable source files live under `/stdlib/` at
 // the repo root and are the SINGLE SOURCE OF TRUTH. Each
-// `stdlib_src_<name>` const below is `$embed_file('../../stdlib/<name>.cx')`
+// `stdlib_src_<name>` const below is `$embed_file('../stdlib/<name>.cx')`
 // — the bundled bytes ARE the on-disk file, embedded at compile time.
 // Edit `/stdlib/<name>.cx`; there is no second copy to keep in sync.
 //
@@ -56,61 +56,61 @@ pub const cx_bundled_stdlib_version = '0.8.0'
 // (`vcx/code/` → `../../stdlib/`). Editing the on-disk file is the only
 // way to change the bundled bytes.
 
-const stdlib_src_strings = $embed_file('../../stdlib/strings.cx').to_string()
+const stdlib_src_strings = $embed_file('../stdlib/strings.cx').to_string()
 
-const stdlib_src_json = $embed_file('../../stdlib/json.cx').to_string()
+const stdlib_src_json = $embed_file('../stdlib/json.cx').to_string()
 
-const stdlib_src_http = $embed_file('../../stdlib/http.cx').to_string()
+const stdlib_src_http = $embed_file('../stdlib/http.cx').to_string()
 
-const stdlib_src_re = $embed_file('../../stdlib/re.cx').to_string()
+const stdlib_src_re = $embed_file('../stdlib/re.cx').to_string()
 
-const stdlib_src_time = $embed_file('../../stdlib/time.cx').to_string()
+const stdlib_src_time = $embed_file('../stdlib/time.cx').to_string()
 
-const stdlib_src_math = $embed_file('../../stdlib/math.cx').to_string()
+const stdlib_src_math = $embed_file('../stdlib/math.cx').to_string()
 
-const stdlib_src_io = $embed_file('../../stdlib/io.cx').to_string()
+const stdlib_src_io = $embed_file('../stdlib/io.cx').to_string()
 
-const stdlib_src_net = $embed_file('../../stdlib/net.cx').to_string()
+const stdlib_src_net = $embed_file('../stdlib/net.cx').to_string()
 
-const stdlib_src_process = $embed_file('../../stdlib/process.cx').to_string()
+const stdlib_src_process = $embed_file('../stdlib/process.cx').to_string()
 
-const stdlib_src_bytes = $embed_file('../../stdlib/bytes.cx').to_string()
+const stdlib_src_bytes = $embed_file('../stdlib/bytes.cx').to_string()
 
-const stdlib_src_format = $embed_file('../../stdlib/format.cx').to_string()
+const stdlib_src_format = $embed_file('../stdlib/format.cx').to_string()
 
-const stdlib_src_path = $embed_file('../../stdlib/path.cx').to_string()
+const stdlib_src_path = $embed_file('../stdlib/path.cx').to_string()
 
-const stdlib_src_log = $embed_file('../../stdlib/log.cx').to_string()
+const stdlib_src_log = $embed_file('../stdlib/log.cx').to_string()
 
-const stdlib_src_url = $embed_file('../../stdlib/url.cx').to_string()
+const stdlib_src_url = $embed_file('../stdlib/url.cx').to_string()
 
-const stdlib_src_crypto = $embed_file('../../stdlib/crypto.cx').to_string()
+const stdlib_src_crypto = $embed_file('../stdlib/crypto.cx').to_string()
 
-const stdlib_src_mime = $embed_file('../../stdlib/mime.cx').to_string()
+const stdlib_src_mime = $embed_file('../stdlib/mime.cx').to_string()
 
-const stdlib_src_email = $embed_file('../../stdlib/email.cx').to_string()
+const stdlib_src_email = $embed_file('../stdlib/email.cx').to_string()
 
 // stdlib_src_hash lives in vcx/code/stdlib_hash.v (per-module ownership).
 
 // stdlib_src_env lives in vcx/code/stdlib_env.v (per-module ownership).
 
-const stdlib_src_test = $embed_file('../../stdlib/test.cx').to_string()
+const stdlib_src_test = $embed_file('../stdlib/test.cx').to_string()
 
-const stdlib_src_csv = $embed_file('../../stdlib/csv.cx').to_string()
+const stdlib_src_csv = $embed_file('../stdlib/csv.cx').to_string()
 
-const stdlib_src_geo = $embed_file('../../stdlib/geo.cx').to_string()
+const stdlib_src_geo = $embed_file('../stdlib/geo.cx').to_string()
 
-const stdlib_src_i18n = $embed_file('../../stdlib/i18n.cx').to_string()
+const stdlib_src_i18n = $embed_file('../stdlib/i18n.cx').to_string()
 
-const stdlib_src_prof = $embed_file('../../stdlib/prof.cx').to_string()
+const stdlib_src_prof = $embed_file('../stdlib/prof.cx').to_string()
 
-const stdlib_src_fp = $embed_file('../../stdlib/fp.cx').to_string()
+const stdlib_src_fp = $embed_file('../stdlib/fp.cx').to_string()
 
-const stdlib_src_bus = $embed_file('../../stdlib/bus.cx').to_string()
+const stdlib_src_bus = $embed_file('../stdlib/bus.cx').to_string()
 
-const stdlib_src_session = $embed_file('../../stdlib/session.cx').to_string()
+const stdlib_src_session = $embed_file('../stdlib/session.cx').to_string()
 
-const stdlib_src_authz = $embed_file('../../stdlib/authz.cx').to_string()
+const stdlib_src_authz = $embed_file('../stdlib/authz.cx').to_string()
 
 // ── Public surface ──────────────────────────────────────────────────
 

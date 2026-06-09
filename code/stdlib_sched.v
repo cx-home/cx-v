@@ -1259,4 +1259,4 @@ fn sch_rearm_intent(intent cx.Element, ev cx.Node) ?cx.Node {
 // This const is the SAME source as stdlib/sched.cx (if a disk copy is added).
 // Backslash-escaped `$` because V interpolates `$` in a string literal.
 
-const stdlib_src_sched = $embed_file('../../stdlib/sched.cx').to_string()
+const stdlib_src_sched = $embed_file('../stdlib/sched.cx').to_string()

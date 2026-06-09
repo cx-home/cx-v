@@ -1,0 +1,142 @@
+[- cx-stdlib/store — content-addressed object store with URL-dispatched backends.
+
+   Full v0.8.0 public surface per spec/std-lib/store.md §3. Bodies forward
+   to native primitives (vcx/code/stdlib_store.v): a Store is mutable
+   in-process state, not expressible as a pure CX value. Doc identity is
+   SHA-256 of the doc strict canonical bytes (§2.1), portable across
+   backends and bindings.
+
+   mem:// (Memory tier) is capability-free (§9): pure in-process, no
+   filesystem or network. file:// and remote backends are capability-gated
+   and denied at open under deny-by-default until a grant surface lands. -]
+
+[?def open           scope=public impure [returns element]              ($url::string)                              [$store-open $url]]
+[?def open-opts      scope=public impure [returns element]              ($url::string $opts::map)                   [$store-open-opts $url $opts]]
+[?def put-doc        scope=public impure [returns string]               ($store::element $doc::any)                 [$store-put-doc $store $doc]]
+[?def put-doc-stream scope=public impure [returns string]               ($store::element $source::element)          [$store-put-doc-stream $store $source]]
+[?def get-doc        scope=public impure [returns any]                  ($store::element $hash::string)             [$store-get-doc $store $hash]]
+[?def list-docs      scope=public impure [returns [sequence string]]    ($store::element)                           [$store-list-docs $store]]
+[?def iter-docs      scope=public impure [returns [sequence element]]   ($store::element)                           [$store-iter-docs $store]]
+[?def query          scope=public impure [returns [sequence element]]   ($store::element $cxpath::path)             [$store-query $store $cxpath]]
+[?def modify-doc     scope=public impure [returns string]               ($store::element $hash::string $action::element) [$store-modify-doc $store $hash $action]]
+[?def delete-doc     scope=public impure [returns bool]                 ($store::element $hash::string)             [$store-delete-doc $store $hash]]
+[?def exists         scope=public impure [returns bool]                 ($store::element $hash::string)             [$store-exists $store $hash]]
+[?def capabilities   scope=public impure [returns map]                  ($store::element)                           [$store-capabilities $store]]
+[?def close          scope=public impure [returns null]                 ($store::element)                           [$store-close $store]]
+[?def set-alias      scope=public impure [returns null]                 ($store::element $name::string $hash::string) [$store-set-alias $store $name $hash]]
+[?def get-alias      scope=public impure [returns [or string [sequence string]]] ($store::element $name::string)             [$store-get-alias $store $name]]
+[?def list-aliases   scope=public impure [returns [sequence element]]   ($store::element)                           [$store-list-aliases $store]]
+[?def delete-alias   scope=public impure [returns bool]                 ($store::element $name::string)             [$store-delete-alias $store $name]]
+[?def migrate        scope=public impure [returns element]              ($from::element $to::element)               [$store-migrate $from $to]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=store
+  [scope """A content-addressed object store with URL-dispatched backends. A single API surface operates against multiple storage backends (local filesystem, in-memory, HTTP, S3-compatible, WebDAV, FTP/FTPS/SFTP, and a CSRP service tier), selected at open time by the URL scheme. Doc IDs are the SHA-256 of a document's strict canonical bytes, so identity is identical across bindings, backends, compression states, and wire encodings — enabling lossless migration and free dedup. A mutable alias layer maps names to hashes on top of the immutable content."""]]
+[fn-doc name=open scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a Store against a backend chosen by the URL scheme, with default options."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:get-doc $s $h]]]"""] [expect """[doc [item 'hello']]"""]]
+]
+[fn-doc name=open-opts scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a Store with explicit options for compression, encoding, sharding, auth, caching, and read-only."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open-opts "mem://" [map read-only="true"]]] [$store:put-doc $s [doc [item "x"]]]]"""] [expect """cx-err:CXER1110"""]]
+]
+[fn-doc name=put-doc scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Store a document and return its SHA-256 content hash; identical content stores once."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:get-doc $s $h]]]"""] [expect """[doc [item 'hello']]"""]]
+]
+[fn-doc name=put-doc-stream scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Store a document from a readable byte-source in bounded chunks, never holding it fully resident."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $a [$store:put-doc $s [user name=al]]] [?let [= $b [$store:put-doc-stream $s [user name=al]]] [= $a $b]]]]"""] [expect """true"""]]
+]
+[fn-doc name=get-doc scope=public purity=impure
+  [sig """-> any"""]
+  [summary """Retrieve the document for a hash, re-validating integrity after decode."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:get-doc $s $h]]]"""] [expect """[doc [item 'hello']]"""]]
+]
+[fn-doc name=list-docs scope=public purity=impure
+  [sig """-> [sequence string]"""]
+  [summary """Return the hashes of every document stored in the Store."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "hello"]]]] [$store:list-docs $s]]]]"""] [expect """('01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9')"""]]
+]
+[fn-doc name=iter-docs scope=public purity=impure
+  [sig """-> [sequence element]"""]
+  [summary """Lazily yield hash-and-document pairs, keeping memory bounded regardless of corpus size."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:iter-docs $s]]]"""] [expect """([entry hash='01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9' [doc [item 'hello']]])"""]]
+]
+[fn-doc name=query scope=public purity=impure
+  [sig """-> [sequence element]"""]
+  [summary """Evaluate a CXPath against every document, returning the matches per doc."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [root [user name=al]]]] [$count [$store:query $s "//user"]]]]"""] [expect """1"""]]
+]
+[fn-doc name=modify-doc scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Apply an action to the doc at a hash and store the result as a new doc, returning its hash."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:modify-doc $s $h [set-attr name=v value="x"]]] [= $h $h2]]]]"""] [expect """false"""]]
+]
+[fn-doc name=delete-doc scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Delete the doc at a hash, returning whether it was present."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open-opts "mem://" [map read-only="true"]]] [$store:delete-doc $s "deadbeef"]]"""] [expect """cx-err:CXER1110"""]]
+]
+[fn-doc name=exists scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Report whether a doc with the given hash is present — a cheap existence check."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:exists $s $h]]]"""] [expect """true"""]]
+]
+[fn-doc name=capabilities scope=public purity=impure
+  [sig """-> map"""]
+  [summary """Report the Store's read/write/list traits plus its backend, URL, compression, and encoding."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:capabilities $s]]"""] [expect """[map read=true write=true list=true backend=mem url='mem://' compression=none encoding=cxbin]"""]]
+]
+[fn-doc name=close scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Close the Store; subsequent operations on it raise CXER1130."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $c [$store:close $s]] [$store:list-docs $s]]]"""] [expect """cx-err:CXER1130"""]]
+]
+[fn-doc name=set-alias scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Bind a name to an existing doc hash in the mutable alias layer (last-write-wins)."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:get-alias $s "latest"]]]]"""] [expect """'01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'"""]]
+]
+[fn-doc name=get-alias scope=public purity=impure
+  [sig """-> [or string [sequence string]]"""]
+  [summary """Resolve an alias name to its hash, or absence (empty) if it does not resolve."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:get-alias $s "latest"]]]]"""] [expect """'01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'"""]]
+]
+[fn-doc name=list-aliases scope=public purity=impure
+  [sig """-> [sequence element]"""]
+  [summary """Return every name-to-hash alias binding in the Store."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:list-aliases $s]]]]"""] [expect """([alias name=latest hash='01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'])"""]]
+]
+[fn-doc name=delete-alias scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Remove an alias, returning whether it existed; the underlying doc is untouched."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:delete-alias $s "latest"]]]]"""] [expect """true"""]]
+]
+[fn-doc name=migrate scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Copy every doc and alias from one Store to another, losslessly across backends and encodings."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $a [$store:open "mem://"]] [?let [= $h [$store:put-doc $a [doc [item "hello"]]]] [?let [= $b [$store:open "mem://"]] [$store:migrate $a $b]]]]"""] [expect """[migration-report doc-count=1 hashes-verified=1 bytes-written=20]"""]]
+]

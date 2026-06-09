@@ -1,0 +1,237 @@
+[- cx-stdlib/authz — the XAP trust model + the single PEP decision
+   function (spec/02-working/stdlib_authz.md). Principals, capabilities,
+   attenuating/time-bounded/revocable delegations, guardian grants behind an
+   incapacity-typed [gate …], the signed+versioned incapacity-predicate
+   library, and the decision function check/authorize: actor × capability ×
+   slice × tenant × unrevoked × required-tier (× guardian-gate) → a [permit]
+   or [deny] VALUE. authz is the DECISION layer; the bus is the single
+   ENFORCEMENT point that calls check.
+
+   COMPOSES the shipped modules and adds NO crypto, NO transport, NO session,
+   and NO new caps-capability of its own (§0/§1/§5): signature/tier verify is
+   cx-stdlib/crypto; the (principal, tenant) actor is cx-stdlib/session;
+   persistence/attribution is cx-stdlib/journal + cx-stdlib/store. authz is
+   NOT caps — caps gates machine effects (this code may open a socket); authz
+   gates DELEGATED AUTHORITY (Dana authorized ops-agent-1 to refund). They
+   AND-compose, never substitute. Its only effects are reads/writes of trust
+   state, gated by store's existing capability model — so, like
+   journal/session, authz adds NO effect_alignment entry (the in-memory store
+   is capability-free, the hermetic posture).
+
+   FOUR-CHANNEL MODEL (SAP §1, §2.4/§2.5): a decision is a present
+   [permit]/[deny] VALUE (a [deny] carries cx-err:CXER4700 as DATA, it is NOT
+   an [err]); check is TOTAL (always permit or deny). A genuine fault is [err]
+   (malformed grant / bright-line violation / signature failure / unknown
+   predicate / store fault). An absent (revoked/expired/never-issued)
+   delegation is the absence channel () — NOT null, NOT a [deny]. null is
+   NEVER produced.
+
+   FAIL-CLOSED (§4): deny by default; any ambiguity denies. A guardian grant
+   permits ONLY while its incapacity gate holds and ONLY its pinned [action …]
+   — the instant the principal re-engages the gate goes false and check flips
+   to [deny] with no explicit revoke (falsifiable-by-presence, §4.4).
+
+   BRIGHT LINE as a TYPE CONSTRAINT (§4.4): a guardian [gate …] admits ONLY
+   `incapacity` (signed-library name@version) + `state` (CXPath threshold)
+   leaves over all/any/not. A leaf branching on a principal's CHOICE
+   (declined/refused/consent/…) is rejected at AUTHORING → CXER4701. A gate
+   needs ≥ 1 incapacity → else CXER4702. Inline/ad-hoc incapacity → CXER4706.
+
+   ERROR BAND cx-err:CXER4700–4799 (§8): 4700 UNAUTHORIZED (the canonical
+   authority-denied code; carried as data in every [deny], raised only under
+   authorize raise-on-deny=true) / 4701 REFUSAL_TRIGGER / 4702 GATE_ILLFORMED
+   / 4703 ESCALATION / 4704 VERIFY_FAILED / 4705 EXPIRED / 4706
+   UNKNOWN_PREDICATE / 4707 REVOKED / 4708 TENANT_MISMATCH / 4709
+   NO_RELATIONSHIP / 4710 STORE_FAULT / 4711 ARG_INVALID / 4712 HANDLE_CLOSED.
+   Cancellation is the core CXER0260; caps denial the core CXER0271 (both
+   inherited, never authz codes).
+
+   The trailing $opts::map {} are DEFAULTED positional parameters
+   (grammar.ebnf [153b]).
+
+   NOTE: this const and the native primitives (vcx/code/stdlib_authz.v) are
+   the same surface — edit both. -]
+
+[- §3.1 authority store construction (the trust-state backend) -]
+[?def store scope=public impure [returns element] ($opts::map {})    [$authz-store $opts]]
+[?def close scope=public impure [returns null]    ($handle::element)  [$authz-close $handle]]
+
+[- §3.2 issue + revoke a delegation (the dial) -]
+[?def delegate scope=public impure [returns element] ($store::element $delegation::element $opts::map {}) [$authz-delegate $store $delegation $opts]]
+[?def revoke   scope=public impure [returns element] ($store::element $id::string         $opts::map {}) [$authz-revoke $store $id $opts]]
+
+[- §3.3 issue a guardian grant (the conditional pre-issued delegation) -]
+[?def grant-guardian scope=public impure [returns element] ($store::element $grant::element $opts::map {}) [$authz-grant-guardian $store $grant $opts]]
+
+[- §3.4 the PEP decision function — check / authorize (pure) -]
+[?def check     scope=public pure [returns element]            ($store::element $req::element $opts::map {}) [$authz-check $store $req $opts]]
+[?def authorize scope=public pure [returns element]            ($store::element $req::element $opts::map {}) [$authz-authorize $store $req $opts]]
+[?def find      scope=public pure [returns element]            ($store::element $id::string)                 [$authz-find $store $id]]
+[?def grants-of scope=public pure [returns [sequence element]] ($store::element $actor::element)             [$authz-grants-of $store $actor]]
+
+[- §3.5 the incapacity-predicate library + gate well-formedness -]
+[?def predicate        scope=public pure   [returns element]            ($store::element $name-at-version::string) [$authz-predicate $store $name-at-version]]
+[?def predicates       scope=public pure   [returns [sequence element]] ($store::element)                          [$authz-predicates $store]]
+[- gate-wellformed: the spec names this `gate-wellformed?`, but `?` is not a
+   grammar NameChar in a call head ([$authz:VERB …]) — the same constraint that
+   forced net's addr->string → addr-to-string. The verb is spelled WITHOUT the
+   trailing `?`; semantics are identical (a [valid]/[invalid] VALUE, never an
+   [err]). -]
+[?def gate-wellformed scope=public pure    [returns element]            ($gate::element $opts::map {})            [$authz-gate-wellformed $gate $opts]]
+[?def verify-tier      scope=public impure [returns element]            ($store::element $grant::element $tier::string "" $opts::map {}) [$authz-verify-tier $store $grant $tier $opts]]
+
+[- §3.6 effective envelope — the intersection (pure) -]
+[?def effective scope=public pure [returns element] ($store::element $actor::element $opts::map {}) [$authz-effective $store $actor $opts]]
+
+[- §3.7 dry-run / explain / trace — why can / can't X do Y? (pure) -]
+[?def dry-run scope=public pure [returns element]            ($store::element $req::element $opts::map {}) [$authz-dry-run $store $req $opts]]
+[?def explain scope=public pure [returns element]            ($decision::element)                          [$authz-explain $decision]]
+[?def trace   scope=public pure [returns [sequence element]] ($store::element $req::element $opts::map {}) [$authz-trace $store $req $opts]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=authz
+  [scope """The XAP authority model as data plus a single decision function. It represents principals, capabilities, attenuating/time-bounded/revocable delegations, and guardian grants gated behind incapacity-typed predicates, then decides authority at one point of enforcement: check/authorize answers whether an actor holds a capability over a slice in a tenant at the required assurance tier, returning a [permit] or [deny] value. Authority originates only from principals and can only attenuate down a delegation chain, so privilege escalation is structurally impossible. This is delegated authority — who authorized whom to do what — distinct from and AND-composed with the effect-permission capability system."""]]
+[fn-doc name=store scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open an authority store — the trust-state handle for one tenant, taken by the persisting and live-read verbs."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund-duplicate]] [over '/orders'] [assurance :t1] [signature sig-dana]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund-duplicate] [slice '/orders/9'] [tenant acme]]]]"""] [expect """[permit rooted-principal=dana [delegation 'd-1'] [via 'd-1'] [tier :t1] [capability 'refund-duplicate']]"""]]
+]
+[fn-doc name=close scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Close an authority store — idempotent, never raises."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $c [$authz:close $az]]
+  [$authz:check $az [authz-request [actor [agent x]] [capability y] [tenant acme]]]]"""] [expect """cx-err:CXER4712"""]]
+]
+[fn-doc name=delegate scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue an ordinary delegation, enforcing attenuation — conveying more than the issuer holds raises CXER4703."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund-duplicate]] [over '/orders'] [assurance :t1] [signature sig-dana]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund-duplicate] [slice '/orders/9'] [tenant acme]]]]"""] [expect """[permit rooted-principal=dana [delegation 'd-1'] [via 'd-1'] [tier :t1] [capability 'refund-duplicate']]"""]]
+]
+[fn-doc name=revoke scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Revoke a delegation by id — idempotent; opts.cascade also revokes everything it sourced."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [over '/orders'] [assurance :t1] [signature s]]]]
+  [= $r [$authz:revoke $az 'd-1']]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [slice '/orders/9'] [tenant acme]]]]"""] [expect """[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'refund'] [slice '/orders/9'] [tenant id=acme]]"""]]
+]
+[fn-doc name=grant-guardian scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Issue a guardian grant after the full two-validator check, storing it dormant until its incapacity gate fires."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $g [$authz:grant-guardian $az
+    [delegation g-1 [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw]] [action [do :pause-gw]]
+      [gate [all [incapacity [no-ack-within [of :escalation]]] [state [gt '/charge-error-rate' 0.15]]]]
+      [assurance :t1] [signature sig-admin]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability pause-gw] [tenant acme]]
+    {with-context: [context [no-ack-within true] [charge-error-rate 0.2]]}]]"""] [expect """[permit rooted-principal=admin [delegation 'g-1'] [via 'g-1'] [tier :t1] [capability 'pause-gw']]"""]]
+]
+[fn-doc name=check scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Decide an authorization request at the single PEP, returning a [permit] or [deny] value — always total."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund-duplicate]] [over '/orders'] [assurance :t1] [signature sig-dana]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund-duplicate] [slice '/orders/9'] [tenant acme]]]]"""] [expect """[permit rooted-principal=dana [delegation 'd-1'] [via 'd-1'] [tier :t1] [capability 'refund-duplicate']]"""]]
+]
+[fn-doc name=authorize scope=public purity=pure
+  [sig """-> element"""]
+  [summary """The strict alias of check — with raise-on-deny=true a [deny] becomes a raised CXER4700."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:authorize $az [authz-request [actor [agent x]] [capability y] [tenant acme]] {raise-on-deny: true}]]"""] [expect """cx-err:CXER4700"""]]
+]
+[fn-doc name=find scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Look up a delegation by id — never-issued, revoked, or expired yields the absence channel."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]]
+  [$authz:find $az 'd-1']]"""] [expect """[delegation id=d-1 mode=delegated state=active [tenant id=acme] [to [agent id=ops-1]] [from [principal id=dana]] [capabilities [refund]] [assurance :t1]]"""]]
+]
+[fn-doc name=grants-of scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """List all currently-active delegations granted to an actor, in receive order."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]]
+  [$authz:grants-of $az [agent ops-1]]]"""] [expect """([delegation id=d-1 mode=delegated state=active [tenant id=acme] [to [agent id=ops-1]] [from [principal id=dana]] [capabilities [refund]] [assurance :t1]])"""]]
+]
+[fn-doc name=predicate scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Look up a signed-library incapacity predicate by name@version — unknown yields the absence channel."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:predicate $az 'no-ack-within@v1']]"""] [expect """[predicate name=no-ack-within version=v1 [params [duration] [of]] [rationale 'a request was issued and no acknowledgement arrived within the window — truth depends on the elapsed clock + the absence of an ack event, never on the principal willing it; an ack the instant it arrives makes it false'] [signature 'bundled-library:no-ack-within@v1']]"""]]
+]
+[fn-doc name=predicates scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """List the whole signed incapacity-predicate library."""]
+]
+[fn-doc name=gate-wellformed scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Run the structural and semantic validators over a [gate …] without issuing, returning a [valid] or [invalid …] value."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[$authz:gate-wellformed [gate [all [incapacity [no-ack-within]] [state [gt '/x' 1]]]]]"""] [expect """[valid]"""]]
+]
+[fn-doc name=verify-tier scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Verify a grant's assurance tier via crypto — returns [verified …] or raises CXER4704."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:verify-tier $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent o]]
+      [capabilities [x]] [assurance :t1] [signature sig-ok]] 't1']]"""] [expect """[verified [tier :t1]]"""]]
+]
+[fn-doc name=effective scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Compute an actor's effective envelope — the most-restrictive intersection of individual and superior/managing/collective gates."""]
+]
+[fn-doc name=dry-run scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Run check over an explicit scenario with no journal write, returning the same [permit] or [deny] value."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent o]]
+      [capabilities [x]] [over '/s'] [assurance :t1] [signature s]]]]
+  [$authz:dry-run $az [authz-request [actor [agent o]] [capability x] [slice '/s/1'] [tenant acme]]]]"""] [expect """[permit rooted-principal=dana [delegation 'd'] [via 'd'] [tier :t1] [capability 'x']]"""]]
+]
+[fn-doc name=explain scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Turn a permit or deny into a readable [explanation …] — the authority chain or the first failing link."""]
+  [example [code """[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [over '/orders'] [assurance :t1] [signature s]]]]
+  [= $dec [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [slice '/orders/9'] [tenant acme]]]]
+  [$authz:explain $dec]]"""] [expect """[explanation outcome=permit [accountable 'dana'] [authority-chain [step 'd-1']]]"""]]
+]
+[fn-doc name=trace scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Return the ordered policy-stack evaluation behind a decision — the deep-debug view behind explain."""]
+]

@@ -1,0 +1,119 @@
+[- cx-stdlib/bus — in-process publish/subscribe with synchronous,
+   deterministic, ordered dispatch (spec/02-inprogress/xap/stdlib_bus.md,
+   band CXER4650-4699). A [bus] owns an ordered subscription list and a
+   re-entrant FIFO emission queue; each published message is delivered to
+   its matching subscribers synchronously, in a defined order (descending
+   priority, ties by registration order), and a message a handler emits
+   during dispatch is drained before the next externally-published message
+   (§4.2). There is NO async mode (N-BUS-1). The bus introduces no
+   capability and gates nothing of its own (§5) — any effect is the
+   handler's own, gated at the handler's effect point.
+
+   construction + introspection are :pure; on/off/close/emit are :impure
+   (handle-state mutation / handler invocation). The bodies forward to the
+   bus-* primitives (vcx/code/stdlib_bus.v); emit + match + matches dispatch
+   through the env-aware path (they invoke CX callables).
+
+   pattern forms (§2.2): a topic atom (:order.placed; trailing .* is a
+   prefix-glob), a head-name string, or an arity-1 boolean predicate fn over
+   the message (the CXPath-predicate form, realized as a pure callable). -]
+
+[- §3.1 construction -]
+[?def bus   scope=public pure   [returns element] ($opts::map {}) [$bus-bus $opts]]
+[?def close scope=public impure [returns null]    ($bus::element) [$bus-close $bus]]
+
+[- §3.2 / §3.3 subscribe / unsubscribe -]
+[?def on  scope=public impure [returns element] ($bus::element $pattern::any $handler::any $opts::map {}) [$bus-on $bus $pattern $handler $opts]]
+[?def off scope=public impure [returns bool]    ($bus::element $sub::any)                                  [$bus-off $bus $sub]]
+
+[- §3.4 publish -]
+[?def emit scope=public impure [returns element] ($bus::element $msg::element $opts::map {}) [$bus-emit $bus $msg $opts]]
+
+[- §3.5 introspection (pure) -]
+[?def subscribers scope=public pure [returns [sequence element]] ($bus::element $pattern::any {}) [$bus-subscribers $bus $pattern]]
+[?def topics      scope=public pure [returns [sequence element]] ($bus::element)                   [$bus-topics $bus]]
+[?def match       scope=public pure [returns [sequence element]] ($bus::element $msg::element)    [$bus-match $bus $msg]]
+[?def topic       scope=public pure [returns element]            ($msg::element)                   [$bus-topic $msg]]
+[?def matches     scope=public pure [returns bool]               ($msg::element $pattern::any)    [$bus-matches $msg $pattern]]
+
+[- co-located docs (seeded — refine in place). -]
+[module-doc name=bus
+  [scope """In-process publish/subscribe that delivers each published message to its matching subscribers synchronously and in a defined order. Subscribers attach a (pattern, handler) registration; messages are matched by topic atom, head name, or an arity-1 boolean predicate. A re-entrant FIFO emission queue drains every message a handler publishes during dispatch before the next externally-published message, keeping delivery deterministic and replayable. The bus has no socket, thread, or timer of its own and introduces no capability — every effect is performed by the handlers it invokes."""]]
+[fn-doc name=bus scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Construct a fresh in-process bus with no subscriptions."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :ping [?fn ($m) $m]] $s
+    [?let [= $d [$bus:emit $b [do :ping]]] $d@delivered]]]"""] [expect """1"""]]
+]
+[fn-doc name=close scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Close the bus, cancelling every active subscription — idempotent, never raises."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[?let [= $b [$bus:bus]]
+  [?let [= $c [$bus:close $b]]
+    [$bus:emit $b [do :t]]]]"""] [expect """cx-err:CXER4664"""]]
+]
+[fn-doc name=on scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Register a handler to fire on every future message matching the pattern, returning a [subscription] handle."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :ping [?fn ($m) $m]] $s
+    [?let [= $d [$bus:emit $b [do :ping]]] $d@delivered]]]"""] [expect """1"""]]
+]
+[fn-doc name=off scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Cancel a subscription by handle or id — true if an active one was cancelled, false if already gone."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?let [= $s [$bus:on $b :t [?fn ($m) $m]]]
+    [$bus:off $b $s]]]"""] [expect """true"""]]
+]
+[fn-doc name=emit scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Publish a message and synchronously drive the full ordered dispatch, returning a [dispatch] summary value."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :ping [?fn ($m) $m]] $s
+    [?let [= $d [$bus:emit $b [do :ping]]] $d@delivered]]]"""] [expect """1"""]]
+]
+[fn-doc name=subscribers scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """List the active subscriptions in dispatch order, optionally filtered by a pattern."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :a [?fn ($m) $m]] $s1
+    [?with-open [$bus:on $b :b [?fn ($m) $m]] $s2
+      [$count [$bus:subscribers $b]]]]]"""] [expect """2"""]]
+]
+[fn-doc name=topics scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """List the distinct topic atoms currently subscribed, in first-appearance order."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :a [?fn ($m) $m]] $s1
+    [?with-open [$bus:on $b :b [?fn ($m) $m]] $s2
+      [$bus:topics $b]]]]"""] [expect """(:a, :b)"""]]
+]
+[fn-doc name=match scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """Report which subscriptions would fire for a message, in fire order, without firing them."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) $m]] $s
+    [$count [$bus:match $b [do :t]]]]]"""] [expect """1"""]]
+]
+[fn-doc name=topic scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Compute a message's topic atom from its head and leading atom argument."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[$bus:matches [do :refund] [?fn ($m) [= [$bus:topic $m] :refund]]]"""] [expect """true"""]]
+]
+[fn-doc name=matches scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Report whether a message matches a pattern — the bare matcher."""]
+  [example [code """[?lib 'cx-stdlib/bus']
+[$bus:matches [do :order-placed] :order-placed]"""] [expect """true"""]]
+]
