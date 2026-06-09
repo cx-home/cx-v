@@ -32,9 +32,13 @@ $(RE2_SHIM_LIB): deps/re2_shim/re2_shim.cc deps/re2_shim/re2_shim.h
 # per module so VMODULES resolves both regardless of the shell's VMODULES.
 MODSETUP = mkdir -p _modules && ln -sfn $$(pwd) _modules/cx && ln -sfn $$(pwd)/code _modules/code
 
+# NOTE: not `-prod`. `-prod` turns V warnings into errors, and the cmd/ LSP
+# files carry benign unused-import warnings (same class as cx-home/cx-private#13);
+# `-prod` with a stock-V Boehm GC can also segfault on macOS. The CLI is a thin
+# dispatch layer over the (in cx-home/cx, -prod) libcx, so -O2 C opt suffices.
 install: re2-shim
 	@mkdir -p $(PREFIX) && $(MODSETUP)
-	@VMODULES=$$(pwd)/_modules $(V) -prod -o $(PREFIX)/cx cmd/; STATUS=$$?; rm -rf _modules; \
+	@VMODULES=$$(pwd)/_modules $(V) -cflags "-O2" -o $(PREFIX)/cx cmd/; STATUS=$$?; rm -rf _modules; \
 	  [ $$STATUS -eq 0 ] && echo "installed: $(PREFIX)/cx — make sure $(PREFIX) is on your PATH"; exit $$STATUS
 
 uninstall:
