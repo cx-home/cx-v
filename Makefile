@@ -34,7 +34,7 @@ MODSETUP = mkdir -p _modules && ln -sfn $$(pwd) _modules/cx && ln -sfn $$(pwd)/c
 
 install: re2-shim
 	@mkdir -p $(PREFIX) && $(MODSETUP)
-	@VMODULES=$$(pwd)/_modules $(V) -prod -o $(PREFIX)/cx cmd/main.v; STATUS=$$?; rm -rf _modules; \
+	@VMODULES=$$(pwd)/_modules $(V) -prod -o $(PREFIX)/cx cmd/; STATUS=$$?; rm -rf _modules; \
 	  [ $$STATUS -eq 0 ] && echo "installed: $(PREFIX)/cx — make sure $(PREFIX) is on your PATH"; exit $$STATUS
 
 uninstall:
