@@ -1,26 +1,45 @@
-# cx
+# cx — CX for V
 
-> **V package distribution** of CX — the native V implementation (the `cx` data
-> module, the `code` eval engine, and the `cx` CLI). This is the `v install`
-> channel. For the spec, the other language bindings (Python / Rust / Go),
-> the conformance suite, and the full guide, see
-> **[github.com/cx-home/cx](https://github.com/cx-home/cx)** or the docs site at
-> **[cx-home.github.io/cx](https://cx-home.github.io/cx/)**.
+[![Version](https://img.shields.io/badge/version-v0.8.0-blue.svg)](#status)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-cx--home.github.io%2Fcx-brightgreen.svg)](https://cx-home.github.io/cx/)
+[![Status](https://img.shields.io/badge/status-pre--1.0_experimental-orange.svg)](#status)
 
-CX (v0.8.0) is **one bracket syntax for data *and* code**. The same `[head …]`
-form is markup, configuration, structured data, *and* an executable,
-homoiconic program language — a document evaluates to itself; a program is
-just data the evaluator walks. It reads and writes JSON, YAML, TOML, and XML,
-and adds a unified selector + transform layer (CXPath as a first-class value
-kind, `[?match]`, `[?modify]`, `[?for]` comprehensions, a module system with a
-bundled standard library, and atom scalars).
+> **One concise syntax for data *and* code.** Configs, structured documents,
+> tabular data, queries, transforms, and the programs that tie them together —
+> one tree of `[...]` forms that round-trips losslessly through XML, JSON,
+> YAML, TOML, and CSV.
+>
+> **The native V distribution.** This is the `v install` channel for CX — the
+> `cx` data module (parse / navigate / emit / convert / stream), the `code`
+> eval engine (CXPath, `[?match]`, `[?modify]`, `[?for]`, the module system),
+> and the `cx` CLI. For the spec, the other language bindings (Python / Rust /
+> Go), the conformance suite, and the full guide, see
+> **[github.com/cx-home/cx](https://github.com/cx-home/cx)**.
 
+CX is a homoiconic data language. Read it like XML, type it like TOML, query
+it like XPath, program it like Lisp. As a format, CX round-trips losslessly
+through JSON, YAML, TOML, XML, and CSV, so you can adopt it incrementally
+without rewriting existing pipelines.
+
+```cx
+[service name=auth port=8443 tls=true
+  [route path=/login  method=:post]
+  [route path=/health method=:get]
+  [active [?for [in $r //route] [yield $r@path]]]]
 ```
-[config version='1.0'
-  [server host=localhost port::u16=8080 tls=true]
-  [database host=db.local port::u16=5432]
-]
-```
+
+Same brackets, same parser. The `?` sigil is the only visible cue that a
+subtree is executable — it's still CX data, queryable and transformable like
+every other node. That's the homoiconic property, and it's why CX is one
+product, not "a format plus a separate language."
+
+> ⚠️ **Not production-ready — experimental, pre-1.0.** CX is already
+> full-featured, but it's still hardening. Expect rough edges: single-core
+> performance is strong (~135k HTTP requests/second) while multi-core scaling
+> is still in progress, and a couple of build dependencies are on the way out.
+> Pin a version, kick the tires, and file issues — but don't put it in front
+> of customers yet.
 
 ## Requirements
 
@@ -28,8 +47,12 @@ This package builds with the **CX project's V fork**
 ([github.com/cx-home/v](https://github.com/cx-home/v)), **not** stock V: the
 `code` module's HTTP/SSE engine uses picoev extensions that live only in the
 fork, and the optimized build needs the fork's macOS GC fix. It also needs a
-**C++ compiler** and **RE2** (the regex engine shim): `brew install re2`
-(macOS) or `apt install libre2-dev` (Debian/Ubuntu).
+**C++ compiler** and **RE2** (the regex engine shim):
+
+```sh
+brew install re2          # macOS
+apt install libre2-dev    # Debian / Ubuntu
+```
 
 ## Install
 
@@ -42,6 +65,15 @@ Then import the data module:
 ```v
 import cx
 ```
+
+To install the `cx` CLI (builds the C++/RE2 shim and links it), point `make`
+at your checkout of the V fork:
+
+```sh
+make -C ~/.vmodules/cx install V=/path/to/cx-home-v/v   # → ~/.local/bin/cx
+```
+
+Override the destination with `PREFIX` (e.g. `PREFIX=/usr/local/bin`).
 
 ## Library — parse, navigate, emit
 
@@ -113,10 +145,10 @@ for ev in s.collect() {
 
 v0.8.0 unifies selection and transformation under the CX **code** language
 ([`code.md`](https://github.com/cx-home/cx/blob/main/spec/03-approved/core/code.md)):
-a CXPath `//path` is a first-class value,
-`[?for]` is the comprehension/pattern-generator, `[?match]` dispatches, and
-`[?modify]` does pure-functional updates. The `code` module's `eval_code`
-evaluates a program against an input document and renders the result.
+a CXPath `//path` is a first-class value, `[?for]` is the
+comprehension/pattern-generator, `[?match]` dispatches, and `[?modify]` does
+pure-functional updates. The `code` module's `eval_code` evaluates a program
+against an input document and renders the result.
 
 ```v
 import code
@@ -133,15 +165,6 @@ out  := code.eval_code(src, prog, 'cx') or { panic(err) }
 ```
 
 ## CLI
-
-The `cx` command-line tool. Built from this package (uses the C++/RE2 shim):
-
-```sh
-v install --git https://github.com/cx-home/cx-v
-make -C ~/.vmodules/cx install V=/path/to/cx-home-v/v   # → ~/.local/bin/cx
-```
-
-Override the destination with `PREFIX` (e.g. `PREFIX=/usr/local/bin`).
 
 A bare resource **evaluates** (the program reading): `cx file.cx` ≡ `cx eval
 file.cx`; a pure-data document evaluates to itself. The result renders to the
@@ -160,11 +183,6 @@ cx --from=cx   --to=yaml file.cx    # convert CX → YAML
 Input is a file argument or stdin; `--from` is auto-detected from the file
 extension when omitted. (Prose-heavy markup documents should use the
 `--from=cx --to=…` data path; the eval path reads the body as a program.)
-
-## Editor tooling
-
-Syntax highlighting + the `cx lsp` language server (VS Code, Neovim) live in the
-main repo: [cx-home/cx/tooling](https://github.com/cx-home/cx/tree/main/tooling).
 
 ## API reference
 
@@ -219,6 +237,26 @@ main repo: [cx-home/cx/tooling](https://github.com/cx-home/cx/tree/main/tooling)
 | `StreamEntityRef` / `StreamAlias` / `StreamRawText` | `name` / `name` / `value` |
 | `StreamStartDoc` / `StreamEndDoc` | — |
 
+## Editor tooling
+
+Syntax highlighting + the `cx lsp` language server (VS Code, Neovim) live in the
+main repo: [cx-home/cx/tooling](https://github.com/cx-home/cx/tree/main/tooling).
+
+## Documentation
+
+The full documentation — overview, quickstart, tutorial, the data and code
+tours, the standard-library reference, cookbook, every binding, and the
+interactive playground — lives at:
+
+**→ [cx-home.github.io/cx](https://cx-home.github.io/cx/)**
+
+## Status
+
+CX is **pre-1.0** and under active development; **v0.8.0** is the current line.
+The grammar is stable and the C ABI is versioned and forward-compatible.
+Formal security review, fuzz-testing, and the multi-core performance work are
+still ahead — so pin a tested version and apply normal pre-1.0 caution.
+
 ## License
 
-MIT
+Apache-2.0. See [`LICENSE`](LICENSE).

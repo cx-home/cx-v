@@ -1,8 +1,8 @@
 Module {
 	name: 'cx'
-	description: 'CX format parser and emitter — native V implementation'
+	description: 'CX — one syntax for data and code: parser, emitter, CXPath/eval engine, and CLI (native V implementation)'
 	version: '0.8.0'
-	license: 'MIT'
+	license: 'Apache-2.0'
 	repo_url: 'https://github.com/cx-home/cx-v'
 	dependencies: []
 }
