@@ -1,9 +1,13 @@
 SHELL  := /bin/bash
-V      := v
+# IMPORTANT: build with the CX project's V fork — github.com/cx-home/v — not
+# stock V. The `code` module's HTTP/SSE engine uses picoev extensions
+# (cx_set_sse_on_close / cx_hold_fd) that live only in the fork, and -prod needs
+# the fork's macOS GC fix. Point `make` at it:  make V=/path/to/cx-home-v/v test
+V ?= v
 PREFIX ?= $(HOME)/.local/bin
 
 # The cx module's regex engine (cx/regex_re2.v) binds the RE2 C++ library
-# through a small shim (deps/re2_shim/). Building `import cx` therefore needs:
+# through a small shim (deps/re2_shim/). Building also needs:
 #   • a C++ compiler
 #   • RE2 development headers + library — macOS: `brew install re2`;
 #     Debian/Ubuntu: `apt install libre2-dev`
