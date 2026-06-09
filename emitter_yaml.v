@@ -23,6 +23,10 @@ pub fn emit_yaml_docs(docs []Document) string {
 fn yaml_value(v JsonVal, depth int, _ bool) string {
 	return match v {
 		JsonNull    { 'null' }
+		// Atom: YAML's native tag system carries the type even in
+		// default mode (conversions.md atom row). The payload is the bare
+		// name; readers that don't know `!!cx:atom` preserve it as a string.
+		JsonAtom    { '!!cx:atom "${(v as JsonAtom).name}"' }
 		bool        { if v as bool { 'true' } else { 'false' } }
 		i64         { (v as i64).str() }
 		f64         { format_float(v as f64) }

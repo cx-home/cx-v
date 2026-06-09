@@ -1,0 +1,752 @@
+[test-suite name=authz
+  [doc [#
+conformance fixtures for cx-stdlib/authz (spec/02-working/stdlib_authz.md §10).
+
+   authz is the DECISION layer — principals, attenuating/time-bounded/revocable
+   delegations, guardian grants behind an incapacity-typed [gate …], the
+   signed+versioned incapacity-predicate library, and the single PEP decision
+   function check/authorize. It COMPOSES the shipped crypto (verify) / session
+   ((principal,tenant)) / journal+store (persist) and adds NO crypto, NO
+   transport, NO new caps-capability of its own (§0/§1/§5). Each program imports
+   the bundled module via [?lib 'cx-stdlib/authz'] and calls [$authz:VERB …].
+
+   FOUR-CHANNEL MODEL (SAP §1, §2.4/§2.5):
+     a decision         → a present [permit]/[deny] VALUE (a [deny] carries
+                          cx-err:CXER4700 as DATA — it is NOT an [err]); check
+                          is TOTAL (always permit or deny).
+     a genuine fault    → [err] (malformed grant / bright-line violation /
+                          signature failure / unknown predicate / closed store).
+     an absent grant    → the absence channel () (revoked/expired/never-issued)
+                          — NOT null, NOT a [deny]. null is NEVER produced.
+
+   FAIL-CLOSED (§4): deny by default; any ambiguity denies. A guardian grant
+   permits ONLY while its incapacity gate holds and ONLY its pinned [action …]
+   — the instant the principal re-engages the gate goes false and check flips to
+   [deny] with no explicit revoke (falsifiable-by-presence, §4.4 invariant 3).
+
+   BRIGHT LINE as a TYPE CONSTRAINT (§4.4): a guardian [gate …] admits ONLY
+   `incapacity` (signed-library name@version) + `state` (CXPath threshold)
+   leaves over all/any/not. A leaf branching on a principal's CHOICE
+   (declined/refused/consent/…) is rejected at AUTHORING → CXER4701. ≥1
+   incapacity required → else CXER4702. Inline/ad-hoc incapacity → CXER4706.
+
+   GRAMMAR ADAPTATION: the spec verb `gate-wellformed?` is spelled
+   `gate-wellformed` (no trailing `?`) — `?` is not a NameChar in a call head
+   [$authz:VERB …], the same constraint that forced net's addr->string →
+   addr-to-string. Semantics identical (a [valid]/[invalid] VALUE).
+
+   HERMETIC: an in-memory authority store per tenant (the capability-free
+   posture, §5); a deterministic clock supplied via the request `as-of` /
+   `until` as Unix-seconds ints; signatures are recorded markers (a non-empty,
+   non-`invalid` [signature …] verifies for T1; T2 needs an M-of-N
+   [signatures need=N …] quorum) so the negatives are testable without minting
+   real keys. CXPath slices are quoted strings in code position (`/orders` bare
+   is a division op). Id ranges:
+     001-009  store + delegate + check permit/deny (no-grant/out-of-slice/
+              unheld-capability/tenant-mismatch/expired) + find + grants-of
+     010-013  revoke (+ cascade) → deny + find absence; idempotent revoke
+     014-019  guardian grant: well-formed dormant + gate-holds permit +
+              falsifiable-by-presence flip + state-threshold + pinned-action
+     020-024  predicate library + gate-wellformed (valid/invalid VALUE)
+     025-028  verify-tier T1/T2 + tier-unmet deny + effective envelope clamp
+     029-032  dry-run determinism + explain (permit chain / deny first-link)
+     040-052  NEGATIVE bright-line spine (CXER4701/4702/4703/4704/4706/4711/4712)
+#]]
+
+ # ── §3.1/§3.2/§3.4 store + delegate + the PEP decision ──
+ [case id=authz-001-delegate-check-permit level=core gate=enforced
+  [tags authz delegate check permit]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund-duplicate]] [over '/orders'] [assurance :t1] [signature sig-dana]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund-duplicate] [slice '/orders/9'] [tenant acme]]]]
+#]]
+  [out-text [#
+[permit rooted-principal=dana [delegation 'd-1'] [via 'd-1'] [tier :t1] [capability 'refund-duplicate']]
+#]]
+ ]
+
+ [case id=authz-002-check-deny-no-grant level=core gate=enforced
+  [tags authz check deny no-grant fail-closed]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:check $az [authz-request [actor [agent ghost]] [capability refund-duplicate] [slice '/orders/9'] [tenant acme]]]]
+#]]
+  [out-text [#
+[deny actor=ghost [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'refund-duplicate'] [slice '/orders/9'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-003-check-deny-out-of-slice level=core gate=enforced
+  [tags authz check deny out-of-slice]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund-duplicate]] [over '/orders'] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund-duplicate] [slice '/payments/9'] [tenant acme]]]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :out-of-slice] [capability 'refund-duplicate'] [slice '/payments/9'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-004-check-deny-unheld-capability level=core gate=enforced
+  [tags authz check deny unheld-capability]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund-duplicate]] [over '/orders'] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability delete-account] [slice '/orders/9'] [tenant acme]]]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'delete-account'] [slice '/orders/9'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-005-check-deny-tenant-mismatch level=core gate=enforced
+  [tags authz check deny tenant-mismatch partition]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund-duplicate]] [over '/orders'] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund-duplicate] [slice '/orders/9'] [tenant other]]]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :tenant-mismatch] [capability 'refund-duplicate'] [slice '/orders/9'] [tenant id=other]]
+#]]
+ ]
+
+ [case id=authz-006-check-deny-expired level=core gate=enforced
+  [tags authz check deny expired time-bound]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [over '/orders'] [until 1700000000] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [slice '/orders/9'] [tenant acme] [as-of 1800000000]]]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :expired] [capability 'refund'] [slice '/orders/9'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-007-find-active level=core gate=enforced
+  [tags authz find delegation]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]]
+  [$authz:find $az 'd-1']]
+#]]
+  [out-text [#
+[delegation id=d-1 mode=delegated state=active [tenant id=acme] [to [agent id=ops-1]] [from [principal id=dana]] [capabilities [refund]] [assurance :t1]]
+#]]
+ ]
+
+ [case id=authz-008-grants-of level=core gate=enforced
+  [tags authz grants-of sequence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]]
+  [$authz:grants-of $az [agent ops-1]]]
+#]]
+  [out-text [#
+([delegation id=d-1 mode=delegated state=active [tenant id=acme] [to [agent id=ops-1]] [from [principal id=dana]] [capabilities [refund]] [assurance :t1]])
+#]]
+ ]
+
+ [case id=authz-009-store-missing-tenant level=core gate=enforced
+  [tags authz store tenant negative arg-invalid]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[$authz:store {}]
+#]]
+  [out-err [#
+cx-err:CXER4711
+#]]
+ ]
+
+ # ── §3.2 revoke → absence-for-check (§2.5) ──
+ [case id=authz-010-revoke-then-deny level=core gate=enforced
+  [tags authz revoke deny]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [over '/orders'] [assurance :t1] [signature s]]]]
+  [= $r [$authz:revoke $az 'd-1']]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [slice '/orders/9'] [tenant acme]]]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'refund'] [slice '/orders/9'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-011-revoke-then-find-absence level=core gate=enforced
+  [tags authz revoke find absence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]]
+  [= $r [$authz:revoke $az 'd-1']]
+  [$authz:find $az 'd-1']]
+#]]
+  [out-text [# () #]]
+ ]
+
+ [case id=authz-012-revoke-cascade level=core gate=enforced
+  [tags authz revoke cascade attenuation]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $p [$authz:delegate $az
+    [delegation d-par [tenant acme] [from [principal dana]] [to [agent mid]]
+      [capabilities [x]] [over '/s'] [assurance :t1] [signature s]]]]
+  [= $c [$authz:delegate $az
+    [delegation d-chi [tenant acme] [from [agent mid]] [to [agent leaf]]
+      [capabilities [x]] [over '/s'] [attenuates d-par] [assurance :t1] [signature s]]]]
+  [= $r [$authz:revoke $az 'd-par' {cascade: true}]]
+  [$authz:check $az [authz-request [actor [agent leaf]] [capability x] [slice '/s/1'] [tenant acme]]]]
+#]]
+  [out-text [#
+[deny actor=leaf [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'x'] [slice '/s/1'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-013-revoke-absent-idempotent level=core gate=enforced
+  [tags authz revoke idempotent absence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:revoke $az 'never-issued']]
+#]]
+  [out-text [# () #]]
+ ]
+
+ # ── §3.3 guardian grant + the falsifiable-by-presence flip (§4.4) ──
+ [case id=authz-014-guardian-permit-gate-holds level=core gate=enforced
+  [tags authz guardian permit gate incapacity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $g [$authz:grant-guardian $az
+    [delegation g-1 [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw]] [action [do :pause-gw]]
+      [gate [all [incapacity [no-ack-within [of :escalation]]] [state [gt '/charge-error-rate' 0.15]]]]
+      [assurance :t1] [signature sig-admin]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability pause-gw] [tenant acme]]
+    {with-context: [context [no-ack-within true] [charge-error-rate 0.2]]}]]
+#]]
+  [out-text [#
+[permit rooted-principal=admin [delegation 'g-1'] [via 'g-1'] [tier :t1] [capability 'pause-gw']]
+#]]
+ ]
+
+ [case id=authz-015-guardian-deny-presence-flip level=core gate=enforced
+  [tags authz guardian deny falsifiable-by-presence bright-line]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $g [$authz:grant-guardian $az
+    [delegation g-1 [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw]] [action [do :pause-gw]]
+      [gate [all [incapacity [no-ack-within [of :escalation]]] [state [gt '/charge-error-rate' 0.15]]]]
+      [assurance :t1] [signature sig-admin]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability pause-gw] [tenant acme]]
+    {with-context: [context [no-ack-within false] [charge-error-rate 0.2]]}]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :gate-not-holding] [capability 'pause-gw'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-016-guardian-deny-state-below level=core gate=enforced
+  [tags authz guardian deny state threshold]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $g [$authz:grant-guardian $az
+    [delegation g-1 [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw]] [action [do :pause-gw]]
+      [gate [all [incapacity [no-ack-within [of :escalation]]] [state [gt '/charge-error-rate' 0.15]]]]
+      [assurance :t1] [signature sig-admin]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability pause-gw] [tenant acme]]
+    {with-context: [context [no-ack-within true] [charge-error-rate 0.05]]}]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :gate-not-holding] [capability 'pause-gw'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-017-guardian-pinned-action-only level=core gate=enforced
+  [tags authz guardian pinned-action deny]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $g [$authz:grant-guardian $az
+    [delegation g-1 [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw] [refund]] [action [do :pause-gw]]
+      [gate [all [incapacity [no-ack-within]]]] [assurance :t1] [signature sig-admin]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]
+    {with-context: [context [no-ack-within true]]}]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :action-not-pinned] [capability 'refund'] [tenant id=acme]]
+#]]
+ ]
+
+ # ── §3.5 predicate library + gate-wellformed VALUE ──
+ [case id=authz-020-predicate-lookup level=core gate=enforced
+  [tags authz predicate library name-at-version]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:predicate $az 'no-ack-within@v1']]
+#]]
+  [out-text [#
+[predicate name=no-ack-within version=v1 [params [duration] [of]] [rationale 'a request was issued and no acknowledgement arrived within the window — truth depends on the elapsed clock + the absence of an ack event, never on the principal willing it; an ack the instant it arrives makes it false'] [signature 'bundled-library:no-ack-within@v1']]
+#]]
+ ]
+
+ [case id=authz-021-predicate-unknown-absence level=core gate=enforced
+  [tags authz predicate unknown absence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:predicate $az 'made-up@v9']]
+#]]
+  [out-text [# () #]]
+ ]
+
+ [case id=authz-022-gate-wellformed-valid level=core gate=enforced
+  [tags authz gate-wellformed valid value]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[$authz:gate-wellformed [gate [all [incapacity [no-ack-within]] [state [gt '/x' 1]]]]]
+#]]
+  [out-text [# [valid] #]]
+ ]
+
+ [case id=authz-023-gate-wellformed-invalid-refusal level=core gate=enforced
+  [tags authz gate-wellformed invalid refusal-trigger value bright-line]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[$authz:gate-wellformed [gate [all [refused]]]]
+#]]
+  [out-text [#
+[invalid [reason :refusal-trigger] [code 'cx-err:CXER4701'] [detail "E_AUTHZ_REFUSAL_TRIGGER: gate leaf `refused` branches on a principal's choice — the bright line: a refusal-triggered grant is unexpressible (§4.4)"]]
+#]]
+ ]
+
+ [case id=authz-024-gate-wellformed-invalid-state-only level=core gate=enforced
+  [tags authz gate-wellformed invalid gate-illformed value]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[$authz:gate-wellformed [gate [all [state [gt '/x' 1]]]]]
+#]]
+  [out-text [#
+[invalid [reason :gate-illformed] [code 'cx-err:CXER4702'] [detail 'E_AUTHZ_GATE_ILLFORMED: a gate needs ≥ 1 incapacity predicate — a state-only gate could fire while the principal is present and declining (§4.4)']]
+#]]
+ ]
+
+ # ── §2.7/§3.5 verify-tier + §3.6 effective envelope ──
+ [case id=authz-025-verify-tier-t1 level=core gate=enforced
+  [tags authz verify-tier t1 signature]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:verify-tier $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent o]]
+      [capabilities [x]] [assurance :t1] [signature sig-ok]] 't1']]
+#]]
+  [out-text [# [verified [tier :t1]] #]]
+ ]
+
+ [case id=authz-026-verify-tier-t2-mofn level=core gate=enforced
+  [tags authz verify-tier t2 m-of-n]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:verify-tier $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent o]] [capabilities [x]] [assurance :t2]
+      [signatures need=2 [signature by=alice] [signature by=bob] [signature invalid]]] 't2']]
+#]]
+  [out-text [# [verified [tier :t2]] #]]
+ ]
+
+ [case id=authz-027-check-deny-tier-unmet level=core gate=enforced
+  [tags authz check deny tier-unmet]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent o]]
+      [capabilities [x]] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent o]] [capability x] [tenant acme] [require-tier :t2]]]]
+#]]
+  [out-text [#
+[deny actor=o [code 'cx-err:CXER4700'] [reason :tier-unmet] [capability 'x'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-028-effective-envelope-clamp level=core gate=enforced
+  [tags authz effective envelope intersection most-restrictive]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $sup [$authz:delegate $az
+    [delegation d-sup [tenant acme] [from [principal boss]] [to [agent ops-1]]
+      [capabilities [a] [b]] [assurance :t1] [signature s]]]]
+  [= $d [$authz:delegate $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [a] [b]] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability b] [tenant acme]]
+    {envelopes: [envelopes [envelope from=boss [allow [a]]]]}]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :envelope-clamped] [capability 'b'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-029-effective-unrecorded-ignored level=core gate=enforced
+  [tags authz effective envelope unrecorded ignored relationship]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [a] [b]] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability b] [tenant acme]]
+    {envelopes: [envelopes [envelope from=ghost [allow [a]]]]}]]
+#]]
+  [out-text [#
+[permit rooted-principal=dana [delegation 'd'] [via 'd'] [tier :t1] [capability 'b']]
+#]]
+ ]
+
+ # ── §3.7 dry-run / explain (pure, deterministic) ──
+ [case id=authz-030-dry-run-permit level=core gate=enforced
+  [tags authz dry-run deterministic]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent o]]
+      [capabilities [x]] [over '/s'] [assurance :t1] [signature s]]]]
+  [$authz:dry-run $az [authz-request [actor [agent o]] [capability x] [slice '/s/1'] [tenant acme]]]]
+#]]
+  [out-text [#
+[permit rooted-principal=dana [delegation 'd'] [via 'd'] [tier :t1] [capability 'x']]
+#]]
+ ]
+
+ [case id=authz-031-explain-permit-chain level=core gate=enforced
+  [tags authz explain permit authority-chain accountable]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [over '/orders'] [assurance :t1] [signature s]]]]
+  [= $dec [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [slice '/orders/9'] [tenant acme]]]]
+  [$authz:explain $dec]]
+#]]
+  [out-text [#
+[explanation outcome=permit [accountable 'dana'] [authority-chain [step 'd-1']]]
+#]]
+ ]
+
+ [case id=authz-032-explain-deny-first-link level=core gate=enforced
+  [tags authz explain deny first-failing-link]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $dec [$authz:check $az [authz-request [actor [agent x]] [capability y] [tenant acme]]]]
+  [$authz:explain $dec]]
+#]]
+  [out-text [#
+[explanation outcome=deny [first-failing-link :no-grant] [code 'cx-err:CXER4700']]
+#]]
+ ]
+
+ [case id=authz-033-authorize-raise-on-deny level=core gate=enforced
+  [tags authz authorize raise-on-deny fail-closed]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:authorize $az [authz-request [actor [agent x]] [capability y] [tenant acme]] {raise-on-deny: true}]]
+#]]
+  [out-err [#
+cx-err:CXER4700
+#]]
+ ]
+
+ # ── NEGATIVE bright-line spine (§7 / §10) ──
+ [case id=authz-040-refusal-trigger level=core gate=enforced
+  [tags authz negative refusal-trigger bright-line CXER4701]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:grant-guardian $az
+    [delegation g [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw]] [action [do :pause-gw]]
+      [gate [all [declined [of :escalation]]]] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4701
+#]]
+ ]
+
+ [case id=authz-041-state-only-gate level=core gate=enforced
+  [tags authz negative gate-illformed CXER4702]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:grant-guardian $az
+    [delegation g [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw]] [action [do :pause-gw]]
+      [gate [all [state [gt '/metrics/err' 0.15]]]] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4702
+#]]
+ ]
+
+ [case id=authz-042-inline-predicate level=core gate=enforced
+  [tags authz negative unknown-predicate CXER4706]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:grant-guardian $az
+    [delegation g [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw]] [action [do :pause-gw]]
+      [gate [all [incapacity [made-up-predicate]]]] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4706
+#]]
+ ]
+
+ [case id=authz-043-escalation level=core gate=enforced
+  [tags authz negative escalation attenuation CXER4703]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:delegate $az
+    [delegation d-x [tenant acme] [from [agent ops-1]] [to [agent sub-1]]
+      [capabilities [refund-duplicate]] [attenuates d-missing] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4703
+#]]
+ ]
+
+ [case id=authz-044-t0-guardian level=core gate=enforced
+  [tags authz negative verify-failed t0-guardian CXER4704]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:grant-guardian $az
+    [delegation g [tenant acme] [mode :guardian] [from [principal admin]] [to [agent ops-1]]
+      [capabilities [pause-gw]] [action [do :pause-gw]]
+      [gate [all [incapacity [no-ack-within]]]] [assurance :t0] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4704
+#]]
+ ]
+
+ [case id=authz-045-verify-tier-bad-signature level=core gate=enforced
+  [tags authz negative verify-failed bad-signature CXER4704]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:verify-tier $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent o]]
+      [capabilities [x]] [assurance :t1] [signature invalid]] 't1']]
+#]]
+  [out-err [#
+cx-err:CXER4704
+#]]
+ ]
+
+ [case id=authz-046-t2-quorum-unmet level=core gate=enforced
+  [tags authz negative verify-failed quorum CXER4704]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:verify-tier $az
+    [delegation d [tenant acme] [from [principal dana]] [to [agent o]] [capabilities [x]] [assurance :t2]
+      [signatures need=3 [signature by=alice] [signature invalid]]] 't2']]
+#]]
+  [out-err [#
+cx-err:CXER4704
+#]]
+ ]
+
+ [case id=authz-047-guardian-shape-to-delegate level=core gate=enforced
+  [tags authz negative arg-invalid CXER4711]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:delegate $az
+    [delegation g [tenant acme] [mode :guardian] [from [principal a]] [to [agent o]]
+      [capabilities [x]] [action [do :x]] [gate [all [incapacity [no-ack-within]]]] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4711
+#]]
+ ]
+
+ [case id=authz-048-ordinary-shape-to-grant-guardian level=core gate=enforced
+  [tags authz negative arg-invalid CXER4711]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:grant-guardian $az
+    [delegation d [tenant acme] [from [principal a]] [to [agent o]] [capabilities [x]] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4711
+#]]
+ ]
+
+ [case id=authz-049-cross-tenant-delegate level=core gate=enforced
+  [tags authz negative arg-invalid partition CXER4711]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:delegate $az
+    [delegation d [tenant other] [from [principal a]] [to [agent o]] [capabilities [x]] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4711
+#]]
+ ]
+
+ [case id=authz-050-closed-store level=core gate=enforced
+  [tags authz negative handle-closed CXER4712 closeable]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $c [$authz:close $az]]
+  [$authz:check $az [authz-request [actor [agent x]] [capability y] [tenant acme]]]]
+#]]
+  [out-err [#
+cx-err:CXER4712
+#]]
+ ]
+
+ [case id=authz-051-gate-not-combinator-rejected level=core gate=enforced
+  [tags authz gate-wellformed not-combinator bright-line hostile security]
+  [doc [#
+HOSTILE (blocker, authority-WIDENING): `not` is the CX symbolic operator, so a
+`[not [incapacity x]]` term in a gate is EAGERLY EVALUATED to a bare scalar
+`false` before authz sees it. The old scan silently dropped the scalar term,
+so `[all [incapacity X] [not [incapacity X]]]` validated AS IF the not-term
+were absent — silently weakening a multi-term gate. It must be rejected
+fail-closed; `not` is not an admissible gate combinator (§2.2 = all/any).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[$authz:gate-wellformed [gate [all [incapacity [no-ack-within]] [not [incapacity [no-ack-within]]]]]]
+#]]
+  [out-text [#
+[invalid [reason :gate-illformed] [code 'cx-err:CXER4702'] [detail 'E_AUTHZ_GATE_ILLFORMED: a gate term collapsed to a bare scalar — `not`/operator forms are not gate combinators; a gate is all/any over incapacity/state leaves only (§2.2)']]
+#]]
+ ]
+
+ [case id=authz-052-verify-tier-expired level=core gate=enforced
+  [tags authz verify-tier CXER4705 expiry clock hostile]
+  [doc [#
+HOSTILE (major): CXER4705 (grant past `until` in a hard verification) was
+DEAD — the verify-tier def forwarded only 3 args, dropping the opts/clock, so
+the clock was always 0 and expiry never fired. The def now forwards $opts; a
+grant whose `until` precedes the supplied `now` is rejected CXER4705.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:verify-tier $az [delegation d [tenant acme] [from [principal dana]] [to [agent o]] [capabilities [x]] [assurance :t1] [signature sig-ok] [until 1000]] 't1' {now: 2000}]]
+#]]
+  [out-err [#
+cx-err:CXER4705
+#]]
+ ]
+
+ [case id=authz-053-verify-tier-not-expired level=core gate=enforced
+  [tags authz verify-tier clock not-expired]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [$authz:verify-tier $az [delegation d [tenant acme] [from [principal dana]] [to [agent o]] [capabilities [x]] [assurance :t1] [signature sig-ok] [until 5000]] 't1' {now: 2000}]]
+#]]
+  [out-text [#
+[verified [tier :t1]]
+#]]
+ ]
+]

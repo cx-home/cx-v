@@ -1,0 +1,27 @@
+[test-suite name=core version='1.0' spec-date=2026-04-19
+  [doc 'Core conformance sample — proves the fixture schema round-trips']
+
+  [case id=003-element-text level=core
+    [tags element text]
+    [in-cx   [# [p Hello] #]]
+    [out-ast [# {
+      "type": "Document",
+      "elements": [
+        {"type": "Element", "name": "p",
+         "items": [{"type": "Text", "value": "Hello"}]}
+      ]
+    } #]]
+    [out-xml [# <p>Hello</p> #]]
+    [out-cx  [# [p Hello] #]]
+  ]
+
+  [case id=sv-014-purity-codes level=extended
+    [tags schema-validate purity]
+    [schema-cxs [# [?cx schema-of doc] #]]
+    [source     [# [doc] #]]
+    [expect-valid false]
+    [expect-codes [:CXER0230, :CXER0233]]
+    [expect-count 2]
+    [expect-severity error]
+  ]
+]

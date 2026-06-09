@@ -1,0 +1,781 @@
+[test-suite name=bytes
+  [doc [#
+conformance/stdlib/bytes.cxd — cx-stdlib/bytes (spec/std-lib/bytes.md §6).
+
+   Auto-run by vcx/tests/code_eval_fixtures_test.v :: test_stdlib_module_fixtures
+   (every conformance/stdlib/*.cxd, no whitelist). Each program imports the
+   bundled module then calls [$bytes:<fn> args]; the last expression is the
+   result. Inputs are strings (bytes round-trips render non-deterministically
+   as raw byte strings, so outputs are composed back to string / int / bool).
+#]]
+
+ [case id=bytes-001-hex-roundtrip level=core
+  [tags bytes hex roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:from-hex "deadbeef"]]
+#]]
+  [out-text [#
+'deadbeef'
+#]]
+ ]
+
+ [case id=bytes-002-hex-upper level=core
+  [tags bytes hex]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex-upper [$bytes:from-hex "deadbeef"]]
+#]]
+  [out-text [#
+'DEADBEEF'
+#]]
+ ]
+
+ [case id=bytes-003-hex-of-utf8 level=core
+  [tags bytes hex utf8]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:from-string-utf8 "abc"]]
+#]]
+  [out-text [#
+'616263'
+#]]
+ ]
+
+ [case id=bytes-004-from-hex-invalid level=core
+  [tags bytes hex error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:from-hex "zz"]
+#]]
+  [out-err [#
+cx-err:CXER2301
+#]]
+ ]
+
+ [case id=bytes-005-length level=core
+  [tags bytes length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$bytes:from-hex "deadbeef"]]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ [case id=bytes-006-at level=core
+  [tags bytes at inspection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:at [$bytes:from-string-utf8 "ABC"] 0]
+#]]
+  [out-text [#
+65
+#]]
+ ]
+
+ [case id=bytes-007-at-out-of-range level=core
+  [tags bytes at error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:at [$bytes:from-string-utf8 "ABC"] 9]
+#]]
+  [out-err [#
+cx-err:CXER2300
+#]]
+ ]
+
+ [case id=bytes-008-is-empty-true level=core
+  [tags bytes is-empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:is-empty [$bytes:from-hex ""]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bytes-009-is-empty-false level=core
+  [tags bytes is-empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:is-empty [$bytes:from-string-utf8 "x"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=bytes-010-equals level=core
+  [tags bytes equals]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:equals [$bytes:from-hex "00ff"] [$bytes:from-hex "00ff"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bytes-011-ct-equals-true level=core
+  [tags bytes constant-time-equals]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:constant-time-equals [$bytes:from-hex "abcd"] [$bytes:from-hex "abcd"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bytes-012-ct-equals-diff-length level=core
+  [tags bytes constant-time-equals]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:constant-time-equals [$bytes:from-hex "ab"] [$bytes:from-hex "abcd"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=bytes-013-slice level=core
+  [tags bytes slice]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:slice [$bytes:from-hex "00112233"] 1 3]]
+#]]
+  [out-text [#
+'1122'
+#]]
+ ]
+
+ [case id=bytes-014-slice-clamp level=core
+  [tags bytes slice clamp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:slice [$bytes:from-hex "0011"] 0 1000000]]
+#]]
+  [out-text [#
+'0011'
+#]]
+ ]
+
+ [case id=bytes-015-slice-negative level=core
+  [tags bytes slice negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:slice [$bytes:from-hex "00112233"] -2 -1]]
+#]]
+  [out-text [#
+'22'
+#]]
+ ]
+
+ [case id=bytes-016-head level=core
+  [tags bytes head]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:head [$bytes:from-hex "00112233"] 2]]
+#]]
+  [out-text [#
+'0011'
+#]]
+ ]
+
+ [case id=bytes-017-tail level=core
+  [tags bytes tail]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:tail [$bytes:from-hex "00112233"] 2]]
+#]]
+  [out-text [#
+'2233'
+#]]
+ ]
+
+ [case id=bytes-018-concat level=core
+  [tags bytes concat]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:concat ([$bytes:from-hex "0011"], [$bytes:from-hex "2233"])]]
+#]]
+  [out-text [#
+'00112233'
+#]]
+ ]
+
+ [case id=bytes-019-repeat level=core
+  [tags bytes repeat]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:repeat [$bytes:from-hex "ab"] 3]]
+#]]
+  [out-text [#
+'ababab'
+#]]
+ ]
+
+ [case id=bytes-020-repeat-length-exceeded level=core
+  [tags bytes repeat length-ceiling error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:repeat [$bytes:from-string-utf8 "xx"] 3000000000]
+#]]
+  [out-err [#
+cx-err:CXER2307
+#]]
+ ]
+
+ [case id=bytes-021-find-start level=core
+  [tags bytes find search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:find [$bytes:from-string-utf8 "hello world"] [$bytes:from-string-utf8 "hello"]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=bytes-022-find-middle level=core
+  [tags bytes find search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:find [$bytes:from-string-utf8 "hello world"] [$bytes:from-string-utf8 "world"]]
+#]]
+  [out-text [#
+6
+#]]
+ ]
+
+ [case id=bytes-023-find-absent level=core
+  [tags bytes find search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:find [$bytes:from-string-utf8 "hello"] [$bytes:from-string-utf8 "zzz"]]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ [case id=bytes-024-find-empty-needle level=core
+  [tags bytes find empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:find [$bytes:from-hex ""] [$bytes:from-hex ""]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=bytes-025-contains level=core
+  [tags bytes contains search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:contains [$bytes:from-string-utf8 "hello world"] [$bytes:from-string-utf8 "o w"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bytes-026-starts-with level=core
+  [tags bytes starts-with]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:starts-with [$bytes:from-string-utf8 "hello"] [$bytes:from-string-utf8 "he"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bytes-027-ends-with level=core
+  [tags bytes ends-with]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:ends-with [$bytes:from-string-utf8 "hello"] [$bytes:from-string-utf8 "lo"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bytes-028-split-third-segment level=core
+  [tags bytes split]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$nth [$bytes:split [$bytes:from-string-utf8 "a,b,c"] [$bytes:from-string-utf8 ","]] 3]]
+#]]
+  [out-text [#
+'c'
+#]]
+ ]
+
+ [case id=bytes-029-split-segment level=core
+  [tags bytes split]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$nth [$bytes:split [$bytes:from-string-utf8 "a,bb,c"] [$bytes:from-string-utf8 ","]] 2]]
+#]]
+  [out-text [#
+'bb'
+#]]
+ ]
+
+ [case id=bytes-030-base64-roundtrip level=core
+  [tags bytes base64 roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$bytes:from-base64 [$bytes:to-base64 [$bytes:from-string-utf8 "hello"]]]]
+#]]
+  [out-text [#
+'hello'
+#]]
+ ]
+
+ [case id=bytes-031-base64-known level=core
+  [tags bytes base64]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-base64 [$bytes:from-string-utf8 "hi"]]
+#]]
+  [out-text [#
+'aGk='
+#]]
+ ]
+
+ [case id=bytes-032-base64-url-unpadded level=core
+  [tags bytes base64 url]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-base64-url [$bytes:from-string-utf8 "hi"]]
+#]]
+  [out-text [#
+'aGk'
+#]]
+ ]
+
+ [case id=bytes-033-base64-url-roundtrip level=core
+  [tags bytes base64 url roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$bytes:from-base64-url [$bytes:to-base64-url [$bytes:from-string-utf8 "hello"]]]]
+#]]
+  [out-text [#
+'hello'
+#]]
+ ]
+
+ [case id=bytes-034-base64-padding-tolerance level=core
+  [tags bytes base64 padding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:equals [$bytes:from-base64 "aGk="] [$bytes:from-base64 "aGk"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bytes-035-base64-invalid level=core
+  [tags bytes base64 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:from-base64 "a"]
+#]]
+  [out-err [#
+cx-err:CXER2302
+#]]
+ ]
+
+ [case id=bytes-036-base32-roundtrip level=core
+  [tags bytes base32 roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$bytes:from-base32 [$bytes:to-base32 [$bytes:from-string-utf8 "hello"]]]]
+#]]
+  [out-text [#
+'hello'
+#]]
+ ]
+
+ [case id=bytes-037-base32-known level=core
+  [tags bytes base32]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-base32 [$bytes:from-string-utf8 "foo"]]
+#]]
+  [out-text [#
+'MZXW6==='
+#]]
+ ]
+
+ [case id=bytes-038-gzip-roundtrip-empty level=core
+  [tags bytes gzip compression roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$bytes:gzip-decompress [$bytes:gzip-compress [$bytes:from-hex ""]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=bytes-039-gzip-roundtrip level=core
+  [tags bytes gzip compression roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$bytes:gzip-decompress [$bytes:gzip-compress [$bytes:from-string-utf8 "hello world"]]]]
+#]]
+  [out-text [#
+'hello world'
+#]]
+ ]
+
+ [case id=bytes-040-gzip-decompress-empty-fails level=core
+  [tags bytes gzip decompress error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:gzip-decompress [$bytes:from-hex ""]]
+#]]
+  [out-err [#
+cx-err:CXER2304
+#]]
+ ]
+
+ [case id=bytes-041-zstd-roundtrip level=core
+  [tags bytes zstd compression roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$bytes:zstd-decompress [$bytes:zstd-compress [$bytes:from-string-utf8 "hello world"]]]]
+#]]
+  [out-text [#
+'hello world'
+#]]
+ ]
+
+ [case id=bytes-042-zstd-level-roundtrip level=core
+  [tags bytes zstd level compression roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$bytes:zstd-decompress [$bytes:zstd-compress-with-level [$bytes:from-string-utf8 "hello world"] 22]]]
+#]]
+  [out-text [#
+'hello world'
+#]]
+ ]
+
+ [case id=bytes-043-zstd-decompress-invalid level=core
+  [tags bytes zstd decompress error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:zstd-decompress [$bytes:from-hex "00112233"]]
+#]]
+  [out-err [#
+cx-err:CXER2304
+#]]
+ ]
+
+ [case id=bytes-044-pack-unpack-int32 level=core
+  [tags bytes pack unpack]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$nth [$bytes:unpack "<I" [$bytes:pack "<I" (1234)]] 1]
+#]]
+  [out-text [#
+1234
+#]]
+ ]
+
+ [case id=bytes-045-pack-width level=core
+  [tags bytes pack]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$bytes:pack "<IIs" (1, 2, "h")]]
+#]]
+  [out-text [#
+9
+#]]
+ ]
+
+ [case id=bytes-046-pack-bool level=core
+  [tags bytes pack bool]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$nth [$bytes:unpack ">?" [$bytes:pack ">?" (true)]] 1]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bytes-047-pack-big-endian-int16 level=core
+  [tags bytes pack endian]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:pack ">H" (258)]]
+#]]
+  [out-text [#
+'0102'
+#]]
+ ]
+
+ [case id=bytes-048-pack-little-endian-int16 level=core
+  [tags bytes pack endian]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:pack "<H" (258)]]
+#]]
+  [out-text [#
+'0201'
+#]]
+ ]
+
+ [case id=bytes-049-pack-signed-roundtrip level=core
+  [tags bytes pack signed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$nth [$bytes:unpack "<b" [$bytes:pack "<b" (-5)]] 1]
+#]]
+  [out-text [#
+-5
+#]]
+ ]
+
+ [case id=bytes-050-pack-format-rejected level=core
+  [tags bytes pack format error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:pack "<p" ("x")]
+#]]
+  [out-err [#
+cx-err:CXER2305
+#]]
+ ]
+
+ [case id=bytes-051-pack-length-mismatch level=core
+  [tags bytes pack length error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:pack "<II" (1)]
+#]]
+  [out-err [#
+cx-err:CXER2306
+#]]
+ ]
+
+ [case id=bytes-052-utf8-roundtrip level=core
+  [tags bytes utf8 roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$bytes:from-string-utf8 "héllo"]]
+#]]
+  [out-text [#
+'héllo'
+#]]
+ ]
+
+ [case id=bytes-053-utf8-invalid-rejected level=core
+  [tags bytes utf8 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$bytes:from-hex "ff"]]
+#]]
+  [out-err [#
+cx-err:CXER2303
+#]]
+ ]
+
+ [case id=bytes-054-utf8-lossy level=core
+  [tags bytes utf8 lossy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$bytes:from-string-utf8 [$bytes:to-string-utf8-lossy [$bytes:from-hex "ff"]]]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=bytes-055-latin1-roundtrip level=core
+  [tags bytes latin1 roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$bytes:from-string-latin1 [$bytes:to-string-latin1 [$bytes:from-hex "00ff80"]]]]
+#]]
+  [out-text [#
+'00ff80'
+#]]
+ ]
+]

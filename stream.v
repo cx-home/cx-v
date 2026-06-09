@@ -73,7 +73,7 @@ pub:
 	name string
 }
 
-// ── Chunked-table events (ADR 0015 D10) ──────────────────────────────────────
+// ── Chunked-table events ──────────────────────────────────────
 //
 // Emitted for `:table` body Elements whose `TableData.from_chunked` is
 // true (set by the data_bin chunked reader path). Non-chunked `:table`
@@ -148,7 +148,7 @@ pub fn (mut s Stream) collect() []StreamEvent {
 fn collect_node_events(n Node, mut events []StreamEvent) {
 	match n {
 		Element {
-			if td := n.table {
+			if td := n.table_opt() {
 				if td.from_chunked {
 					emit_chunked_table_events(n.name, td, mut events)
 					return
@@ -157,9 +157,9 @@ fn collect_node_events(n Node, mut events []StreamEvent) {
 			events << StreamStartElement{
 				name:      n.name
 				attrs:     n.attrs
-				data_type: n.data_type
-				anchor:    n.anchor
-				merge:     n.merge
+				data_type: n.data_type()
+				anchor:    n.anchor()
+				merge:     n.merge()
 			}
 			for child in n.items {
 				collect_node_events(child, mut events)
@@ -216,9 +216,9 @@ fn emit_chunked_table_events(name string, td TableData, mut events []StreamEvent
 			mut end_idx := row_idx + chunk
 			if end_idx > td.rows.len { end_idx = td.rows.len }
 			rg_rows := td.rows[row_idx .. end_idx]
-			// Phase 2.1: streaming chunked-table writer is scalar-only at
-			// v0.6.0. Wire format extension for collection cells lands in
-			// Phase 2.2 per ADR 0018 §D4. scalar_rows_from_cells errors
+			// Phase 2.1: streaming chunked-table writer is scalar-only.
+			// Wire format extension for collection cells lands in
+			// Phase 2.2. scalar_rows_from_cells errors
 			// on collection cells with a clear pending-feature msg.
 			rg_srows := scalar_rows_from_cells(rg_rows) or {
 				events << StreamRowGroup{ row_count: 0, payload: []u8{} }
@@ -263,7 +263,7 @@ fn build_event_col_spec(cols []TableColumn) []u8 {
 }
 
 // build_row_group_plain_body encodes one row group's plain body per
-// spec/data_bin.md §3.11.2: uvarint(row_count) + column-major payloads
+// spec/core/data-bin.md §3.11.2: uvarint(row_count) + column-major payloads
 // (one per column, in declaration order). Reuses the strict-cell encoder
 // from data_bin_chunked.v so byte-for-byte output matches what
 // `cx_table_writer_*` produces.

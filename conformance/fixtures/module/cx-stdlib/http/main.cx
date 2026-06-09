@@ -1,0 +1,4 @@
+[?def get
+  scope=public
+  ($url::string)
+  [response status=200]]

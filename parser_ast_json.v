@@ -68,24 +68,30 @@ fn ajv_to_element(obj map[string]JV) !Node {
 	if iv := obj['items'] {
 		if iv is []JV { for n in iv as []JV { items << ajv_to_node(n)! } }
 	}
-	return Node(Element{
-		name:      ajv_str(obj, 'name')
+	return Node(new_element(ajv_str(obj, 'name'), ElementMeta{
 		anchor:    ajv_opt_str(obj, 'anchor')
 		merge:     ajv_opt_str(obj, 'merge')
 		id:        ajv_opt_str(obj, 'id')
 		data_type: ajv_opt_str(obj, 'dataType')
-		attrs:     attrs
-		items:     items
-	})
+	}, attrs, items))
 }
 
 fn ajv_to_attr(obj map[string]JV) !Attribute {
-	dt     := if s := ajv_opt_str(obj, 'dataType') { ajv_scalar_type(s) } else { none }
+	// D3: the attribute carrier is the canonical type NAME. Preserve the
+	// `dataType` string verbatim (so sized numerics survive); `string` and
+	// an absent tag carry no annotation.
+	dt := if s := ajv_opt_str(obj, 'dataType') {
+		if s == 'string' || s == '' { ?string(none) } else { ?string(s) }
+	} else {
+		?string(none)
+	}
 	val_jv := obj['value'] or { JV(JVNull{}) }
 	is_ref := if rv := obj['isRef'] {
 		if rv is bool { rv as bool } else { false }
 	} else { false }
-	return Attribute{ name: ajv_str(obj, 'name'), value: ajv_scalar_val(val_jv), data_type: dt, is_ref: is_ref }
+	mut a := new_attribute(ajv_str(obj, 'name'), ajv_scalar_val(val_jv), AttributeMeta{ data_type: dt })
+	a.is_ref = is_ref
+	return a
 }
 
 fn ajv_to_scalar_node(obj map[string]JV) !Node {
@@ -107,6 +113,8 @@ fn ajv_scalar_type(s string) ?ScalarType {
 		// v3.4 additions
 		'decimal'  { ?ScalarType(ScalarType.decimal_type) }
 		'bigint'   { ?ScalarType(ScalarType.bigint_type) }
+		'duration' { ?ScalarType(ScalarType.duration_type) }
+		'period'   { ?ScalarType(ScalarType.period_type) }
 		// v3.4 sized variants map to their base category in the AST.
 		// The original annotation string is preserved on the parent
 		// Element's data_type field for round-trip and binary emission.

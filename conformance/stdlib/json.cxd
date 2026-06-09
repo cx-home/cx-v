@@ -1,0 +1,663 @@
+[test-suite name=json
+  [doc [#
+conformance fixtures for cx-stdlib/json (spec/std-lib/json.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/json']
+   (resolver MUST be quoted) then calls [$json:fn args]. The LAST expression
+   is the rendered result.
+
+   Rendering contract (code_eval_fixtures_test.v::render_value):
+   - parse* return CXDM values: a JSON object -> CX map rendered {k: v};
+     a JSON array -> CX array rendered [a, b, c]; scalars render bare
+     (42, true, null, 3.14) or single-quoted for strings ('hi').
+   - emit* return a STRING (JSON text). JSON uses double quotes and never
+     single quotes, so the renderer single-quotes the whole result:
+     emit({a: 1}) -> '{"a":1}'. Comparison is whitespace-normalised
+     token-by-token, so pretty output compares by token sequence.
+   - bytes-producing/consuming calls compose through cx-stdlib/bytes so the
+     final result is a deterministic scalar (mirrors the bytes fixtures).
+   - Error fixtures use out-err with the bare CXERNNNN code.
+#]]
+
+ # ── §3.1 parse — strict ──
+
+ [case id=json-001-parse-int level=core
+  [tags json parse scalar int]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "42"]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=json-002-parse-true level=core
+  [tags json parse scalar bool]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "true"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=json-003-parse-null level=core
+  [tags json parse scalar null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "null"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=json-004-parse-float level=core
+  [tags json parse scalar float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "3.14"]
+#]]
+  [out-text [#
+3.14
+#]]
+ ]
+
+ [case id=json-005-parse-string level=core
+  [tags json parse scalar string]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "\"hi\""]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=json-006-parse-array level=core
+  [tags json parse array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "[1, 2, 3]"]
+#]]
+  [out-text [#
+[1, 2, 3]
+#]]
+ ]
+
+ [case id=json-007-parse-object-map level=core
+  [tags json parse map object]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "{\"a\": 1}"]
+#]]
+  [out-text [#
+{a: 1}
+#]]
+ ]
+
+ [case id=json-008-parse-malformed level=core
+  [tags json parse error CXER3100]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "{,}"]
+#]]
+  [out-err [#
+cx-err:CXER3100
+#]]
+ ]
+
+ [case id=json-009-parse-duplicate-key-strict level=core
+  [tags json parse duplicate-key error CXER3106]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "{\"a\": 1, \"a\": 2}"]
+#]]
+  [out-err [#
+cx-err:CXER3106
+#]]
+ ]
+
+ [case id=json-010-parse-int-out-of-range level=core
+  [tags json parse number-out-of-range error CXER3105]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse "99999999999999999999"]
+#]]
+  [out-err [#
+cx-err:CXER3105
+#]]
+ ]
+
+ # ── §3.1 parse-with-opts ──
+
+ [case id=json-011-parse-with-opts-lenient-trailing-comma level=core
+  [tags json parse-with-opts lenient trailing-comma]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse-with-opts "[1, 2,]" {lenient: true}]
+#]]
+  [out-text [#
+[1, 2]
+#]]
+ ]
+
+ [case id=json-012-parse-with-opts-lenient-duplicate-last-wins level=core
+  [tags json parse-with-opts lenient duplicate-key last-wins]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse-with-opts "{\"a\": 1, \"a\": 2}" {lenient: true}]
+#]]
+  [out-text [#
+{a: 2}
+#]]
+ ]
+
+ [case id=json-013-parse-with-opts-number-mode-string level=core
+  [tags json parse-with-opts number-mode string]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse-with-opts "99999999999999999999" {number-mode: "string"}]
+#]]
+  [out-text [#
+'99999999999999999999'
+#]]
+ ]
+
+ [case id=json-014-parse-with-opts-max-depth-exceeded level=core
+  [tags json parse-with-opts max-depth error CXER3101]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse-with-opts "[[[1]]]" {max-depth: 1}]
+#]]
+  [out-err [#
+cx-err:CXER3101
+#]]
+ ]
+
+ [case id=json-015-parse-with-opts-max-bytes-exceeded level=core
+  [tags json parse-with-opts max-bytes error CXER3102]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse-with-opts "[1, 2, 3]" {max-bytes: 2}]
+#]]
+  [out-err [#
+cx-err:CXER3102
+#]]
+ ]
+
+ # ── §3.1 parse-bytes ──
+
+ [case id=json-016-parse-bytes-utf8 level=core
+  [tags json parse-bytes utf8]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[?lib 'cx-stdlib/bytes']
+[$json:parse-bytes [$bytes:from-string-utf8 "42"]]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=json-017-parse-bytes-utf8-bom-stripped level=core
+  [tags json parse-bytes bom utf8]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[?lib 'cx-stdlib/bytes']
+[$json:parse-bytes [$bytes:from-hex "efbbbf3432"]]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ # ── §3.2 emit — canonical ──
+
+ [case id=json-018-emit-int level=core
+  [tags json emit scalar int]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit 42]
+#]]
+  [out-text [#
+'42'
+#]]
+ ]
+
+ [case id=json-019-emit-string level=core
+  [tags json emit scalar string]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit "hi"]
+#]]
+  [out-text [#
+'"hi"'
+#]]
+ ]
+
+ [case id=json-020-emit-bool level=core
+  [tags json emit scalar bool]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit true]
+#]]
+  [out-text [#
+'true'
+#]]
+ ]
+
+ [case id=json-021-emit-null level=core
+  [tags json emit scalar null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit null]
+#]]
+  [out-text [#
+'null'
+#]]
+ ]
+
+ [case id=json-022-emit-array level=core
+  [tags json emit array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit [1, 2, 3]]
+#]]
+  [out-text [#
+'[1,2,3]'
+#]]
+ ]
+
+ [case id=json-023-emit-canonical-sorts-keys level=core
+  [tags json emit canonical sort-keys map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit {b: 2, a: 1}]
+#]]
+  [out-text [#
+'{"a":1,"b":2}'
+#]]
+ ]
+
+ # emit on an atom: §4.6 enumerates atom/bytes/date/datetime (and other
+ # non-JSON kinds) as non-JSON-emittable, so canonical emit raises
+ # CXER3103 E_JSON_UNSUPPORTED_VALUE.
+ [case id=json-024-emit-unsupported-value level=core
+  [tags json emit unsupported-value error CXER3103]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit :foo]
+#]]
+  [out-err [#
+cx-err:CXER3103
+#]]
+ ]
+
+ # §2/§4.3 element round-trip via the lossless `named` encoding. §2 pins the
+ # shape {"$tag","$attrs","$children"} mapping map -> JSON object (empty -> {})
+ # and array -> JSON array (empty -> []); §3.2 makes canonical `emit` sort map
+ # keys, fixing the order $attrs < $children < $tag. Fully spec-determined.
+ [case id=json-025-emit-element-named-encoding level=core
+  [tags json emit element named-encoding lossless]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit-with-opts [empty] {lossless: true}]
+#]]
+  [out-text [#
+'{"$tag":"empty","$attrs":{},"$children":[]}'
+#]]
+ ]
+
+ [case id=json-025a-emit-element-semantic-default level=core
+  [tags json emit element semantic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit [server [host x] [port 80]]]
+#]]
+  [out-text [#
+'{"server":{"host":"x","port":80}}'
+#]]
+ ]
+
+ [case id=json-025b-emit-parse-named-roundtrip level=core
+  [tags json emit parse element lossless roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse [$json:emit-with-opts [server [port 80]] {lossless: true}]]
+#]]
+  [out-text [#
+[server [port 80]]
+#]]
+ ]
+
+ # ── §3.2 emit-pretty ──
+
+ [case id=json-026-emit-pretty-object level=core
+  [tags json emit-pretty indent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit-pretty {a: 1}]
+#]]
+  [out-text [#
+'{ "a": 1 }'
+#]]
+ ]
+
+ [case id=json-027-emit-pretty-preserves-insertion-order level=core
+  [tags json emit-pretty insertion-order]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit-pretty {b: 2, a: 1}]
+#]]
+  [out-text [#
+'{ "b": 2, "a": 1 }'
+#]]
+ ]
+
+ # ── §3.2 emit-with-opts ──
+
+ [case id=json-028-emit-with-opts-indent level=core
+  [tags json emit-with-opts indent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit-with-opts {a: 1} {indent: 2}]
+#]]
+  [out-text [#
+'{ "a": 1 }'
+#]]
+ ]
+
+ [case id=json-029-emit-with-opts-sort-keys level=core
+  [tags json emit-with-opts sort-keys]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit-with-opts {b: 2, a: 1} {sort-keys: true}]
+#]]
+  [out-text [#
+'{"a":1,"b":2}'
+#]]
+ ]
+
+ # §4.5 ensure-ascii escapes non-ASCII as \uXXXX. U+1234 chosen so the
+ # escape (ሴ) has no hex letters and is case-insensitive.
+ [case id=json-030-emit-with-opts-ensure-ascii level=core
+  [tags json emit-with-opts ensure-ascii unicode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit-with-opts "ሴ" {ensure-ascii: true}]
+#]]
+  [out-text [#
+'"\\u1234"'
+#]]
+ ]
+
+ [case id=json-031-emit-with-opts-trailing-newline level=core
+  [tags json emit-with-opts trailing-newline length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[?lib 'cx-stdlib/json']
+[?let [= $r [$json:emit-with-opts 1 {trailing-newline: true}]] [$strings:length $r]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # §4.4 nan-handling="error" raises CXER3104 when the value contains NaN.
+ # non-finite unconstructible from pure CX (finite-only, code.md §6.5);
+ # CXER2103/CXER3104 are FFI-boundary guards — real coverage is a
+ # binding-level NaN-injection test (TODO). [/ 0.0 0.0] raises CXER0101
+ # (division by zero), never yields NaN, so this case cannot exercise
+ # CXER3104 from pure CX.
+ [case id=json-032-emit-with-opts-nan-error level=core gate=skip
+  [tags json emit-with-opts nan-handling error CXER3104]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:emit-with-opts [/ 0.0 0.0] {nan-handling: "error"}]
+#]]
+  [out-err [#
+cx-err:CXER3104
+#]]
+ ]
+
+ # ── §3.2 emit-bytes ──
+
+ [case id=json-033-emit-bytes-utf8 level=core
+  [tags json emit-bytes utf8]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-string-utf8 [$json:emit-bytes 42]]
+#]]
+  [out-text [#
+'42'
+#]]
+ ]
+
+ # ── §3.3 streaming ──
+
+ [case id=json-034-parse-stream-jsonl level=core
+  [tags json parse-stream streaming jsonl sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse-stream ("1", "2", "3")]
+#]]
+  [out-text [#
+(1, 2, 3)
+#]]
+ ]
+
+ [case id=json-035-parse-many-whitespace-separated level=core
+  [tags json parse-many streaming sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse-many "1 2 3"]
+#]]
+  [out-text [#
+(1, 2, 3)
+#]]
+ ]
+
+ [case id=json-036-parse-many-concatenated-objects level=core
+  [tags json parse-many streaming object boundary]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:parse-many "{\"a\": 1} {\"b\": 2}"]
+#]]
+  [out-text [#
+({a: 1}, {b: 2})
+#]]
+ ]
+
+ [case id=json-037-emit-stream-record-count level=core
+  [tags json emit-stream streaming count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[?let [= $r [$json:emit-stream (1, 2)]] [$count $r]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # ── §3.4 validation ──
+
+ [case id=json-038-is-valid-true level=core
+  [tags json is-valid predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:is-valid "{\"a\": 1}"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=json-039-is-valid-malformed level=core
+  [tags json is-valid predicate malformed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:is-valid "{,}"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=json-040-is-valid-strict-trailing-comma level=core
+  [tags json is-valid predicate strict trailing-comma]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[$json:is-valid "[1, 2,]"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+ [case id=json-041-encode-canonical-module-scaffold level=core gate=enforced
+  [tags json encode module-system scaffold canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+# json:encode = CX canonical form via $format-canonical (NOT JSON); a §12.4.4
+# module re-export scaffold (paired with the private encoder-not-reexported),
+# not part of the json §3 surface — also exercised by conformance/code.cxd.
+[?lib 'cx-stdlib/json']
+[$json:encode {a: 1}]
+#]]
+  [out-text [#
+'{a: 1}'
+#]]
+ ]
+
+]

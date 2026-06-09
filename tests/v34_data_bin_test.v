@@ -2,20 +2,21 @@ module main
 
 import cx
 
-// Round-trip tests for CXDB v1: cx -> emit_data_bin -> parse_data_bin
-// -> emit_cx -> equivalent shape. Spec: spec/data_bin.md.
+// Round-trip tests for CXCol v1: cx -> emit_data_bin -> parse_data_bin
+// -> emit_cx -> equivalent shape. Spec: spec/core/data-bin.md.
 
 // ── Header ───────────────────────────────────────────────────────────────────
 
 fn test_data_bin_emits_magic_and_version() {
 	doc := cx.parse('[a]') or { panic(err) }
 	bytes := cx.emit_data_bin(doc)
-	// Frame: [u32 LE size][CXDB ...].
+	// Frame: [u32 LE size][CXCol ...].
 	assert bytes.len >= 16, 'expected at least header + framing; got ${bytes.len}'
-	// Bytes 4..8 = magic "CXDB"
-	assert bytes[4] == 0x43 && bytes[5] == 0x58 && bytes[6] == 0x44 && bytes[7] == 0x42
-	// Byte 8 = version 0x01
-	assert bytes[8] == 0x01
+	// Bytes 4..9 = 5-byte magic "CXCol" (spec/core/data-bin.md §3.1).
+	assert bytes[4] == 0x43 && bytes[5] == 0x58 && bytes[6] == 0x43
+		&& bytes[7] == 0x6F && bytes[8] == 0x6C
+	// Byte 9 = version 0x01
+	assert bytes[9] == 0x01
 }
 
 // ── Round-trip: scalars and shape ────────────────────────────────────────────
@@ -146,7 +147,7 @@ fn test_data_bin_round_trip_nested_map() {
 // ── Round-trip: tables ───────────────────────────────────────────────────────
 
 fn test_data_bin_round_trip_table() {
-	src := '[users :table[name:string age:int]
+	src := '[users [table[name::string age::int]]
   alice 30
   bob 25
 ]'
@@ -154,7 +155,7 @@ fn test_data_bin_round_trip_table() {
 	bytes := cx.emit_data_bin(doc)
 	doc2 := cx.parse_data_bin(bytes) or { panic(err) }
 	root := doc2.root() or { panic('no root') }
-	t := root.table or { panic('table data lost on data_bin round-trip') }
+	t := root.table_opt() or { panic('table data lost on data_bin round-trip') }
 	assert t.cols.len == 2
 	assert t.rows.len == 2
 	assert t.cols[0].name == 'name'

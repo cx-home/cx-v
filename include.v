@@ -228,7 +228,7 @@ fn load_and_resolve_include(rel_path string, opts ResolveIncludeOpts) ![]Node {
 	// E910 — UTF-8 validity. V strings are byte sequences; we apply a
 	// simple structural check (no NUL inside, no obviously-truncated
 	// continuation bytes). Full structural UTF-8 validation matching
-	// RFC 3629 is a follow-up; v0.7.0 accepts any byte sequence the
+	// RFC 3629 is a follow-up; the resolver accepts any byte sequence the
 	// parser tolerates, with the parse error becoming E911.
 	if contents.contains('\x00') {
 		return error('cx-err:E910 included file is not valid UTF-8 (NUL byte): ${resolved}')

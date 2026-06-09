@@ -1,0 +1,258 @@
+[test-suite name=md
+  [doc [#
+# CX Conformance — Markdown Tests
+# Version: 1.0 — 2026-04-19
+# Covers: CX MD dialect → Markdown output, MD input → CX AST.
+#]]
+
+ [case id=002-md-h1-html-alias level=md
+  [tags heading h1 md-output canonical]
+  [in-cx [#
+[h1 Hello]
+#]]
+  [out-md [#
+# Hello
+#]]
+ ]
+
+ [case id=003-md-paragraph level=md
+  [tags paragraph md-output]
+  [in-cx [#
+[p Hello world]
+#]]
+  [out-md [#
+Hello world
+#]]
+ ]
+
+ [case id=005-md-bold-html level=md
+  [tags strong bold md-output]
+  [in-cx [#
+[strong bold text]
+#]]
+  [out-md [#
+**bold text**
+#]]
+ ]
+
+ [case id=009-md-ul level=md
+  [tags ul li list md-output]
+  [in-cx [#
+[ul
+  [li item one]
+  [li item two]
+]
+#]]
+  [out-md [#
+- item one
+- item two
+#]]
+ ]
+
+ [case id=010-md-ol level=md
+  [tags ol li list md-output]
+  [in-cx [#
+[ol
+  [li step one]
+  [li step two]
+]
+#]]
+  [out-md [#
+1. step one
+2. step two
+#]]
+ ]
+
+ [case id=011-md-link level=md
+  [tags anchor link md-output]
+  [in-cx [#
+[a href=https://example.com click here]
+#]]
+  [out-md [#
+[click here](https://example.com)
+#]]
+ ]
+
+ [case id=012-md-img level=md
+  [tags image img md-output]
+  [in-cx [#
+[img src=photo.png alt=photo]
+#]]
+  [out-md [#
+![photo](photo.png)
+#]]
+ ]
+
+ [case id=015-md-del-alias level=md
+  [tags del strikethrough md-output alias]
+  [in-cx [#
+[del text]
+#]]
+  [out-md [#
+~~text~~
+#]]
+ ]
+
+ [case id=016-md-unknown-element level=md
+  [tags unknown element md-output comment]
+  [in-cx [#
+[widget type:fancy Hello]
+#]]
+  [out-md [#
+<!-- [widget type:fancy Hello] -->
+#]]
+ ]
+
+ [case id=017-md-from-heading level=md
+  [tags heading md-input parse]
+  [in-md [#
+# Hello
+#]]
+  [out-cx [#
+[doc
+  [h1 Hello]
+]
+#]]
+ ]
+
+ [case id=018-md-from-paragraph level=md
+  [tags paragraph md-input parse]
+  [in-md [#
+Hello world
+#]]
+  [out-cx [#
+[doc
+  [p Hello world]
+]
+#]]
+ ]
+
+ [case id=020-md-strong-b-alias level=md
+  [tags strong bold md-output html-alias]
+  [in-cx [#
+[b bold text]
+#]]
+  [out-md [#
+**bold text**
+#]]
+ ]
+
+ [case id=021-md-em-i-alias level=md
+  [tags em italic md-output html-alias]
+  [in-cx [#
+[i italic text]
+#]]
+  [out-md [#
+*italic text*
+#]]
+ ]
+
+ [case id=024-md-from-h2 level=md
+  [tags heading h2 md-input parse]
+  [in-md [#
+## Section
+#]]
+  [out-cx [#
+[doc
+  [h2 Section]
+]
+#]]
+ ]
+
+ [case id=025-md-from-hr level=md
+  [tags hr md-input parse]
+  [in-md [#
+---
+#]]
+  [out-cx [#
+[doc
+  [hr]
+]
+#]]
+ ]
+
+ [case id=026-md-frontmatter-not-hr level=md
+  [tags frontmatter yaml md-input parse regression]
+  [in-md [#
+---
+title: Hello
+---
+# World
+#]]
+  [out-cx [#
+[doc title=Hello
+  [h1 World]
+]
+#]]
+ ]
+
+ [case id=027-md-b-alias-bold level=md
+  [tags strong bold html-alias md-output regression]
+  [in-cx [#
+[b bold]
+#]]
+  [out-md [#
+**bold**
+#]]
+ ]
+
+ [case id=028-md-i-alias-italic level=md
+  [tags em italic html-alias md-output regression]
+  [in-cx [#
+[i italic]
+#]]
+  [out-md [#
+*italic*
+#]]
+ ]
+
+ [case id=029-md-del-s-alias level=md
+  [tags del strikethrough html-alias md-output regression]
+  [in-cx [#
+[s deleted]
+#]]
+  [out-md [#
+~~deleted~~
+#]]
+ ]
+
+ [case id=030-md-pre-code-block-fence level=md
+  [tags code block fenced pre md-output regression-2026-05-22]
+  [in-cx [#
+[pre [code lang='cx' [|[pizza name=Margherita]
+[pizza name=Hawaiian]|]]]
+#]]
+  [out-md [#
+```cx
+[pizza name=Margherita]
+[pizza name=Hawaiian]
+```
+#]]
+ ]
+
+ [case id=031-md-code-multiline-scalar-block-fence level=md
+  [tags code block fenced scalar multi-line md-output regression-2026-05-22]
+  [in-cx [#
+[code "line one
+line two
+line three"]
+#]]
+  [out-md [#
+```
+line one
+line two
+line three
+```
+#]]
+ ]
+
+ [case id=032-md-code-single-line-scalar-stays-inline level=md
+  [tags code inline scalar single-line md-output regression-2026-05-22]
+  [in-cx [#
+[code "single line"]
+#]]
+  [out-md [#
+`single line`
+#]]
+ ]
+]

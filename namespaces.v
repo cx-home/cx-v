@@ -1,6 +1,6 @@
 module cx
 
-// namespaces.v — namespace resolution per ADR 0002.
+// namespaces.v — namespace resolution.
 //
 // Walks a parsed Document and populates Element.{local, ns_uri}
 // and Attribute.{local, ns_uri} based on in-scope xmlns / xmlns:
@@ -8,7 +8,7 @@ module cx
 // (CX, XML, JSON, YAML, TOML, MD, ast_bin) so downstream consumers
 // see a uniform expanded-name view of the document.
 //
-// Reserved prefixes (ADR 0002 D4):
+// Reserved prefixes:
 //   - `xml`   → http://www.w3.org/XML/1998/namespace (XML built-in)
 //   - `cx`    → https://cx-home.org/ns/cx           (CX metadata)
 //   - `xmlns` → declaration-only; never resolves as a name prefix
@@ -25,10 +25,9 @@ pub const cx_namespace_uri  = 'https://cx-home.org/ns/cx'
 // resolve_namespaces walks the document and populates expanded-name
 // fields on every Element and Attribute. Idempotent: calling twice
 // produces the same result. Called automatically by parse(),
-// parse_xml(), parse_json(), parse_yaml(), parse_toml(),
-// parse_markdown(), and the ast_bin decoder.
+// parse_xml(), parse_yaml(), parse_toml(), and the ast_bin decoder.
 //
-// v0.7.0 Z2: also resolves inherited cx:lang scope per spec/i18n.md
+// Z2: also resolves inherited cx:lang scope per spec/i18n.md
 // §1.3 — each Element's `lang_resolved` field is populated with the
 // nearest in-scope BCP 47 language tag (or empty Option when no
 // cx:lang is in scope, or Some("") when explicitly shadowed).
@@ -75,7 +74,7 @@ fn resolve_element_lang(mut e Element, mut stack []?string) {
 	} else {
 		?string(none)
 	}
-	e.lang_resolved = resolved
+	e.set_lang_resolved(resolved)
 	stack << resolved
 	for i := 0; i < e.items.len; i++ {
 		mut item := e.items[i]
@@ -102,22 +101,24 @@ fn resolve_element(mut e Element, mut scope []map[string]string) {
 	}
 
 	prefix, local := split_ns_prefix(e.name)
-	e.local = local
-	e.ns_uri = lookup_element_ns(prefix, scope)
+	if local != e.name {
+		e.set_local(local)
+	}
+	e.set_ns_uri(lookup_element_ns(prefix, scope))
 
 	for i := 0; i < e.attrs.len; i++ {
 		ap, al := split_ns_prefix(e.attrs[i].name)
-		e.attrs[i].local = al
+		e.attrs[i].set_local(al)
 		if e.attrs[i].name == 'xmlns' || ap == 'xmlns' {
-			e.attrs[i].ns_uri = ?string(none)
+			e.attrs[i].set_ns_uri(?string(none))
 			continue
 		}
 		if ap == '' {
 			// Default ns does not apply to unprefixed attrs.
-			e.attrs[i].ns_uri = ?string(none)
+			e.attrs[i].set_ns_uri(?string(none))
 			continue
 		}
-		e.attrs[i].ns_uri = lookup_attribute_ns(ap, scope)
+		e.attrs[i].set_ns_uri(lookup_attribute_ns(ap, scope))
 	}
 
 	for i := 0; i < e.items.len; i++ {
@@ -175,7 +176,7 @@ fn lookup_attribute_ns(prefix string, scope []map[string]string) ?string {
 	return lookup_element_ns(prefix, scope)
 }
 
-// ── Canonical-form namespace rewrite (ADR 0002 D6 / namespaces.md §3.2) ──
+// ── Canonical-form namespace rewrite (/ namespaces.md §3.2) ──
 //
 // Strict canonical form requires deterministic prefix selection so that
 // two semantically equal namespaced documents — e.g., one declaring

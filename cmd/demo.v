@@ -1,7 +1,7 @@
 // `cx demo` subcommand per the evaluation-experience checklist (60s tier).
 //
 // Self-contained showcase: no file I/O, no network, no dependencies.
-// Demonstrates type fidelity, :table → CSV, CXL templating, and the
+// Demonstrates type fidelity, :table → CSV, CX code templating, and the
 // CX-vs-JSON comparison framing in under 60s wall-clock.
 //
 // Deterministic output — diff-able byte-for-byte against
@@ -35,7 +35,7 @@ fn run_demo(args []string) {
 	for line in json_out.trim_space().split('\n') { println(' ${line}') }
 	println('')
 	println(' JSON would silently float 9007199254740993 → 9007199254740992')
-	println(' in JavaScript / browsers / many parsers. CX/CXDB preserves')
+	println(' in JavaScript / browsers / many parsers. CX/CXCol preserves')
 	println(' int64 exactly. This is the type-fidelity contract that makes')
 	println(' CX an honest source-of-truth format.')
 	println('')
@@ -58,8 +58,8 @@ fn run_demo(args []string) {
 	for line in csv_out.trim_space().split('\n') { println(' ${line}') }
 	println('')
 
-	// ── Demo 3: CXL template ───────────────────────────────────────────────
-	println('3. CXL — CX-native templating that shares one parser & data model')
+	// ── Demo 3: CX program ───────────────────────────────────────────────
+	println('3. CX code — CX-native templating that shares one parser & data model')
 	println('─────────────────────────────────────────────────────────────────')
 	println('')
 	tmpl := '[greeting [?if @verbose :then [?= @name] :else friend]]'
@@ -68,11 +68,11 @@ fn run_demo(args []string) {
 	println(' Data: ${data}')
 	println('')
 
-	// CXL eval at runtime needs context; demo a static parse to show
+	// CX code eval at runtime needs context; demo a static parse to show
 	// the form is recognised.
 	parsed := cx.to_cx(tmpl) or { 'parse error: ${err}' }
 	println(' Parses cleanly: ${parsed.trim_space()}')
-	println(' (Full CXL eval: cx eval template.cxl --data=data.cx)')
+	println(' (Full CX code eval: cx eval template.cx --data=data.cx)')
 	println('')
 
 	// ── Demo 4: side-by-side comparison ────────────────────────────────────
@@ -104,5 +104,5 @@ fn run_demo(args []string) {
 	println(' docs/TUTORIAL.md docs/CHEATSHEET.md docs/FAQ.md')
 	println('────────────────────────────────────────────────────────────────')
 
-	_ = args // unused; subcommand accepts no flags at v0.6.0
+	_ = args // unused; subcommand accepts no flags
 }

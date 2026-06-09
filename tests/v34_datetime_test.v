@@ -5,7 +5,7 @@ import cx
 // Phase 7.74c-datetime-foundations — strict-cell datetime wire form.
 // Covers parse_iso_datetime_canonical edge cases, format_iso_datetime_utc
 // reconstruction, and chunked-table strict-cell datetime round-trip.
-// Spec: spec/data_bin.md §3.6.1.
+// Spec: spec/core/data-bin.md §3.6.1.
 
 // ── parse_iso_datetime_canonical ─────────────────────────────────────────────
 
@@ -104,7 +104,7 @@ fn test_parse_iso_datetime_rejects_malformed() {
 // ── chunked-table strict-cell datetime round-trip ────────────────────────────
 
 fn test_chunked_datetime_column_round_trip() {
-	src := '[evts :table[name:string when:datetime]
+	src := '[evts [table[name::string when::datetime]]
   alpha 2024-01-15T12:34:56Z
   beta  2025-06-30T23:00:00+02:00
   gamma 2023-12-25T08:15:30.250Z

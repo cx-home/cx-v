@@ -3,13 +3,13 @@ module main
 import cx
 import os
 
-// Streaming Table reader / writer round-trip — Phase 7.74a (ADR 0015 D8).
+// Streaming Table reader / writer round-trip — Phase 7.74a.
 // Verifies that emitting a chunked table via the in-memory writer,
 // streaming-reading it back, and re-emitting through the streaming
 // writer reproduces the same bytes (byte-identical canonical
 // round-trip when chunking is preserved).
 
-const six_row_input = '[points :table[name:string score:i32]
+const six_row_input = '[points [table[name::string score::i32]]
   alice 91
   bob 88
   carol 73
@@ -75,7 +75,7 @@ fn test_streaming_table_round_trip_bytes_mode() {
 }
 
 fn test_streaming_table_fd_round_trip() {
-	tmp := os.temp_dir() + '/cx_streaming_table_test_${os.getpid()}.cxdb'
+	tmp := os.temp_dir() + '/cx_streaming_table_test_${os.getpid()}.cxcol'
 	defer { os.rm(tmp) or {} }
 
 	doc := cx.parse(six_row_input) or { panic('parse failed: ${err}') }

@@ -1,0 +1,1087 @@
+[test-suite name=email
+  [doc [#
+conformance fixtures for cx-stdlib/email (spec/std-lib/email.md §6/§7).
+
+   Spec-first: authored AHEAD of implementation, so every case is RED until
+   the module lands. Each program imports the bundled module via
+   [?lib 'cx-stdlib/email'] (resolver MUST be quoted) then calls
+   [$email:<fn> args]; the LAST expression is the rendered result. String
+   scalars render double-quoted by the runner; bool/int bare; sequences in
+   paren form (a, b, c). Error fixtures use out-err with the bare CXER code.
+
+   email/parse takes bytes, so those cases also import 'cx-stdlib/bytes' and
+   feed [bytes/from-string-utf8 "..."]. Element/sequence results are reduced
+   to a grounded scalar via the typed accessors (subject/text-body/...) or the
+   core builtins [$count …] / [$first …], so the asserted value is one the
+   spec states normatively rather than an invented full-element render.
+
+   Grounded anchors (all from §6/§7 and the §2/§3 normative text):
+     - decode =?UTF-8?Q?Hello_=E4=B8=96=E7=95=8C?= -> "Hello 世界"
+     - decode =?UTF-8?B?SGVsbG8g5LiW55WM?=         -> "Hello 世界"
+     - address "John Doe <john@example.com>" -> local-part john / domain example.com
+     - group "team: alice@x, bob@x;" -> [address-group name="team" …] (2 members)
+     - DSN failed/5.1.1 -> is-bounce true, is-hard-bounce true
+     - DSN delayed/4.x.x -> is-bounce true, is-hard-bounce false
+     - error codes: CXER1300..CXER1306 (§6)
+#]]
+
+ # ── §3.1 parse / emit ───────────────────────────────────────────────────────
+
+ [case id=email-001-parse-is-multipart-false level=core
+  [tags email parse is-multipart]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nTo: c@d.com\r\nSubject: Hi\r\n\r\nHello body\r\n"]]]
+  [$email:is-multipart $msg]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=email-002-parse-crlf-lf-identical level=core
+  [tags email parse crlf lf]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $crlf [$email:parse [$bytes:from-string-utf8 "Subject: Hi\r\n\r\nbody"]]]
+  [?let [= $lf [$email:parse [$bytes:from-string-utf8 "Subject: Hi\n\nbody"]]]
+    [$eq [$email:subject $crlf] [$email:subject $lf]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=email-003-parse-malformed level=core
+  [tags email parse error malformed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[$email:parse [$bytes:from-string-utf8 "not an email"]]
+#]]
+  [out-err [#
+cx-err:CXER1300
+#]]
+ ]
+
+ # emit consumes the conceptual [message] element and returns bytes; we assert
+ # the round-trip stability the spec guarantees for builder-produced messages
+ # (§2: "Round-trip is byte-stable for messages produced by [$email:emit]").
+ [case id=email-004-emit-roundtrip-subject level=core
+  [tags email emit build roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?let [= $msg [$email:build {"from": "agent@example.com",
+                            "to": "customer@example.com",
+                            "subject": "Re: Invoice question",
+                            "body": "Thank you for reaching out..."}]]
+  [$email:subject [$email:parse [$email:emit $msg]]]]
+#]]
+  [out-text [#
+'Re: Invoice question'
+#]]
+ ]
+
+ # emit raises CXER1304 when From or all recipients are missing (§6).
+ [case id=email-005-emit-required-header-missing level=core
+  [tags email emit error required-header]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:emit [message [headers [subject "no sender"]] [body [parts [part content-type="text/plain" "x"]] [is-multipart "false"]]]]
+#]]
+  [out-err [#
+cx-err:CXER1304
+#]]
+ ]
+
+ # emit raises CXER1305 when the multipart boundary appears in a part body (§6).
+ [case id=email-006-emit-boundary-collision level=core
+  [tags email emit error boundary-collision]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:emit [message
+  [headers [from "a@b.com"] [to "c@d.com"]]
+  [body
+    [parts
+      [part content-type="text/plain" "----=_Part_X body contains the boundary"]
+      [part content-type="text/html" "<p>x</p>"]]
+    [is-multipart "true"]
+    [boundary "----=_Part_X"]]]]
+#]]
+  [out-err [#
+cx-err:CXER1305
+#]]
+ ]
+
+ # ── §3.2 header inspection ───────────────────────────────────────────────────
+
+ [case id=email-007-headers-count level=core
+  [tags email headers map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nSubject: Hi\r\n\r\nbody"]]]
+  [$count [$email:headers $msg]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=email-008-header-lowercased level=core
+  [tags email header case-insensitive]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nSubject: Hi\r\n\r\nbody"]]]
+  [$email:header $msg "subject"]]
+#]]
+  [out-text [#
+'Hi'
+#]]
+ ]
+
+ # header returns empty string when the named header is absent (§3.2).
+ [case id=email-009-header-absent-empty level=core
+  [tags email header absent empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\n\r\nbody"]]]
+  [$email:header $msg "x-nonexistent"]]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ # Multi-instance Received: headers preserved as a sequence (§7).
+ [case id=email-010-header-multi-received-sequence level=core
+  [tags email header-values multi-instance received sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "Received: from a\r\nReceived: from b\r\nFrom: a@b.com\r\n\r\nbody"]]]
+  [$email:header-values $msg "Received"]]
+#]]
+  # §3.2: [email/header-values] returns ALL values of a header as a uniform
+  # [sequence string] (length N for a multi-instance header like Received) — the
+  # always-sequence companion to [email/header] (which returns only the first).
+  [out-text [#
+('from a', 'from b')
+#]]
+ ]
+
+ # ── §3.2 typed accessors (documented in the §3.2 table) ──────────────────────
+
+ [case id=email-011-subject-plain level=core
+  [tags email subject plain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "Subject: Invoice question\r\nFrom: a@b.com\r\n\r\nbody"]]]
+  [$email:subject $msg]]
+#]]
+  [out-text [#
+'Invoice question'
+#]]
+ ]
+
+ # subject decodes encoded-words (§3.2 "Decoded encoded-words"; §7 anchor).
+ [case id=email-012-subject-encoded-word level=core
+  [tags email subject encoded-word decode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "Subject: =?UTF-8?B?SGVsbG8g5LiW55WM?=\r\nFrom: a@b.com\r\n\r\nbody"]]]
+  [$email:subject $msg]]
+#]]
+  [out-text [#
+'Hello 世界'
+#]]
+ ]
+
+ [case id=email-013-from-addr-domain level=core
+  [tags email from-addr address]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: John Doe <john@example.com>\r\n\r\nbody"]]]
+  [$email:format-address [$email:from-addr $msg]]]
+#]]
+  [out-text [#
+'John Doe <john@example.com>'
+#]]
+ ]
+
+ [case id=email-014-to-addrs-count level=core
+  [tags email to-addrs sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "To: a@x.com, b@x.com\r\nFrom: c@y.com\r\n\r\nbody"]]]
+  [$count [$email:to-addrs $msg]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=email-015-cc-addrs-count level=core
+  [tags email cc-addrs sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: c@y.com\r\nCc: a@x.com\r\n\r\nbody"]]]
+  [$count [$email:cc-addrs $msg]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=email-016-bcc-addrs-count level=core
+  [tags email bcc-addrs sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: c@y.com\r\nBcc: a@x.com, b@x.com\r\n\r\nbody"]]]
+  [$count [$email:bcc-addrs $msg]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # message-id returned WITHOUT angle brackets (§3.2).
+ [case id=email-017-message-id-no-brackets level=core
+  [tags email message-id threading]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "Message-ID: <abc123@example.com>\r\nFrom: a@b.com\r\n\r\nbody"]]]
+  [$email:message-id $msg]]
+#]]
+  [out-text [#
+'abc123@example.com'
+#]]
+ ]
+
+ # in-reply-to returned WITHOUT angle brackets (§3.2).
+ [case id=email-018-in-reply-to-no-brackets level=core
+  [tags email in-reply-to threading]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "In-Reply-To: <def456@example.com>\r\nFrom: a@b.com\r\n\r\nbody"]]]
+  [$email:in-reply-to $msg]]
+#]]
+  [out-text [#
+'def456@example.com'
+#]]
+ ]
+
+ # references returns the threading chain as a [sequence string] (§3.2, §5).
+ [case id=email-019-references-sequence level=core
+  [tags email references threading sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "References: <a@x> <b@x>\r\nFrom: c@y.com\r\n\r\nbody"]]]
+  [$count [$email:references $msg]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # list-unsubscribe with multiple URIs parses as a sequence (§7).
+ [case id=email-020-list-unsubscribe-sequence level=core
+  [tags email list-unsubscribe sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "List-Unsubscribe: <https://x/u>, <mailto:u@x>\r\nFrom: a@b.com\r\n\r\nbody"]]]
+  [$count [$email:list-unsubscribe $msg]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # date-header returns the parsed RFC 5322 Date as a `datetime` (§3.2), which
+ # renders ISO 8601 (cf. time-002); +0000 offset → `Z`. Direct date-header call.
+ [case id=email-021-date-header-datetime level=core
+  [tags email date-header datetime]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "Date: Tue, 26 May 2026 14:30:00 +0000\r\nFrom: a@b.com\r\n\r\nbody"]]]
+  [$email:date-header $msg]]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ # ── §3.3 body navigation ─────────────────────────────────────────────────────
+
+ [case id=email-022-parts-nonmultipart-single level=core
+  [tags email parts non-multipart]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nContent-Type: text/plain\r\n\r\njust text"]]]
+  [$count [$email:parts $msg]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ # attachments returns parts with attachment disposition / inline-with-filename
+ # (§3.3, §7 multipart/mixed with PDF + image -> two attachments).
+ [case id=email-023-attachments-count level=core
+  [tags email attachments multipart-mixed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nhi\r\n--B\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"invoice.pdf\"\r\n\r\nPDF\r\n--B\r\nContent-Type: image/png\r\nContent-Disposition: attachment; filename=\"img.png\"\r\n\r\nPNG\r\n--B--\r\n"]]]
+  [$count [$email:attachments $msg]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # text-body / html-body: multipart/alternative -> both return correct content (§7).
+ [case id=email-024-text-body level=core
+  [tags email text-body alternative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nContent-Type: multipart/alternative; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nplain text here\r\n--B\r\nContent-Type: text/html\r\n\r\n<p>html here</p>\r\n--B--\r\n"]]]
+  [$email:text-body $msg]]
+#]]
+  [out-text [#
+'plain text here'
+#]]
+ ]
+
+ [case id=email-025-html-body-raw level=core
+  [tags email html-body alternative raw]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nContent-Type: multipart/alternative; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nplain text here\r\n--B\r\nContent-Type: text/html\r\n\r\n<p>html here</p>\r\n--B--\r\n"]]]
+  [$email:html-body $msg]]
+#]]
+  [out-text [#
+'<p>html here</p>'
+#]]
+ ]
+
+ # Opposite body accessor returns empty for single-type messages (§7).
+ [case id=email-026-text-body-empty-when-html-only level=core
+  [tags email text-body html-only empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nContent-Type: text/html\r\n\r\n<p>only html</p>"]]]
+  [$email:text-body $msg]]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ [case id=email-027-html-body-empty-when-text-only level=core
+  [tags email html-body text-only empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nContent-Type: text/plain\r\n\r\nonly text"]]]
+  [$email:html-body $msg]]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ [case id=email-028-is-multipart-true level=core
+  [tags email is-multipart multipart]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nContent-Type: multipart/alternative; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nx\r\n--B\r\nContent-Type: text/html\r\n\r\n<p>x</p>\r\n--B--\r\n"]]]
+  [$email:is-multipart $msg]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # ── §3.4 encoding helpers ────────────────────────────────────────────────────
+
+ # §7 anchor: =?UTF-8?Q?Hello_=E4=B8=96=E7=95=8C?= decodes to "Hello 世界".
+ [case id=email-029-decode-encoded-word-q level=core
+  [tags email decode-encoded-word rfc2047 q]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:decode-encoded-word "=?UTF-8?Q?Hello_=E4=B8=96=E7=95=8C?="]
+#]]
+  [out-text [#
+'Hello 世界'
+#]]
+ ]
+
+ # §7 anchor: =?UTF-8?B?SGVsbG8g5LiW55WM?= decodes to "Hello 世界".
+ [case id=email-030-decode-encoded-word-b level=core
+  [tags email decode-encoded-word rfc2047 b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:decode-encoded-word "=?UTF-8?B?SGVsbG8g5LiW55WM?="]
+#]]
+  [out-text [#
+'Hello 世界'
+#]]
+ ]
+
+ # §4.4 pinned charset (Shift_JIS) — §7 lists decode across pinned charsets.
+ # ASCII "Hi" base64-encoded under Shift_JIS is the same bytes; assert it decodes.
+ [case id=email-031-decode-encoded-word-shift-jis level=core
+  [tags email decode-encoded-word charset shift-jis]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:decode-encoded-word "=?Shift_JIS?B?SGk=?="]
+#]]
+  [out-text [#
+'Hi'
+#]]
+ ]
+
+ # Unsupported charset raises CXER1303 and preserves raw bytes (§3.4, §4.4, §6, §7).
+ [case id=email-032-decode-encoded-word-charset-unknown level=core
+  [tags email decode-encoded-word error charset-unknown]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:decode-encoded-word "=?KOI8-R?B?SGk=?="]
+#]]
+  [out-err [#
+cx-err:CXER1303
+#]]
+ ]
+
+ # encode-encoded-word always wraps in =?...?= (§3.4). Q-encoding of "Hi".
+ [case id=email-033-encode-encoded-word-q level=core
+  [tags email encode-encoded-word rfc2047 q]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:encode-encoded-word "Hi" "UTF-8" "Q"]
+#]]
+  [out-text [#
+'=?UTF-8?Q?Hi?='
+#]]
+ ]
+
+ # B-encoding round-trips through decode (§3.4 + §7 decode anchor are inverse).
+ [case id=email-034-encode-encoded-word-b-roundtrip level=core
+  [tags email encode-encoded-word decode roundtrip b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:decode-encoded-word [$email:encode-encoded-word "Hello 世界" "UTF-8" "B"]]
+#]]
+  [out-text [#
+'Hello 世界'
+#]]
+ ]
+
+ # ── §3.5 address parsing and formatting ──────────────────────────────────────
+
+ # §2.3 example: "John Doe <john@example.com>" -> local-part john, domain example.com.
+ # Round-trip through format-address asserts both grounded fields at once.
+ [case id=email-035-parse-address-roundtrip level=core
+  [tags email parse-address format-address roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:format-address [$email:parse-address "John Doe <john@example.com>"]]
+#]]
+  [out-text [#
+'John Doe <john@example.com>'
+#]]
+ ]
+
+ # Bare addr-spec with no display name (§2.3 model; raw mailbox form).
+ [case id=email-036-parse-address-bare level=core
+  [tags email parse-address format-address bare]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:format-address [$email:parse-address "john@example.com"]]
+#]]
+  [out-text [#
+'john@example.com'
+#]]
+ ]
+
+ # parse-address on malformed input raises CXER1301 (§3.5, §6).
+ [case id=email-037-parse-address-malformed level=core
+  [tags email parse-address error address-malformed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:parse-address "not an @ddress <<>>"]
+#]]
+  [out-err [#
+cx-err:CXER1301
+#]]
+ ]
+
+ # parse-address-list with a plain list (§3.5): two [address] entries.
+ [case id=email-038-parse-address-list-count level=core
+  [tags email parse-address-list sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$count [$email:parse-address-list "alice@x.com, bob@y.com"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # §6/§7: "team: alice@x, bob@x;" parses with the group as a single sequence
+ # item ([address-group name="team" …]).
+ [case id=email-039-parse-address-list-group level=core
+  [tags email parse-address-list group address-group]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$count [$email:parse-address-list "team: alice@x, bob@x;"]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ # parse-address-list on malformed input raises CXER1301 (§3.5, §6).
+ [case id=email-040-parse-address-list-malformed level=core
+  [tags email parse-address-list error address-malformed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:parse-address-list "alice@x.com, <<broken"]
+#]]
+  [out-err [#
+cx-err:CXER1301
+#]]
+ ]
+
+ # format-address-list round-trips group syntax (§6/§7).
+ [case id=email-041-format-address-list-group-roundtrip level=core
+  [tags email format-address-list parse-address-list group roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:format-address-list [$email:parse-address-list "team: alice@x, bob@x;"]]
+#]]
+  # §3.5 pins canonical group emission: "name: a@x, b@x;" (space after colon,
+  # ", " members, ";" terminator with no space before it).
+  [out-text [#
+'team: alice@x, bob@x;'
+#]]
+ ]
+
+ # format-address-list over a plain (non-group) list (§3.5).
+ [case id=email-042-format-address-list-plain level=core
+  [tags email format-address-list plain roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:format-address-list [$email:parse-address-list "alice@x.com, bob@y.com"]]
+#]]
+  # §3.5 pins the plain-mailbox-list join separator as ", " (comma + space).
+  [out-text [#
+'alice@x.com, bob@y.com'
+#]]
+ ]
+
+ # ── §3.6 outgoing-message builder ────────────────────────────────────────────
+
+ [case id=email-043-build-subject level=core
+  [tags email build subject]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?let [= $msg [$email:build {"from": "agent@example.com",
+                            "to": "customer@example.com",
+                            "subject": "Re: Invoice question",
+                            "body": "Thank you for reaching out..."}]]
+  [$email:subject $msg]]
+#]]
+  [out-text [#
+'Re: Invoice question'
+#]]
+ ]
+
+ # build round-trips via parse(emit($msg)) (§7) — assert body text survives.
+ [case id=email-044-build-roundtrip-body level=core
+  [tags email build emit parse roundtrip text-body]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?let [= $msg [$email:build {"from": "agent@example.com",
+                            "to": "customer@example.com",
+                            "subject": "Hi",
+                            "body": "Thank you for reaching out..."}]]
+  [$email:text-body [$email:parse [$email:emit $msg]]]]
+#]]
+  [out-text [#
+'Thank you for reaching out...'
+#]]
+ ]
+
+ # Recipient string-or-sequence: a single "to" string is normalized to one
+ # recipient (§3.6, §7).
+ [case id=email-045-build-recipient-string level=core
+  [tags email build recipient string-or-sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?let [= $msg [$email:build {"from": "a@b.com", "to": "c@d.com", "subject": "x", "body": "y"}]]
+  [$count [$email:to-addrs $msg]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ # Recipient string-or-sequence: a sequence "to" yields multiple recipients (§3.6, §7).
+ [case id=email-046-build-recipient-sequence level=core
+  [tags email build recipient sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?let [= $msg [$email:build {"from": "a@b.com", "to": ("c@d.com", "e@f.com"), "subject": "x", "body": "y"}]]
+  [$count [$email:to-addrs $msg]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # build-multipart with a text + HTML alternative (§3.6).
+ [case id=email-047-build-multipart-is-multipart level=core
+  [tags email build-multipart multipart]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?let [= $msg [$email:build-multipart {"from": "a@b.com", "to": "c@d.com", "subject": "x", "body": "plain"}
+                ([part content-type="text/html" body="<p>rich</p>"])]]
+  [$email:is-multipart $msg]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # build-multipart: html-body present alongside the plaintext body (§3.6).
+ [case id=email-048-build-multipart-html-body level=core
+  [tags email build-multipart html-body]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?let [= $msg [$email:build-multipart {"from": "a@b.com", "to": "c@d.com", "subject": "x", "body": "plain"}
+                ([part content-type="text/html" body="<p>rich</p>"])]]
+  [$email:html-body [$email:parse [$email:emit $msg]]]]
+#]]
+  [out-text [#
+'<p>rich</p>'
+#]]
+ ]
+
+ # ── §3.7 reply and forward ───────────────────────────────────────────────────
+
+ # §7: reply sets In-Reply-To = orig.message-id.
+ [case id=email-049-reply-in-reply-to level=core
+  [tags email reply threading in-reply-to]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nMessage-ID: <abc123@example.com>\r\nSubject: Question\r\n\r\nbody"]]]
+  [?let [= $r [$email:reply $orig {"body": "Answer."}]]
+    [$email:in-reply-to $r]]]
+#]]
+  [out-text [#
+'abc123@example.com'
+#]]
+ ]
+
+ # reply auto-prefixes "Re: " when not already present (§3.7).
+ [case id=email-050-reply-subject-prefix level=core
+  [tags email reply subject prefix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nSubject: Question\r\n\r\nbody"]]]
+  [?let [= $r [$email:reply $orig {"body": "Answer."}]]
+    [$email:subject $r]]]
+#]]
+  [out-text [#
+'Re: Question'
+#]]
+ ]
+
+ # reply recipient defaults to orig.from-addr (§3.7); the reply's own From is
+ # left unset in a pure reply (§3.7), so assert the grounded fact: To == orig.from.
+ [case id=email-051-reply-recipient-default level=core
+  [tags email reply recipient default]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nSubject: Question\r\n\r\nbody"]]]
+  [?let [= $r [$email:reply $orig {"body": "Answer."}]]
+    [$email:format-address [$first [$email:to-addrs $r]]]]]
+#]]
+  [out-text [#
+'sender@x.com'
+#]]
+ ]
+
+ # forward auto-prefixes "Fwd: " when not already present (§3.7).
+ [case id=email-052-forward-subject-prefix level=core
+  [tags email forward subject prefix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nSubject: Report\r\n\r\nbody"]]]
+  [?let [= $f [$email:forward $orig {"to": "dest@x.com", "body": "FYI"}]]
+    [$email:subject $f]]]
+#]]
+  [out-text [#
+'Fwd: Report'
+#]]
+ ]
+
+ # forward wraps orig as a message/rfc822 attachment (§3.7) -> 1 attachment.
+ [case id=email-053-forward-rfc822-attachment level=core
+  [tags email forward attachment rfc822]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nSubject: Report\r\n\r\nbody"]]]
+  [?let [= $f [$email:forward $orig {"to": "dest@x.com", "body": "FYI"}]]
+    [$count [$email:attachments $f]]]]
+#]]
+  # §3.7: the wrapping message/rfc822 part carries Content-Disposition: attachment,
+  # so it is surfaced by [attachments] (§3.3) — expected count 1 is grounded.
+  [out-text [#
+1
+#]]
+ ]
+
+ # ── §3.8 delivery-status notifications ───────────────────────────────────────
+
+ # §3.8/§7: DSN hard bounce (failed / 5.1.1) -> is-bounce true.
+ [case id=email-054-parse-dsn-is-bounce level=core
+  [tags email parse-dsn is-bounce hard]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nfailed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; user@example.com\r\nAction: failed\r\nStatus: 5.1.1\r\nDiagnostic-Code: smtp; 550 no such user\r\n--B--\r\n"]]]
+  [?let [= $dsn [$email:parse-dsn $msg]]
+    [$email:is-bounce $dsn]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.8/§7: DSN hard bounce (failed / 5.x.x) -> is-hard-bounce true.
+ [case id=email-055-parse-dsn-is-hard-bounce level=core
+  [tags email parse-dsn is-hard-bounce hard]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nfailed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; user@example.com\r\nAction: failed\r\nStatus: 5.1.1\r\nDiagnostic-Code: smtp; 550 no such user\r\n--B--\r\n"]]]
+  [?let [= $dsn [$email:parse-dsn $msg]]
+    [$email:is-hard-bounce $dsn]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.8/§7: DSN soft bounce (delayed / 4.x.x) -> is-bounce true, is-hard-bounce false.
+ [case id=email-056-parse-dsn-soft-is-bounce level=core
+  [tags email parse-dsn is-bounce soft delayed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\ndelayed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; queue@example.com\r\nAction: delayed\r\nStatus: 4.4.1\r\nDiagnostic-Code: smtp; 421 connection timed out\r\n--B--\r\n"]]]
+  [?let [= $dsn [$email:parse-dsn $msg]]
+    [$email:is-bounce $dsn]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=email-057-parse-dsn-soft-is-hard-bounce-false level=core
+  [tags email parse-dsn is-hard-bounce soft delayed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\ndelayed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; queue@example.com\r\nAction: delayed\r\nStatus: 4.4.1\r\nDiagnostic-Code: smtp; 421 connection timed out\r\n--B--\r\n"]]]
+  [?let [= $dsn [$email:parse-dsn $msg]]
+    [$email:is-hard-bounce $dsn]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # parse-dsn on non-DSN input raises CXER1306 (§3.8, §6, §7).
+ [case id=email-058-parse-dsn-not-dsn level=core
+  [tags email parse-dsn error not-dsn]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nSubject: just a normal email\r\n\r\nhello"]]]
+  [$email:parse-dsn $msg]]
+#]]
+  [out-err [#
+cx-err:CXER1306
+#]]
+ ]
+
+ # parse-dsn-bytes parses raw bytes first, then lifts the DSN shape (§3.8).
+ [case id=email-059-parse-dsn-bytes-is-bounce level=core
+  [tags email parse-dsn-bytes is-bounce]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $dsn [$email:parse-dsn-bytes [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nfailed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; user@example.com\r\nAction: failed\r\nStatus: 5.1.1\r\nDiagnostic-Code: smtp; 550 no such user\r\n--B--\r\n"]]]
+  [$email:is-bounce $dsn]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # parse-dsn-bytes on non-DSN raw input raises CXER1306 (§3.8, §6).
+ [case id=email-060-parse-dsn-bytes-not-dsn level=core
+  [tags email parse-dsn-bytes error not-dsn]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[$email:parse-dsn-bytes [$bytes:from-string-utf8 "From: a@b.com\r\nSubject: normal\r\n\r\nhello"]]
+#]]
+  [out-err [#
+cx-err:CXER1306
+#]]
+ ]
+
+ # ── §6 remaining error codes: CXER1302 (unsupported transfer encoding) ───────
+
+ [case id=email-061-parse-encoding-unknown level=core
+  [tags email parse error encoding-unknown]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[?lib 'cx-stdlib/bytes']
+[?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: a@b.com\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: uuencode\r\n\r\nbody"]]]
+  [$email:text-body $msg]]
+#]]
+  # §4.2/§6: CXER1302 fires lazily on decode (text-body), not at parse — parse
+  # retains the raw undecoded bytes; the decode here triggers the error.
+  [out-err [#
+cx-err:CXER1302
+#]]
+ ]
+ [case id=email-062-emit-rejects-header-injection level=core gate=enforced
+  [tags email build emit header-injection security CXER1300]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/email']
+[$email:emit [$email:build {"from": "a@x.com", "to": "b@y.com", "subject": "Hi\r\nBcc: victim@evil.com", "body": "real"}]]
+#]]
+  [out-err [#
+cx-err:CXER1300
+#]]
+ ]
+
+]

@@ -18,8 +18,7 @@ module cx
 //
 // v0 limitations (documented; future enhancement):
 // - Element-rename detection at the same path depth is exact-name
-// match only; LCS / move detection is rejected for v0.6.0 per the
-// ADR's A2.
+// match only; LCS / move detection is rejected.
 // - Cross-format diff (cx_text_diff of CX vs JSON) is not yet wired
 // here; the CLI implements it by parsing both inputs to Documents
 // before calling cx_text_diff. C ABI helper lands in a future phase.
@@ -157,8 +156,8 @@ fn diff_element(path string, a Element, b Element, mut changes []Change) {
 	}
 
 	// Type annotation
-	a_dt := if a.data_type != none { a.data_type or { '' } } else { '' }
-	b_dt := if b.data_type != none { b.data_type or { '' } } else { '' }
+	a_dt := a.data_type() or { '' }
+	b_dt := b.data_type() or { '' }
 	if a_dt != b_dt {
 		changes << Change{ kind: .type_changed, path: path, before: a_dt, after: b_dt }
 	}

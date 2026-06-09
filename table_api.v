@@ -1,12 +1,12 @@
 // CX V binding — native Table API.
 //
-// Implements the 17-member public Table API per ADR 0018 D1 against
+// Implements the 17-member public Table API against
 // the V core's TableData. Native V binding (direct import of
 // vcx/cx/) — no FFI overhead, full type fidelity, all V cells
-// (scalars + ADR 0017 §D1 collection literals) preserved at the
+// (scalars collection literals) preserved at the
 // CXDM value level.
 //
-// Per ADR 0018 §4 per-binding naming conventions: V uses snake_case
+// Per per-binding naming conventions: V uses snake_case
 // member names matching the canonical surface exactly (cols, types,
 // row_count, col_count, row, column, cell, slice, head, tail, select,
 // to_cx, to_csv, to_json, to_data_bin, to_dict_list, plus iteration
@@ -18,7 +18,7 @@ import strings
 
 // Table is an immutable handle over a single `:table` block parsed
 // from CX text or constructed programmatically. Cells admit any of
-// the ADR 0017 §D5 Item kinds (scalars + Array / Map / Sequence).
+// the Item kinds (scalars + Array / Map / Sequence).
 // Modification returns a new Table; the underlying TableData is
 // shared by reference but never mutated.
 pub struct Table {
@@ -37,15 +37,15 @@ pub fn table_from_cx(src string) !Table {
 	for n in doc.elements {
 		if n is Element {
 			el := n as Element
-			if td := el.table {
-				return Table{ data: td }
+			if td := el.table_opt() {
+				return Table{ data: *td }
 			}
 			// Recurse one level into the root element's body in case
 			// the table is wrapped (common pattern: `[doc [t :table…]]`).
 			for child in el.items {
 				if child is Element {
-					if td := (child as Element).table {
-						return Table{ data: td }
+					if td := (child as Element).table_opt() {
+						return Table{ data: *td }
 					}
 				}
 			}
@@ -69,8 +69,8 @@ pub fn tables_from_cx(src string) ![]Table {
 }
 
 fn collect_tables(el Element, mut tables []Table) {
-	if td := el.table {
-		tables << Table{ data: td }
+	if td := el.table_opt() {
+		tables << Table{ data: *td }
 	}
 	for child in el.items {
 		if child is Element {
@@ -80,7 +80,7 @@ fn collect_tables(el Element, mut tables []Table) {
 }
 
 // new constructs a Table from explicit columns / types / rows.
-// Validates the four invariants per ADR 0018 §D7:
+// Validates the four invariants:
 //   1. len(cols) == len(types)
 //   2. all column names unique
 //   3. every row has exactly col_count cells
@@ -88,7 +88,7 @@ fn collect_tables(el Element, mut tables []Table) {
 //      a null sentinel for nullable columns
 //
 // Cells are supplied as TableCellValue (scalars or AST collection
-// nodes per ADR 0017 §D5).
+// nodes).
 pub fn new_table(cols []string, types []string, rows [][]TableCellValue) !Table {
 	if cols.len != types.len {
 		return error('cxlib: len(cols)=${cols.len} != len(types)=${types.len}')
@@ -332,14 +332,15 @@ pub:
 // ── Conversion ───────────────────────────────────────────────────────────────
 
 // to_cx renders the Table as canonical CX `:table` block text. Pure
-// text-shape per ADR 0018 §D6 + spec/canonical.md §2.11.
+// text-shape + spec/canonical.md §2.11.
 pub fn (t Table) to_cx() string {
 	// Wrap in a synthetic root element so the existing emit_cx
 	// produces the right `:table` block form.
+	td_copy := t.data
 	root := Element{
-		name:      '_'
-		data_type: ?string('table')
-		table:     ?TableData(t.data)
+		name:  '_'
+		meta:  &ElementMeta{ data_type: ?string('table') }
+		table: &td_copy
 	}
 	mut doc := Document{
 		elements: [Node(root)]
@@ -348,14 +349,15 @@ pub fn (t Table) to_cx() string {
 }
 
 // to_csv emits CSV (comma-separated) by default. delim parameter for
-// arbitrary single-char delimiters per ADR 0001 D6. Collection cells
-// emit as JSON-encoded strings per ADR 0001 §D7 — same as the C ABI
+// arbitrary single-char delimiters. Collection cells
+// emit as JSON-encoded strings — same as the C ABI
 // `cx_to_csv` route.
 pub fn (t Table) to_csv(delim u8) string {
+	td_copy := t.data
 	root := Element{
-		name:      '_'
-		data_type: ?string('table')
-		table:     ?TableData(t.data)
+		name:  '_'
+		meta:  &ElementMeta{ data_type: ?string('table') }
+		table: &td_copy
 	}
 	doc := Document{
 		elements: [Node(root)]
@@ -367,7 +369,7 @@ pub fn (t Table) to_csv(delim u8) string {
 
 // to_json emits semantic JSON: list of row objects, one per row,
 // with cell values as host-native JSON (Array → JSON array, Map →
-// JSON object, scalars → JSON scalars). Per ADR 0018 §D6.
+// JSON object, scalars → JSON scalars).
 pub fn (t Table) to_json() string {
 	mut b := strings.new_builder(256)
 	b.write_string('[')
@@ -493,16 +495,17 @@ fn json_quote_string(s string) string {
 	return b.str()
 }
 
-// to_data_bin emits the plain table binary form per ADR 0015. The
+// to_data_bin emits the plain table binary form. The
 // chunked `0x63` form requires scalar-only cells (strict columnar);
 // for collection-cell tables this method routes through plain
 // `0x60` encoding via emit_data_bin which dispatches on cell
 // type per Phase 2.2 wire-format rule.
 pub fn (t Table) to_data_bin() []u8 {
+	td_copy := t.data
 	root := Element{
-		name:      '_'
-		data_type: ?string('table')
-		table:     ?TableData(t.data)
+		name:  '_'
+		meta:  &ElementMeta{ data_type: ?string('table') }
+		table: &td_copy
 	}
 	doc := Document{
 		elements: [Node(root)]
@@ -519,7 +522,7 @@ pub fn (t Table) to_dict_list() []map[string]TableCellValue {
 // ── Equality ─────────────────────────────────────────────────────────────────
 
 // eq compares two tables by canonical bytes (CX text form). Per
-// ADR 0018 §3.6 "two tables compare equal iff: same cols, same
+// "two tables compare equal iff: same cols, same
 // types, same row count, and each cell compares equal under host
 // equality." The text-canonical comparison subsumes those rules
 // since the canonical-form serializer encodes cols, types, rows

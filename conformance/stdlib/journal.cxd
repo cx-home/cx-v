@@ -1,0 +1,1272 @@
+[test-suite name=journal
+  [doc [#
+conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journal.md
+§3/§6/§10). Each program imports the bundled module via [?lib 'cx-stdlib/journal']
+(resolver MUST be quoted). The LAST expression is the rendered result.
+
+   journal is the append-only, hash-chained, tenant-partitioned event log +
+   deterministic fold→state, built ON store (persistence) + hash (chain links)
+   + crypto.ed25519 (snapshot signing). The four-channel model (code.md §9.1.2):
+     - a committed entry is a present [entry] VALUE;
+     - a failed-precondition append (stale-tail / closed / read-only / denied)
+       is an [err] (failure channel);
+     - an empty / out-of-range read is the ABSENCE channel — the empty
+       node-set () — never null and never [err];
+     - a verify / snapshot-verify of a corrupt chain is a present
+       [verification valid=false …] / [snapshot-verification valid=false …]
+       FINDING (a VALUE, not [err] — SAP §1).
+
+   HERMETIC. Every case uses the mem:// backend (capability-free, deterministic)
+   so fixtures need no host grant; the one file:// case is a CXER0271 denial
+   (deny-lane). The default clock is a synthetic monotonic counter (ts =
+   epoch:HH:MM:SS keyed off seq) so ts/hash are byte-stable across runs.
+
+   Determinism: the entry hash is computed over the canonical CX bytes of
+   seq+tenant+actor+authority+ts+prev-hash+event; genesis prev-hash is the
+   fixed sentinel b3:GENESIS. The fold/replay/dry-run/snapshot/fold-from
+   reducers MUST be pure (an impure $fn → CXER4611).
+
+   Snapshot signing uses an ed25519 seed (32 bytes, hex) as opts.signing-key;
+   the fixtures use the all-0x01 seed. mem:// may take an unsigned snapshot
+   (opts.sign=false) usable for fold-from but NOT as a retention cover.
+
+   Error band CXER4600–4649 (§8). Shared codes: CXER0271 (store cap denial).
+
+   Id ranges:
+     001-010  open/append/read/slice/since/head round-trip + chain link + absence
+     011-018  fold / fold-slice / fold-value / replay / dry-run / determinism
+     019-026  verify / verify-slice (finding-is-a-value) + tamper finding
+     027-035  snapshot / snapshot-verify / fold-from (signed + unsigned + equivalence)
+     036-041  retain / compact (prune-behind-snapshot + copy-forward source-intact)
+     042-058  negatives / no-surface (every CXER46xx + CXER0271 denial)
+   #]]
+
+  [# ── 001-010: open / append / read / slice / since / head ───────────── #]
+
+  [case id=journal-001-append-genesis level=core
+   [tags journal append genesis chain entry]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://acme" "acme"]]
+  [$journal:append $j [do :refund] {actor: "ops" authority: "d-77"}]]
+#]]
+   [out-text [#
+[entry seq=1 tenant=acme actor=ops authority=d-77 ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:bdc6c60e64d8bc43a17fc1762633a915d8816ca2dffd429b45ce19dda82d6178 [event [do :refund]]]
+#]]
+  ]
+
+  [case id=journal-002-chain-link level=core
+   [tags journal append chain prev-hash]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b 2] {actor: "u" authority: "g"}]]
+  [$journal:read $j 2]]]]
+#]]
+   [out-text [#
+[entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash=sha256:f0d42b6c75733de803ac02bb66eecf005add595cadca2f7151f1c682ecb440d0 hash='sha256:2bcb8230b14039e30cc935fb9af79aa4047d317167b0e6edb95e674a82b7e8c2' [event [b 2]]]
+#]]
+  ]
+
+  [case id=journal-003-read-out-of-range-absence level=core
+   [tags journal read absence empty-node-set]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:read $j 5]]
+#]]
+   [out-text [#
+()
+#]]
+  ]
+
+  [case id=journal-004-slice level=core
+   [tags journal slice range seq-order]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+  [$journal:slice $j 2 3]]]]]
+#]]
+   [out-text [#
+([entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa' [event [b]]], [entry seq=3 tenant=acme actor=u authority=g ts='epoch:00:00:03' prev-hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa' hash='sha256:6c29ae866f4b35ead2bc4de4bb388382d1c4542ec46828c568a0d63f60117c43' [event [c]]])
+#]]
+  ]
+
+  [case id=journal-005-slice-out-of-range-absence level=core
+   [tags journal slice absence empty]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:slice $j 5 9]]]
+#]]
+   [out-text [#
+()
+#]]
+  ]
+
+  [case id=journal-006-since level=core
+   [tags journal since tail incremental]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+  [$journal:since $j 2]]]]
+#]]
+   [out-text [#
+([entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa' [event [b]]])
+#]]
+  ]
+
+  [case id=journal-007-head-empty-absence level=core
+   [tags journal head absence empty]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:head $j]]
+#]]
+   [out-text [#
+()
+#]]
+  ]
+
+  [case id=journal-008-head level=core
+   [tags journal head pure]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:head $j]]]
+#]]
+   [out-text [#
+[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' [event [a]]]
+#]]
+  ]
+
+  [case id=journal-009-query-cxpath level=core
+   [tags journal query cxpath audit]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [do :refund] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [note "hi"] {actor: "u" authority: "g"}]]
+  [$journal:query $j "/event/do"]]]]
+#]]
+   [out-text [#
+([entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:fcd34ab5565c2823273d24922fe5e7b53d3ffe02fd62695a99b214d409933c30 [event [do :refund]]])
+#]]
+  ]
+
+  [case id=journal-010-missing-attribution level=core
+   [tags journal append CXER4609 attribution]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:append $j [a] {authority: "g"}]]
+#]]
+   [out-err [#
+cx-err:CXER4609
+#]]
+  ]
+
+  [# ── 011-018: fold / fold-slice / fold-value / replay / dry-run ──────── #]
+
+  [case id=journal-011-fold-count level=core
+   [tags journal fold projection state]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+  [$journal:fold $j [?fn ($a $e) [+ $a 1]] 0]]]]]
+#]]
+   [out-text [#
+3
+#]]
+  ]
+
+  [case id=journal-012-fold-empty-returns-init level=core
+   [tags journal fold empty identity]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:fold $j [?fn ($a $e) [+ $a 1]] 42]]
+#]]
+   [out-text [#
+42
+#]]
+  ]
+
+  [case id=journal-013-fold-value-pure-core level=core
+   [tags journal fold-value pure materialized]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $es [$journal:since $j 1]]
+  [$journal:fold-value $es [?fn ($a $e) [+ $a 10]] 0]]]]]
+#]]
+   [out-text [#
+20
+#]]
+  ]
+
+  [case id=journal-014-fold-slice level=core
+   [tags journal fold-slice windowed]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+  [$journal:fold-slice $j [?fn ($a $e) [+ $a 1]] 0 2 3]]]]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [case id=journal-015-replay-at-seq-time-travel level=core
+   [tags journal replay at-seq time-travel determinism]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+  [$journal:replay $j [?fn ($a $e) [+ $a 1]] 0 {at-seq: 2}]]]]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [case id=journal-016-replay-determinism level=core
+   [tags journal replay determinism repeatable]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $r1 [$journal:replay $j [?fn ($a $e) [+ $a 1]] 0 {}]]
+[?let [= $r2 [$journal:replay $j [?fn ($a $e) [+ $a 1]] 0 {}]]
+  [det run1=$r1 run2=$r2]]]]]]
+#]]
+   [out-text [#
+[det run1=2 run2=2]
+#]]
+  ]
+
+  [case id=journal-017-dry-run-value level=core
+   [tags journal dry-run preview provisional]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:dry-run $j [b] {actor: "u" authority: "g"} [?fn ($a $e) [+ $a 1]] 0]]]
+#]]
+   [out-text [#
+[dry-run [state 2] [entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa' [event [b]]]]
+#]]
+  ]
+
+  [case id=journal-018-dry-run-no-commit level=core
+   [tags journal dry-run no-commit head-unmoved]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $dr [$journal:dry-run $j [b] {actor: "u" authority: "g"} [?fn ($a $e) [+ $a 1]] 0]]
+  [$journal:head $j]]]]
+#]]
+   [out-text [#
+[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' [event [a]]]
+#]]
+  ]
+
+  [# ── 019-026: verify / verify-slice (finding-is-a-value) ─────────────── #]
+
+  [case id=journal-019-verify-valid level=core
+   [tags journal verify valid finding chain-intact]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+  [$journal:verify $j {}]]]]
+#]]
+   [out-text [#
+[verification valid=true checked-from=1 checked-to=2 head-hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa']
+#]]
+  ]
+
+  [case id=journal-020-verify-empty-journal level=core
+   [tags journal verify empty genesis]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:verify $j {}]]
+#]]
+   [out-text [#
+[verification valid=true checked-from=0 checked-to=0 head-hash=b3:GENESIS]
+#]]
+  ]
+
+  [case id=journal-021-verify-slice level=core
+   [tags journal verify-slice bounded]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+  [$journal:verify-slice $j 2 3]]]]]
+#]]
+   [out-text [#
+[verification valid=true checked-from=2 checked-to=3 head-hash='sha256:6c29ae866f4b35ead2bc4de4bb388382d1c4542ec46828c568a0d63f60117c43']
+#]]
+  ]
+
+  [case id=journal-022-tamper-finding-is-value level=core
+   [tags journal snapshot-verify tamper finding anchor-mismatch SAP]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $bad [snapshot tenant=acme at-seq=1 anchor-hash="sha256:deadbeef" hash-algo=sha256 sig-algo=none [state 99]]]
+  [$journal:snapshot-verify $j $bad]]]]
+#]]
+   [out-text [#
+[snapshot-verification valid=false at-seq=1 reason=':anchor-mismatch']
+#]]
+  ]
+
+  [# ── 027-035: snapshot / snapshot-verify / fold-from ─────────────────── #]
+
+  [case id=journal-027-snapshot-unsigned level=core
+   [tags journal snapshot unsigned mem-tier]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {sign: "false"}]]]
+#]]
+   [out-text [#
+[snapshot tenant=acme at-seq=1 anchor-hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' hash-algo=sha256 sig-algo=none [state 1]]
+#]]
+  ]
+
+  [case id=journal-028-snapshot-verify-unsigned level=core
+   [tags journal snapshot-verify unsigned anchor-only]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {sign: "false"}]]
+  [$journal:snapshot-verify $j $snap]]]]
+#]]
+   [out-text [#
+[snapshot-verification valid=true at-seq=1 reason=':unsigned']
+#]]
+  ]
+
+  [case id=journal-029-snapshot-verify-signed level=core
+   [tags journal snapshot signed snapshot-verify ed25519 non-repudiation]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+  [$journal:snapshot-verify $j $snap]]]]
+#]]
+   [out-text [#
+[snapshot-verification valid=true at-seq=1]
+#]]
+  ]
+
+  [case id=journal-030-fold-from-equivalence level=core
+   [tags journal fold-from snapshot equivalence acceleration]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {sign: "false" at-seq: 1}]]
+[?let [= $full [$journal:fold $j [?fn ($a $e) [+ $a 1]] 0]]
+[?let [= $fast [$journal:fold-from $j $snap [?fn ($a $e) [+ $a 1]]]]
+  [equiv full=$full fast=$fast]]]]]]]]
+#]]
+   [out-text [#
+[equiv full=3 fast=3]
+#]]
+  ]
+
+  [# ── 036-041: retain / compact ───────────────────────────────────────── #]
+
+  [case id=journal-036-retain-covered level=core
+   [tags journal retain covered prune-behind-snapshot]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" at-seq: 2}]]
+  [$journal:retain $j {keep-after-seq: 2 snapshot: $snap}]]]]]
+#]]
+   [out-text [#
+[retention boundary=2 covered-by-seq=2]
+#]]
+  ]
+
+  [case id=journal-037-compact-source-intact level=core
+   [tags journal compact copy-forward source-intact append-only]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://src" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" at-seq: 2}]]
+[?let [= $ret [$journal:retain $j {keep-after-seq: 2 snapshot: $snap}]]
+[?let [= $seg [$journal:compact $j {retention: $ret target: "mem://seg"}]]
+  [$journal:verify $j {}]]]]]]]]
+#]]
+   [out-text [#
+[verification valid=true checked-from=1 checked-to=3 head-hash='sha256:6c29ae866f4b35ead2bc4de4bb388382d1c4542ec46828c568a0d63f60117c43']
+#]]
+  ]
+
+  [case id=journal-038-compact-segment-verifies-across-seam level=core
+   [tags journal compact seam verify snapshot-anchor]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://src2" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" at-seq: 2}]]
+[?let [= $ret [$journal:retain $j {keep-after-seq: 2 snapshot: $snap}]]
+[?let [= $seg [$journal:compact $j {retention: $ret target: "mem://seg2"}]]
+  [$journal:verify $seg {}]]]]]]]]
+#]]
+   [out-text [#
+[verification valid=true checked-from=3 checked-to=3 head-hash='sha256:6c29ae866f4b35ead2bc4de4bb388382d1c4542ec46828c568a0d63f60117c43']
+#]]
+  ]
+
+  [# ── 042-058: negatives / no-surface (every CXER46xx + CXER0271) ─────── #]
+
+  [case id=journal-042-stale-tail level=core
+   [tags journal append CXER4604 stale-tail optimistic-concurrency]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:append $j [b] {actor: "u" authority: "g" expect-prev-seq: 0}]]]
+#]]
+   [out-err [#
+cx-err:CXER4604
+#]]
+  ]
+
+  [case id=journal-043-closed level=core
+   [tags journal CXER4612 closed]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $x [$journal:close $j]]
+  [$journal:append $j [a] {actor: "u" authority: "g"}]]]
+#]]
+   [out-err [#
+cx-err:CXER4612
+#]]
+  ]
+
+  [case id=journal-044-read-only level=core
+   [tags journal CXER4603 read-only]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme" {read-only: "true"}]]
+  [$journal:append $j [a] {actor: "u" authority: "g"}]]
+#]]
+   [out-err [#
+cx-err:CXER4603
+#]]
+  ]
+
+  [case id=journal-045-not-found level=core
+   [tags journal CXER4601 create-false not-found]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[$journal:open "mem://absent-nf" "acme" {create: "false"}]
+#]]
+   [out-err [#
+cx-err:CXER4601
+#]]
+  ]
+
+  [case id=journal-046-hash-unsupported level=core
+   [tags journal CXER4607 hash-algo]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[$journal:open "mem://t" "acme" {hash-algo: "md5"}]
+#]]
+   [out-err [#
+cx-err:CXER4607
+#]]
+  ]
+
+  [case id=journal-047-seq-out-of-range-arg level=core
+   [tags journal CXER4610 arg seq]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:read $j 0]]
+#]]
+   [out-err [#
+cx-err:CXER4610
+#]]
+  ]
+
+  [case id=journal-048-from-greater-than-to level=core
+   [tags journal CXER4610 slice from-to]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:slice $j 5 2]]
+#]]
+   [out-err [#
+cx-err:CXER4610
+#]]
+  ]
+
+  [case id=journal-049-fold-impure level=core
+   [tags journal CXER4611 fold impure determinism-guard]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/random']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:fold $j [?fn ($a $e) [$random:int 1 9]] 0]]]
+#]]
+   [out-err [#
+cx-err:CXER4611
+#]]
+  ]
+
+  [case id=journal-050-snapshot-unsigned-no-key level=core
+   [tags journal CXER4614 snapshot signing-required]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {}]]]
+#]]
+   [out-err [#
+cx-err:CXER4614
+#]]
+  ]
+
+  [case id=journal-051-snapshot-at-seq-beyond-head level=core
+   [tags journal CXER4606 snapshot at-seq]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {sign: "false" at-seq: 9}]]]
+#]]
+   [out-err [#
+cx-err:CXER4606
+#]]
+  ]
+
+  [case id=journal-052-retain-uncovered level=core
+   [tags journal CXER4616 retain uncovered prune-behind-snapshot]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" at-seq: 1}]]
+  [$journal:retain $j {keep-after-seq: 2 snapshot: $snap}]]]]]
+#]]
+   [out-err [#
+cx-err:CXER4616
+#]]
+  ]
+
+  [case id=journal-053-retain-unsigned-cover level=core
+   [tags journal CXER4614 retain unsigned-cover]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {sign: "false" at-seq: 1}]]
+  [$journal:retain $j {keep-after-seq: 1 snapshot: $snap}]]]]
+#]]
+   [out-err [#
+cx-err:CXER4614
+#]]
+  ]
+
+  [case id=journal-054-fold-from-divergent level=core
+   [tags journal CXER4615 fold-from divergent snapshot]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $bad [snapshot tenant=acme at-seq=1 anchor-hash="sha256:deadbeef" hash-algo=sha256 sig-algo=none [state 1]]]
+  [$journal:fold-from $j $bad [?fn ($a $e) [+ $a 1]]]]]]
+#]]
+   [out-err [#
+cx-err:CXER4615
+#]]
+  ]
+
+  [case id=journal-055-fold-from-forged-signature level=core
+   [tags journal CXER4613 fold-from forged-signature]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[?let [= $forged [snapshot tenant=acme at-seq=1 anchor-hash="sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d" hash-algo=sha256 sig-algo=ed25519 signature="0000" verify-key="0000" [state 1]]]
+  [$journal:fold-from $j $forged [?fn ($a $e) [+ $a 1]]]]]]
+#]]
+   [out-err [#
+cx-err:CXER4613
+#]]
+  ]
+
+  [case id=journal-056-file-backend-denied level=core
+   [tags journal CXER0271 capability store file-backend deny-lane]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[$journal:open "file:///tmp/cx-journal-conformance" "acme"]
+#]]
+   [out-err [#
+cx-err:CXER0271
+#]]
+  ]
+
+  [case id=journal-057-no-update-surface level=core
+   [tags journal append-only no-surface negative]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:update $j 1 [a]]]
+#]]
+   [out-err [#
+no callable
+#]]
+  ]
+
+  [case id=journal-058-cross-tenant-inexpressible level=core
+   [tags journal tenant-partition no-surface inexpressible negative]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:read-tenant $j "other" 1]]
+#]]
+   [out-err [#
+no callable
+#]]
+  ]
+
+ [case id=journal-059-reopen-rehydrate-verify level=core gate=enforced
+  [tags journal reopen persistence verify durable]
+  [doc [#
+HOSTILE (blocker #2): reopen never rehydrated. The head pointer was written
+as a raw "seq:hash" ALIAS VALUE, but the store alias model is content-
+addressed (store-set-alias rejects any value that is not an existing doc-hash),
+so the head pointer silently never persisted and a reopened journal saw an
+empty chain. The algo pointer had the same flaw + a doc-hash/algo-name
+conflation that raised CXER4602 on every reopen. Now both are persisted as
+docs; attach over a store that already holds the chain rehydrates and verifies.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://r"]]
+[?let [= $j1 [$journal:attach $s "acme"]]
+[?let [= $a [$journal:append $j1 [a 1] {actor: "u" authority: "g"}]]
+[?let [= $b [$journal:append $j1 [b 2] {actor: "u" authority: "g"}]]
+[?let [= $c [$journal:close $j1]]
+[?let [= $j2 [$journal:attach $s "acme"]]
+  [$journal:verify $j2]]]]]]]
+#]]
+  [out-text [#
+[verification valid=true checked-from=1 checked-to=2 head-hash='sha256:2bcb8230b14039e30cc935fb9af79aa4047d317167b0e6edb95e674a82b7e8c2']
+#]]
+ ]
+
+ [case id=journal-060-reopen-read-entry level=core gate=enforced
+  [tags journal reopen read entry durable]
+  [doc [#
+Reopen rehydrates the entry docs from the store (not just the head): a
+read of seq 1 on the reopened handle returns the original entry.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://r"]]
+[?let [= $j1 [$journal:attach $s "acme"]]
+[?let [= $a [$journal:append $j1 [a 1] {actor: "u" authority: "g"}]]
+[?let [= $b [$journal:append $j1 [b 2] {actor: "u" authority: "g"}]]
+[?let [= $c [$journal:close $j1]]
+[?let [= $j2 [$journal:attach $s "acme"]]
+  [$journal:read $j2 1]]]]]]]
+#]]
+  [out-text [#
+[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:f0d42b6c75733de803ac02bb66eecf005add595cadca2f7151f1c682ecb440d0 [event [a 1]]]
+#]]
+ ]
+
+ [case id=journal-061-sha512-real-digest level=core gate=enforced
+  [tags journal hash-algo sha512 tamper-evidence]
+  [doc [#
+HOSTILE (blocker #1): every algo used to hash with sha256 and merely
+re-label, so sha256/sha384/sha512/blake3 produced byte-identical 64-hex
+digests — the algo choice was cosmetic. A genuine SHA-512 digest is 128 hex;
+asserting the full value is impossible under the fake impl.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme" {hash-algo: "sha512"}]]
+  [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
+#]]
+  [out-text [#
+[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha512:47d2fbec67d2b8e588c13d5562bd19b3deea386a0b11907b69a74815dc91fb07406499c1b9a9ea953fa282d2554f7b013beee05c9d7f1e3298949d395c03fe57' [event [a 1]]]
+#]]
+ ]
+
+ [case id=journal-062-blake3-real-digest level=core gate=enforced
+  [tags journal hash-algo blake3 tamper-evidence]
+  [doc [#
+blake3 produces a genuine BLAKE3-256 digest (tag b3:), distinct from the
+sha256 digest of the same canonical bytes.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme" {hash-algo: "blake3"}]]
+  [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
+#]]
+  [out-text [#
+[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='b3:4a887c65757ddb7ad85fb9298ee7534a7fde46fd854577740701a8e114bac3f2' [event [a 1]]]
+#]]
+ ]
+
+ [case id=journal-063-tamper-hash-mismatch level=core gate=enforced
+  [tags journal verify tamper hash-mismatch valid-false]
+  [doc [#
+HOSTILE: chain-tamper verify was UNTESTED (0 valid=false fixtures). Simulate
+a storage attacker: forge entry 1 with a correct genesis prev-hash but a
+bogus stored hash, re-point its alias, reopen, verify. The re-hash detects
+the content/hash divergence.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://tg4"]]
+[?let [= $j1 [$journal:attach $s "acme"]]
+[?let [= $a [$journal:append $j1 [x 1] {actor: "u" authority: "g"}]]
+[?let [= $bad [$store:put-doc $s [entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha256:0000000000000000000000000000000000000000000000000000000000000000' [event [x 1]]]]]
+[?let [= $z [$store:set-alias $s "cx-journal/entry/acme/1" $bad]]
+[?let [= $c [$journal:close $j1]]
+[?let [= $j2 [$journal:attach $s "acme"]]
+  [$journal:verify $j2]]]]]]]]
+#]]
+  [out-text [#
+[verification valid=false checked-from=1 checked-to=1 first-bad-seq=1 reason=':hash-mismatch']
+#]]
+ ]
+
+ [case id=journal-064-tamper-link-broken level=core gate=enforced
+  [tags journal verify tamper link-broken valid-false]
+  [doc [#
+Forge entry 2 with a prev-hash that does not chain to entry 1; verify
+reports link-broken at seq 2.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://tg3"]]
+[?let [= $j1 [$journal:attach $s "acme"]]
+[?let [= $a [$journal:append $j1 [x 1] {actor: "u" authority: "g"}]]
+[?let [= $b [$journal:append $j1 [y 2] {actor: "u" authority: "g"}]]
+[?let [= $bad [$store:put-doc $s [entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash='sha256:wronglink' hash='sha256:whatever' [event [y 2]]]]]
+[?let [= $z [$store:set-alias $s "cx-journal/entry/acme/2" $bad]]
+[?let [= $c [$journal:close $j1]]
+[?let [= $j2 [$journal:attach $s "acme"]]
+  [$journal:verify $j2]]]]]]]]]
+#]]
+  [out-text [#
+[verification valid=false checked-from=1 checked-to=2 first-bad-seq=2 reason=':link-broken']
+#]]
+ ]
+
+ [case id=journal-065-tamper-seq-gap level=core gate=enforced
+  [tags journal verify tamper seq-gap valid-false]
+  [doc [#
+Forge the head pointer to claim seq 3 while only 2 entries exist; verify
+reports seq-gap.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://tg1"]]
+[?let [= $j1 [$journal:attach $s "acme"]]
+[?let [= $a [$journal:append $j1 [x 1] {actor: "u" authority: "g"}]]
+[?let [= $b [$journal:append $j1 [y 2] {actor: "u" authority: "g"}]]
+[?let [= $hd [$store:put-doc $s [journal-head seq=3 hash='sha256:deadbeef']]]
+[?let [= $z [$store:set-alias $s "cx-journal/head/acme" $hd]]
+[?let [= $c [$journal:close $j1]]
+[?let [= $j2 [$journal:attach $s "acme"]]
+  [$journal:verify $j2]]]]]]]]]
+#]]
+  [out-text [#
+[verification valid=false checked-from=1 checked-to=3 first-bad-seq=3 reason=':seq-gap']
+#]]
+ ]
+
+ [case id=journal-066-tamper-genesis-invalid level=core gate=enforced
+  [tags journal verify tamper genesis-invalid valid-false]
+  [doc [#
+Forge entry 1 with a non-genesis prev-hash; verify reports genesis-invalid.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://tg2"]]
+[?let [= $j1 [$journal:attach $s "acme"]]
+[?let [= $a [$journal:append $j1 [x 1] {actor: "u" authority: "g"}]]
+[?let [= $bad [$store:put-doc $s [entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash='sha256:notgenesis' hash='sha256:whatever' [event [x 1]]]]]
+[?let [= $z [$store:set-alias $s "cx-journal/entry/acme/1" $bad]]
+[?let [= $c [$journal:close $j1]]
+[?let [= $j2 [$journal:attach $s "acme"]]
+  [$journal:verify $j2]]]]]]]]
+#]]
+  [out-text [#
+[verification valid=false checked-from=1 checked-to=1 first-bad-seq=1 reason=':genesis-invalid']
+#]]
+ ]
+
+  [# ── 059-065: per-aggregate streams (R2, stdlib_journal.md §2.1.1) ─────────
+     A tenant journal is a set of independent per-aggregate streams; the
+     `:default` stream is INVISIBLE (no stream attr, no stream in the canonical
+     bytes / hash, legacy alias) so 001-058 above are byte-identical. A named
+     stream binds `stream` into the entry + hash and has its own seq/head/chain;
+     disjoint streams are independent (their own genesis, their own conflict). #]
+
+  [case id=journal-059-stream-genesis level=core
+   [tags journal append stream genesis chain]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "principal:dana"}]]
+#]]
+   [out-text [#
+[entry seq=1 tenant=acme stream=principal:dana actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:c178d1437d00735ee84e43a7d54e9ad7e2a90733440e9bde7d71b1e3496fb304 [event [a 1]]]
+#]]
+  ]
+
+  [case id=journal-060-stream-independence level=core
+   [tags journal append stream independence per-stream-seq]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g"}]]
+[?let [= $b [$journal:append $j [y 1] {actor: "u" authority: "g" stream: "dana"}]]
+  [$journal:read $j 1 "dana"]]]]
+#]]
+   [out-text [#
+[entry seq=1 tenant=acme stream=dana actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha256:87fb04b81c6bf94faaf297d1956f65fb748a5b151c5691c33a39ce3a921ebf2b' [event [y 1]]]
+#]]
+  ]
+
+  [case id=journal-061-stream-disjoint-seq level=core
+   [tags journal append stream per-stream-seq read]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+  [$journal:read $j 2 "s1"]]]]
+#]]
+   [out-text [#
+[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='epoch:00:00:02' prev-hash=sha256:bfb30a05b39bfe6c03a52bfae36a909f38fa5ec75c7613c09840b8bafb539bfa hash=sha256:c0088c8001f6bc5a098165d54aa6df547e9e3f279ab365427595b57939e3da43 [event [x 2]]]
+#]]
+  ]
+
+  [case id=journal-062-streams-enumerator level=core
+   [tags journal stream streams enumerator]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $c [$journal:append $j [y 1] {actor: "u" authority: "g" stream: "s2"}]]
+  [$journal:streams $j]]]]]
+#]]
+   [out-text [#
+('s1', 's2')
+#]]
+  ]
+
+  [case id=journal-063-stream-stale-tail level=core
+   [tags journal append stream CXER4604 stale-tail optimistic-concurrency]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+  [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1" expect-prev-seq: 0}]]]
+#]]
+   [out-err [#
+cx-err:CXER4604
+#]]
+  ]
+
+  [case id=journal-064-stream-conflict-isolated level=core
+   [tags journal append stream optimistic-concurrency isolation]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $d [$journal:append $j [z 1] {actor: "u" authority: "g"}]]
+  [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1" expect-prev-seq: 1}]]]]
+#]]
+   [out-text [#
+[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='epoch:00:00:02' prev-hash=sha256:bfb30a05b39bfe6c03a52bfae36a909f38fa5ec75c7613c09840b8bafb539bfa hash=sha256:c0088c8001f6bc5a098165d54aa6df547e9e3f279ab365427595b57939e3da43 [event [x 2]]]
+#]]
+  ]
+
+  [case id=journal-065-default-stream-invisible level=core
+   [tags journal append stream default backward-compat]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$journal:append $j [k 1] {actor: "u" authority: "g" stream: ":default"}]]
+#]]
+   [out-text [#
+[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:ccdef679e6692bd24651ac1ff19dd15bf11bcc6e69f359b8614c76431dea5cdd [event [k 1]]]
+#]]
+  ]
+
+  [# ── 066-068: per-stream verify / fold / snapshot+fold-from (R2, §2.1.1) ────
+     verify/fold/replay/snapshot/fold-from all accept a stream scope and operate
+     on that stream's own chain. (Per-stream `file://` reload is exercised
+     out-of-band — it needs a write grant the hermetic mem:// tier withholds.) #]
+
+  [case id=journal-066-stream-verify level=core
+   [tags journal verify stream finding]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+  [$journal:verify $j {stream: "s1"}]]]]
+#]]
+   [out-text [#
+[verification valid=true checked-from=1 checked-to=2 head-hash=sha256:c0088c8001f6bc5a098165d54aa6df547e9e3f279ab365427595b57939e3da43]
+#]]
+  ]
+
+  [case id=journal-067-stream-fold level=core
+   [tags journal fold stream per-stream-state]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $z [$journal:append $j [d 1] {actor: "u" authority: "g"}]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+  [$journal:fold $j [?fn ($acc $e) [+ $acc 1]] 0 "s1"]]]]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [case id=journal-068-stream-snapshot-fold-from level=core
+   [tags journal snapshot fold-from stream]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" sign: false}]]
+  [$journal:fold-from $j $snap [?fn ($acc $e) [+ $acc 1]]]]]]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [# ── 069-071: per-stream retain + compact (R2, §2.1.1 / §4.10) ──────────────
+     A stream-scoped retain (policy.stream + a per-stream covering snapshot)
+     yields a stream-tagged retention; compact copies that named stream's
+     retained tail into the segment's same named stream, seam-anchored, leaving
+     the source byte-for-byte intact. Signing seed = all-0x01 (as 027-035). #]
+
+  [case id=journal-069-stream-compact level=core
+   [tags journal compact retain stream segment seam]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $c [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 1 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[?let [= $ret [$journal:retain $j {keep-after-seq: 1 stream: "s1" snapshot: $snap}]]
+[?let [= $seg [$journal:compact $j {retention: $ret target: "mem://seg-a"}]]
+  [$journal:read $seg 2 "s1"]]]]]]]]
+#]]
+   [out-text [#
+[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='epoch:00:00:02' prev-hash=sha256:bfb30a05b39bfe6c03a52bfae36a909f38fa5ec75c7613c09840b8bafb539bfa hash=sha256:c0088c8001f6bc5a098165d54aa6df547e9e3f279ab365427595b57939e3da43 [event [x 2]]]
+#]]
+  ]
+
+  [case id=journal-070-stream-compact-verify-seam level=core
+   [tags journal compact verify stream seam finding]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $c [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 1 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[?let [= $ret [$journal:retain $j {keep-after-seq: 1 stream: "s1" snapshot: $snap}]]
+[?let [= $seg [$journal:compact $j {retention: $ret target: "mem://seg-b"}]]
+  [$journal:verify $seg {stream: "s1"}]]]]]]]]
+#]]
+   [out-text [#
+[verification valid=true checked-from=2 checked-to=3 head-hash='sha256:5fd660607531a8a7c7949dfda2d197de33a5d572d989e82d87f97714004d8767']
+#]]
+  ]
+
+  [case id=journal-071-stream-compact-source-intact level=core
+   [tags journal compact stream append-only source-intact]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[?let [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $c [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[?let [= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 1 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[?let [= $ret [$journal:retain $j {keep-after-seq: 1 stream: "s1" snapshot: $snap}]]
+[?let [= $seg [$journal:compact $j {retention: $ret target: "mem://seg-c"}]]
+  [$journal:read $j 1 "s1"]]]]]]]]
+#]]
+   [out-text [#
+[entry seq=1 tenant=acme stream=s1 actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:bfb30a05b39bfe6c03a52bfae36a909f38fa5ec75c7613c09840b8bafb539bfa [event [x 1]]]
+#]]
+  ]
+
+]

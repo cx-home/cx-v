@@ -1,0 +1,785 @@
+[test-suite name=validate
+  [doc [#
+Conformance fixtures for cx-stdlib/validate (spec/std-lib/validate.md §6).
+
+Each program imports the bundled module via [?lib 'cx-stdlib/validate']
+(resolver MUST be quoted) then calls a validate/fn. The LAST expression
+is the rendered result. String scalars render quoted; bool bare;
+sequences in paren form (a, b, c). Error fixtures use out-err with the
+bare CXERNNNN code.
+
+The two primary functions (validate-shape, validate-against) return an
+[ok …] / [invalid [violation …] …] element (failure is the inspectable
+[invalid …] outcome, NOT the propagating [err] control-flow sentinel — §AH). The spec gives no canonical
+element-serialization literal, so per AUTHORING.md we ground these by
+composing them into a string- or bool-returning surface:
+  - [validate/is-ok RESULT]            -> bool (renders bare true/false)
+  - RESULT/violation/@code             -> CXPath projection to a string
+  - [?count [validate/errors-of R]]    -> int
+  - [validate/violation-paths R]       -> [sequence string]
+  - [validate/violation-messages R]    -> [sequence string]
+These are the spec's own composition helpers (§3.3, §3.4) and the §6
+"path= consumable by select/CXPath" guarantee — spec-grounded strings,
+never invented element literals.
+
+All six public functions are pure (§3.1–§3.4). validate-against is
+specified-but-not-operable at v0.8.0 (§3.2): the named-schema registry
+is unpopulable, so it always raises CXER1600 — fixtured as such.
+
+The module is NOT implemented yet, so these are red until then.
+#]]
+
+ # ─────────────────────────────────────────────────────────────────────
+ # §3.1 validate-shape — validate value against an inline [schema …]
+ # ─────────────────────────────────────────────────────────────────────
+
+ # Happy path: a record satisfying every field constraint -> [ok …].
+ # Grounded via is-ok -> true (§3.1, §3.3).
+ [case id=validate-001-shape-ok level=core
+  [tags validate validate-shape happy is-ok]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [user [email "alice@example.com"] [score 87]]
+    [schema
+      [field name="email" type="string" pattern=".+@.+\\..+"]
+      [field name="score" type="int" min=0 max=100]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # TYPE_MISMATCH: int field carrying a string value (§2.3 table row 1).
+ # Ground via CXPath /violation/@code -> the violation code string.
+ [case id=validate-002-shape-type-mismatch level=core
+  [tags validate validate-shape type-mismatch violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [score "abc"]]
+  [schema [field name="score" type="int"]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'TYPE_MISMATCH'
+#]]
+ ]
+
+ # PATTERN_MISMATCH: invalid email against pattern=".+@.+\..+" (§2.2, §6).
+ [case id=validate-003-shape-pattern-mismatch level=core
+  [tags validate validate-shape pattern-mismatch violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [email "not-an-email"]]
+  [schema [field name="email" type="string" pattern=".+@.+\\..+"]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'PATTERN_MISMATCH'
+#]]
+ ]
+
+ # Pattern happy path: valid email is [ok …] (§6 pattern matrix).
+ [case id=validate-004-shape-pattern-ok level=core
+  [tags validate validate-shape pattern happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [email "a@b.co"]]
+    [schema [field name="email" type="string" pattern=".+@.+\\..+"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # MIN_VIOLATION: numeric value below min= (§2.3, §6 min/max matrix).
+ [case id=validate-005-shape-min-violation level=core
+  [tags validate validate-shape min-violation violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [score -1]]
+  [schema [field name="score" type="int" min=0 max=100]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'MIN_VIOLATION'
+#]]
+ ]
+
+ # MAX_VIOLATION: numeric value above max= (§2.3, §6 min/max matrix).
+ [case id=validate-006-shape-max-violation level=core
+  [tags validate validate-shape max-violation violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [score 101]]
+  [schema [field name="score" type="int" min=0 max=100]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'MAX_VIOLATION'
+#]]
+ ]
+
+ # In-range numeric is [ok …] (§6 min/max in-range case).
+ [case id=validate-007-shape-min-max-ok level=core
+  [tags validate validate-shape min max happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [score 50]]
+    [schema [field name="score" type="int" min=0 max=100]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # MIN_LENGTH_VIOLATION: string shorter than min-length= (§2.3, §6).
+ [case id=validate-008-shape-min-length-violation level=core
+  [tags validate validate-shape min-length-violation violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [name ""]]
+  [schema [field name="name" type="string" min-length=1]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'MIN_LENGTH_VIOLATION'
+#]]
+ ]
+
+ # MAX_LENGTH_VIOLATION: string longer than max-length= (§2.3, §6).
+ [case id=validate-009-shape-max-length-violation level=core
+  [tags validate validate-shape max-length-violation violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [code "ABCD"]]
+  [schema [field name="code" type="string" max-length=2]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'MAX_LENGTH_VIOLATION'
+#]]
+ ]
+
+ # REQUIRED_MISSING: a required field is absent (§2.3, §4.2, §6).
+ [case id=validate-010-shape-required-missing level=core
+  [tags validate validate-shape required-missing violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [other "x"]]
+  [schema [field name="email" type="string"]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'REQUIRED_MISSING'
+#]]
+ ]
+
+ # Optional field absent -> no violation (§4.2: missing optional = ok).
+ [case id=validate-011-shape-optional-missing-ok level=core
+  [tags validate validate-shape optional happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [other "x"]]
+    [schema [field name="phone" type="string" optional=true]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # ENUM_MISMATCH: value not in enum= set (§2.3, §6).
+ [case id=validate-012-shape-enum-mismatch level=core
+  [tags validate validate-shape enum-mismatch violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [color "purple"]]
+  [schema [field name="color" type="string" enum=["red", "green", "blue"]]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'ENUM_MISMATCH'
+#]]
+ ]
+
+ # enum= member is [ok …] (§3.5 membership test happy path).
+ [case id=validate-013-shape-enum-ok level=core
+  [tags validate validate-shape enum happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [color "red"]]
+    [schema [field name="color" type="string" enum=["red", "green", "blue"]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # UNKNOWN_FIELD: strict=true schema sees an undeclared field (§2.3, §4.1, §6).
+ [case id=validate-014-shape-strict-unknown-field level=core
+  [tags validate validate-shape unknown-field strict violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [email "a@b.co"] [extra "x"]]
+  [schema strict=true [field name="email" type="string"]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'UNKNOWN_FIELD'
+#]]
+ ]
+
+ # Lax (default): undeclared field is ignored -> [ok …] (§4.1).
+ [case id=validate-015-shape-lax-ignores-unknown level=core
+  [tags validate validate-shape lax happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [email "a@b.co"] [extra "x"]]
+    [schema [field name="email" type="string"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # NESTED_VIOLATION + extended path: nested-schema failure bubbles up with
+ # its path extended by the nesting step (§2.3, §4.3, §6). Ground via the
+ # leaf violation's CXPath path= -> "/address/zip".
+ [case id=validate-016-shape-nested-path level=core
+  [tags validate validate-shape nested path violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:violation-paths
+  [$validate:validate-shape
+    [rec [address [zip "abc"]]]
+    [schema [field name="address" type="element" schema=[schema
+      [field name="zip" type="string" pattern="^\\d{5}(-\\d{4})?$"]]]]]]
+#]]
+  [out-text [#
+('/address/zip')
+#]]
+ ]
+
+ # Multi-violation: a value with two distinct violations produces both
+ # (§6 multi-violation). Ground via errors-of count = 2 (§3.3).
+ [case id=validate-017-shape-multi-violation-count level=core
+  [tags validate validate-shape multi-violation count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$count
+  [$validate:errors-of
+    [$validate:validate-shape
+      [rec [email "bad"] [score "abc"]]
+      [schema
+        [field name="email" type="string" pattern=".+@.+\\..+"]
+        [field name="score" type="int"]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # §4.5.1 widening: type="float" ACCEPTS an int (lossless widening) -> ok.
+ [case id=validate-018-shape-float-accepts-int level=core
+  [tags validate validate-shape type float widening]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [n 3]]
+    [schema [field name="n" type="float"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §4.5.1 narrowing rejected: type="int" REJECTS a float (even 3.0).
+ [case id=validate-019-shape-int-rejects-float level=core
+  [tags validate validate-shape type int narrowing type-mismatch]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $r [$validate:validate-shape
+  [rec [n 3.0]]
+  [schema [field name="n" type="int"]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'TYPE_MISMATCH'
+#]]
+ ]
+
+ # type="any" always matches (§4.5 type matrix).
+ [case id=validate-020-shape-any-matches level=core
+  [tags validate validate-shape type any]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [x "anything"]]
+    [schema [field name="x" type="any"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # CXER1601 E_VALIDATE_TYPE_UNKNOWN: type= not in §4.5 set (§5).
+ [case id=validate-021-shape-type-unknown-err level=core
+  [tags validate validate-shape error CXER1601]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:validate-shape
+  [rec [x "y"]]
+  [schema [field name="x" type="frobnicate"]]]
+#]]
+  [out-err [#
+cx-err:CXER1601
+#]]
+ ]
+
+ # CXER1602 E_VALIDATE_PATTERN_INVALID: pattern= that doesn't compile (§5).
+ [case id=validate-022-shape-pattern-invalid-err level=core
+  [tags validate validate-shape error CXER1602]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:validate-shape
+  [rec [x "y"]]
+  [schema [field name="x" type="string" pattern="("]]]
+#]]
+  [out-err [#
+cx-err:CXER1602
+#]]
+ ]
+
+ # CXER1603 E_VALIDATE_SCHEMA_MALFORMED: impure validate-with= (§3.6, §4.6, §5).
+ [case id=validate-023-shape-impure-validator-err level=core
+  [tags validate validate-shape error CXER1603 validate-with purity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?def loud-check [returns bool] ($v::int)
+  [?io:print "side effect"]
+  true]
+[$validate:validate-shape
+  [rec [score 4]]
+  [schema [field name="score" type="int" validate-with=loud-check]]]
+#]]
+  [out-err [#
+cx-err:CXER1603
+#]]
+ ]
+
+ # CXER1604 E_VALIDATE_ENUM_INVALID: enum= value is non-comparable (§5).
+ # An element is non-comparable as an enum member.
+ [case id=validate-024-shape-enum-invalid-err level=core
+  [tags validate validate-shape error CXER1604 enum]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:validate-shape
+  [rec [x "y"]]
+  [schema [field name="x" type="string" enum=[[bad-member]]]]]
+#]]
+  [out-err [#
+cx-err:CXER1604
+#]]
+ ]
+
+ # CXER1605 E_VALIDATE_NESTED_DEPTH: nested-schema recursion exceeds the
+ # implementation-defined limit (§5). Per §5 an implementation MUST accept at
+ # least 64 levels of nesting and MAY raise CXER1605 only beyond its limit,
+ # which MUST be >= 64. The trigger therefore requires nesting that EXCEEDS the
+ # implementation limit (>= 64): at depths <= 64 a conforming implementation
+ # never raises this code. The self-referential schema below is the spec's
+ # documented construction; the literal data is illustrative (the surrounding
+ # parser caps element nesting at 64, so a real >64-deep trigger must be built
+ # programmatically against an implementation whose validate limit is exceeded).
+ # This case is documentary for CXER1605 and is not gate-run against the
+ # implementation; it asserts the error code on the canonical deep-nesting form.
+ [case id=validate-025-shape-nested-depth-err level=extended
+  [tags validate validate-shape error CXER1605 nested depth]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?const DEEP_SCHEMA [schema
+  [field name="child" type="element" schema=DEEP_SCHEMA]]]
+[$validate:validate-shape
+  [rec [child [child [child [child [child [child [child [child
+    [child [child [child [child [child [child [child [child
+      [child [child [child [child [leaf "x"]]]]]]]]]]]]]]]]]]]]]
+  DEEP_SCHEMA]
+#]]
+  [out-err [#
+cx-err:CXER1605
+#]]
+ ]
+
+ # §3.6 field-level validate-with=: false -> CUSTOM_VIOLATION at field path
+ # (§4.6 return-to-violation mapping). even-score on an odd value.
+ [case id=validate-026-shape-custom-field-false level=core
+  [tags validate validate-shape validate-with custom-violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?def even-score pure [returns bool] ($v::int)
+  [= [$mod $v 2] 0]]
+[?let [= $r [$validate:validate-shape
+  [rec [score 7]]
+  [schema [field name="score" type="int" validate-with=even-score]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'CUSTOM_VIOLATION'
+#]]
+ ]
+
+ # §3.6 field-level validate-with= passing: even value -> [ok …].
+ [case id=validate-027-shape-custom-field-true level=core
+  [tags validate validate-shape validate-with happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?def even-score pure [returns bool] ($v::int)
+  [= [$mod $v 2] 0]]
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [score 8]]
+    [schema [field name="score" type="int" validate-with=even-score]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.6 record-level validate-with=: cross-field rule -> CUSTOM_VIOLATION
+ # (§3.6 record-level, §6). Ground via the violation path= -> "/end-date".
+ [case id=validate-028-shape-custom-record-level level=core
+  [tags validate validate-shape validate-with record-level custom-violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?def end-after-start pure [returns [sequence element]] ($rec::any)
+  [?if [$lt $rec/end $rec/start]
+    [then [violation code="CUSTOM_VIOLATION" path="/end-date"
+                     message="end must be after start"]]]]
+[$validate:violation-paths
+  [$validate:validate-shape
+    [rec [start 10] [end 5]]
+    [schema validate-with=end-after-start
+      [field name="start" type="int"]
+      [field name="end" type="int"]]]]
+#]]
+  [out-text [#
+('/end-date')
+#]]
+ ]
+
+ # ─────────────────────────────────────────────────────────────────────
+ # §3.7 extends= schema composition
+ # ─────────────────────────────────────────────────────────────────────
+
+ # extends=: child validates base + own fields. A record satisfying both
+ # the base and child fields -> [ok …] (§3.7, §4.7, §6).
+ [case id=validate-029-extends-ok level=core
+  [tags validate validate-shape extends happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?const BASE [schema [field name="id" type="string"]]]
+[$validate:is-ok
+  [$validate:validate-shape
+    [rec [id "x"] [email "a@b.co"]]
+    [schema extends=$BASE
+      [field name="email" type="string" pattern=".+@.+\\..+"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # extends=: a base field still enforced through extension -> violation
+ # when missing (§3.7 includes all base fields, §6).
+ [case id=validate-030-extends-base-enforced level=core
+  [tags validate validate-shape extends required-missing violation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?const BASE [schema [field name="id" type="string"]]]
+[?let [= $r [$validate:validate-shape
+  [rec [email "a@b.co"]]
+  [schema extends=$BASE
+    [field name="email" type="string"]]]]
+  $r/violation/@code]
+#]]
+  [out-text [#
+'REQUIRED_MISSING'
+#]]
+ ]
+
+ # extends= cycle is malformed -> CXER1603 (§3.7, §4.7, §5, §6).
+ # §6 mandates this fixture ("cycle -> CXER1603"); the outcome is the
+ # spec-fixed error code, which is what this case asserts. A self-
+ # referential [?const] is the cycle trigger.
+ [case id=validate-031-extends-cycle-err level=extended
+  [tags validate validate-shape extends error CXER1603 cycle]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?const CYCLE [schema extends=CYCLE [field name="x" type="string"]]]
+[$validate:validate-shape [rec [x "y"]] CYCLE]
+#]]
+  [out-err [#
+cx-err:CXER1603
+#]]
+ ]
+
+ # ─────────────────────────────────────────────────────────────────────
+ # §3.2 validate-against — named schema (specified, not operable at v0.8.0)
+ # ─────────────────────────────────────────────────────────────────────
+
+ # Per §3.2: the named-schema registry is unpopulable at v0.8.0, so
+ # validate-against ALWAYS raises CXER1600 E_VALIDATE_SCHEMA_NOT_FOUND.
+ [case id=validate-032-against-not-found-err level=core
+  [tags validate validate-against error CXER1600 not-found]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:validate-against
+  [rec [email "a@b.co"]]
+  "LEAD_SCHEMA"]
+#]]
+  [out-err [#
+cx-err:CXER1600
+#]]
+ ]
+
+ # ─────────────────────────────────────────────────────────────────────
+ # §3.3 is-ok / errors-of — result inspection
+ # ─────────────────────────────────────────────────────────────────────
+
+ # is-ok true iff result is [ok …] (§3.3). Direct [ok …] element.
+ [case id=validate-033-is-ok-true level=core
+  [tags validate is-ok happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok [ok [user [email "a@b.co"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # is-ok false on an [err …] result (§3.3).
+ [case id=validate-034-is-ok-false level=core
+  [tags validate is-ok err]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:is-ok
+  [invalid [violation code="TYPE_MISMATCH" path="/score"]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # errors-of returns the sequence of [violation …] children; count two
+ # violations in an [err …] (§3.3).
+ [case id=validate-035-errors-of-count level=core
+  [tags validate errors-of count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$count
+  [$validate:errors-of
+    [invalid [violation code="TYPE_MISMATCH" path="/a"]
+         [violation code="PATTERN_MISMATCH" path="/b"]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # errors-of on an [ok …] result is empty (§3.3: "or empty for [ok …]").
+ [case id=validate-036-errors-of-ok-empty level=core
+  [tags validate errors-of ok empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$count [$validate:errors-of [ok [user [email "a@b.co"]]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ # ─────────────────────────────────────────────────────────────────────
+ # §3.4 violation-paths / violation-messages — projections
+ # ─────────────────────────────────────────────────────────────────────
+
+ # violation-paths projects the path= field of each violation (§3.4).
+ [case id=validate-037-violation-paths level=core
+  [tags validate violation-paths projection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:violation-paths
+  [invalid [violation code="TYPE_MISMATCH" path="/score"]
+       [violation code="PATTERN_MISMATCH" path="/email"]]]
+#]]
+  [out-text [#
+('/score', '/email')
+#]]
+ ]
+
+ # violation-paths on an [ok …] result is empty (§3.4 projects over the
+ # violation children, of which an ok result has none).
+ [case id=validate-038-violation-paths-ok-empty level=core
+  [tags validate violation-paths ok empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$count [$validate:violation-paths [ok [user [email "a@b.co"]]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ # violation-messages projects the message= field of each violation (§3.4).
+ [case id=validate-039-violation-messages level=core
+  [tags validate violation-messages projection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:violation-messages
+  [invalid [violation code="TYPE_MISMATCH" path="/score"
+                  message="score: expected int, got \"abc\""]]]
+#]]
+  [out-text [#
+('score: expected int, got "abc"')
+#]]
+ ]
+]

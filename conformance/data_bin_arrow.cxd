@@ -1,0 +1,391 @@
+[test-suite name=data-bin-arrow
+  [doc [#
+# CX Conformance — Apache Arrow C-Data interop round-trips
+# Version: 0.3 — 2026-05-09 (Phase 7.74c-conformance-runner)
+# Covers: spec/abi.md §2.11, D9 (libcx_arrow).
+#
+# Verification model. Apache Arrow's binary form is not stable across
+# versions, so we cannot assert exact Arrow bytes. These fixtures are
+# round-trip identity tests instead:
+#   1. parse(in_cx) → emit_data_bin_chunked(chunk_size=chunk_at) → bytes_in
+#   2. arrow.round_trip_cxcol(bytes_in) → bytes_out (CXCol → Arrow → CXCol
+#      via libcx_arrow's export + import paths)
+#   3. parse_data_bin(bytes_in) and parse_data_bin(bytes_out) emit
+#      structurally equivalent CX text (every value in `expect_values`
+#      appears in both).
+# Optional assertions:
+#   --- arrow_children_formats   per-column Arrow format strings (one per line)
+#   --- arrow_chunk_lengths      per-emitted-chunk row counts (one per line)
+#   --- expected_export_error    substring of expected error from
+#                                arrow.round_trip_cxcol (negative case)
+#
+# Section format follows the conformance runner's `=== test:` /
+# `--- section` shape (see vcx/tests/runners/conformance/conformance_run.v
+# for the parser; the arrow runner reuses it). Comments after `# `
+# inside any section are stripped by the runner.
+#
+# Supported column types (all 10):
+#   int / i64    →  Arrow 'l'    int64
+#   i8           →  Arrow 'c'    int8
+#   i16          →  Arrow 's'    int16
+#   i32          →  Arrow 'i'    int32
+#   float / f64  →  Arrow 'g'    float64
+#   bool         →  Arrow 'b'    bool, bit-packed
+#   string       →  Arrow 'u'    utf8
+#   date / d     →  Arrow 'tdD'  date32
+#   datetime     →  Arrow 'tsn:UTC' timestamp[ns, UTC]
+#   bytes        →  Arrow 'z'    binary
+#
+# Deferred (must surface a clear `not yet supported in ` error):
+#   decimal, dictionary columns.
+#]]
+
+ [case id=arrow-001-int64-roundtrip level=extended
+  [tags arrow roundtrip int64]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[points [table[id::int score::int]]
+  1 91
+  2 88
+  3 73
+]
+#]]
+  [arrow-children-formats [#
+l
+l
+#]]
+  [expect-values [#
+1
+2
+3
+91
+88
+73
+#]]
+ ]
+
+ [case id=arrow-002-float64-roundtrip level=extended
+  [tags arrow roundtrip float64]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[ratios [table[name::string ratio::float]]
+  alice 0.91
+  bob 0.88
+]
+#]]
+  [arrow-children-formats [#
+u
+g
+#]]
+  [expect-values [#
+alice
+bob
+0.91
+0.88
+#]]
+ ]
+
+ [case id=arrow-003-bool-bit-packing level=extended
+  [tags arrow roundtrip bool]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[flags [table[passed::bool]]
+  false
+  false
+  false
+  false
+  false
+  false
+  false
+  false
+  false
+]
+#]]
+  [arrow-children-formats [#
+b
+#]]
+  [arrow-chunk-lengths [#
+9
+#]]
+ ]
+
+ [case id=arrow-004-utf8-strings level=extended
+  [tags arrow roundtrip string]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[catalog [table[sku::string desc::string]]
+  A-100 LightBulb
+  A-200 DoorKnob
+  A-300 HammerClaw
+]
+#]]
+  [arrow-children-formats [#
+u
+u
+#]]
+  [expect-values [#
+A-100
+A-200
+A-300
+LightBulb
+DoorKnob
+HammerClaw
+#]]
+ ]
+
+ [case id=arrow-005-multi-chunk-stream level=extended
+  [tags arrow roundtrip multi_chunk]
+  [meta [#
+chunk_at: 2
+#]]
+  [in-cx [#
+[xs [table[i::int]]
+  10
+  20
+  30
+  40
+  50
+]
+#]]
+  [arrow-children-formats [#
+l
+#]]
+  [arrow-chunk-lengths [#
+2
+2
+1
+#]]
+  [expect-values [#
+10
+20
+30
+40
+50
+#]]
+ ]
+
+ [case id=arrow-006-int8-roundtrip level=extended
+  [tags arrow roundtrip int8]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[stats [table[v::i8]]
+  -128
+  -1
+  0
+  1
+  127
+]
+#]]
+  [arrow-children-formats [#
+c
+#]]
+  [expect-values [#
+-128
+-1
+0
+1
+127
+#]]
+ ]
+
+ [case id=arrow-007-int16-roundtrip level=extended
+  [tags arrow roundtrip int16]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[stats [table[v::i16]]
+  -32768
+  -1
+  0
+  1
+  32767
+]
+#]]
+  [arrow-children-formats [#
+s
+#]]
+  [expect-values [#
+-32768
+-1
+0
+1
+32767
+#]]
+ ]
+
+ [case id=arrow-008-int32-roundtrip level=extended
+  [tags arrow roundtrip int32]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[stats [table[v::i32]]
+  -2147483648
+  -1
+  0
+  1
+  2147483647
+]
+#]]
+  [arrow-children-formats [#
+i
+#]]
+  [expect-values [#
+-2147483648
+-1
+0
+1
+2147483647
+#]]
+ ]
+
+ [case id=arrow-009-date-roundtrip level=extended
+  [tags arrow roundtrip date]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[evts [table[name::string when::date]]
+  launch 2026-05-09
+  promo 2026-06-01
+  epoch 1970-01-01
+  past 1900-01-01
+  future 9999-12-31
+]
+#]]
+  [arrow-children-formats [#
+u
+tdD
+#]]
+  [expect-values [#
+2026-05-09
+2026-06-01
+1970-01-01
+1900-01-01
+9999-12-31
+#]]
+ ]
+
+ [case id=arrow-010-datetime-utc-zulu level=extended
+  [tags arrow roundtrip datetime]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[evts [table[name::string when::datetime]]
+  launch 2024-01-15T12:34:56Z
+  epoch 1970-01-01T00:00:00Z
+  past 1900-01-01T00:00:00Z
+]
+#]]
+  [arrow-children-formats [#
+u
+tsn:UTC
+#]]
+  [expect-values [#
+2024-01-15T12:34:56Z
+1970-01-01T00:00:00Z
+1900-01-01T00:00:00Z
+#]]
+ ]
+
+ [case id=arrow-011-datetime-offset-normalizes level=extended
+  [tags arrow roundtrip datetime canonical_offset]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[evts [table[name::string when::datetime]]
+  beta 2025-06-30T23:00:00+02:00
+]
+#]]
+  [arrow-children-formats [#
+u
+tsn:UTC
+#]]
+  [expect-values [#
+2025-06-30T21:00:00Z
+#]]
+ ]
+
+ [case id=arrow-012-bytes-roundtrip level=extended
+  [tags arrow roundtrip bytes]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[blobs [table[name::string blob::bytes]]
+  alpha A1B2
+  beta FF00DE
+  empty ''
+]
+#]]
+  [arrow-children-formats [#
+u
+z
+#]]
+  [expect-values [#
+alpha
+beta
+empty
+#]]
+ ]
+
+ [case id=arrow-013-multi-column-mixed-types level=extended
+  [tags arrow roundtrip multi_column]
+  [meta [#
+chunk_at: 1024
+#]]
+  [in-cx [#
+[rows [table[name::string score::int ratio::float passed::bool]]
+  alice 91 0.91 false
+  bob 88 0.88 false
+  carol 73 0.73 false
+  dave 95 0.95 false
+]
+#]]
+  [arrow-children-formats [#
+u
+l
+g
+b
+#]]
+  [expect-values [#
+alice
+bob
+carol
+dave
+91
+88
+73
+95
+0.91
+0.88
+0.73
+0.95
+#]]
+ ]
+
+ [case id=arrow-014-unsupported-type-deferred-error level=extended
+  [tags arrow negative deferred_type]
+  [meta [#
+pending: phase-7.74d (no column-type byte survives chunked
+#]]
+  [in-cx [#
+[prices [table[v::int]]
+  1
+]
+#]]
+ ]
+]

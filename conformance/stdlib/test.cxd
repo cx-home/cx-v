@@ -1,0 +1,505 @@
+[test-suite name=test
+  [doc [#
+conformance fixtures for cx-stdlib/test (spec/std-lib/test.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/test']
+   (resolver MUST be quoted) then calls [$test:fn args]. The LAST
+   expression is the rendered result. String scalars render quoted;
+   bool/int bare; null as `null`.
+
+   RETURN POSTURE: every assertion, lifecycle hook, fail/skip and
+   configure is declared `[returns null]` (§3). On the happy path the
+   spec value is therefore the bare scalar `null`. A failing assertion
+   raises CXER2200 (§5: "Any assertion failing"); the spec-grounded
+   negative path is the bare error code.
+
+   THUNKS: `$thunk::any` parameters (assert-throws, before-each,
+   after-each, before-all, after-all) take a value. The spec-grounded
+   thunk form is the v0.8.0 anonymous function literal [?fn () body]
+   (spec/core/code.md §8.6) — a nullary [?fn] is a deferred computation.
+   Lifecycle hooks register the thunk and return null without running it
+   at registration time, so they are deterministic here.
+
+   ASSERT-THROWS grounding: `fail` (§3.1) raises CXER2200 unconditionally.
+   A thunk that calls [test/fail …] therefore raises CXER2200, which is a
+   stable, spec-named code to assert the positive path against. A thunk
+   that returns a value without raising drives the negative path
+   (assert-throws itself raises CXER2200).
+
+   EFFECTFUL / AMBIGUOUS: fixture-load is capability-gated (read, §8) and
+   raises CXER0271 under the runner's deny-by-default capability set
+   (AUTHORING.md "Capability-gated / effectful"). assert-snapshot,
+   assert-shape (schema element grammar), assert-match (pattern element
+   grammar), and fixture (tagged-sequence rendering) have an
+   underspecified surface in test.md; their cases carry their best
+   reading with a TODO(spec-ambiguous) line-comment and are listed in the
+   report.
+
+   NOTE: no inter-fixture comment blocks appear between cases except the
+   TODO markers placed immediately above the case they annotate; all
+   other explanatory prose lives in this doc header or in tags.
+#]]
+
+ [case id=test-001-assert-true level=core
+  [tags test assert happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert true]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-002-assert-false-fails level=core
+  [tags test assert fail CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert false]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+ [case id=test-003-assert-false-with-label-fails level=core
+  [tags test assert label CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert false $label="round-trip"]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+ [case id=test-004-assert-equal-pass level=core
+  [tags test assert-equal happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-equal 42 42]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-005-assert-equal-string-pass level=core
+  [tags test assert-equal string happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-equal "alice" "alice"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-006-assert-equal-mismatch-fails level=core
+  [tags test assert-equal fail CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-equal 1 2]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+ [case id=test-007-assert-not-equal-pass level=core
+  [tags test assert-not-equal happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-not-equal 1 2]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-008-assert-not-equal-equal-fails level=core
+  [tags test assert-not-equal fail CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-not-equal 5 5]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+ [case id=test-009-assert-shape-pass level=core
+  [tags test assert-shape happy validate]
+  [# validate-shape (which assert-shape delegates to, test.md §79) reads
+     record fields as CHILD ELEMENTS ([user [id 1] …]), per validate.md §91 —
+     not attributes. The prior attribute form [user id=1 …] reported every
+     field REQUIRED_MISSING. #]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-shape [user [id 1] [name "Alice"]] [schema [field name="id" type="int" required=true] [field name="name" type="string" required=true]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-010-assert-shape-mismatch-fails level=core
+  [tags test assert-shape fail CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-shape [user id="not-an-int"] [schema [field name="id" type="int" required=true]]]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+ [case id=test-011-assert-throws-positive level=core
+  [tags test assert-throws happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-throws [?fn () [$test:fail "boom"]] "CXER2200"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-012-assert-throws-no-raise-fails level=core
+  [tags test assert-throws fail CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-throws [?fn () true] "CXER2200"]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+ [case id=test-013-assert-near-pass level=core
+  [tags test assert-near happy float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-near 1.0001 1.0 0.001]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-014-assert-near-outside-epsilon-fails level=core
+  [tags test assert-near fail float CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-near 1.01 1.0 0.001]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+ [case id=test-015-assert-contains-substring-pass level=core
+  [tags test assert-contains string happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-contains "hello world" "world"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-016-assert-contains-member-pass level=core
+  [tags test assert-contains sequence happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-contains (1, 2, 3) 2]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-017-assert-contains-absent-fails level=core
+  [tags test assert-contains fail CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-contains "hello" "zzz"]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+# assert-match takes a $pattern::element matched "per [?match]". A plain
+# (non-@) attribute on the pattern element is a structural-equality test
+# on that attribute's value (spec/core/code.md §5.2 rule 9), so
+# [user id=1] matches a value with id=1. A value structurally matching
+# the pattern passes (returns null).
+ [case id=test-018-assert-match-pass level=core
+  [tags test assert-match happy pattern]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-match [user id=1] [user id=1]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+# assert-match failure path: a value not matching the pattern raises
+# CXER2200 (§5). Here [user id=2] fails the structural-equality test on
+# the plain id attribute (§5.2 rule 9) against [user id=1].
+ [case id=test-019-assert-match-no-match-fails level=core
+  [tags test assert-match fail CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-match [user id=1] [user id=2]]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+# NOTE(snapshot-harness): assert-snapshot is effectful — it records/compares
+# against files under __snapshots__/ resolved relative to the test
+# program or $snapshot-dir (§3.1). CXER2203 fires only on a SECOND run
+# whose value diverges from a previously recorded snapshot, outside
+# update mode. A single eval under the runner has no pre-recorded
+# snapshot and no test-program dir, so the spec-correct outcome of one
+# isolated call (first-run record-and-pass vs. a missing snapshot dir) is
+# not determinable from test.md. Best reading: the documented mismatch
+# code CXER2203 is the stable assertion target for the divergence
+# scenario; reconcile the first-run/record semantics in a snapshot-dir
+# harness (see report).
+# gate=pending: no snapshot store exists under the conformance runner; revisit when the test module + a snapshot-harness mode land.
+ [case id=test-020-assert-snapshot-mismatch level=core gate=pending
+  [tags test assert-snapshot CXER2203]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:assert-snapshot [user id=1] $snapshot-key="user-shape"]
+#]]
+  [out-err [#
+cx-err:CXER2203
+#]]
+ ]
+
+ [case id=test-021-fail-raises level=core
+  [tags test fail CXER2200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:fail "unconditional"]
+#]]
+  [out-err [#
+cx-err:CXER2200
+#]]
+ ]
+
+ [case id=test-022-skip-raises level=core
+  [tags test skip CXER2202]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:skip "not on windows"]
+#]]
+  [out-err [#
+cx-err:CXER2202
+#]]
+ ]
+
+ [case id=test-023-fixture-count level=core
+  [tags test fixture pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$count [$test:fixture "alice" [user id=1 email="alice@example.com" name="Alice"]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=test-024-fixture-load-cap-denied level=core
+  [tags test fixture-load capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:fixture-load "fixtures/alice.cx"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=test-025-before-each-registers level=core
+  [tags test before-each lifecycle happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:before-each [?fn () true]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-026-after-each-registers level=core
+  [tags test after-each lifecycle happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:after-each [?fn () true]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-027-before-all-registers level=core
+  [tags test before-all lifecycle happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:before-all [?fn () true]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-028-after-all-registers level=core
+  [tags test after-all lifecycle happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:after-all [?fn () true]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-029-configure-on-fail-collect level=core
+  [tags test configure happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:configure [map on-fail="collect"]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=test-030-configure-reporter level=core
+  [tags test configure reporter happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/test']
+[$test:configure [map reporter="tap"]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+ [case id=test-031-fixture-load-granted level=core gate=enforced grant='read write'
+  [tags test fixture-load granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/test']
+[?let [= $d [$io:temp-dir "cxc"]]
+  [?let [= $p [$path:join $d "fx.cx"]]
+    [?let [= $w [$io:write-file $p "[user name=\"alice\" age=30]"]]
+      [?let [= $fx [$test:fixture-load $p]] $fx@name]]]]
+#]]
+  [out-text [#
+'alice'
+#]]
+ ]
+
+]

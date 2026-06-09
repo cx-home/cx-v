@@ -1,0 +1,434 @@
+[test-suite name=log
+  [doc [#
+conformance fixtures for cx-stdlib/log (spec/std-lib/log.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/log']
+   (resolver MUST be quoted) then calls [$log:fn args]. The LAST expression
+   is the rendered result. The runner compares that result value (NOT the
+   text a sink emits): null renders bare as `null`; bool bare; a map as
+   `{key: value}` with string values single-quoted (`{request-id: 'r1'}`)
+   and `{}` when empty. Error fixtures use out-err with the bare CXER code.
+
+   DETERMINISM / EFFECTFUL MODULE: every log emit function (debug, info,
+   warn, error, fatal, log, emit-raw) is `impure` and `[returns null]`
+   (§3.1/§3.2/§3.5). Their observable effect is a write to the active sink
+   (default `"stderr"`, §3.4) — but the stdlib eval runner asserts the
+   eval RESULT, which is the documented `null` return, not the sink bytes.
+   Sink output (json-lines / logfmt / field formatting / multi-sink
+   fan-out / rotation / async-flush / sampling) is not observable through a
+   return value, so those §6 list items are NOT asserted here as out-text;
+   they belong in a sink-capturing harness (conformance/stdlib/log.cxd). The
+   runner-faithful, spec-grounded assertion for each emit happy-path is the
+   `null` return.
+
+   LEVEL FILTER: filtering changes whether a sink emits, NOT the emit
+   function's return value (still `null`), so the §6 "level=:warn then info
+   no output / warn output" item is exercised through the PURE predicate
+   `is-enabled` (§3.6) instead — the only level-filter behavior visible in a
+   return value. `[log/configure {level: :warn}]` then `[log/is-enabled
+   :info]` is false; `:warn` is true.
+
+   SCOPES: the active dynamic context is established by the core
+   `[?with-scope]` directive (core §8.10.8), not a log function; log reads
+   it. `current-scope` (§3.3) returns the merged active map — `{}` outside
+   any scope, the merged fields inside. Nest/override and call-site-wins
+   (§2.3/§6) are observed through `current-scope`'s returned map.
+
+   MAP SURFACE NOTE: the spec's prose writes field/config/scope maps
+   space-separated (`{request-id "abc123"}`, `fields={user-id 1234}`); the
+   v0.8.0 parser accepts the colon+comma map literal (`{request-id: "r1"}`,
+   `{a: 1, b: 2}`). The in-code payloads use the parser-accepted surface so
+   the programs actually evaluate; the field SEMANTICS are identical. The
+   surface divergence is flagged spec-ambiguous for the field-bearing
+   functions in the report.
+
+   NOTE: no inter-fixture comment blocks appear between cases (a comment
+   between sections risks capture into the preceding section payload); all
+   explanatory prose lives in this doc header or in tags.
+#]]
+
+ [case id=log-001-debug-returns-null level=core
+  [tags log debug emit null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:debug "verbose internals"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-002-info-returns-null level=core
+  [tags log info emit null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:info "operational milestone"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-003-warn-returns-null level=core
+  [tags log warn emit null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:warn "recoverable problem"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-004-error-returns-null level=core
+  [tags log error emit null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:error "failed operation"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-005-fatal-returns-null-no-exit level=core
+  [tags log fatal emit null no-exit]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:fatal "unrecoverable"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-006-info-with-fields-returns-null level=core
+  [tags log info fields emit null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:info "user created" fields={user-id: 1234, email: "alice@example.com", duration-ms: 12.5}]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-007-info-empty-fields-returns-null level=core
+  [tags log info fields empty null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:info "m" fields={}]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-008-log-generic-returns-null level=core
+  [tags log log generic emit null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:log :info "programmatic level"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-009-log-generic-warn-returns-null level=core
+  [tags log log generic warn null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:log :warn "programmatic warn"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-010-log-unknown-level-raises level=core
+  [tags log log generic level-invalid CXER2402]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:log :verbose "bad level atom"]
+#]]
+  [out-err [#
+cx-err:CXER2402
+#]]
+ ]
+
+ [case id=log-011-current-scope-empty-no-scope level=core
+  [tags log current-scope scope empty map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:current-scope]
+#]]
+  [out-text [#
+{}
+#]]
+ ]
+
+ [case id=log-012-current-scope-inside-scope level=core
+  [tags log current-scope scope auto-attach map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[?with-scope {request-id: "r1"}
+  [$log:current-scope]]
+#]]
+  [out-text [#
+{request-id: 'r1'}
+#]]
+ ]
+
+ [case id=log-013-current-scope-nest-override level=core
+  [tags log current-scope scope nest override map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[?with-scope {request-id: "outer"}
+  [?with-scope {request-id: "inner"}
+    [$log:current-scope]]]
+#]]
+  [out-text [#
+{request-id: 'inner'}
+#]]
+ ]
+
+ [case id=log-014-current-scope-restored-on-exit level=core
+  [tags log current-scope scope restore exit map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[?with-scope {request-id: "r1"}
+  [$log:current-scope]]
+[$log:current-scope]
+#]]
+  [out-text [#
+{}
+#]]
+ ]
+
+ [case id=log-015-configure-level-returns-null level=core
+  [tags log configure level null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {level: :warn}]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-016-configure-sink-none-returns-null level=core
+  [tags log configure sink none null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {sink: "none"}]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-017-configure-format-jsonlines-returns-null level=core
+  [tags log configure format json-lines null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {format: "json-lines"}]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-018-configure-unknown-sink-raises level=core
+  [tags log configure sink-invalid CXER2400]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {sink: "carrier-pigeon"}]
+#]]
+  [out-err [#
+cx-err:CXER2400
+#]]
+ ]
+
+ [case id=log-019-configure-sink-and-sinks-raises level=core
+  [tags log configure sink-config CXER2403]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {sink: "stderr", sinks: [{sink: "stdout", format: "text"}]}]
+#]]
+  [out-err [#
+cx-err:CXER2403
+#]]
+ ]
+
+ [case id=log-020-configure-rotation-non-file-raises level=core
+  [tags log configure rotation CXER2404]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {sinks: [{sink: "stderr", format: "text", rotation: {by: :size, max-bytes: 1024}}]}]
+#]]
+  [out-err [#
+cx-err:CXER2404
+#]]
+ ]
+
+ [case id=log-021-configure-sample-rate-out-of-range-raises level=core
+  [tags log configure sample-rate CXER2405]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {sinks: [{sink: "stderr", format: "text", sample-rate: 1.5}]}]
+#]]
+  [out-err [#
+cx-err:CXER2405
+#]]
+ ]
+
+ [case id=log-022-emit-raw-returns-null level=core
+  [tags log emit-raw direct null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:emit-raw [log-event level=:info message="pre-shaped"]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=log-023-is-enabled-debug-default-false level=core
+  [tags log is-enabled level-check predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:is-enabled :debug]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=log-024-is-enabled-info-default-true level=core
+  [tags log is-enabled level-check predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:is-enabled :info]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=log-025-is-enabled-warn-default-true level=core
+  [tags log is-enabled level-check predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:is-enabled :warn]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=log-026-is-enabled-after-configure-warn-info-false level=core
+  [tags log is-enabled configure level-filter predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {level: :warn}]
+[$log:is-enabled :info]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=log-027-is-enabled-after-configure-warn-warn-true level=core
+  [tags log is-enabled configure level-filter predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/log']
+[$log:configure {level: :warn}]
+[$log:is-enabled :warn]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+]

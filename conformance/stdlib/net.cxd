@@ -1,0 +1,862 @@
+[test-suite name=net
+  [doc [#
+conformance fixtures for cx-stdlib/net (spec/02-inprogress/stdlib_net.md §10).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/net']
+   (resolver MUST be quoted) then calls [$net:fn args]. The LAST
+   expression is the rendered result.
+
+   DETERMINISM / EFFECTFUL MODULE: cx-stdlib/net is a Tier-B, necessarily
+   impure module. Every SOCKET/RESOLVER function is `impure` (§3) and every
+   one of its effect points is gated on the `net` capability (§5). The
+   stdlib eval runner evaluates each case under `code.new_env()`, which
+   grants NO capabilities (deny-by-default per spec/core/security.md §2). At
+   the effect point the active set is checked FIRST; with the grant absent
+   the function raises E_CAP_DENIED = `cx-err:CXER0271` (security.md §4).
+
+   Consequently the deterministic, runner-faithful, spec-grounded assertion
+   for the happy-path call of every GATED net function is the capability-
+   denied error CXER0271 — real socket I/O (connect/bind/accept) is neither
+   reproducible nor safe inside the conformance harness, and AUTHORING.md
+   ("Capability lanes") directs us to fixture the capability-denied error
+   rather than real effects. Each gated function therefore gets a CXER0271
+   case exercising its real call shape (correct arity / arg kinds per the
+   §3 [?def] signature). The capability-GRANTED behavior (real round-trips,
+   TLS handshake, accept-iter, SSRF deny) belongs in a capability-granted
+   harness (implementation-phase task) and is gate=pending here.
+
+   CAPABILITY-FREE FUNCTIONS (§5): parse-addr and addr-to-string are PURE
+   (no `net` grant, real output even under the empty set); close / is-open /
+   local-addr / remote-addr inspect already-known local handle state (no
+   I/O), so they too run capability-free. These get real-output cases.
+
+   NET ERROR CODES (CXER4500–CXER4524, §8): net owns CXER4500–4524. The
+   rev-7 draft's CXER44xx band collided with cx-stdlib/fp (CXER4400–4409,
+   governance §9.6); net was reallocated the next free 25-code block. The
+   restricted-transport-URL errors (CXER4500 E_NET_ADDR_INVALID, CXER4501
+   E_NET_SCHEME_UNSUPPORTED) fire inside the PURE parse, ahead of any cap
+   check, so they are asserted directly. The connection/TLS codes
+   (CXER4502+) fire only AFTER the cap check passes, so under the empty set
+   a correct impl raises CXER0271 — NOT the net-specific code — for those
+   scenarios; they belong in the granted harness (gate=pending).
+#]]
+
+ [- §3.1 resolution & addresses — parse-addr / addr-to-string PURE -]
+
+ [case id=net-001-parse-addr-tcp level=core
+  [tags net parse-addr address pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://example.com:443']
+#]]
+  [out-text [#
+[addr host='example.com' port=443 family=ipv4]
+#]]
+ ]
+
+ [case id=net-002-parse-addr-tls level=core
+  [tags net parse-addr tls pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tls://example.com:443']
+#]]
+  [out-text [#
+[addr host='example.com' port=443 family=ipv4]
+#]]
+ ]
+
+ [case id=net-003-parse-addr-ipv6-bracketed level=core
+  [tags net parse-addr ipv6 pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://[::1]:8080']
+#]]
+  [out-text [#
+[addr host='::1' port=8080 family=ipv6]
+#]]
+ ]
+
+ [case id=net-004-parse-addr-udp-wildcard level=core
+  [tags net parse-addr udp pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'udp://0.0.0.0:9000']
+#]]
+  [out-text [#
+[addr host='0.0.0.0' port=9000 family=ipv4]
+#]]
+ ]
+
+ [case id=net-005-parse-addr-unix level=core
+  [tags net parse-addr unix pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'unix:/run/db.sock']
+#]]
+  [out-text [#
+[addr path='/run/db.sock' family=unix]
+#]]
+ ]
+
+ [case id=net-006-parse-addr-bare-hostport level=core
+  [tags net parse-addr bare pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr '127.0.0.1:5432']
+#]]
+  [out-text [#
+[addr host='127.0.0.1' port=5432 family=ipv4]
+#]]
+ ]
+
+ [case id=net-007-addr-to-string-roundtrip-tcp level=core
+  [tags net addr-to-string roundtrip pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:addr-to-string [$net:parse-addr 'tcp://example.com:443']]
+#]]
+  [out-text [#
+'example.com:443'
+#]]
+ ]
+
+ [case id=net-008-addr-to-string-roundtrip-ipv6 level=core
+  [tags net addr-to-string ipv6 pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:addr-to-string [$net:parse-addr 'tcp://[::1]:8080']]
+#]]
+  [out-text [#
+'[::1]:8080'
+#]]
+ ]
+
+ [case id=net-009-addr-to-string-unix level=core
+  [tags net addr-to-string unix pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:addr-to-string [$net:parse-addr 'unix:/run/db.sock']]
+#]]
+  [out-text [#
+'unix:/run/db.sock'
+#]]
+ ]
+
+ [- §2.2 restricted-transport-URL violations — PURE parse, ahead of any cap -]
+
+ [case id=net-010-parse-addr-missing-port level=core
+  [tags net parse-addr CXER4500 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://example.com']
+#]]
+  [out-err [#
+cx-err:CXER4500
+#]]
+ ]
+
+ [case id=net-011-parse-addr-userinfo-rejected level=core
+  [tags net parse-addr CXER4500 userinfo error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://user:pass@example.com:443']
+#]]
+  [out-err [#
+cx-err:CXER4500
+#]]
+ ]
+
+ [case id=net-012-parse-addr-query-rejected level=core
+  [tags net parse-addr CXER4500 query error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://example.com:443?foo=bar']
+#]]
+  [out-err [#
+cx-err:CXER4500
+#]]
+ ]
+
+ [case id=net-013-parse-addr-path-on-tcp-rejected level=core
+  [tags net parse-addr CXER4500 path error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://example.com:443/path']
+#]]
+  [out-err [#
+cx-err:CXER4500
+#]]
+ ]
+
+ [case id=net-014-parse-addr-ipv6-unbracketed-rejected level=core
+  [tags net parse-addr CXER4500 ipv6 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://::1:443']
+#]]
+  [out-err [#
+cx-err:CXER4500
+#]]
+ ]
+
+ [case id=net-015-parse-addr-empty-host-dial-rejected level=core
+  [tags net parse-addr CXER4500 empty-host error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'tcp://:443']
+#]]
+  [out-err [#
+cx-err:CXER4500
+#]]
+ ]
+
+ [case id=net-016-parse-addr-unsupported-scheme level=core
+  [tags net parse-addr CXER4501 scheme error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:parse-addr 'ftp://example.com:21']
+#]]
+  [out-err [#
+cx-err:CXER4501
+#]]
+ ]
+
+ [- §3.1 resolve — gated on `net` → CXER0271 under the empty set -]
+
+ [case id=net-017-resolve-cap-denied level=core
+  [tags net resolve capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:resolve 'example.com' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §3.2 dial (client) — every dial is gated → CXER0271 -]
+
+ [case id=net-018-dial-cap-denied level=core
+  [tags net dial capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:dial 'tcp://example.com:443' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-019-dial-tcp-cap-denied level=core
+  [tags net dial-tcp capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:dial-tcp 'tcp://example.com:443' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-020-dial-tls-cap-denied level=core
+  [tags net dial-tls capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:dial-tls 'tls://example.com:443' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-021-dial-udp-cap-denied level=core
+  [tags net dial-udp capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:dial-udp 'udp://example.com:9000' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-022-dial-dtls-cap-denied level=core
+  [tags net dial-dtls capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:dial-dtls 'dtls://example.com:8443' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-023-dial-unix-cap-denied level=core
+  [tags net dial-unix capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:dial-unix '/run/db.sock' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §3.3 listen / accept (server) — gated → CXER0271 -]
+
+ [case id=net-024-listen-cap-denied level=core
+  [tags net listen capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:listen 'tcp://0.0.0.0:8080' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-025-listen-tcp-cap-denied level=core
+  [tags net listen-tcp capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:listen-tcp 'tcp://0.0.0.0:8080' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-026-listen-tls-cap-denied level=core
+  [tags net listen-tls capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:listen-tls 'tls://0.0.0.0:8443' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-027-listen-udp-cap-denied level=core
+  [tags net listen-udp capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:listen-udp 'udp://0.0.0.0:9000' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-028-listen-dtls-cap-denied level=core
+  [tags net listen-dtls capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:listen-dtls 'dtls://0.0.0.0:8443' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-029-listen-unix-cap-denied level=core
+  [tags net listen-unix capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:listen-unix '/run/srv.sock' {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-030-accept-cap-denied level=core
+  [tags net accept capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:accept [listener fd=6 transport='tcp' state='listening']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-031-accept-iter-cap-denied level=core
+  [tags net accept-iter capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:accept-iter [listener fd=6 transport='tcp' state='listening']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §3.4 stream I/O — gated → CXER0271 -]
+
+ [case id=net-032-read-bytes-cap-denied level=core
+  [tags net read-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:read-bytes [socket fd=7 transport='tcp' state='open'] 4096]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-033-read-exact-cap-denied level=core
+  [tags net read-exact capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:read-exact [socket fd=7 transport='tcp' state='open'] 16]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-034-read-line-cap-denied level=core
+  [tags net read-line capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:read-line [socket fd=7 transport='tcp' state='open']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-035-read-all-cap-denied level=core
+  [tags net read-all capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:read-all [socket fd=7 transport='tcp' state='open'] {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-036-read-all-bytes-cap-denied level=core
+  [tags net read-all-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:read-all-bytes [socket fd=7 transport='tcp' state='open'] {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-037-write-bytes-cap-denied level=core
+  [tags net write-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[?lib 'cx-stdlib/bytes']
+[$net:write-bytes [socket fd=7 transport='tcp' state='open'] [$bytes:from-string-utf8 'ping']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-038-write-string-cap-denied level=core
+  [tags net write-string capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:write-string [socket fd=7 transport='tcp' state='open'] 'hello']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-039-write-line-cap-denied level=core
+  [tags net write-line capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:write-line [socket fd=7 transport='tcp' state='open'] 'GET / HTTP/1.0']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-040-flush-cap-denied level=core
+  [tags net flush capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:flush [socket fd=7 transport='tcp' state='open']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-041-is-eof-cap-denied level=core
+  [tags net is-eof capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:is-eof [socket fd=7 transport='tcp' state='open']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-042-line-iter-cap-denied level=core
+  [tags net line-iter capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:line-iter [socket fd=7 transport='tcp' state='open']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-043-chunk-iter-cap-denied level=core
+  [tags net chunk-iter capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:chunk-iter [socket fd=7 transport='tcp' state='open'] 4096]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §3.5 datagram I/O — gated → CXER0271 -]
+
+ [case id=net-044-send-to-cap-denied level=core
+  [tags net send-to capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:send-to [socket fd=9 transport='udp' state='bound'] 'ping' [addr host='10.0.0.5' port=9000 family='ipv4']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-045-recv-from-cap-denied level=core
+  [tags net recv-from capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:recv-from [socket fd=9 transport='udp' state='bound'] 2048]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-046-send-cap-denied level=core
+  [tags net send capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:send [socket fd=9 transport='udp' state='connected'] 'ping']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-047-recv-cap-denied level=core
+  [tags net recv capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:recv [socket fd=9 transport='udp' state='connected'] 2048]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §3.6 TLS — gated → CXER0271 -]
+
+ [case id=net-048-tls-wrap-cap-denied level=core
+  [tags net tls-wrap capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:tls-wrap [socket fd=7 transport='tcp' state='open'] {server-name: 'example.com'}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-049-tls-accept-cap-denied level=core
+  [tags net tls-accept capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:tls-accept [socket fd=7 transport='tcp' state='open'] {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-050-peer-cert-cap-denied level=core
+  [tags net peer-cert capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:peer-cert [socket fd=7 transport='tls' state='open']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-051-tls-info-cap-denied level=core
+  [tags net tls-info capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:tls-info [socket fd=7 transport='tls' state='open']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §3.7 lifecycle — gated effect points → CXER0271 -]
+
+ [case id=net-052-shutdown-cap-denied level=core
+  [tags net shutdown capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:shutdown [socket fd=7 transport='tcp' state='open'] 'write']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-053-set-deadline-cap-denied level=core
+  [tags net set-deadline capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:set-deadline [socket fd=7 transport='tcp' state='open'] {both: 30}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=net-054-set-opt-cap-denied level=core
+  [tags net set-opt capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:set-opt [socket fd=7 transport='tcp' state='open'] {nodelay: true}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §5/§3.7 capability-FREE introspection — real output under the empty set -]
+
+ [case id=net-055-close-no-cap level=core
+  [tags net close capability-free null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:close [socket fd=7 transport='tcp' state='open']]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=net-056-is-open-unknown-handle level=core
+  [tags net is-open capability-free bool]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:is-open [socket fd=999 transport='tcp' state='closed']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=net-057-remote-addr-empty-nodeset level=core
+  [tags net remote-addr capability-free empty-nodeset]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/net']
+[$net:remote-addr [socket fd=999 transport='udp' state='bound']]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+]

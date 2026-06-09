@@ -67,6 +67,9 @@ fn toml_table(obj map[string]JsonVal, prefix string) string {
 fn toml_value(v JsonVal) string {
 	return match v {
 		JsonNull    { '' } // TOML has no null — omit
+		// Atom: TOML has no tag protocol, so the atom row of
+		// conversions.md is lossy — emit the `:NAME` surface form as a string.
+		JsonAtom    { toml_str(':' + (v as JsonAtom).name) }
 		bool        { if v as bool { 'true' } else { 'false' } }
 		i64         { (v as i64).str() }
 		f64         { format_float(v as f64) }

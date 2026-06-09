@@ -17,78 +17,34 @@ mut:
 	sections map[string]string
 }
 
+// strip_blank_edges reproduces the former flush() normalization: drop
+// leading/trailing BLANK lines from a section body, applied to the loader's
+// byte-exact body so the runner sees byte-identical sections vs the old .txt.
+fn strip_blank_edges(s string) string {
+	mut lines := s.split('\n')
+	for lines.len > 0 && lines[0].trim_space() == '' { lines.delete(0) }
+	for lines.len > 0 && lines[lines.len - 1].trim_space() == '' { lines.delete(lines.len - 1) }
+	return lines.join('\n')
+}
+
+// parse_suite loads a .cxd suite (diff.cxd / lint.cxd) via cx.load_fixtures,
+// replacing the bespoke `=== test:` / `--- key` scanner. level/tags come from
+// the case attr / [tags] element; the runner keys into t.sections[name] by
+// presence exactly as before.
 fn parse_suite(path string) []DiffLintCase {
-	src := os.read_file(path) or {
-		eprintln('could not read suite file: ${path}')
-		return []
-	}
 	mut tests := []DiffLintCase{}
-	mut cur := ?DiffLintCase(none)
-	mut section := ?string(none)
-	mut lines_buf := []string{}
-
-	// Note: section flushing is inlined as for-body rather than a
-	// closure. V closures capture mutated optionals by value, so
-	// `cur = t` inside a closure does not propagate back to the
-	// outer `cur` — same trap fixed in conformance_run.v session 5
-	// where it had been silently passing every fixture mismatch.
-
-	for raw in src.split_into_lines() {
-		if raw.starts_with('=== test:') {
-			if sec := section {
-				for lines_buf.len > 0 && lines_buf[0].trim_space() == '' { lines_buf.delete(0) }
-				for lines_buf.len > 0 && lines_buf[lines_buf.len-1].trim_space() == '' { lines_buf.delete(lines_buf.len-1) }
-				val := lines_buf.join('\n')
-				if mut t := cur {
-					t.sections[sec] = val
-					cur = t
-				}
-			}
-			lines_buf = []string{}
-			if t := cur { tests << t }
-			cur = DiffLintCase{ name: raw[9..].trim_space(), sections: map[string]string{} }
-			section = none
-			continue
+	for c in cx.load_fixtures(path) {
+		mut t := DiffLintCase{
+			name:     c.name
+			level:    c.level
+			tags:     c.tags
+			sections: map[string]string{}
 		}
-		if raw.starts_with('level:') {
-			if mut t := cur { t.level = raw[6..].trim_space(); cur = t }
-			continue
+		for k, v in c.sections {
+			t.sections[k] = strip_blank_edges(v)
 		}
-		if raw.starts_with('tags:') {
-			if mut t := cur { t.tags = raw[5..].trim_space().split(' '); cur = t }
-			continue
-		}
-		if raw.starts_with('--- ') {
-			if sec := section {
-				for lines_buf.len > 0 && lines_buf[0].trim_space() == '' { lines_buf.delete(0) }
-				for lines_buf.len > 0 && lines_buf[lines_buf.len-1].trim_space() == '' { lines_buf.delete(lines_buf.len-1) }
-				val := lines_buf.join('\n')
-				if mut t := cur {
-					t.sections[sec] = val
-					cur = t
-				}
-			}
-			lines_buf = []string{}
-			if cur != none { section = raw[4..].trim_space() }
-			continue
-		}
-		if raw.starts_with('#') || raw.trim_space() == '' {
-			if section != none { lines_buf << raw }
-			continue
-		}
-		if section != none { lines_buf << raw }
+		tests << t
 	}
-	// flush trailing section
-	if sec := section {
-		for lines_buf.len > 0 && lines_buf[0].trim_space() == '' { lines_buf.delete(0) }
-		for lines_buf.len > 0 && lines_buf[lines_buf.len-1].trim_space() == '' { lines_buf.delete(lines_buf.len-1) }
-		val := lines_buf.join('\n')
-		if mut t := cur {
-			t.sections[sec] = val
-			cur = t
-		}
-	}
-	if t := cur { tests << t }
 	return tests
 }
 

@@ -1,6 +1,8 @@
 module cx
 
 import crypto.sha256
+import crypto.sha512
+import crypto.blake3
 
 // Canonical-form tooling per spec/canonical.md and spec/abi.md §2.6.
 //
@@ -35,8 +37,8 @@ pub fn cx_text_fmt(input string) !string {
 
 // cx_text_canonical parses the input, strips presentation nodes,
 // canonicalizes namespace prefix usage and xmlns-declaration order
-// per ADR 0002 D6, sorts MapNode entries into lexicographic Unicode
-// order per ADR 0017 §D14 / spec/canonical.md §2.11.1, and re-emits
+// sorts MapNode entries into lexicographic Unicode
+// order / spec/canonical.md §2.11.1, and re-emits
 // it. The output is the strict canonical text per spec/canonical.md
 // §1.2.
 pub fn cx_text_canonical(input string) !string {
@@ -56,6 +58,27 @@ pub fn cx_text_hash(input string) !string {
 	return digest.hex()
 }
 
+// cx_text_hash_algo returns the lowercase hex digest of the strict
+// canonical text bytes under the named algorithm — one of `sha256`,
+// `sha384`, `sha512`, `blake3`. Unlike a single fixed digest, callers
+// that advertise a configurable hash algorithm (e.g. the journal chain,
+// std-lib/journal §4.2) MUST produce a genuinely DIFFERENT digest per
+// algo, or the algorithm choice is a lie and tamper-evidence is hollow
+// (sha256 and sha512 of the same bytes must not collide in length or
+// value). An unknown algo is an error (the caller maps it to its domain
+// code, e.g. CXER4607). sha256 is byte-identical to `cx_text_hash`.
+pub fn cx_text_hash_algo(input string, algo string) !string {
+	canonical := cx_text_canonical(input)!
+	b := canonical.bytes()
+	return match algo {
+		'sha256' { sha256.sum256(b).hex() }
+		'sha384' { sha512.sum384(b).hex() }
+		'sha512' { sha512.sum512(b).hex() }
+		'blake3' { blake3.sum256(b).hex() }
+		else { error('unsupported hash algorithm `${algo}`') }
+	}
+}
+
 // cx_text_eq returns true iff the strict canonical of `a` equals the
 // strict canonical of `b` (byte-identical, not just data-equivalent —
 // per the canonical-form spec, byte-identity *is* data equivalence).
@@ -66,8 +89,8 @@ pub fn cx_text_eq(a string, b string) !bool {
 }
 
 // cx_data_bin_hash returns the lowercase hex SHA-256 of the strict
-// canonical text bytes of a CXDB binary input. Compression-invariant
-// per spec/data_bin.md §3.12.2: row groups wrapped in body-tag 0x90
+// canonical text bytes of a CXCol binary input. Compression-invariant
+// per spec/core/data-bin.md §3.12.2: row groups wrapped in body-tag 0x90
 // are decompressed by parse_data_bin, the resulting Document is run
 // through the same canonical pipeline as cx_text_hash, and the
 // canonical text bytes are hashed. zstd-1 / zstd-19 / plain
@@ -75,8 +98,8 @@ pub fn cx_text_eq(a string, b string) !bool {
 // because parse_data_bin yields the same Document for each, and
 // canonical text is a function of Document content only.
 //
-// HH1 (v0.7.0) — closes the §3.12.2 promise documented but unwired
-// at v0.6.0. The pipeline composes the chunked decoder (which
+// HH1 — closes the §3.12.2 promise that was documented but unwired.
+// The pipeline composes the chunked decoder (which
 // already decompresses 0x90 wrappers internally) with the existing
 // canonical pipeline, so no new decompression code path lands; the
 // surface is purely an entry-point composition.
@@ -143,16 +166,20 @@ fn canonicalize_node(n Node) ?Node {
 					new_items << keep
 				}
 			}
-			return Node(Element{
-				name:      n.name
-				anchor:    none // strip anchor metadata
-				merge:     none // strip merge metadata
-				data_type: n.data_type
-				attrs:     n.attrs
-				items:     new_items
-				id:        n.id // preserved; canonicalize_ids renames in document order
-				body_ref:  n.body_ref // preserved; canonicalize_ids rewrites
-			})
+			mut canon := new_element(n.name, ElementMeta{
+				// anchor/merge stripped per strict-canonical
+				data_type: n.data_type()
+				id:        n.id() // preserved; canonicalize_ids renames in document order
+				body_ref:  n.body_ref() // preserved; canonicalize_ids rewrites
+			}, n.attrs, new_items)
+			// Preserve the `:table` block payload — it lives in the
+			// pointer-ized `table` field, NOT in `items`, so rebuilding the
+			// element without it silently dropped every row (the surviving
+			// `::table` data_type then rendered as a bare `[name::table]`).
+			if td := n.table_opt() {
+				canon = canon.with_table(td)
+			}
+			return Node(canon)
 		}
 		else {
 			// TextNode, ScalarNode, EntityRefNode, AliasNode, PINode,
@@ -167,7 +194,7 @@ fn canonicalize_node(n Node) ?Node {
 
 // canonicalize_collection_literals rewrites every MapNode in the
 // document so its entries appear in lexicographic Unicode order of
-// the canonical key serialization per ADR 0017 §D14 + spec/canonical.md
+// the canonical key serialization + spec/canonical.md
 // §2.11.1. SequenceNode and ArrayNode items keep their source order
 // (sequences are flat at parse time per CXDM §1, arrays are nested-
 // preserving per §D3). Recurses into element bodies, sequence /
@@ -206,9 +233,9 @@ fn canonicalize_collection_nodes(mut nodes []Node) {
 // from spec/canonical.md §2.11.1. The primary sort is by type-tag
 // name (bool < bytes < date < datetime < float < int < string); ties
 // break by lexicographic Unicode order of the canonical-string
-// serialization of the key value. v0.6.0 restricts map keys to
-// strings per ADR §D4 — the type-tag tie-break is in place for the
-// CXL 3.1 widening but exercises rarely today.
+// serialization of the key value. Map keys are restricted to
+// strings — the type-tag tie-break is in place for the
+// CX code 3.1 widening but exercises rarely today.
 fn map_entry_cmp(a &MapEntry, b &MapEntry) int {
 	a_tag := map_key_type_tag_name(a.key_type)
 	b_tag := map_key_type_tag_name(b.key_type)
@@ -234,5 +261,14 @@ fn map_key_type_tag_name(t ScalarType) string {
 		.null_type     { 'null' }
 		.decimal_type  { 'decimal' }
 		.bigint_type   { 'bigint' }
+		.duration_type { 'duration' }
+		.period_type   { 'period' }
+		// Atoms are not valid map keys in v0.8.0 per
+		// spec/cxdm.md §2.5 closing note. This branch
+		// is unreachable for well-formed inputs; we still spell it so
+		// the V exhaustive-match rule passes. Reachable only via a
+		// programming bug — surface as 'atom' so the diagnostic
+		// matches the underlying type tag.
+		.atom_type     { 'atom' }
 	}
 }

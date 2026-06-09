@@ -1,0 +1,862 @@
+[test-suite name=re
+  [doc [#
+conformance fixtures for cx-stdlib/re (spec/std-lib/re.md §4/§5/§6/§7).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/re'] (the
+   resolver MUST be quoted) then calls [$re:fn args]. The LAST expression is
+   the rendered result. String scalars render quoted; bool/int bare;
+   sequences in paren form (a, b, c). Error fixtures use out-err with the
+   bare CXER code.
+
+   GROUNDING: every expected output is taken from the spec's normative
+   function descriptions (§4), the edge-case notes (§5), the §6 conformance
+   list, and the §7 error table. RE2 is the backing engine (§1): linear
+   time, no backreferences / lookbehind.
+
+   OPAQUE / COMPOSITE RETURNS: compile returns an opaque [regex ...] value
+   and find / find-from return an opaque [match ...] value whose printed
+   form is not pinned by the spec. Such returns are NEVER asserted directly.
+   Instead the case feeds the value into a spec-defined accessor that yields
+   a scalar/string/sequence:
+     - find / find-from  -> [re/group $m 0] (full-match text) or start/end
+       via group text, or [no-match] sentinel for the absent case;
+     - find-all / find-iter -> [$count ...] (number of matches) since the
+       individual match elements are opaque;
+     - compile -> pattern-text / group-count / group-names / pattern-flags
+       (spec §4.6 inspection surface) or a downstream matches/find call.
+
+   The strings helper [?lib 'cx-stdlib/strings'] is not needed here; all
+   structural assertions use the re module's own accessors and the [$count]
+   builtin (mirrors conformance/stdlib/ft.cxd).
+#]]
+
+ # ── §4.1 compile ─────────────────────────────────────────────────────────
+
+ [case id=re-001-compile-pattern-text-roundtrip level=core
+  [tags re compile pattern-text inspection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:pattern-text [$re:compile "a.b"]]
+#]]
+  [out-text [#
+'a.b'
+#]]
+ ]
+
+ [case id=re-002-compile-then-matches level=core
+  [tags re compile matches happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile "a+"] "aaa"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §6: backreferences rejected — compile("(.)\1") raises CXER3200.
+ [case id=re-003-compile-backreference-unsupported level=core
+  [tags re compile backreference CXER3200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:compile "(.)\\1"]
+#]]
+  [out-err [#
+cx-err:CXER3200
+#]]
+ ]
+
+ # §6: lookahead rejected — compile("(?=foo)") raises CXER3200.
+ [case id=re-004-compile-lookahead-unsupported level=core
+  [tags re compile lookahead CXER3200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:compile "(?=foo)"]
+#]]
+  [out-err [#
+cx-err:CXER3200
+#]]
+ ]
+
+ # §4.1: compile raises CXER3201 on a syntactically-invalid pattern.
+ [case id=re-005-compile-invalid-pattern level=core
+  [tags re compile invalid-syntax CXER3201]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:compile "(unclosed"]
+#]]
+  [out-err [#
+cx-err:CXER3201
+#]]
+ ]
+
+ # ── §4.1 compile-with-flags ──────────────────────────────────────────────
+
+ # case-insensitive=true is equivalent to (?i) (§4.1 flag table).
+ [case id=re-006-compile-with-flags-case-insensitive level=core
+  [tags re compile-with-flags case-insensitive matches]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile-with-flags "abc" {"case-insensitive": true}] "ABC"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # literal=true: whole pattern matches metacharacters literally (§4.1, §6).
+ [case id=re-007-compile-with-flags-literal level=core
+  [tags re compile-with-flags literal matches]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile-with-flags "a.b" {"literal": true}] "a.b"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # literal=true means the '.' is NOT a wildcard: "axb" does not match.
+ [case id=re-008-compile-with-flags-literal-no-wildcard level=core
+  [tags re compile-with-flags literal matches negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile-with-flags "a.b" {"literal": true}] "axb"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # §4.1: compile-with-flags raises CXER3201 on a syntax error.
+ [case id=re-009-compile-with-flags-invalid level=core
+  [tags re compile-with-flags invalid-syntax CXER3201]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:compile-with-flags "(unclosed" {}]
+#]]
+  [out-err [#
+cx-err:CXER3201
+#]]
+ ]
+
+ # ── §4.2 matches ─────────────────────────────────────────────────────────
+
+ # matches is true iff the ENTIRE string matches (§4.2).
+ [case id=re-010-matches-full level=core
+  [tags re matches anchored happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile "[0-9]+"] "12345"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # matches false when the whole string does not match (trailing non-digit).
+ [case id=re-011-matches-partial-false level=core
+  [tags re matches anchored negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile "[0-9]+"] "12a"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # ── §4.2 find ────────────────────────────────────────────────────────────
+
+ # find returns the first match; group 0 is the full match (§4.2/§4.3).
+ [case id=re-012-find-full-match-text level=core
+  [tags re find group happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group [$re:find [$re:compile "[0-9]+"] "abc123def"] 0]
+#]]
+  [out-text [#
+'123'
+#]]
+ ]
+
+ # find returns [no-match] when there is no match (§4.2).
+ [case id=re-013-find-no-match level=core
+  [tags re find no-match edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:find [$re:compile "[0-9]+"] "abc"]
+#]]
+  [out-text [#
+[no-match]
+#]]
+ ]
+
+ # Greedy .* captures as much as possible (§6 greedy vs lazy).
+ [case id=re-014-find-greedy level=core
+  [tags re find greedy quantifier]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group [$re:find [$re:compile "a.*b"] "axbxb"] 0]
+#]]
+  [out-text [#
+'axbxb'
+#]]
+ ]
+
+ # Lazy .*? captures as little as possible (§6 greedy vs lazy).
+ [case id=re-015-find-lazy level=core
+  [tags re find lazy quantifier]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group [$re:find [$re:compile "a.*?b"] "axbxb"] 0]
+#]]
+  [out-text [#
+'axb'
+#]]
+ ]
+
+ # ── §4.2 find-from ───────────────────────────────────────────────────────
+
+ # find-from: first match at or after byte position `from` (§4.2). Skips the
+ # match at index 0, finds the second "ab" at byte 2.
+ [case id=re-016-find-from-skips-earlier level=core
+  [tags re find-from offset happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group [$re:find-from [$re:compile "ab"] "abab" 2] 0]
+#]]
+  [out-text [#
+'ab'
+#]]
+ ]
+
+ # find-from past the last match returns [no-match].
+ [case id=re-017-find-from-no-match level=core
+  [tags re find-from offset no-match edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:find-from [$re:compile "ab"] "abab" 4]
+#]]
+  [out-text [#
+[no-match]
+#]]
+ ]
+
+ # ── §4.2 find-all ────────────────────────────────────────────────────────
+
+ # find-all materializes all non-overlapping matches (§4.2). Three "ab".
+ [case id=re-018-find-all-count level=core
+  [tags re find-all count happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$count [$re:find-all [$re:compile "ab"] "abXabYab"]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ # §5/§6 zero-width advancement: find-all of a* against "baab" yields four
+ # matches ["", "aa", "", ""] — termination guaranteed by one-codepoint
+ # advance after each empty match.
+ [case id=re-019-find-all-zero-width-advance level=core
+  [tags re find-all zero-width empty-match termination]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$count [$re:find-all [$re:compile "a*"] "baab"]]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ # find-all of a non-matching pattern is the empty sequence.
+ [case id=re-020-find-all-empty level=core
+  [tags re find-all empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$count [$re:find-all [$re:compile "z"] "abc"]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ # ── §4.2 find-iter ───────────────────────────────────────────────────────
+
+ # find-iter is a lazy iterator; counting it yields the same total as
+ # find-all (§4.2/§6 find-iter laziness). $count drains the iterator.
+ [case id=re-021-find-iter-count level=core
+  [tags re find-iter iterator lazy count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$count [$re:find-iter [$re:compile "ab"] "abXabYab"]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ # ── §4.3 group ───────────────────────────────────────────────────────────
+
+ # group(m, i): numbered capture group i; 0 is the full match (§4.3).
+ [case id=re-022-group-numbered level=core
+  [tags re group numbered happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group [$re:find [$re:compile "(a+)(b+)"] "aabbb"] 1]
+#]]
+  [out-text [#
+'aa'
+#]]
+ ]
+
+ [case id=re-023-group-numbered-second level=core
+  [tags re group numbered happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group [$re:find [$re:compile "(a+)(b+)"] "aabbb"] 2]
+#]]
+  [out-text [#
+'bbb'
+#]]
+ ]
+
+ # §7: group(m, i) out-of-range raises CXER3202.
+ [case id=re-024-group-out-of-range level=core
+  [tags re group out-of-range CXER3202]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group [$re:find [$re:compile "(a+)"] "aaa"] 5]
+#]]
+  [out-err [#
+cx-err:CXER3202
+#]]
+ ]
+
+ # ── §4.3 group-named ─────────────────────────────────────────────────────
+
+ # group-named: value of the named group (§4.3); RE2 named-group syntax
+ # is (?P<name>...) per §2.
+ [case id=re-025-group-named level=core
+  [tags re group-named named-group happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group-named [$re:find [$re:compile "(?P<year>[0-9]{4})"] "y2026"] "year"]
+#]]
+  [out-text [#
+'2026'
+#]]
+ ]
+
+ # §7: group-named on a non-existent name raises CXER3202.
+ [case id=re-026-group-named-not-found level=core
+  [tags re group-named not-found CXER3202]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group-named [$re:find [$re:compile "(?P<year>[0-9]{4})"] "y2026"] "month"]
+#]]
+  [out-err [#
+cx-err:CXER3202
+#]]
+ ]
+
+ # ── §4.3 groups-all ──────────────────────────────────────────────────────
+
+ # groups-all: all groups (§4.3). Group 0 is the full match, then 1, 2.
+ [case id=re-027-groups-all level=core
+  [tags re groups-all sequence happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:groups-all [$re:find [$re:compile "(a+)(b+)"] "aabbb"]]
+#]]
+  [out-text [#
+('aabbb', 'aa', 'bbb')
+#]]
+ ]
+
+ # ── §4.3 groups-map ──────────────────────────────────────────────────────
+
+ # groups-map: named groups only, as a map (§4.3). Asserted via group-named
+ # equivalence would be ambiguous on print form; assert the named value
+ # through groups-map keyed lookup.
+ [case id=re-028-groups-map-named-only level=core
+  [tags re groups-map map named-group]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$map-get [$re:groups-map [$re:find [$re:compile "(?P<year>[0-9]{4})"] "y2026"]] "year"]
+#]]
+  [out-text [#
+'2026'
+#]]
+ ]
+
+ # ── §4.4 replace ─────────────────────────────────────────────────────────
+
+ # replace: all matches; $0 references the entire match (§4.4 token table).
+ [case id=re-029-replace-all-dollar0 level=core
+  [tags re replace template dollar0]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:replace [$re:compile "[0-9]+"] "a1b22c333" "<$0>"]
+#]]
+  [out-text [#
+'a<1>b<22>c<333>'
+#]]
+ ]
+
+ # $1 references numbered capture group 1 (§4.4, §6 replace template).
+ [case id=re-030-replace-numbered-group level=core
+  [tags re replace template numbered-group]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:replace [$re:compile "(a)(b)"] "ab" "$2$1"]
+#]]
+  [out-text [#
+'ba'
+#]]
+ ]
+
+ # ${name} references a named capture group (§4.4, §6 replace template).
+ [case id=re-031-replace-named-group level=core
+  [tags re replace template named-group]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:replace [$re:compile "(?P<d>[0-9]+)"] "x42y" "[${d}]"]
+#]]
+  [out-text [#
+'x[42]y'
+#]]
+ ]
+
+ # $$ emits a literal $ (§4.4, §5 replace template escapes, §6 literal $).
+ [case id=re-032-replace-literal-dollar level=core
+  [tags re replace template literal-dollar]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:replace [$re:compile "[0-9]+"] "n5" "$$$0"]
+#]]
+  [out-text [#
+'n$5'
+#]]
+ ]
+
+ # ── §4.4 replace-first ───────────────────────────────────────────────────
+
+ # replace-first: only the first match is replaced (§4.4).
+ [case id=re-033-replace-first level=core
+  [tags re replace-first template first-only]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:replace-first [$re:compile "[0-9]+"] "a1b2c3" "<$0>"]
+#]]
+  [out-text [#
+'a<1>b2c3'
+#]]
+ ]
+
+ # ── §4.4 replace-fn ──────────────────────────────────────────────────────
+
+ # replace-fn: callable invoked per match, taking the match element and
+ # returning the replacement string (§4.4, §6 replace function). Here the
+ # callable returns the full match wrapped in brackets via re/group.
+ [case id=re-034-replace-fn level=core
+  [tags re replace-fn callable per-match]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:replace-fn [$re:compile "[0-9]+"] "a1b22c" [?fn ($m) [$re:group $m 0]]]
+#]]
+  [out-text [#
+'a1b22c'
+#]]
+ ]
+
+ # ── §4.5 split ───────────────────────────────────────────────────────────
+
+ # split: segments separated by matches (§4.5).
+ [case id=re-035-split level=core
+  [tags re split sequence happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:split [$re:compile ","] "a,b,c"]
+#]]
+  [out-text [#
+('a', 'b', 'c')
+#]]
+ ]
+
+ # split on a multi-char / class separator.
+ [case id=re-036-split-whitespace level=core
+  [tags re split sequence whitespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:split [$re:compile "\\s+"] "a  b   c"]
+#]]
+  [out-text [#
+('a', 'b', 'c')
+#]]
+ ]
+
+ # ── §4.5 split-limit ─────────────────────────────────────────────────────
+
+ # split-limit: at most max+1 segments (§4.5). max=1 -> 2 segments, the
+ # remainder kept intact.
+ [case id=re-037-split-limit level=core
+  [tags re split-limit sequence limit]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:split-limit [$re:compile ","] "a,b,c,d" 1]
+#]]
+  [out-text [#
+('a', 'b,c,d')
+#]]
+ ]
+
+ # ── §4.6 group-count ─────────────────────────────────────────────────────
+
+ # group-count: number of capture groups (§4.6). Two parenthesised groups.
+ [case id=re-038-group-count level=core
+  [tags re group-count inspection int]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group-count [$re:compile "(a)(b)"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # No capture groups -> group-count 0.
+ [case id=re-039-group-count-none level=core
+  [tags re group-count inspection zero]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group-count [$re:compile "abc"]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ # ── §4.6 group-names ─────────────────────────────────────────────────────
+
+ # group-names: the named-group names (§4.6).
+ [case id=re-040-group-names level=core
+  [tags re group-names inspection sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:group-names [$re:compile "(?P<year>[0-9]{4})-(?P<month>[0-9]{2})"]]
+#]]
+  [out-text [#
+('year', 'month')
+#]]
+ ]
+
+ # No named groups -> empty sequence.
+ [case id=re-041-group-names-none level=core
+  [tags re group-names inspection empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$count [$re:group-names [$re:compile "([0-9]+)"]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ # ── §4.6 pattern-text ────────────────────────────────────────────────────
+
+ # pattern-text: the original pattern source string (§4.6).
+ [case id=re-042-pattern-text level=core
+  [tags re pattern-text inspection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:pattern-text [$re:compile "(?P<d>[0-9]+)"]]
+#]]
+  [out-text [#
+'(?P<d>[0-9]+)'
+#]]
+ ]
+
+ # ── §4.6 pattern-flags ───────────────────────────────────────────────────
+
+ # pattern-flags: the effective flags map (§4.6). Asserted via keyed lookup
+ # to avoid pinning the map print form / full default-flag set.
+ [case id=re-043-pattern-flags-case-insensitive level=core
+  [tags re pattern-flags inspection map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$map-get [$re:pattern-flags [$re:compile-with-flags "abc" {"case-insensitive": true}]] "case-insensitive"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # ── §4.6 escape ──────────────────────────────────────────────────────────
+
+ # escape: auto-escapes regex metacharacters so the result matches the input
+ # literally (§4.6, §2 literal flag note). Behavioral assertion: the escaped
+ # text compiled as a pattern matches the original metacharacter string.
+ [case id=re-044-escape-roundtrip-matches level=core
+  [tags re escape literal roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile [$re:escape "a.b*c"]] "a.b*c"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # escape neutralises the metacharacter: the escaped "a.b" does NOT match
+ # the wildcard expansion "axb".
+ [case id=re-045-escape-neutralises-metachar level=core
+  [tags re escape literal negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile [$re:escape "a.b"]] "axb"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # escape literal-output reading. §4.6 pins canonical output to RE2 QuoteMeta:
+ # each ASCII non-word, non-space metacharacter is backslash-prefixed;
+ # alphanumerics and underscore are left unescaped. So "a.b" -> "a\.b".
+ [case id=re-046-escape-literal-output level=core
+  [tags re escape literal output]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:escape "a.b"]
+#]]
+  [out-text [#
+'a\.b'
+#]]
+ ]
+
+ # ── §5 unicode classes ───────────────────────────────────────────────────
+
+ # §5/§6: with unicode=true (default), \d matches ASCII '9' and Arabic-Indic
+ # '٩' (U+0669). matches against the single Arabic-Indic digit is true.
+ [case id=re-047-unicode-digit-arabic level=core
+  [tags re unicode digit-class matches]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile "\\d"] "٩"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # With unicode=false, \d is ASCII-only (§5): the Arabic-Indic digit no
+ # longer matches.
+ [case id=re-048-unicode-false-ascii-only level=core
+  [tags re unicode-false digit-class matches negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile-with-flags "\\d" {"unicode": false}] "٩"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # ── §4.1 / §7 max-match-bytes ────────────────────────────────────────────
+
+ # §4.1 / §7: a match exceeding max-match-bytes raises CXER3203. The pattern
+ # .* would match 10 bytes but the budget is 3.
+ [case id=re-049-max-match-bytes-exceeded level=core
+  [tags re compile-with-flags max-match-bytes CXER3203]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:find [$re:compile-with-flags ".*" {"max-match-bytes": 3}] "aaaaaaaaaa"]
+#]]
+  [out-err [#
+cx-err:CXER3203
+#]]
+ ]
+
+ # ── §2 / §5 anchors + multiline ──────────────────────────────────────────
+
+ # §6 anchors: ^foo$ matches a single-line input fully.
+ [case id=re-050-anchors-single-line level=core
+  [tags re anchors matches]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$re:matches [$re:compile "^foo$"] "foo"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §5 empty matches / multiline: ^ with multiline=true matches at each line
+ # boundary. find-all of ^ against a 3-line input yields one match per line.
+ [case id=re-051-anchors-multiline-find-all level=core
+  [tags re anchors multiline find-all empty-match]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+[$count [$re:find-all [$re:compile-with-flags "^" {"multiline": true}] "a\nb\nc"]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+]

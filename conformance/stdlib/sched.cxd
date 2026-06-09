@@ -1,0 +1,727 @@
+[test-suite name=sched
+  [doc [#
+conformance fixtures for cx-stdlib/sched (spec/02-working/stdlib_sched.md
+§3/§6/§10). Each program imports the bundled module via [?lib 'cx-stdlib/sched']
+(resolver MUST be quoted). The LAST expression is the rendered result.
+
+   sched is a durable scheduler: after / at / every (fixed-delay|fixed-rate) /
+   recur (a time [recurrence …] rule) / cron, cancel, durable timers
+   (journal-backed, survive restart via restore), a catch-up policy
+   (on-missed), and a controllable :manual test clock. It COMPOSES three
+   shipped modules (time recurrence math, journal durability, the picoev loop)
+   and adds NO calendar grammar, NO persistence, and NO new capability (§0/§5).
+
+   FOUR-CHANNEL MODEL (code.md §9.1.2): an armed/fired/canceled timer is a
+   present [timer] VALUE; a bad arg/mode/durable is an [err] in CXER4970-4989;
+   COUNT/UNTIL exhaustion is the NORMAL terminal "fired" transition (a value,
+   not a fault); an orphaned durable intent on restore is a present finding in
+   the [restore-report …] VALUE, never silently dropped.
+
+   HERMETIC. ALL fixtures run under the :manual test clock (§3.3) — this
+   evaluator loop is the conformance harness loop and runs :manual by default,
+   so virtual-now starts at the epoch (instant 0). Timers fire only when
+   [$sched:test-clock-advance] moves virtual time past their deadline, in
+   deadline order, deterministically and SLEEP-FREE (§4.2). NO wall-clock
+   sleeps; NO nondeterministic values asserted. `at`/`recur`/`cron` fixtures
+   use EPOCH-anchored datetimes (1970-01-01…) so a small advance crosses them.
+
+   FIRING is one of two effects chosen by $ev's shape (§2.1): a zero-arg
+   callable ([?fn [] …]) is invoked on the loop (its return ignored); a
+   [?channel] value gets a [tick timer=<name>] posted to its queue — the
+   fixtures observe a fire by [?receive]-ing that tick. A raw effect in a fired
+   callback without a live grant hits CXER0271 at the callback's effect point;
+   the fixture surfaces it by [?send]-ing the effect's result to a channel.
+
+   on-missed (§2.5/§4.6): a single test-clock-advance that crosses N occurrences
+   applies the policy exactly as a real fast-forward would — :skip fires once
+   (the latest), :coalesce fires once, :fire-all fires once per crossed
+   occurrence. A continuous occurrence-by-occurrence advance under :fire-all
+   observes every tick (the recur COUNT-3 path).
+
+   Error band CXER4970-4989 (§8): 4970 test-clock-under-wall (pinned by §7
+   footnote 1; UNREACHABLE from the public surface in this :manual loop — the
+   wall-clock production loop is the synthetic-transport part, gate=pending),
+   4971 arg-invalid, 4972 mode/on-missed invalid, 4973 durable-no-name, 4974
+   durable-no-journal, 4975 restore-intent-corrupt. Shared: CXER0271 (effect
+   denial in a fired callback). cron parse faults surface time's CXER33xx
+   unchanged (NOT a sched code).
+
+   Id ranges:
+     001-009  after / at / every / cancel / state / clock-mode / with-open
+     010-016  recur / cron + COUNT/UNTIL terminal + fixed-rate cadence
+     017-021  on-missed catch-up (skip / coalesce / fire-all)
+     022-027  durable / restore (worker-recycle correctness) + orphaned
+     028-036  negatives (CXER4971-4975 + CXER0271 + cron parse fault)
+   #]]
+
+  [# ── 001-009: after / at / every / cancel / state / clock-mode / with-open ── #]
+
+  [case id=sched-001-after-fires-once level=core
+   [tags sched after channel tick state]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="ticks" buffer=4]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch]]
+[?let [= $s0 [$sched:timer-state $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq $s0 [$sched:timer-state $t] [?receive from=$ch]]]]]]
+#]]
+   [out-text [#
+[seq 'armed' 'fired' [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-002-after-callback-side-effect level=core
+   [tags sched after callable fn fire]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $cb [?fn [] [?send "ding" to=$ch]]]
+[?let [= $t [$sched:after [$time:duration-m 10] $cb]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq [$sched:timer-state $t] [?receive from=$ch]]]]]]
+#]]
+   [out-text [#
+[seq 'fired' 'ding']
+#]]
+  ]
+
+  [case id=sched-003-cancel-before-fire level=core
+   [tags sched cancel armed prevented]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch]]
+[?let [= $c [$sched:cancel $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq $c [$sched:timer-state $t]]]]]]
+#]]
+   [out-text [#
+[seq true 'canceled']
+#]]
+  ]
+
+  [case id=sched-004-cancel-after-fire-idempotent level=core
+   [tags sched cancel fired idempotent false]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[$sched:cancel $t]]]]
+#]]
+   [out-text [#
+false
+#]]
+  ]
+
+  [case id=sched-005-clock-mode-manual level=core
+   [tags sched clock-mode manual pure]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[$sched:clock-mode]
+#]]
+   [out-text [#
+':manual'
+#]]
+  ]
+
+  [case id=sched-006-at-future-fires level=core
+   [tags sched at absolute one-shot datetime]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:at [$time:datetime 1970 1 1 0 10 0] $ch]]
+[?let [= $s0 [$sched:timer-state $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[seq $s0 [$sched:timer-state $t] [?receive from=$ch]]]]]]
+#]]
+   [out-text [#
+[seq 'armed' 'fired' [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-007-at-past-fires-next-turn level=core
+   [tags sched at past one-shot]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:at [$time:datetime 1969 12 31 0 0 0] $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-s 1]]]
+[seq [$sched:timer-state $t] [?receive from=$ch]]]]]
+#]]
+   [out-text [#
+[seq 'fired' [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-008-every-fires-n-stays-armed level=core
+   [tags sched every recurring fixed-delay armed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $t [$sched:every [$time:duration-m 1] $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[?let [= $c [?receive from=$ch]]
+[?let [= $d [?receive from=$ch]]
+[?let [= $e [?receive from=$ch]]
+[seq [$sched:timer-state $t] $a $b $c $d $e]]]]]]]]]
+#]]
+   [out-text [#
+[seq 'armed' [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-009-with-open-cancels-on-exit level=core
+   [tags sched with-open closeable cancel]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $saved [?with-open [$sched:after [$time:duration-m 10] $ch] $t $t]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[$sched:timer-state $saved]]]]
+#]]
+   [out-text [#
+'canceled'
+#]]
+  ]
+
+  [# ── 010-016: recur / cron + COUNT/UNTIL terminal + fixed-rate ── #]
+
+  [case id=sched-010-recur-count-3-fires-3-terminal level=core
+   [tags sched recur recurrence count terminal fire-all]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $r [$time:recurrence :daily '1970-01-01T00:00:00Z' 'UTC' {count: 3}]]
+[?let [= $t [$sched:recur $r $ch {on-missed: :fire-all}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-d 10]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[?let [= $c [?receive from=$ch]]
+[seq [$sched:timer-state $t] $a $b $c]]]]]]]]
+#]]
+   [out-text [#
+[seq 'fired' [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-011-recur-state-armed-between level=core
+   [tags sched recur armed between occurrences]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $r [$time:recurrence :daily '1970-01-01T00:00:00Z' 'UTC' {count: 3}]]
+[?let [= $t [$sched:recur $r $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-h 12]]]
+[$sched:timer-state $t]]]]]
+#]]
+   [out-text [#
+'armed'
+#]]
+  ]
+
+  [case id=sched-012-recur-no-future-terminal-at-arm level=core
+   [tags sched recur until exhausted terminal arm]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $r [$time:recurrence :daily '1960-01-01T00:00:00Z' 'UTC' {count: 1}]]
+[?let [= $t [$sched:recur $r $ch]]
+[$sched:timer-state $t]]]]
+#]]
+   [out-text [#
+'fired'
+#]]
+  ]
+
+  [case id=sched-013-cron-valid-fires level=core
+   [tags sched cron parse fires]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:cron "0 0 * * *" $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-d 1]]]
+[seq [$sched:timer-state $t] [?receive from=$ch]]]]]
+#]]
+   [out-text [#
+[seq 'armed' [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-014-every-fixed-rate-on-grid level=core
+   [tags sched every fixed-rate grid cadence]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $t [$sched:every [$time:duration-m 1] $ch {mode: :fixed-rate}]]
+[?let [= $a0 [$sched:test-clock-advance [$time:duration-m 1]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b0 [$sched:test-clock-advance [$time:duration-m 1]]]
+[?let [= $b [?receive from=$ch]]
+[?let [= $c0 [$sched:test-clock-advance [$time:duration-m 1]]]
+[?let [= $c [?receive from=$ch]]
+[seq [$sched:timer-state $t] $a $b $c]]]]]]]]]
+#]]
+   [out-text [#
+[seq 'armed' [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-015-after-zero-advance-no-fire level=core
+   [tags sched after no-advance armed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
+[$sched:timer-state $t]]]]
+#]]
+   [out-text [#
+'armed'
+#]]
+  ]
+
+  [case id=sched-016-recur-count-1-anchor-future level=core
+   [tags sched recur count one occurrence]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $r [$time:recurrence :daily '1970-01-01T00:00:00Z' 'UTC' {count: 1}]]
+[?let [= $t [$sched:recur $r $ch {on-missed: :fire-all}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-d 5]]]
+[seq [$sched:timer-state $t] [?receive from=$ch]]]]]]
+#]]
+   [out-text [#
+[seq 'fired' [tick timer=timer-1]]
+#]]
+  ]
+
+  [# ── 017-021: on-missed catch-up (skip / coalesce / fire-all) ── #]
+
+  [case id=sched-017-on-missed-skip-fires-once level=core
+   [tags sched on-missed skip catch-up fixed-rate]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $t [$sched:every [$time:duration-m 1] $ch {mode: :fixed-rate on-missed: :skip}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[seq $a $b]]]]]]
+#]]
+   [out-text [#
+[seq [tick timer=timer-1] [err code=cx-err:CXER0202 message='receive timed out']]
+#]]
+  ]
+
+  [case id=sched-018-on-missed-coalesce-fires-once level=core
+   [tags sched on-missed coalesce catch-up fixed-rate]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $t [$sched:every [$time:duration-m 1] $ch {mode: :fixed-rate on-missed: :coalesce}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[seq $a $b]]]]]]
+#]]
+   [out-text [#
+[seq [tick timer=timer-1] [err code=cx-err:CXER0202 message='receive timed out']]
+#]]
+  ]
+
+  [case id=sched-019-on-missed-fire-all-fires-each level=core
+   [tags sched on-missed fire-all catch-up fixed-rate]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $t [$sched:every [$time:duration-m 1] $ch {mode: :fixed-rate on-missed: :fire-all}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[?let [= $c [?receive from=$ch]]
+[?let [= $d [?receive from=$ch]]
+[?let [= $e [?receive from=$ch]]
+[seq $a $b $c $d $e]]]]]]]]]
+#]]
+   [out-text [#
+[seq [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-020-recur-fire-all-catch-up level=core
+   [tags sched recur on-missed fire-all single-advance]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $r [$time:recurrence :daily '1970-01-01T00:00:00Z' 'UTC' {count: 5}]]
+[?let [= $t [$sched:recur $r $ch {on-missed: :fire-all}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-d 30]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[?let [= $c [?receive from=$ch]]
+[?let [= $d [?receive from=$ch]]
+[?let [= $e [?receive from=$ch]]
+[seq [$sched:timer-state $t] $a $b $c $d $e]]]]]]]]]]
+#]]
+   [out-text [#
+[seq 'fired' [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1] [tick timer=timer-1]]
+#]]
+  ]
+
+  [case id=sched-021-recur-skip-catch-up-once level=core
+   [tags sched recur on-missed skip single-advance once]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $r [$time:recurrence :daily '1970-01-01T00:00:00Z' 'UTC' {count: 5}]]
+[?let [= $t [$sched:recur $r $ch]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-d 30]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[seq $a $b]]]]]]]
+#]]
+   [out-text [#
+[seq [tick timer=timer-1] [err code=cx-err:CXER0202 message='receive timed out']]
+#]]
+  ]
+
+  [# ── 022-027: durable / restore (worker-recycle correctness) ── #]
+
+  [case id=sched-022-durable-appends-intent level=core
+   [tags sched durable journal append intent]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $jr [$journal:open "mem://sched" "tenant"]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch {name: 'no-ack' durable: $jr}]]
+[$journal:head $jr]]]]
+#]]
+   [out-text [#
+[entry seq=1 tenant=tenant actor=sched authority='sched/durable' ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:ef1b71180dfb55ca71df058c7cde5f8ce8df59db793adeb159a7838706830e7b [event [sched-intent [kind 'after'] [name 'no-ack'] [deadline 600000000000] [dur-ns 600000000000] [mode 'fixed-delay'] [on-missed 'skip'] [status 'pending']]]]
+#]]
+  ]
+
+  [case id=sched-023-restore-rearms-bound level=core
+   [tags sched restore rearmed registry worker-recycle]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $jr [$journal:open "mem://sched" "tenant"]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch {name: 'win' durable: $jr}]]
+[$sched:restore $jr {'win': $ch}]]]]
+#]]
+   [out-text [#
+[restore-report rearmed=1 skipped=0 orphaned=0]
+#]]
+  ]
+
+  [case id=sched-024-restore-rearmed-still-fires level=core
+   [tags sched restore fires remaining-time]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $jr [$journal:open "mem://sched" "tenant"]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch {name: 'win' durable: $jr}]]
+[?let [= $rep [$sched:restore $jr {'win': $ch}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[?receive from=$ch]]]]]]
+#]]
+   [out-text [#
+[tick timer=win]
+#]]
+  ]
+
+  [case id=sched-025-restore-orphaned-surfaced level=core
+   [tags sched restore orphaned finding not-dropped]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $jr [$journal:open "mem://sched" "tenant"]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch {name: 'no-ack' durable: $jr}]]
+[$sched:restore $jr {}]]]]
+#]]
+   [out-text [#
+[restore-report rearmed=0 skipped=0 orphaned=1 [orphaned [orphan name=no-ack]]]
+#]]
+  ]
+
+  [case id=sched-026-canceled-durable-not-rearmed level=core
+   [tags sched durable cancel closed not-rearmed restore]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $jr [$journal:open "mem://sched" "tenant"]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch {name: 'win' durable: $jr}]]
+[?let [= $c [$sched:cancel $t]]
+[$sched:restore $jr {'win': $ch}]]]]]
+#]]
+   [out-text [#
+[restore-report rearmed=0 skipped=0 orphaned=0]
+#]]
+  ]
+
+  [case id=sched-027-durable-recur-restore level=core
+   [tags sched durable recur restore rearmed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $jr [$journal:open "mem://sched" "tenant"]]
+[?let [= $r [$time:recurrence :daily '1970-01-01T00:00:00Z' 'UTC' {count: 3}]]
+[?let [= $t [$sched:recur $r $ch {name: 'nightly' durable: $jr}]]
+[$sched:restore $jr {'nightly': $ch}]]]]]
+#]]
+   [out-text [#
+[restore-report rearmed=1 skipped=0 orphaned=0]
+#]]
+  ]
+
+  [# ── 028-036: negatives ── #]
+
+  [case id=sched-028-after-nonpositive-dur-CXER4971 level=core
+   [tags sched negative arg-invalid duration]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[$sched:after [$time:duration-m 0] $ch]]
+#]]
+   [out-err [#
+cx-err:CXER4971
+#]]
+  ]
+
+  [case id=sched-029-after-bad-ev-CXER4971 level=core
+   [tags sched negative arg-invalid ev]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[$sched:after [$time:duration-m 10] 'not-callable']
+#]]
+   [out-err [#
+cx-err:CXER4971
+#]]
+  ]
+
+  [case id=sched-030-at-bad-when-CXER4971 level=core
+   [tags sched negative arg-invalid datetime]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?let [= $ch [?channel name="t" buffer=4]]
+[$sched:at "not-a-datetime" $ch]]
+#]]
+   [out-err [#
+cx-err:CXER4971
+#]]
+  ]
+
+  [case id=sched-031-bad-mode-CXER4972 level=core
+   [tags sched negative mode-invalid]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[$sched:every [$time:duration-m 1] $ch {mode: :bogus}]]
+#]]
+   [out-err [#
+cx-err:CXER4972
+#]]
+  ]
+
+  [case id=sched-032-bad-on-missed-CXER4972 level=core
+   [tags sched negative on-missed-invalid]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[$sched:every [$time:duration-m 1] $ch {on-missed: :nope}]]
+#]]
+   [out-err [#
+cx-err:CXER4972
+#]]
+  ]
+
+  [case id=sched-033-durable-no-name-CXER4973 level=core
+   [tags sched negative durable-no-name]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $jr [$journal:open "mem://s" "t"]]
+[$sched:after [$time:duration-m 10] $ch {durable: $jr}]]]]
+#]]
+   [out-err [#
+cx-err:CXER4973
+#]]
+  ]
+
+  [case id=sched-034-durable-true-no-journal-CXER4974 level=core
+   [tags sched negative durable-no-journal]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=4]]
+[$sched:after [$time:duration-m 10] $ch {name: 'x' durable: true}]]
+#]]
+   [out-err [#
+cx-err:CXER4974
+#]]
+  ]
+
+  [case id=sched-035-cron-malformed-time-fault level=core
+   [tags sched cron malformed time-fault composed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?let [= $ch [?channel name="t" buffer=4]]
+[$sched:cron "not a cron" $ch]]
+#]]
+   [out-err [#
+cx-err:CXER3321
+#]]
+  ]
+
+  [case id=sched-036-callback-effect-denied-CXER0271 level=core
+   [tags sched callback effect-denied capability deny-lane]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/io']
+[?let [= $ch [?channel name="t" buffer=4]]
+[?let [= $cb [?fn [] [?send [$io:read-file "/etc/hosts"] to=$ch]]]
+[?let [= $t [$sched:after [$time:duration-m 10] $cb]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[?receive from=$ch]]]]]
+#]]
+   [out-err [#
+cx-err:CXER0271
+#]]
+  ]
+
+  [case id=sched-037-recur-skip-large-advance-fires-once level=core
+   [tags sched recur on-missed skip large-advance perf hostile]
+   [doc [#
+HOSTILE (blocker): an unbounded :skip recur advanced across ~50000 occurrences
+must fire EXACTLY ONCE and return immediately. The prior sch_fire_recur walked
+time-next-occurrence once PER crossed occurrence even for :skip/:coalesce
+(which fire once), so this advance took minutes (O(N) in the missed count). It
+now jumps straight to the next occurrence after the target in a single
+fast-forwarding call; if the O(N) walk is reintroduced this case hangs the gate.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=16]]
+[?let [= $r [$time:recurrence :daily '1970-01-01T00:00:00Z' 'UTC' {}]]
+[?let [= $t [$sched:recur $r $ch {on-missed: :skip}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-d 50000]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[seq $a $b]]]]]]]
+#]]
+   [out-text [#
+[seq [tick timer=timer-1] [err code=cx-err:CXER0202 message='receive timed out']]
+#]]
+  ]
+
+  [case id=sched-038-restore-no-duplicate-timer level=core
+   [tags sched restore durable dedup worker-recycle hostile]
+   [doc [#
+HOSTILE (major): restore re-arms a durable intent by name, but the registry was
+keyed by a fresh monotonic id, so re-arming a name already live left a
+DUPLICATE timer (both fired, doubling delivery, §2.4 worker-recycle wrong).
+sched-024 only receives once so it never saw the duplicate; here we arm 'win',
+restore it, advance, and receive TWICE: exactly ONE tick must arrive (the
+second receive times out). Name is now the registry identity.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="t" buffer=8]]
+[?let [= $jr [$journal:open "mem://sched" "tenant"]]
+[?let [= $t [$sched:after [$time:duration-m 10] $ch {name: 'win' durable: $jr}]]
+[?let [= $rep [$sched:restore $jr {'win': $ch}]]
+[?let [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
+[?let [= $a [?receive from=$ch]]
+[?let [= $b [?receive from=$ch]]
+[seq $a $b]]]]]]]]
+#]]
+   [out-text [#
+[seq [tick timer=win] [err code=cx-err:CXER0202 message='receive timed out']]
+#]]
+  ]
+]

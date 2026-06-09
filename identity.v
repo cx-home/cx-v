@@ -1,6 +1,6 @@
 module cx
 
-// identity.v — ID/IDREF resolution per ADR 0003.
+// identity.v — ID/IDREF resolution.
 //
 // Walks a parsed Document and:
 //   1. Collects all elements declaring `#id` into the document-scope
@@ -12,13 +12,13 @@ module cx
 //
 // v0 limitations (documented; tracked in ROADMAP):
 //   - Document scope only. The `[?cx include=other.cx]` directive
-//     does NOT yet merge ID spaces across files (ADR 0003 D3 second
+// does NOT yet merge ID spaces across files (second
 //     paragraph). Cross-include references are out of scope until
 //     the include-resolution work lands.
 //   - No XML round-trip mapping yet. `xs:ID` / `xs:IDREF` import +
-//     export deferred to a follow-up phase (ADR 0003 D6 first bullet).
-//   - No canonical-form ID renaming yet (ADR 0003 D7).
-//   - `[ref @id]` body-position node form (ADR 0003 D1 second bullet)
+// export deferred to a follow-up phase (first bullet).
+// No canonical-form ID renaming yet.
+// `[ref @id]` body-position node form (second bullet)
 //     is not yet recognized; only attribute-value `@id` references.
 //   - C ABI surface (cx_resolve_ref / cx_node_id / cx_id_lookup) and
 //     9-binding rollout are deferred. Public V API (resolve_id /
@@ -41,9 +41,9 @@ pub fn resolve_ids(doc Document) ! {
 fn collect_ids(nodes []Node, mut id_table map[string]bool) ! {
 	for n in nodes {
 		if n is Element {
-			if id := n.id {
+			if id := n.id() {
 				if id in id_table {
-					return error("duplicate ID '#${id}' — declared on more than one element in the document")
+					return error("duplicate ID '#${id}' — declared on more than one element in the document (cx-err:CXER0208)")
 				}
 				id_table[id] = true
 			}
@@ -63,7 +63,7 @@ fn validate_refs(nodes []Node, id_table map[string]bool) ! {
 					}
 				}
 			}
-			if br := n.body_ref {
+			if br := n.body_ref() {
 				if br !in id_table {
 					return error("unresolved reference '[ref @${br}]' — no '#${br}' declared in the document")
 				}
@@ -85,10 +85,9 @@ pub fn (d Document) resolve_id(id string) ?Element {
 
 // resolve_body_ref returns the Element targeted by `e.body_ref` in
 // this document, or none when body_ref is unset or the target ID is
-// undeclared. v0.7.0 (ADR 0003 D1 second bullet / GG13 row at
-// spec/v0_7_0_status.md).
+// undeclared.
 pub fn (d Document) resolve_body_ref(e Element) ?Element {
-	if br := e.body_ref {
+	if br := e.body_ref() {
 		return d.resolve_id(br)
 	}
 	return none
@@ -97,7 +96,7 @@ pub fn (d Document) resolve_body_ref(e Element) ?Element {
 fn find_element_by_id(nodes []Node, id string) ?Element {
 	for n in nodes {
 		if n is Element {
-			if eid := n.id {
+			if eid := n.id() {
 				if eid == id {
 					return n
 				}
@@ -123,7 +122,7 @@ pub fn (d Document) elements_by_id() map[string]Element {
 fn collect_elements_by_id(nodes []Node, mut out map[string]Element) {
 	for n in nodes {
 		if n is Element {
-			if eid := n.id {
+			if eid := n.id() {
 				out[eid] = n
 			}
 			collect_elements_by_id(n.items, mut out)
@@ -133,7 +132,7 @@ fn collect_elements_by_id(nodes []Node, mut out map[string]Element) {
 
 // canonicalize_ids rewrites every `#id` declaration to a deterministic
 // `id-N` name in document order, and rewrites every `is_ref` attribute
-// value to track the renamed declaration. Per ADR 0003 D7: two
+// value to track the renamed declaration. Per: two
 // documents that differ only in ID *spelling* produce byte-identical
 // strict-canonical output (and therefore hash to the same value).
 //
@@ -162,7 +161,7 @@ pub fn canonicalize_ids(mut doc Document) {
 fn collect_id_renames(nodes []Node, mut rename map[string]string) {
 	for n in nodes {
 		if n is Element {
-			if eid := n.id {
+			if eid := n.id() {
 				if eid !in rename {
 					rename[eid] = 'id-${rename.len + 1}'
 				}
@@ -183,14 +182,14 @@ fn apply_id_renames(mut nodes []Node, rename map[string]string) {
 }
 
 fn rename_element_ids(mut e Element, rename map[string]string) {
-	if eid := e.id {
+	if eid := e.id() {
 		if new_name := rename[eid] {
-			e.id = new_name
+			e.set_id(new_name)
 		}
 	}
-	if br := e.body_ref {
+	if br := e.body_ref() {
 		if new_name := rename[br] {
-			e.body_ref = new_name
+			e.set_body_ref(new_name)
 		}
 	}
 	for j := 0; j < e.attrs.len; j++ {

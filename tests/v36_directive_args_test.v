@@ -2,15 +2,15 @@ module main
 
 import cx
 
-// ── ADR 0017 §D6/§D7 directive-arg-array shapes (parser tests) ───────────────
+// ── §D7 directive-arg-array shapes (parser tests) ───────────────
 //
 // Covers the §F-parser landing of resolutions 1.d (slot-as-body) and
 // 2.i (first-`[…]`-in-`[?Name …]`-is-always-Array). These tests pin
 // the parse-level expectations of the new uniform directive shape
-// before the CXL evaluator rewrite (§F-evaluator) ratifies them
+// before the program evaluator rewrite (§F-evaluator) ratifies them
 // behaviorally.
 //
-// Companion specs: ADR 0017 §D5/§D6/§D7, spec/eval.md §3.0.
+// Companion specs: §D6/§D7, spec/eval.md §3.0.
 
 fn parse_one(src string) cx.Node {
 	d := cx.parse(src) or { panic('parse: ${err}') }
@@ -23,8 +23,8 @@ fn parse_one(src string) cx.Node {
 fn test_include_single_slot() {
 	// `[?include [path]]` — no comma in arg array; parser must still
 	// route the inner `[…]` to Array (not Element named "path") per
-	// resolution 2.i (2026-05-12) which implements ADR 0017 §D6.
-	n := parse_one("[?include ['partials/card.cxl']]")
+	// resolution 2.i (2026-05-12) which implements.
+	n := parse_one("[?include ['partials/card.cx']]")
 	assert n is cx.EvalDirectiveNode
 	d := n as cx.EvalDirectiveNode
 	assert d.name == 'include'
@@ -35,17 +35,21 @@ fn test_include_single_slot() {
 	assert arr.items.len == 1
 	slot0 := arr.items[0]
 	assert slot0 is cx.TextNode
-	assert (slot0 as cx.TextNode).value == 'partials/card.cxl'
+	assert (slot0 as cx.TextNode).value == 'partials/card.cx'
 }
 
 fn test_use_single_slot_bare_name() {
-	// Bare-name single slot — same disambiguation rule applies.
+	// Per grammar [59] every directive child is a uniform BodyItem, so
+	// `[card-row]` disambiguates exactly as it would in an element body
+	// (D1): bare name, no commas → Element. (The retired ArgArray
+	// machinery forced first-`[…]` to Array here; [59] supersedes.)
 	n := parse_one('[?use [card-row]]')
 	d := n as cx.EvalDirectiveNode
-	arg := d.items[0] as cx.ArrayNode
-	assert arg.items.len == 1
-	slot0 := arg.items[0] as cx.TextNode
-	assert slot0.value == 'card-row'
+	assert d.items.len == 1
+	el := d.items[0] as cx.Element
+	assert el.name == 'card-row'
+	assert el.attrs.len == 0
+	assert el.items.len == 0
 }
 
 fn test_empty_arg_array() {
@@ -117,9 +121,11 @@ fn test_mixed_content_slot_wraps_sequence() {
 }
 
 fn test_for_three_slot_with_body_element() {
-	// `[?for [var, iterable, body]]` — body slot is a single Element.
-	// Single-item slots keep their natural Item kind without wrapping.
-	n := parse_one('[?for [v, //variant, [?=v/@sku]]]')
+	// `[?for ['var', iterable, body]]` — body slot is a single Element.
+	// Single-item slots keep their natural Item kind without wrapping. The
+	// leading slot is QUOTED: a bare-word leading array item is reserved for
+	// the element head and is a parse error (3a / lexicon §collections [L83]).
+	n := parse_one("[?for ['v', //variant, [?=v/@sku]]]")
 	d := n as cx.EvalDirectiveNode
 	arr := d.items[0] as cx.ArrayNode
 	assert arr.items.len == 3
@@ -194,40 +200,45 @@ fn test_atomic_array_nested_preserves_shape() {
 	assert (inner0.items[0] as cx.ScalarNode).data_type == .int_type
 }
 
-// ── Old syntax must error cleanly ────────────────────────────────────────────
+// ── Legacy surfaces now round-trip as opaque data (grammar [59]) ─────────────
+//
+// Per [59] the data parser treats directive children as uniform BodyItems and
+// performs no clause/slot interpretation (that is the program-AST layer's job,
+// [127]). Surfaces that the retired labeled-slot machinery once rejected now
+// parse as ordinary data and round-trip idempotently. Program-level validity
+// of these forms is the code parser's concern, not the data parser's.
 
-fn test_old_attribute_slot_form_rejected() {
-	// `[?if cond :then=[…]]` — the pre-ADR-0017 attribute-slot form
-	// is no longer accepted under the new uniform shape. Parser
-	// should surface a clear error pointing at ADR 0017 §D6.
-	cx.parse('[?if cond :then=[yes] :else=[no]]') or {
-		assert err.msg().contains('ADR 0017 §D6') || err.msg().contains('argument array')
-		return
-	}
-	assert false, 'old attribute-slot form must reject'
+fn test_legacy_attribute_slot_form_round_trips() {
+	src := '[?if cond :then=[yes] :else=[no]]'
+	d := cx.parse(src) or { panic('parse: ${err}') }
+	out := cx.emit_cx(d).trim_right('\n')
+	// Re-parse + re-emit reaches a fixed point (idempotent round-trip).
+	d2 := cx.parse(out) or { panic('reparse: ${err}') }
+	assert cx.emit_cx(d2).trim_right('\n') == out
 }
 
-fn test_old_positional_for_form_rejected() {
-	// `[?for v in expr body]` — pre-ADR-0017 positional-text form.
-	// Now invalid; arg array required.
-	cx.parse('[?for v in //variant [card [?=v/@sku]]]') or {
-		assert err.msg().contains('ADR 0017 §D6') || err.msg().contains('argument array')
-		return
-	}
-	assert false, 'old positional-text for form must reject'
+fn test_legacy_positional_for_form_round_trips() {
+	src := '[?for v in //variant [card [?=v/@sku]]]'
+	d := cx.parse(src) or { panic('parse: ${err}') }
+	out := cx.emit_cx(d).trim_right('\n')
+	d2 := cx.parse(out) or { panic('reparse: ${err}') }
+	assert cx.emit_cx(d2).trim_right('\n') == out
 }
 
 // ── Round-trip: parse → emit_cx → re-parse → identical AST ───────────────────
 
 fn test_round_trip_three_slot_if() {
-	src := '[?if [cond, [yes], [no]]]'
+	// Leading slot quoted per 3a (a bare-word leading array item is reserved
+	// for the element head — lexicon §collections [L83]).
+	src := "[?if ['cond', [yes], [no]]]"
 	d := cx.parse(src) or { panic(err) }
 	out := cx.emit_cx(d).trim_right('\n')
 	assert out == src, 'round-trip mismatch: got "${out}"'
 }
 
 fn test_round_trip_for_with_interp_body() {
-	src := '[?for [v, //variant, [?=v/@sku]]]'
+	// Leading slot quoted per 3a (lexicon §collections [L83]).
+	src := "[?for ['v', //variant, [?=v/@sku]]]"
 	d := cx.parse(src) or { panic(err) }
 	out := cx.emit_cx(d).trim_right('\n')
 	assert out == src, 'round-trip mismatch: got "${out}"'

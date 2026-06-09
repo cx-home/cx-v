@@ -1,0 +1,711 @@
+[test-suite name=mime
+  [doc [#
+conformance fixtures for cx-stdlib/mime (spec/std-lib/mime.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/mime']
+   (resolver MUST be quoted) then calls a mime/fn. The LAST expression
+   is the rendered result. String scalars render quoted; bool bare;
+   element-returning functions are exercised by composing a pure
+   accessor (format-content-type, get-parameter, charset-of,
+   disposition-filename) or a CXPath query so the asserted value is a
+   scalar grounded in the spec. Error fixtures use [out-err] with the
+   bare CXERNNNN code. Per AUTHORING.md, the effectful generator
+   (multipart-boundary) is asserted by structural property (prefix /
+   length), never by literal random value.
+
+   Grounding: every expected output is taken from spec §2 (conceptual
+   model examples), §6 (conformance fixtures), and the §3 normative
+   function descriptions. The §5 error table maps codes to functions.
+#]]
+
+ # §3.1 / §6: ".txt" -> "text/plain". Leading dot accepted.
+ [case id=mime-001-type-for-extension-txt level=core
+  [tags mime type-for-extension lookup]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:type-for-extension ".txt"]
+#]]
+  [out-text [#
+'text/plain'
+#]]
+ ]
+
+ # §3.1: ext may omit the leading dot; ".jpg"/"jpg" both -> image/jpeg (§6).
+ [case id=mime-002-type-for-extension-no-dot level=core
+  [tags mime type-for-extension lookup no-dot]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:type-for-extension "jpg"]
+#]]
+  [out-text [#
+'image/jpeg'
+#]]
+ ]
+
+ # §6: ".jpeg" also maps to image/jpeg.
+ [case id=mime-003-type-for-extension-jpeg level=core
+  [tags mime type-for-extension lookup]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:type-for-extension ".jpeg"]
+#]]
+  [out-text [#
+'image/jpeg'
+#]]
+ ]
+
+ # §3.1 / §6: unknown extension -> application/octet-stream.
+ [case id=mime-004-type-for-extension-unknown level=core
+  [tags mime type-for-extension unknown fallback]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:type-for-extension ".no-such-ext-xyz"]
+#]]
+  [out-text [#
+'application/octet-stream'
+#]]
+ ]
+
+ # §3.1 / §6: reverse lookup "image/jpeg" -> ".jpg" (most common extension).
+ [case id=mime-005-extension-for-type level=core
+  [tags mime extension-for-type reverse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:extension-for-type "image/jpeg"]
+#]]
+  [out-text [#
+'.jpg'
+#]]
+ ]
+
+ # §3.1: unknown type -> empty string.
+ [case id=mime-006-extension-for-type-unknown level=core
+  [tags mime extension-for-type unknown empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:extension-for-type "application/x-not-a-real-type"]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ # §3.1 / §6: all-extensions-for-type returns every known extension for a
+ # type. §6 enumerates exactly .jpg and .jpeg for image/jpeg, so the
+ # sequence has 2 entries.
+ [case id=mime-007-all-extensions-for-type level=core
+  [tags mime all-extensions-for-type sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$count [$mime:all-extensions-for-type "image/jpeg"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # §3.1 / §6: register-type adds a mapping; later registrations override
+ # built-ins. After register, lookup returns the registered type.
+ [case id=mime-008-register-type-override level=core
+  [tags mime register-type registry impure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[?let [= $_ [$mime:register-type ".avif" "image/avif"]] [$mime:type-for-extension ".avif"]]
+#]]
+  [out-text [#
+'image/avif'
+#]]
+ ]
+
+ # §3.1 / §5: load-mime-types raises CXER2804 on a missing/malformed file.
+ [case id=mime-009-load-mime-types-missing-err level=core
+  [tags mime load-mime-types error CXER2804]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:load-mime-types "/no/such/mime.types/file/xyz"]
+#]]
+  [out-err [#
+cx-err:CXER2804
+#]]
+ ]
+
+ # §2.1 / §3.2: parse-content-type yields an element; /@type is "text".
+ [case id=mime-010-parse-content-type-type level=core
+  [tags mime parse-content-type element cxpath]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[?let [= $p [$mime:parse-content-type "text/html; charset=utf-8"]] $p/@type]
+#]]
+  [out-text [#
+'text'
+#]]
+ ]
+
+ # §2.1: subtype is "html".
+ [case id=mime-011-parse-content-type-subtype level=core
+  [tags mime parse-content-type element cxpath]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[?let [= $p [$mime:parse-content-type "text/html; charset=utf-8"]] $p/@subtype]
+#]]
+  [out-text [#
+'html'
+#]]
+ ]
+
+ # §4: quoted vs unquoted parses identically — charset="UTF-8" == charset=UTF-8.
+ [case id=mime-012-parse-content-type-quoted level=core
+  [tags mime parse-content-type quoted normalise]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:get-parameter [$mime:parse-content-type "text/html; charset=\"UTF-8\""] "charset"]
+#]]
+  [out-text [#
+'UTF-8'
+#]]
+ ]
+
+ # §5: parse-content-type raises CXER2800 on unparseable input.
+ [case id=mime-013-parse-content-type-malformed-err level=core
+  [tags mime parse-content-type error CXER2800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:parse-content-type "<<<not a content type>>>"]
+#]]
+  [out-err [#
+cx-err:CXER2800
+#]]
+ ]
+
+ # §3.2 / §6: format-content-type is the inverse of parse; round-trip of a
+ # bare type with no parameters produces the canonical "text/html".
+ [case id=mime-014-format-content-type-roundtrip level=core
+  [tags mime format-content-type roundtrip canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:format-content-type [$mime:parse-content-type "text/html"]]
+#]]
+  [out-text [#
+'text/html'
+#]]
+ ]
+
+ # §3.2: get-parameter returns the parameter value (§2.1 charset="utf-8").
+ [case id=mime-015-get-parameter level=core
+  [tags mime get-parameter parameter]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:get-parameter [$mime:parse-content-type "text/html; charset=utf-8"] "charset"]
+#]]
+  [out-text [#
+'utf-8'
+#]]
+ ]
+
+ # §3.2: get-parameter returns empty string for an absent parameter.
+ [case id=mime-016-get-parameter-absent level=core
+  [tags mime get-parameter absent empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:get-parameter [$mime:parse-content-type "text/html"] "boundary"]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ # §2.2 / §3.3: parse-content-disposition yields an element; /@type "attachment".
+ [case id=mime-017-parse-content-disposition-type level=core
+  [tags mime parse-content-disposition element cxpath]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[?let [= $p [$mime:parse-content-disposition "attachment; filename=\"report.pdf\""]] $p/@type]
+#]]
+  [out-text [#
+'attachment'
+#]]
+ ]
+
+ # §5: parse-content-disposition raises CXER2801 on unparseable input.
+ [case id=mime-018-parse-content-disposition-malformed-err level=core
+  [tags mime parse-content-disposition error CXER2801]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:parse-content-disposition "<<<not a disposition>>>"]
+#]]
+  [out-err [#
+cx-err:CXER2801
+#]]
+ ]
+
+ # §3.3 / §6: disposition-filename returns the plain filename when only
+ # filename= is present.
+ [case id=mime-019-disposition-filename-plain level=core
+  [tags mime disposition-filename plain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:disposition-filename [$mime:parse-content-disposition "attachment; filename=\"report.pdf\""]]
+#]]
+  [out-text [#
+'report.pdf'
+#]]
+ ]
+
+ # §3.3 / §4 / §6: disposition-filename prefers filename* (RFC 5987);
+ # UTF-8''Report%20Final.pdf decodes to "Report Final.pdf".
+ [case id=mime-020-disposition-filename-extended level=core
+  [tags mime disposition-filename rfc5987 extended decode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:disposition-filename [$mime:parse-content-disposition "attachment; filename*=UTF-8''Report%20Final.pdf"]]
+#]]
+  [out-text [#
+'Report Final.pdf'
+#]]
+ ]
+
+ # §5: disposition-filename raises CXER2803 on a malformed filename* value.
+ [case id=mime-021-disposition-filename-bad-extended-err level=core
+  [tags mime disposition-filename error CXER2803]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:disposition-filename [$mime:parse-content-disposition "attachment; filename*=UTF-8''%ZZbad"]]
+#]]
+  [out-err [#
+cx-err:CXER2803
+#]]
+ ]
+
+ # §3.3: ASCII filename round-trips through format -> parse -> filename.
+ [case id=mime-022-format-content-disposition-roundtrip level=core
+  [tags mime format-content-disposition roundtrip ascii]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:disposition-filename [$mime:parse-content-disposition [$mime:format-content-disposition [$mime:parse-content-disposition "attachment; filename=\"report.pdf\""]]]]
+#]]
+  [out-text [#
+'report.pdf'
+#]]
+ ]
+
+ # §3.4 / §6: multipart-boundary is prefixed "=_Part_". Effectful (random):
+ # assert the deterministic prefix, never the random hex tail.
+ [case id=mime-023-multipart-boundary-prefix level=core
+  [tags mime multipart-boundary effectful random prefix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[?lib 'cx-stdlib/strings']
+[$strings:starts-with [$mime:multipart-boundary] "=_Part_"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.4 / §6: multipart-boundary is "=_Part_" (7 chars) + 17 random hex
+ # chars = 24 chars total. Effectful (random): assert the fixed length only.
+ [case id=mime-024-multipart-boundary-length level=core
+  [tags mime multipart-boundary effectful random length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[?lib 'cx-stdlib/strings']
+[$strings:length [$mime:multipart-boundary]]
+#]]
+  [out-text [#
+24
+#]]
+ ]
+
+ # §3.4: is-valid-boundary true for a valid RFC 2046 boundary.
+ [case id=mime-025-is-valid-boundary-true level=core
+  [tags mime is-valid-boundary rfc2046]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-valid-boundary "----=_Part_12345"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.4: is-valid-boundary false — empty string violates the 1-70 char rule.
+ [case id=mime-026-is-valid-boundary-empty level=core
+  [tags mime is-valid-boundary empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-valid-boundary ""]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # §3.5 / §6: text/html -> is-text-type true.
+ [case id=mime-027-is-text-type level=core
+  [tags mime is-text-type predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-text-type "text/html"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.5: is-binary-type true for application/pdf (§6).
+ [case id=mime-028-is-binary-type level=core
+  [tags mime is-binary-type predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-binary-type "application/pdf"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.5: is-image-type true for image/svg+xml (§6).
+ [case id=mime-029-is-image-type level=core
+  [tags mime is-image-type predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-image-type "image/svg+xml"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.5: is-audio-type true for an audio/* top-level type.
+ [case id=mime-030-is-audio-type level=core
+  [tags mime is-audio-type predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-audio-type "audio/mpeg"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.5: is-video-type true for a video/* top-level type.
+ [case id=mime-031-is-video-type level=core
+  [tags mime is-video-type predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-video-type "video/mp4"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.5: is-message-type true for a message/* top-level type.
+ [case id=mime-032-is-message-type level=core
+  [tags mime is-message-type predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-message-type "message/rfc822"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.5 / §6: multipart/mixed -> is-multipart-type true.
+ [case id=mime-033-is-multipart-type level=core
+  [tags mime is-multipart-type predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-multipart-type "multipart/mixed"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.5 / §4 / §6: application/pdf -> is-application-type true; vendor tree
+ # also true, but pdf suffices for the happy path.
+ [case id=mime-034-is-application-type level=core
+  [tags mime is-application-type predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-application-type "application/pdf"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §3.5 / §6: is-structured-syntax of image/svg+xml -> "xml".
+ [case id=mime-035-is-structured-syntax-xml level=core
+  [tags mime is-structured-syntax rfc6838 suffix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-structured-syntax "image/svg+xml"]
+#]]
+  [out-text [#
+'xml'
+#]]
+ ]
+
+ # §3.5: is-structured-syntax of application/ld+json -> "json".
+ [case id=mime-036-is-structured-syntax-json level=core
+  [tags mime is-structured-syntax rfc6838 suffix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-structured-syntax "application/ld+json"]
+#]]
+  [out-text [#
+'json'
+#]]
+ ]
+
+ # §3.5: is-structured-syntax empty string when no suffix present.
+ [case id=mime-037-is-structured-syntax-none level=core
+  [tags mime is-structured-syntax none empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:is-structured-syntax "text/plain"]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ # §3.6 / §2.1: charset-of extracts the charset parameter -> "utf-8".
+ [case id=mime-038-charset-of level=core
+  [tags mime charset-of parameter]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:charset-of [$mime:parse-content-type "text/html; charset=utf-8"]]
+#]]
+  [out-text [#
+'utf-8'
+#]]
+ ]
+
+ # §3.6: charset-of empty string when no charset parameter present.
+ [case id=mime-039-charset-of-absent level=core
+  [tags mime charset-of absent empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:charset-of [$mime:parse-content-type "text/html"]]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ # §3.6: with-charset returns a new element with charset set; verify via
+ # charset-of on the result.
+ [case id=mime-040-with-charset level=core
+  [tags mime with-charset element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:charset-of [$mime:with-charset [$mime:parse-content-type "text/html"] "iso-8859-1"]]
+#]]
+  [out-text [#
+'iso-8859-1'
+#]]
+ ]
+
+ # §3.6: with-charset replaces an existing charset.
+ [case id=mime-041-with-charset-replace level=core
+  [tags mime with-charset replace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:charset-of [$mime:with-charset [$mime:parse-content-type "text/html; charset=utf-8"] "us-ascii"]]
+#]]
+  [out-text [#
+'us-ascii'
+#]]
+ ]
+
+ # §3.7 / §6: parse-accept yields a q-ranked sequence; the header has two
+ # media ranges, so the sequence count is 2.
+ [case id=mime-042-parse-accept-count level=core
+  [tags mime parse-accept sequence count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$count [$mime:parse-accept "text/html;q=0.9, */*;q=0.8"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # §3.7 / §6: absent q defaults to 1.0 (RFC 7231 §5.3.1); the single range
+ # parses to one accept element with q=1.0, read via CXPath.
+ [case id=mime-043-parse-accept-q-default level=core
+  [tags mime parse-accept q default rfc7231]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[?let [= $p [$first [$mime:parse-accept "text/html"]]] $p/@q]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ # §3.7 / §6: match-accept returns the best q-weighted offer; text/html
+ # (q=0.9) beats text/* (q=0.5).
+ [case id=mime-044-match-accept-precedence level=core
+  [tags mime match-accept negotiation rfc7231]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:match-accept "text/*;q=0.5, text/html;q=0.9" ["text/plain", "text/html"]]
+#]]
+  [out-text [#
+'text/html'
+#]]
+ ]
+
+ # §3.7 / §6: match-accept returns empty string when nothing is acceptable
+ # (every candidate carries q=0).
+ [case id=mime-045-match-accept-none level=core
+  [tags mime match-accept none empty rfc7231]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:match-accept "text/html;q=0" ["text/html"]]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+]

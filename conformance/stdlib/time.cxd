@@ -1,0 +1,2281 @@
+[test-suite name=time
+  [doc [#
+conformance fixtures for cx-stdlib/time (spec/std-lib/time.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/time']
+   (resolver MUST be quoted) then calls [$time:fn args]. The LAST
+   expression is the rendered result. Date/datetime scalars render
+   quoted ("…"); instants/durations are int nanoseconds (bare); bools
+   bare; atoms with leading colon (:monday); sequences in paren form.
+
+   DETERMINISM: now / today / instant-now / monotonic-now / utc-now are
+   impure and never asserted by literal value — they appear only inside
+   pure round-trips / compositions whose result is stable. Error cases
+   use --- out_err with the bare CXER code.
+#]]
+
+ [case id=time-001-date level=core
+  [tags time construction date]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:date 2026 5 26]
+#]]
+  [out-text [#
+'2026-05-26'
+#]]
+ ]
+
+ [case id=time-002-datetime level=core
+  [tags time construction datetime]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:datetime 2026 5 26 14 30 0]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-003-date-invalid-component level=core
+  [tags time construction CXER3300]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:date 2026 2 31]
+#]]
+  [out-err [#
+cx-err:CXER3300
+#]]
+ ]
+
+ [case id=time-004-datetime-invalid-month level=core
+  [tags time construction CXER3300]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:datetime 2026 13 1 0 0 0]
+#]]
+  [out-err [#
+cx-err:CXER3300
+#]]
+ ]
+
+ [case id=time-005-from-unix level=core
+  [tags time construction instant from-unix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:from-unix 1000]
+#]]
+  [out-text [#
+1000000000000
+#]]
+ ]
+
+ [case id=time-006-from-unix-ms level=core
+  [tags time construction instant from-unix-ms]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:from-unix-ms 1500]
+#]]
+  [out-text [#
+1500000000
+#]]
+ ]
+
+ [case id=time-007-from-unix-ns level=core
+  [tags time construction instant from-unix-ns]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:from-unix-ns 42]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=time-008-epoch level=core
+  [tags time construction epoch]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:epoch]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=time-009-datetime-with-tz-utc level=core
+  [tags time construction tz]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:datetime-with-tz 2026 1 15 12 0 0 "America/New_York"]
+#]]
+  [out-text [#
+'2026-01-15T12:00:00-05:00'
+#]]
+ ]
+
+ [case id=time-010-datetime-with-tz-dst level=core
+  [tags time construction tz dst]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:datetime-with-tz 2026 7 15 12 0 0 "America/New_York"]
+#]]
+  [out-text [#
+'2026-07-15T12:00:00-04:00'
+#]]
+ ]
+
+ [case id=time-011-datetime-with-tz-unknown level=core
+  [tags time construction tz CXER3302]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:datetime-with-tz 2026 7 15 12 0 0 "Mars/Olympus"]
+#]]
+  [out-err [#
+cx-err:CXER3302
+#]]
+ ]
+
+ [case id=time-012-year level=core
+  [tags time decomposition year]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:year [$time:parse-date "2026-05-26"]]
+#]]
+  [out-text [#
+2026
+#]]
+ ]
+
+ [case id=time-013-month level=core
+  [tags time decomposition month]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:month [$time:parse-date "2026-05-26"]]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=time-014-day level=core
+  [tags time decomposition day]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:day [$time:parse-date "2026-05-26"]]
+#]]
+  [out-text [#
+26
+#]]
+ ]
+
+ [case id=time-015-hour-minute-second level=core
+  [tags time decomposition hms]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:hour [$time:parse-datetime "2026-05-26T14:30:45Z"]]
+#]]
+  [out-text [#
+14
+#]]
+ ]
+
+ [case id=time-016-minute level=core
+  [tags time decomposition minute]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:minute [$time:parse-datetime "2026-05-26T14:30:45Z"]]
+#]]
+  [out-text [#
+30
+#]]
+ ]
+
+ [case id=time-017-second level=core
+  [tags time decomposition second]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:second [$time:parse-datetime "2026-05-26T14:30:45Z"]]
+#]]
+  [out-text [#
+45
+#]]
+ ]
+
+ [case id=time-018-nanosecond level=core
+  [tags time decomposition nanosecond]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:nanosecond [$time:parse-datetime "2026-05-26T14:30:45.250Z"]]
+#]]
+  [out-text [#
+250000000
+#]]
+ ]
+
+ [case id=time-019-weekday level=core
+  [tags time decomposition weekday atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:weekday [$time:parse-date "2026-05-26"]]
+#]]
+  [out-text [#
+:tuesday
+#]]
+ ]
+
+ [case id=time-020-day-of-year level=core
+  [tags time decomposition day-of-year]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:day-of-year [$time:parse-date "2026-01-01"]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=time-021-day-of-year-leap level=core
+  [tags time decomposition day-of-year leap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:day-of-year [$time:parse-date "2024-12-31"]]
+#]]
+  [out-text [#
+366
+#]]
+ ]
+
+ [case id=time-022-week-of-year level=core
+  [tags time decomposition week-of-year]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:week-of-year [$time:parse-date "2026-01-05"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=time-023-timezone-offset level=core
+  [tags time decomposition timezone-offset]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:timezone-offset [$time:parse-datetime "2026-01-15T12:00:00-05:00"]]
+#]]
+  [out-text [#
+-18000
+#]]
+ ]
+
+ [case id=time-024-to-unix level=core
+  [tags time decomposition to-unix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:to-unix [$time:parse-datetime "1970-01-01T00:16:40Z"]]
+#]]
+  [out-text [#
+1000
+#]]
+ ]
+
+ [case id=time-025-to-unix-ms level=core
+  [tags time decomposition to-unix-ms]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:to-unix-ms [$time:parse-datetime "1970-01-01T00:00:01Z"]]
+#]]
+  [out-text [#
+1000
+#]]
+ ]
+
+ [case id=time-026-to-unix-ns level=core
+  [tags time decomposition to-unix-ns]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:to-unix-ns [$time:parse-datetime "1970-01-01T00:00:01Z"]]
+#]]
+  [out-text [#
+1000000000
+#]]
+ ]
+
+ [case id=time-027-add-duration-datetime level=core
+  [tags time arithmetic add duration]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add [$time:parse-datetime "2026-05-26T14:00:00Z"] [$time:duration-h 2]]
+#]]
+  [out-text [#
+'2026-05-26T16:00:00Z'
+#]]
+ ]
+
+ [case id=time-028-subtract-duration-datetime level=core
+  [tags time arithmetic subtract duration]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:subtract [$time:parse-datetime "2026-05-26T14:00:00Z"] [$time:duration-h 2]]
+#]]
+  [out-text [#
+'2026-05-26T12:00:00Z'
+#]]
+ ]
+
+ [case id=time-029-diff level=core
+  [tags time arithmetic diff]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:diff [$time:parse-datetime "2026-05-26T14:00:00Z"] [$time:parse-datetime "2026-05-26T13:00:00Z"]]
+#]]
+  [out-text [#
+3600000000000
+#]]
+ ]
+
+ [case id=time-030-add-days level=core
+  [tags time arithmetic period add-days]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-days [$time:parse-date "2026-05-26"] 10]
+#]]
+  [out-text [#
+'2026-06-05'
+#]]
+ ]
+
+ [case id=time-031-add-months-clamp level=core
+  [tags time arithmetic period add-months clamp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-months [$time:parse-date "2026-01-31"] 1]
+#]]
+  [out-text [#
+'2026-02-28'
+#]]
+ ]
+
+ [case id=time-032-add-months-leap-clamp level=core
+  [tags time arithmetic period add-months leap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-months [$time:parse-date "2024-01-31"] 1]
+#]]
+  [out-text [#
+'2024-02-29'
+#]]
+ ]
+
+ [case id=time-033-add-months-strict-raises level=core
+  [tags time arithmetic period add-months-strict CXER3300]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-months-strict [$time:parse-date "2026-01-31"] 1]
+#]]
+  [out-err [#
+cx-err:CXER3300
+#]]
+ ]
+
+ [case id=time-034-add-months-strict-ok level=core
+  [tags time arithmetic period add-months-strict]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-months-strict [$time:parse-date "2026-01-15"] 1]
+#]]
+  [out-text [#
+'2026-02-15'
+#]]
+ ]
+
+ [case id=time-035-add-years level=core
+  [tags time arithmetic period add-years]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-years [$time:parse-date "2024-02-29"] 1]
+#]]
+  [out-text [#
+'2025-02-28'
+#]]
+ ]
+
+ [case id=time-036-add-hours level=core
+  [tags time arithmetic duration add-hours]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-hours [$time:parse-datetime "2026-05-26T22:00:00Z"] 5]
+#]]
+  [out-text [#
+'2026-05-27T03:00:00Z'
+#]]
+ ]
+
+ [case id=time-037-add-minutes level=core
+  [tags time arithmetic duration add-minutes]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-minutes [$time:parse-datetime "2026-05-26T14:00:00Z"] 90]
+#]]
+  [out-text [#
+'2026-05-26T15:30:00Z'
+#]]
+ ]
+
+ [case id=time-038-add-seconds level=core
+  [tags time arithmetic duration add-seconds]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:add-seconds [$time:parse-datetime "2026-05-26T14:00:00Z"] 75]
+#]]
+  [out-text [#
+'2026-05-26T14:01:15Z'
+#]]
+ ]
+
+ [case id=time-039-add-hours-across-dst-instant level=core
+  [tags time arithmetic duration dst]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:diff [$time:add-hours [$time:parse-datetime "2026-03-08T06:00:00Z"] 1] [$time:parse-datetime "2026-03-08T06:00:00Z"]]
+#]]
+  [out-text [#
+3600000000000
+#]]
+ ]
+
+ [case id=time-040-duration-ms level=core
+  [tags time duration duration-ms]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-ms 100]
+#]]
+  [out-text [#
+100000000
+#]]
+ ]
+
+ [case id=time-041-duration-s level=core
+  [tags time duration duration-s]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-s 5]
+#]]
+  [out-text [#
+5000000000
+#]]
+ ]
+
+ [case id=time-042-duration-m level=core
+  [tags time duration duration-m]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-m 2]
+#]]
+  [out-text [#
+120000000000
+#]]
+ ]
+
+ [case id=time-043-duration-h level=core
+  [tags time duration duration-h]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-h 1]
+#]]
+  [out-text [#
+3600000000000
+#]]
+ ]
+
+ [case id=time-044-duration-d level=core
+  [tags time duration duration-d]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-d 1]
+#]]
+  [out-text [#
+86400000000000
+#]]
+ ]
+
+ [case id=time-045-duration-parts level=core
+  [tags time duration duration-parts element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-parts [$time:parse-duration "1d2h30m45s"]]
+#]]
+  [out-text [#
+[duration-parts days=1 hours=2 minutes=30 seconds=45 nanoseconds=0]
+#]]
+ ]
+
+ [case id=time-046-duration-total-ms level=core
+  [tags time duration total-ms]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-total-ms [$time:duration-s 3]]
+#]]
+  [out-text [#
+3000
+#]]
+ ]
+
+ [case id=time-047-duration-total-s level=core
+  [tags time duration total-s]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-total-s [$time:duration-h 2]]
+#]]
+  [out-text [#
+7200
+#]]
+ ]
+
+ [case id=time-048-duration-total-h level=core
+  [tags time duration total-h]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-total-h [$time:duration-h 2]]
+#]]
+  [out-text [#
+2.0
+#]]
+ ]
+
+ [case id=time-049-duration-add level=core
+  [tags time duration add]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-add [$time:duration-s 1] [$time:duration-s 2]]
+#]]
+  [out-text [#
+3000000000
+#]]
+ ]
+
+ [case id=time-050-duration-sub level=core
+  [tags time duration sub]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-sub [$time:duration-s 5] [$time:duration-s 2]]
+#]]
+  [out-text [#
+3000000000
+#]]
+ ]
+
+ [case id=time-051-duration-mul level=core
+  [tags time duration mul]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-mul [$time:duration-s 2] 3]
+#]]
+  [out-text [#
+6000000000
+#]]
+ ]
+
+ [case id=time-052-duration-div level=core
+  [tags time duration div]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-div [$time:duration-s 6] 3]
+#]]
+  [out-text [#
+2000000000
+#]]
+ ]
+
+ [case id=time-053-duration-div-zero level=core
+  [tags time duration div CXER3304]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:duration-div [$time:duration-s 6] 0]
+#]]
+  [out-err [#
+cx-err:CXER3304
+#]]
+ ]
+
+ [case id=time-054-parse-date level=core
+  [tags time parse date]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-date "2026-05-26"]
+#]]
+  [out-text [#
+'2026-05-26'
+#]]
+ ]
+
+ [case id=time-055-parse-date-malformed level=core
+  [tags time parse date CXER3301]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-date "2026/05/26"]
+#]]
+  [out-err [#
+cx-err:CXER3301
+#]]
+ ]
+
+ [case id=time-056-parse-datetime-z level=core
+  [tags time parse datetime]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-datetime "2026-05-26T14:30:00Z"]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-057-parse-datetime-offset level=core
+  [tags time parse datetime offset]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-datetime "2026-05-26T14:30:00+02:00"]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00+02:00'
+#]]
+ ]
+
+ [case id=time-058-parse-instant-normalizes-utc level=core
+  [tags time parse instant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-instant "1970-01-01T00:00:01Z"]
+#]]
+  [out-text [#
+1000000000
+#]]
+ ]
+
+ [case id=time-059-parse-duration-shorthand level=core
+  [tags time parse duration shorthand]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-duration "1h30m"]
+#]]
+  [out-text [#
+5400000000000
+#]]
+ ]
+
+ [case id=time-060-parse-duration-ms level=core
+  [tags time parse duration ms]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-duration "100ms"]
+#]]
+  [out-text [#
+100000000
+#]]
+ ]
+
+ [case id=time-061-parse-duration-iso level=core
+  [tags time parse duration iso8601]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-duration "P1DT2H"]
+#]]
+  [out-text [#
+93600000000000
+#]]
+ ]
+
+ [case id=time-062-parse-duration-malformed level=core
+  [tags time parse duration CXER3301]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-duration "five hours"]
+#]]
+  [out-err [#
+cx-err:CXER3301
+#]]
+ ]
+
+ [case id=time-063-parse-rfc3339 level=core
+  [tags time parse rfc3339]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-rfc3339 "2026-05-26T14:30:00Z"]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-064-parse-rfc2822 level=core
+  [tags time parse rfc2822]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-rfc2822 "Tue, 26 May 2026 14:30:00 +0000"]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-065-parse-rfc2822-offset level=core
+  [tags time parse rfc2822 offset]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-rfc2822 "26 May 2026 14:30:00 +0200"]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00+02:00'
+#]]
+ ]
+
+ [case id=time-066-parse-with-format level=core
+  [tags time parse with-format ldml]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-with-format "2026-05-26 14:30:00" "yyyy-MM-dd HH:mm:ss"]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-067-parse-with-format-named-month level=core
+  [tags time parse with-format ldml month-name]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-with-format "26 May 2026" "dd MMM yyyy"]
+#]]
+  [out-text [#
+'2026-05-26T00:00:00Z'
+#]]
+ ]
+
+ [case id=time-068-parse-with-format-unknown-token level=core
+  [tags time parse with-format CXER3303]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-with-format "2026" "Q"]
+#]]
+  [out-err [#
+cx-err:CXER3303
+#]]
+ ]
+
+ [case id=time-069-parse-strftime level=core
+  [tags time parse strftime escape-hatch]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-strftime "2026-05-26 14:30:00" "%Y-%m-%d %H:%M:%S"]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-070-parse-strftime-unknown-token level=core
+  [tags time parse strftime CXER3303]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-strftime "2026" "%Q"]
+#]]
+  [out-err [#
+cx-err:CXER3303
+#]]
+ ]
+
+ [case id=time-071-format-iso8601-datetime level=core
+  [tags time format iso8601]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-iso8601 [$time:parse-datetime "2026-05-26T14:30:00Z"]]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-072-format-iso8601-date level=core
+  [tags time format iso8601 date]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-iso8601 [$time:parse-date "2026-05-26"]]
+#]]
+  [out-text [#
+'2026-05-26'
+#]]
+ ]
+
+ [case id=time-073-format-rfc3339 level=core
+  [tags time format rfc3339]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-rfc3339 [$time:parse-datetime "2026-05-26T14:30:00Z"]]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-074-format-rfc2822 level=core
+  [tags time format rfc2822]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-rfc2822 [$time:parse-datetime "2026-05-26T14:30:00Z"]]
+#]]
+  [out-text [#
+'Tue, 26 May 2026 14:30:00 +0000'
+#]]
+ ]
+
+ [case id=time-075-format-with-format level=core
+  [tags time format with-format ldml]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-with-format [$time:parse-datetime "2026-05-26T14:30:00Z"] "yyyy-MM-dd HH:mm:ss"]
+#]]
+  [out-text [#
+'2026-05-26 14:30:00'
+#]]
+ ]
+
+ [case id=time-076-format-with-format-names level=core
+  [tags time format with-format names]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-with-format [$time:parse-datetime "2026-05-26T14:30:00Z"] "EEE, dd MMM yyyy"]
+#]]
+  [out-text [#
+'Tue, 26 May 2026'
+#]]
+ ]
+
+ [case id=time-077-format-with-format-12h level=core
+  [tags time format with-format 12h]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-with-format [$time:parse-datetime "2026-05-26T14:30:00Z"] "hh:mm a"]
+#]]
+  [out-text [#
+'02:30 PM'
+#]]
+ ]
+
+ [case id=time-078-format-with-format-unknown-token level=core
+  [tags time format with-format CXER3303]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-with-format [$time:parse-date "2026-05-26"] "Q"]
+#]]
+  [out-err [#
+cx-err:CXER3303
+#]]
+ ]
+
+ [case id=time-079-format-duration level=core
+  [tags time format duration]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-duration [$time:parse-duration "1d2h30m45s"]]
+#]]
+  [out-text [#
+'1d2h30m45s'
+#]]
+ ]
+
+ [case id=time-080-format-duration-ms level=core
+  [tags time format duration ms]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-duration [$time:duration-ms 100]]
+#]]
+  [out-text [#
+100ms
+#]]
+ ]
+
+ [case id=time-081-format-relative-past level=core
+  [tags time format relative past]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-relative [$time:parse-datetime "2026-05-26T12:00:00Z"] [$time:parse-datetime "2026-05-26T14:00:00Z"]]
+#]]
+  [out-text [#
+'2 hours ago'
+#]]
+ ]
+
+ [case id=time-082-format-relative-future level=core
+  [tags time format relative future]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-relative [$time:parse-datetime "2026-05-29T14:00:00Z"] [$time:parse-datetime "2026-05-26T14:00:00Z"]]
+#]]
+  [out-text [#
+'in 3 days'
+#]]
+ ]
+
+ [case id=time-083-timezone-element level=core
+  [tags time timezone element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:timezone "America/New_York"]
+#]]
+  [out-text [#
+[timezone name='America/New_York' offset=-18000 dst=true]
+#]]
+ ]
+
+ [case id=time-084-timezone-unknown level=core
+  [tags time timezone CXER3302]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:timezone "Mars/Olympus"]
+#]]
+  [out-err [#
+cx-err:CXER3302
+#]]
+ ]
+
+ [case id=time-085-to-timezone level=core
+  [tags time timezone to-timezone]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:to-timezone [$time:parse-datetime "2026-01-15T17:00:00Z"] "America/New_York"]
+#]]
+  [out-text [#
+'2026-01-15T12:00:00-05:00'
+#]]
+ ]
+
+ [case id=time-086-to-timezone-dst level=core
+  [tags time timezone to-timezone dst]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:to-timezone [$time:parse-datetime "2026-07-15T16:00:00Z"] "America/New_York"]
+#]]
+  [out-text [#
+'2026-07-15T12:00:00-04:00'
+#]]
+ ]
+
+ [case id=time-087-to-utc level=core
+  [tags time timezone to-utc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:to-utc [$time:parse-datetime "2026-01-15T12:00:00-05:00"]]
+#]]
+  [out-text [#
+'2026-01-15T17:00:00Z'
+#]]
+ ]
+
+ [case id=time-088-to-timezone-unknown level=core
+  [tags time timezone to-timezone CXER3302]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:to-timezone [$time:parse-datetime "2026-01-15T17:00:00Z"] "Mars/Olympus"]
+#]]
+  [out-err [#
+cx-err:CXER3302
+#]]
+ ]
+
+ [case id=time-089-list-timezones-contains level=core
+  [tags time timezone list-timezones]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:list-timezones]
+#]]
+  [out-text [#
+('UTC', 'Etc/UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Asia/Tokyo', 'Asia/Kolkata', 'Australia/Sydney')
+#]]
+ ]
+
+ [case id=time-090-is-leap-year-true level=core
+  [tags time predicate leap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-leap-year 2024]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-091-is-leap-year-false level=core
+  [tags time predicate leap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-leap-year 2025]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=time-092-is-leap-year-century level=core
+  [tags time predicate leap gregorian]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-leap-year 2100]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=time-093-is-before level=core
+  [tags time predicate is-before]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-before [$time:parse-date "2026-01-01"] [$time:parse-date "2026-12-31"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-094-is-after level=core
+  [tags time predicate is-after]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-after [$time:parse-date "2026-12-31"] [$time:parse-date "2026-01-01"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-095-is-same level=core
+  [tags time predicate is-same]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-same [$time:parse-datetime "2026-05-26T14:00:00Z"] [$time:parse-datetime "2026-05-26T16:00:00+02:00"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-096-is-same-day level=core
+  [tags time predicate is-same-day]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-same-day [$time:parse-datetime "2026-05-26T01:00:00Z"] [$time:parse-datetime "2026-05-26T23:00:00Z"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-097-days-in-month-feb-leap level=core
+  [tags time predicate days-in-month leap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:days-in-month 2024 2]
+#]]
+  [out-text [#
+29
+#]]
+ ]
+
+ [case id=time-098-days-in-month-feb-common level=core
+  [tags time predicate days-in-month]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:days-in-month 2025 2]
+#]]
+  [out-text [#
+28
+#]]
+ ]
+
+ [case id=time-099-days-in-month-invalid level=core
+  [tags time predicate days-in-month CXER3300]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:days-in-month 2025 13]
+#]]
+  [out-err [#
+cx-err:CXER3300
+#]]
+ ]
+
+ [case id=time-100-now-mock-roundtrip level=core
+  [tags time source now-mock deterministic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-iso8601 [$time:now-mock [$time:datetime 2026 5 26 14 30 0]]]
+#]]
+  [out-text [#
+'2026-05-26T14:30:00Z'
+#]]
+ ]
+
+ [case id=time-101-today-mock-roundtrip level=core
+  [tags time source today-mock deterministic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:year [$time:today-mock [$time:date 2026 5 26]]]
+#]]
+  [out-text [#
+2026
+#]]
+ ]
+
+ [case id=time-102-instant-now-mock-passthrough level=core
+  [tags time source instant-now-mock deterministic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:instant-now-mock 1000000000]
+#]]
+  [out-text [#
+1000000000
+#]]
+ ]
+
+ [case id=time-103-monotonic-now-non-decreasing level=core
+  [tags time source monotonic-now deterministic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?let [= $a [$time:monotonic-now]] [?let [= $b [$time:monotonic-now]] [>= $b $a]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=time-104-utc-now-zero-offset level=core
+  [tags time source utc-now deterministic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:timezone-offset [$time:utc-now]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=time-105-mock-set-noop-returns-null level=core
+  [tags time source mock-set null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:mock-set [$time:from-unix 1000]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=time-106-mock-advance-noop-returns-null level=core
+  [tags time source mock-advance null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:mock-advance [$time:duration-h 1]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+# NOTE(host-dependent): system-timezone returns the host's IANA tz id (§3.8),
+# which is host-dependent and has no deterministic literal output. The only
+# stable, spec-grounded property is that its result is a resolvable IANA
+# identifier — i.e. round-tripping it through time/timezone does not raise
+# CXER3302. The rendered timezone element (name/offset/dst) still varies by
+# host, so this asserts only the round-trip succeeds via timezone-offset being
+# an int; reconcile once a $mock/CX_TZ_DIR-pinned harness exists for a
+# deterministic host tz. (Host-dependence of system-timezone is declared in
+# README.md "Reference platform — POSIX"; this case's assertion stays as the
+# stable round-trip property.)
+ [case id=time-107-system-timezone-resolvable level=core
+  [tags time source system-timezone deterministic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[>= [$time:timezone-offset [$time:datetime-with-tz 2026 1 15 12 0 0 [$time:system-timezone]]] -86400]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ # Wall-clock reads require the `clock` capability (§8). Under the empty-cap
+ # runner they raise CXER0271; behavior (a plausible datetime/date/instant)
+ # belongs in a clock-granted / $mock harness.
+ [case id=time-108-now-cap-denied level=core
+  [tags time source now capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:now]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=time-109-today-cap-denied level=core
+  [tags time source today capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:today]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=time-110-instant-now-cap-denied level=core
+  [tags time source instant-now capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:instant-now]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+ [case id=time-111-system-timezone-utc-granted level=core gate=enforced grant='clock'
+  [tags time source system-timezone granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:system-timezone]
+#]]
+  [out-text [#
+'UTC'
+#]]
+ ]
+
+ [case id=time-112-instant-now-after-2020-granted level=core gate=enforced grant='clock'
+  [tags time source instant-now monotonic granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[> [$time:instant-now] 1577836800000000000]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-113-monotonic-now-positive-granted level=core gate=enforced grant='clock'
+  [tags time source monotonic-now granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[> [$time:monotonic-now] 0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-114-now-year-lower-bound-granted level=core gate=enforced grant='clock'
+  [tags time source now year granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[>= [$time:year [$time:now]] 2026]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-115-today-year-lower-bound-granted level=core gate=enforced grant='clock'
+  [tags time source today year granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[>= [$time:year [$time:today]] 2026]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-116-utc-now-year-lower-bound-granted level=core gate=enforced grant='clock'
+  [tags time source utc-now year granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[>= [$time:year [$time:utc-now]] 2026]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [- ───────────────────────────────────────────────────────────────────
+    §3.10 recurrence — RFC 5545 RRULE + cron (all pure, no clock).
+    Expansion vectors cross-validated against a hand-rolled RFC 5545
+    reference (Node v22) for last-weekday-of-month (BYSETPOS=-1),
+    DST-spanning weekly, and the biweekly MO/WE/FR example.
+    ─────────────────────────────────────────────────────────────────── -]
+
+ [case id=time-117-rrule-round-trip-byday-ordinal level=core gate=enforced
+  [tags time recurrence rrule round-trip byday]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-rrule [$time:parse-rrule 'FREQ=MONTHLY;BYDAY=3TH' '2026-01-01T09:00:00' 'UTC']]
+#]]
+  [out-text [#
+'FREQ=MONTHLY;BYDAY=3TH'
+#]]
+ ]
+
+ [case id=time-118-rrule-round-trip-full level=core gate=enforced
+  [tags time recurrence rrule round-trip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-rrule [$time:parse-rrule 'FREQ=WEEKLY;INTERVAL=2;COUNT=10;BYDAY=MO,WE,FR;BYHOUR=9' '2026-06-01T09:00:00' 'UTC']]
+#]]
+  [out-text [#
+'FREQ=WEEKLY;INTERVAL=2;COUNT=10;BYDAY=MO,WE,FR;BYHOUR=9'
+#]]
+ ]
+
+ [case id=time-119-rrule-byday-ordinal-to-element level=core gate=enforced
+  [tags time recurrence rrule byday nth]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:rule-freq [$time:parse-rrule 'FREQ=MONTHLY;BYDAY=3TH' '2026-01-01T09:00:00' 'UTC']]
+#]]
+  [out-text [#
+:monthly
+#]]
+ ]
+
+ [case id=time-120-rrule-malformed level=core gate=enforced
+  [tags time recurrence rrule CXER3320]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-rrule 'FREQ=BOGUS' '2026-01-01T00:00:00' 'UTC']
+#]]
+  [out-err [#
+cx-err:CXER3320
+#]]
+ ]
+
+ [case id=time-121-cron-round-trip-5field level=core gate=enforced
+  [tags time recurrence cron round-trip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-cron [$time:parse-cron '30 9 * * 1' 'UTC']]
+#]]
+  [out-text [#
+'30 9 * * 1'
+#]]
+ ]
+
+ [case id=time-122-cron-macro-daily level=core gate=enforced
+  [tags time recurrence cron macro]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-cron [$time:parse-cron '@daily' 'UTC']]
+#]]
+  [out-text [#
+'0 0 * * *'
+#]]
+ ]
+
+ [case id=time-123-cron-6field-round-trip level=core gate=enforced
+  [tags time recurrence cron round-trip seconds]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-cron [$time:parse-cron '15 30 9 * * *' 'UTC']]
+#]]
+  [out-text [#
+'15 30 9 * * *'
+#]]
+ ]
+
+ [case id=time-124-cron-inexpressible-interval level=core gate=enforced
+  [tags time recurrence cron CXER3324]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-cron [recurrence freq=:daily anchor='2026-01-01T09:00:00' tz='UTC' interval=2]]
+#]]
+  [out-err [#
+cx-err:CXER3324
+#]]
+ ]
+
+ [case id=time-125-cron-inexpressible-setpos level=core gate=enforced
+  [tags time recurrence cron CXER3324 byset-pos]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-cron [recurrence freq=:monthly anchor='2026-01-01T09:00:00' tz='UTC' [by-day :monday :tuesday :wednesday :thursday :friday] [by-set-pos -1]]]
+#]]
+  [out-err [#
+cx-err:CXER3324
+#]]
+ ]
+
+ [case id=time-126-cron-malformed-fieldcount level=core gate=enforced
+  [tags time recurrence cron CXER3321]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:parse-cron '1 2 3' 'UTC']
+#]]
+  [out-err [#
+cx-err:CXER3321
+#]]
+ ]
+
+ [case id=time-127-occurrences-daily-count level=core gate=enforced
+  [tags time recurrence occurrences-in count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:occurrences-in [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' count=3] '2026-06-01T00:00:00' '2026-06-10T00:00:00']
+#]]
+  [out-text [#
+('2026-06-01T09:00:00Z', '2026-06-02T09:00:00Z', '2026-06-03T09:00:00Z')
+#]]
+ ]
+
+ [case id=time-128-occurrences-setpos-last-weekday level=core gate=enforced
+  [tags time recurrence occurrences-in byset-pos byday last-weekday]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:occurrences-in [recurrence freq=:monthly anchor='2026-01-01T09:00:00' tz='UTC' [by-day :monday :tuesday :wednesday :thursday :friday] [by-set-pos -1]] '2026-01-01T00:00:00' '2026-04-01T00:00:00']
+#]]
+  [out-text [#
+('2026-01-30T09:00:00Z', '2026-02-27T09:00:00Z', '2026-03-31T09:00:00Z')
+#]]
+ ]
+
+ [case id=time-129-occurrences-dst-weekly-keeps-local level=core gate=enforced
+  [tags time recurrence occurrences-in dst weekly tz]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:occurrences-in [recurrence freq=:weekly anchor='2026-03-02T09:00:00' tz='America/New_York' [by-day :monday]] '2026-03-01T00:00:00' '2026-03-30T00:00:00']
+#]]
+  [out-text [#
+('2026-03-02T09:00:00-05:00', '2026-03-09T09:00:00-04:00', '2026-03-16T09:00:00-04:00', '2026-03-23T09:00:00-04:00')
+#]]
+ ]
+
+ [case id=time-130-occurrences-biweekly-mwf level=core gate=enforced
+  [tags time recurrence occurrences-in interval byday]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:occurrences-in [recurrence freq=:weekly interval=2 anchor='2026-06-01T00:00:00' tz='UTC' [by-day :monday :wednesday :friday]] '2026-06-01T00:00:00' '2026-06-20T00:00:00']
+#]]
+  [out-text [#
+('2026-06-01T00:00:00Z', '2026-06-03T00:00:00Z', '2026-06-05T00:00:00Z', '2026-06-15T00:00:00Z', '2026-06-17T00:00:00Z', '2026-06-19T00:00:00Z')
+#]]
+ ]
+
+ [case id=time-131-occurrences-cron-weekly level=core gate=enforced
+  [tags time recurrence occurrences-in cron weekly]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:occurrences-in [$time:parse-cron '30 9 * * 1' 'UTC'] '2026-06-01T00:00:00' '2026-06-30T00:00:00']
+#]]
+  [out-text [#
+('2026-06-01T09:30:00Z', '2026-06-08T09:30:00Z', '2026-06-15T09:30:00Z', '2026-06-22T09:30:00Z', '2026-06-29T09:30:00Z')
+#]]
+ ]
+
+ [case id=time-132-occurrences-empty-window level=core gate=enforced
+  [tags time recurrence occurrences-in empty absence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:occurrences-in [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' count=3] '2027-01-01T00:00:00' '2027-02-01T00:00:00']
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=time-133-next-occurrence-exclusive level=core gate=enforced
+  [tags time recurrence next-occurrence exclusive]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:next-occurrence [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' count=5] '2026-06-02T09:00:00']
+#]]
+  [out-text [#
+'2026-06-03T09:00:00Z'
+#]]
+ ]
+
+ [case id=time-134-nth-occurrence level=core gate=enforced
+  [tags time recurrence nth-occurrence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:nth-occurrence [recurrence freq=:weekly interval=2 anchor='2026-06-01T00:00:00' tz='UTC' [by-day :monday :wednesday :friday]] 4]
+#]]
+  [out-text [#
+'2026-06-15T00:00:00Z'
+#]]
+ ]
+
+ [case id=time-135-nth-occurrence-index-error level=core gate=enforced
+  [tags time recurrence nth-occurrence CXER3326]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:nth-occurrence [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' count=3] 0]
+#]]
+  [out-err [#
+cx-err:CXER3326
+#]]
+ ]
+
+ [case id=time-136-rule-contradictory-construction level=core gate=enforced
+  [tags time recurrence CXER3323 contradictory]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:recurrence :yearly '2026-01-01T09:00:00' 'UTC' {by-month: 2 by-month-day: 30}]
+#]]
+  [out-err [#
+cx-err:CXER3323
+#]]
+ ]
+
+ [case id=time-137-rule-count-until-contradictory level=core gate=enforced
+  [tags time recurrence CXER3323 contradictory count until]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:validate-rule [recurrence freq=:weekly anchor='2026-06-01T09:00:00' tz='UTC' count=2 until='2026-12-01T00:00:00']]
+#]]
+  [out-err [#
+cx-err:CXER3323
+#]]
+ ]
+
+ [case id=time-138-rule-field-invalid level=core gate=enforced
+  [tags time recurrence CXER3322 ordinal-byday]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:validate-rule [recurrence freq=:weekly anchor='2026-06-01T09:00:00' tz='UTC' [by-day [nth 3 :thursday]]]]
+#]]
+  [out-err [#
+cx-err:CXER3322
+#]]
+ ]
+
+ [case id=time-139-is-valid-rule-true level=core gate=enforced
+  [tags time recurrence is-valid-rule predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-valid-rule [recurrence freq=:monthly anchor='2026-01-01T09:00:00' tz='UTC' [by-day [nth 3 :thursday]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-140-is-valid-rule-false level=core gate=enforced
+  [tags time recurrence is-valid-rule predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:is-valid-rule [recurrence freq=:weekly anchor='2026-06-01T09:00:00' tz='UTC' count=2 until='2026-12-01T00:00:00']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=time-141-rule-freq-introspection level=core gate=enforced
+  [tags time recurrence rule-freq introspection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:rule-freq [recurrence freq=:weekly anchor='2026-06-01T09:00:00' tz='UTC']]
+#]]
+  [out-text [#
+:weekly
+#]]
+ ]
+
+ [case id=time-142-rule-bound-count level=core gate=enforced
+  [tags time recurrence rule-bound introspection count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:rule-bound [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' count=3]]
+#]]
+  [out-text [#
+[count 3]
+#]]
+ ]
+
+ [case id=time-143-rule-bound-until level=core gate=enforced
+  [tags time recurrence rule-bound introspection until]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:rule-bound [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' until='2026-12-01T00:00:00']]
+#]]
+  [out-text [#
+[until 2026-12-01T00:00:00Z]
+#]]
+ ]
+
+ [case id=time-144-rule-is-finite-true level=core gate=enforced
+  [tags time recurrence rule-is-finite introspection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:rule-is-finite [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' count=3]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-145-rule-is-finite-false level=core gate=enforced
+  [tags time recurrence rule-is-finite introspection infinite]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:rule-is-finite [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=time-146-recurrence-purity level=core gate=enforced
+  [tags time recurrence purity determinism]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[= [$time:occurrences-in [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' count=3] '2026-06-01T00:00:00' '2026-06-10T00:00:00'] [$time:occurrences-in [recurrence freq=:daily anchor='2026-06-01T09:00:00' tz='UTC' count=3] '2026-06-01T00:00:00' '2026-06-10T00:00:00']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=time-147-recurrence-constructor-validates level=core gate=enforced
+  [tags time recurrence recurrence constructor rule-freq]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:rule-freq [$time:recurrence :weekly '2026-06-01T09:00:00' 'America/New_York' {count: 3}]]
+#]]
+  [out-text [#
+:weekly
+#]]
+ ]
+
+ [case id=time-148-leading-zero-datetime level=core gate=enforced
+  [tags time construction datetime leading-zero]
+  [doc [#
+HOSTILE (core-bug #1): zero-padded datetime components (`01`, `00`) are
+NOT Integer tokens per lexicon [L20c] — they preserve as strings (the
+ZIP/SKU rule). Before the coercion fix, every leading-zero argument made
+`[$time:datetime …]` fail with a misleading `no callable "time-datetime"`
+(the int-param guard rejected the string and dispatch fell through). This
+is the natural way a user writes a timestamp; it MUST construct.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:datetime 2030 01 01 00 00 00]
+#]]
+  [out-text [#
+'2030-01-01T00:00:00Z'
+#]]
+ ]
+
+ [case id=time-149-leading-zero-date level=core gate=enforced
+  [tags time construction date leading-zero]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:date 2026 05 26]
+#]]
+  [out-text [#
+'2026-05-26'
+#]]
+ ]
+
+ [case id=time-150-leading-zero-still-validates level=core gate=enforced
+  [tags time construction date leading-zero CXER3300]
+  [doc [#
+The lenient coercion does NOT weaken validation: a zero-padded but
+out-of-range component still raises CXER3300, exactly as the bare form.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:date 2026 02 31]
+#]]
+  [out-err [#
+cx-err:CXER3300
+#]]
+ ]
+
+
+ [case id=time-151-yearly-feb29-skip level=core gate=enforced
+  [tags time recurrence yearly leap RFC5545 skip-invalid]
+  [doc [#
+HOSTILE (blocker): a YEARLY rule anchored on Feb 29 must SKIP non-leap years
+(RFC 5545 §3.3.10 ignores invalid instances), not emit a nonexistent
+2025-02-29 nor clamp to Feb 28. Only the leap years 2024 and 2028 occur.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:occurrences-in [recurrence freq=:yearly anchor='2024-02-29T12:00:00' tz='UTC'] '2024-01-01T00:00:00' '2028-12-31T00:00:00']
+#]]
+  [out-text [#
+('2024-02-29T12:00:00Z', '2028-02-29T12:00:00Z')
+#]]
+ ]
+
+ [case id=time-152-monthly-day31-skip level=core gate=enforced
+  [tags time recurrence monthly RFC5545 skip-not-clamp]
+  [doc [#
+HOSTILE (major): a MONTHLY rule with no BYMONTHDAY recurs on the anchor
+day-of-month; months lacking that day (Feb, Apr) are SKIPPED, not clamped to
+their last day. Jan/Mar/May 31 occur; Feb/Apr do not.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:occurrences-in [recurrence freq=:monthly anchor='2026-01-31T09:00:00' tz='UTC'] '2026-01-01T00:00:00' '2026-07-01T00:00:00']
+#]]
+  [out-text [#
+('2026-01-31T09:00:00Z', '2026-03-31T09:00:00Z', '2026-05-31T09:00:00Z')
+#]]
+ ]
+
+ [case id=time-153-dst-fallback-earlier-offset level=core gate=enforced
+  [tags time recurrence dst fall-back overlap earlier-offset]
+  [doc [#
+HOSTILE (blocker): a fall-back OVERLAP local time exists under both offsets;
+§4.2 adopts the EARLIER instant (pre-transition, -04:00 DST), not the later
+-05:00. NY 2026-11-01 01:30 must render -04:00.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:next-occurrence [recurrence freq=:yearly anchor='2026-11-01T01:30:00' tz='America/New_York'] '2026-01-01T00:00:00']
+#]]
+  [out-text [#
+'2026-11-01T01:30:00-04:00'
+#]]
+ ]
+
+ [case id=time-154-dst-gap-rollforward level=core gate=enforced
+  [tags time recurrence dst spring-forward gap roll-forward]
+  [doc [#
+HOSTILE (major): a spring-forward GAP local time (NY 2026-03-08 02:30) does
+not exist; §4.2 rolls it FORWARD to the next valid local time (03:30 -04:00)
+rather than emitting the nonexistent 02:30 label.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:next-occurrence [recurrence freq=:yearly anchor='2026-03-08T02:30:00' tz='America/New_York'] '2026-01-01T00:00:00']
+#]]
+  [out-text [#
+'2026-03-08T03:30:00-04:00'
+#]]
+ ]
+
+ [case id=time-155-instant-overflow level=core gate=enforced
+  [tags time recurrence instant overflow CXER3304]
+  [doc [#
+HOSTILE (blocker): past ~2262-04 the i64-ns instant wraps; a next-occurrence
+whose result lands beyond the representable range must raise CXER3304, NOT
+return a bogus wrapped instant appearing before `after`.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:next-occurrence [recurrence freq=:yearly anchor='2200-06-15T12:00:00' tz='UTC'] '2262-01-01T00:00:00']
+#]]
+  [out-err [#
+cx-err:CXER3304
+#]]
+ ]
+
+ [case id=time-156-format-cron-hourly level=core gate=enforced
+  [tags time recurrence format-cron hourly sub-daily]
+  [doc [#
+HOSTILE (major): an HOURLY rule formats to `M * * * *` (fire every hour at
+the anchor minute). The prior code emitted the anchor hour, silently
+collapsing it to a once-a-day cron.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-cron [recurrence freq=:hourly anchor='2026-01-01T00:15:00' tz='UTC']]
+#]]
+  [out-text [#
+'15 * * * *'
+#]]
+ ]
+
+ [case id=time-157-format-cron-minutely level=core gate=enforced
+  [tags time recurrence format-cron minutely sub-daily]
+  [doc [#
+A MINUTELY rule formats to `* * * * *` (every minute), not the anchor
+minute/hour.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[$time:format-cron [recurrence freq=:minutely anchor='2026-01-01T00:00:00' tz='UTC']]
+#]]
+  [out-text [#
+'* * * * *'
+#]]
+ ]
+
+]

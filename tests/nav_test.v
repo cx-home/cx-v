@@ -106,54 +106,14 @@ fn test_document_append_prepend() {
 	assert (doc.get('b') or { panic('') }).name == 'b'
 }
 
-fn test_select_descendant() {
-	doc := cx.parse('[services [service name=auth] [service name=api]]') or { panic(err) }
-	results := doc.select_all('//service')
-	assert results.len == 2
-	assert results[0].attr('name') == 'auth'
-}
-
-fn test_select_attr_predicate() {
-	doc := cx.parse('[services [service name=auth active=true] [service name=api active=false]]') or { panic(err) }
-	actives := doc.select_all('//service[@active=true]')
-	assert actives.len == 1
-	assert actives[0].attr('name') == 'auth'
-}
-
-fn test_select_numeric_predicate() {
-	doc := cx.parse('[services [service port=8080] [service port=80]]') or { panic(err) }
-	high := doc.select_all('//service[@port>=8000]')
-	assert high.len == 1
-}
-
-fn test_select_position() {
-	doc := cx.parse('[services [service name=auth] [service name=api] [service name=web]]') or { panic(err) }
-	second := doc.select('//service[2]') or { panic('') }
-	assert second.attr('name') == 'api'
-}
-
-fn test_transform_path() {
-	doc := cx.parse('[config [server host=localhost]]') or { panic(err) }
-	updated := doc.transform('config/server', fn (el cx.Element) cx.Element {
-		mut e := el
-		e.set_attr('host', cx.ScalarValue('prod.example.com'))
-		return e
-	})
-	assert updated.at('config/server') or { panic('') }.attr('host') == 'prod.example.com'
-	assert doc.at('config/server') or { panic('') }.attr('host') == 'localhost'
-}
-
-fn test_transform_all() {
-	doc := cx.parse('[services [service name=auth] [service name=api]]') or { panic(err) }
-	updated := doc.transform_all('//service', fn (el cx.Element) cx.Element {
-		mut e := el
-		e.set_attr('active', cx.ScalarValue(true))
-		return e
-	})
-	for svc in updated.find_all('service') {
-		assert svc.attr('active') == 'true'
-	}
-}
+// CXPath `Document.select` / `Document.select_all` and the
+// `Document.transform` / `Document.transform_all` shape-mutation
+// helpers were removed when cxpath.v + transform.v were deleted per
+// The replacement is the CX code language — `[?for pattern
+// :yield expr]` for selection (CXPath §7.5 pattern-generator form),
+// or `[?for $m :in (…) :yield …]` for projection.
+// See spec/code.md §5 + §7 and the programs API tests in
+// vcx/tests/code_api_test.v.
 
 fn test_stream_function() {
 	events := cx.stream('[config host=localhost]') or { panic(err) }

@@ -1,0 +1,620 @@
+[test-suite name=bus
+  [doc [#
+conformance fixtures for cx-stdlib/bus (spec/02-inprogress/xap/stdlib_bus.md
+§6/§10). In-process publish/subscribe with synchronous, deterministic,
+ordered dispatch (band CXER4650-4699).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/bus']
+   (resolver MUST be quoted). A few handler-effect cases also import
+   'cx-stdlib/store'. The LAST expression is the rendered result.
+
+   Handles + subscriptions are closeable ([?with-open]); a [bus] is built
+   with [$bus:bus], subscribed with [$bus:on], published with [$bus:emit]
+   (returns a [dispatch …] VALUE), unsubscribed with [$bus:off], and
+   introspected with subscribers/topics/match/topic/matches (all pure).
+
+   PATTERN FORMS (§2.2): a topic atom (:order-placed); a head-name string
+   ('metric'); or an arity-1 boolean predicate function over the message
+   (the CXPath-predicate form). PREFIX-GLOB: the spec writes :order.* with
+   `.` hierarchy + `.*` suffix; the CX atom grammar admits neither `.` nor
+   `*` as a NameChar, so this impl realizes the SAME prefix-glob with `-`
+   as the separator and a TRAILING `-` marker: :order- matches
+   :order-placed / :order-cancelled (semantics identical, only the typeable
+   spelling differs).
+
+   FAULTS (§4.3): a handler "faults" only when it RAISES (a `!`-forced call
+   that returns an [err]); a handler that merely RETURNS an [err] value is
+   success (§4.5, return ignored). on-fault ∈ :isolate (default; record,
+   continue, faulted=true) / :collect (aggregate into [dispatch]/faults) /
+   :halt (stop, surface the [err]).
+
+   Determinism: dispatch order is descending priority, ties by ascending
+   registration order (§4.1); re-entrant emissions drain FIFO before the
+   next external message (§4.2); every cascade is bounded (§4.4).
+
+   Id ranges:
+     001-006  on + emit delivery, zero-subscriber VALUE, fire order
+     007-013  pattern forms: atom / glob / head-name / predicate; topic
+     014-018  re-entrant FIFO drain, once, mutation-during-dispatch
+     019-022  introspection: subscribers / topics / match / matches dry-run
+     023-026  off idempotence; handler capability effect flows through
+     027-030  fault policies: isolate / collect / halt
+     031-037  negatives: CXER4660/4661-n.a./4662/4663/4664/4665
+#]]
+
+ [- ── 001-006 on + emit delivery ─────────────────────────────────────── -]
+
+ [case id=bus-001-on-emit-single-subscriber level=core gate=enforced
+  [tags bus on emit dispatch delivery]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :ping [?fn ($m) $m]] $s
+    [?let [= $d [$bus:emit $b [do :ping]]] $d@delivered]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=bus-001b-emit-dispatch-topic level=core gate=enforced
+  [tags bus emit dispatch topic value]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :ping [?fn ($m) $m]] $s
+    [?let [= $d [$bus:emit $b [do :ping]]] $d@topic]]]
+#]]
+  [out-text [#
+'ping'
+#]]
+ ]
+
+ [case id=bus-002-emit-zero-subscribers-is-a-value level=core gate=enforced
+  [tags bus emit zero-subscribers value four-channel]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?let [= $d [$bus:emit $b [do :nobody]]] $d@delivered]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=bus-002b-emit-zero-subscribers-is-not-an-err level=core gate=enforced
+  [tags bus emit zero-subscribers value four-channel name]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?let [= $d [$bus:emit $b [do :nobody]]] [$name $d]]]
+#]]
+  [out-text [#
+'dispatch'
+#]]
+ ]
+
+ [case id=bus-003-multiple-subscribers-registration-order level=core gate=enforced
+  [tags bus emit fire-order registration-order]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) $m]] $s1
+    [?with-open [$bus:on $b :t [?fn ($m) $m]] $s2
+      [?let [= $d [$bus:emit $b [do :t]]] [$count $d/fired/subscription]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=bus-004-priority-reorders-fire-order level=core gate=enforced
+  [tags bus emit priority fire-order]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) $m] {priority: 1}] $lo
+    [?with-open [$bus:on $b :t [?fn ($m) $m] {priority: 5}] $hi
+      [?let [= $d [$bus:emit $b [do :t]]]
+        [?let [= $top [$first $d/fired/subscription]] $top@id]]]]]
+#]]
+  [out-text [#
+'s-2'
+#]]
+ ]
+
+ [case id=bus-005-delivered-count level=core gate=enforced
+  [tags bus emit delivered]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) $m]] $s1
+    [?with-open [$bus:on $b :t [?fn ($m) $m]] $s2
+      [?let [= $d [$bus:emit $b [do :t]]] $d@delivered]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=bus-006-non-matching-subscriber-not-fired level=core gate=enforced
+  [tags bus emit selectivity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :a [?fn ($m) $m]] $s1
+    [?with-open [$bus:on $b :b [?fn ($m) $m]] $s2
+      [?let [= $d [$bus:emit $b [do :a]]] $d@delivered]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [- ── 007-013 pattern forms + topic derivation ──────────────────────── -]
+
+ [case id=bus-007-atom-topic-match level=core gate=enforced
+  [tags bus matches atom-topic pattern]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[$bus:matches [do :order-placed] :order-placed]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bus-008-prefix-glob-match level=core gate=enforced
+  [tags bus matches prefix-glob pattern]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[$bus:matches [do :order-placed] :order-]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bus-009-prefix-glob-non-match level=core gate=enforced
+  [tags bus matches prefix-glob selectivity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[$bus:matches [do :payment-failed] :order-]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=bus-010-head-name-match level=core gate=enforced
+  [tags bus matches head-name pattern]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[$bus:matches [metric val=1] 'metric']
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bus-011-predicate-pattern-match level=core gate=enforced
+  [tags bus matches predicate pattern]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[$bus:matches [do :refund] [?fn ($m) [= [$bus:topic $m] :refund]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bus-012-topic-from-leading-atom level=core gate=enforced
+  [tags bus topic derivation atom]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[$bus:topic [do :order-placed [order id="42"]]]
+#]]
+  [out-text [#
+:order-placed
+#]]
+ ]
+
+ [case id=bus-013-topic-from-head-when-no-atom level=core gate=enforced
+  [tags bus topic derivation head]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[$bus:topic [tick]]
+#]]
+  [out-text [#
+:tick
+#]]
+ ]
+
+ [- ── 014-018 re-entrant drain, once, mutation-during-dispatch ───────── -]
+
+ [case id=bus-014-reentrant-emit-queued-and-drained level=core gate=enforced
+  [tags bus emit reentrant fifo cascade depth]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :first [?fn ($m) [$bus:emit $b [do :second]]]] $s1
+    [?with-open [$bus:on $b :second [?fn ($m) $m]] $s2
+      [?let [= $d [$bus:emit $b [do :first]]] $d@depth]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=bus-015-reentrant-events-count level=core gate=enforced
+  [tags bus emit reentrant events]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :first [?fn ($m) [$bus:emit $b [do :second]]]] $s1
+    [?with-open [$bus:on $b :second [?fn ($m) $m]] $s2
+      [?let [= $d [$bus:emit $b [do :first]]] $d@events]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=bus-016-once-auto-cancels-after-first level=core gate=enforced
+  [tags bus on once one-shot]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) $m] {once: true}] $s
+    [?let [= $first [$bus:emit $b [do :t]]]
+      [?let [= $d [$bus:emit $b [do :t]]] $d@delivered]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=bus-017-once-fires-on-first level=core gate=enforced
+  [tags bus on once first]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) $m] {once: true}] $s
+    [?let [= $d [$bus:emit $b [do :t]]] $d@delivered]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=bus-018-mutation-during-dispatch-next-message level=core gate=enforced
+  [tags bus on mutation-during-dispatch snapshot]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) [$bus:on $b :t [?fn ($m2) $m2]]]] $s
+    [?let [= $d [$bus:emit $b [do :t]]] $d@delivered]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [- ── 019-022 introspection ─────────────────────────────────────────── -]
+
+ [case id=bus-019-subscribers-count level=core gate=enforced
+  [tags bus subscribers introspection]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :a [?fn ($m) $m]] $s1
+    [?with-open [$bus:on $b :b [?fn ($m) $m]] $s2
+      [$count [$bus:subscribers $b]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=bus-020-topics-distinct level=core gate=enforced
+  [tags bus topics introspection]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :a [?fn ($m) $m]] $s1
+    [?with-open [$bus:on $b :b [?fn ($m) $m]] $s2
+      [$bus:topics $b]]]]
+#]]
+  [out-text [#
+(:a, :b)
+#]]
+ ]
+
+ [case id=bus-021-match-dry-run-without-firing level=core gate=enforced
+  [tags bus match dry-run pure]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) $m]] $s
+    [$count [$bus:match $b [do :t]]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=bus-022-match-empty-when-none level=core gate=enforced
+  [tags bus match dry-run absence-channel]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [$count [$bus:match $b [do :nope]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [- ── 023-026 off idempotence + handler capability effect ────────────── -]
+
+ [case id=bus-023-off-returns-true-then-false level=core gate=enforced
+  [tags bus off idempotent value]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?let [= $s [$bus:on $b :t [?fn ($m) $m]]]
+    [$bus:off $b $s]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bus-024-off-already-cancelled-is-false level=core gate=enforced
+  [tags bus off idempotent value]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?let [= $s [$bus:on $b :t [?fn ($m) $m]]]
+    [?let [= $one [$bus:off $b $s]]
+      [$bus:off $b $s]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=bus-025-off-cancelled-not-delivered level=core gate=enforced
+  [tags bus off emit selectivity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?let [= $s [$bus:on $b :t [?fn ($m) $m]]]
+    [?let [= $cancel [$bus:off $b $s]]
+      [?let [= $d [$bus:emit $b [do :t]]] $d@delivered]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=bus-026-handler-capability-effect-flows-through level=core gate=enforced
+  [tags bus emit handler capability store effect]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?lib 'cx-stdlib/store']
+[?let [= $st [$store:open 'mem://bus-effect']]
+  [?with-open [$bus:bus] $b
+    [?with-open [$bus:on $b :save [?fn ($m) [$store:put-doc $st [doc x=1]]]] $s
+      [?let [= $d [$bus:emit $b [do :save]]]
+        [$store:exists $st 'a4a2dc818fa04391655363de78c057c0c4d0971fba0046477e2b8072c3f7f20b']]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [- ── 027-030 fault policies (§4.3) ─────────────────────────────────── -]
+
+ [case id=bus-027-isolate-peer-still-fires level=core gate=enforced
+  [tags bus emit on-fault isolate fault]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) [$bus:emit $b [do :x] {sync: false}]!] {priority: 9}] $s1
+    [?with-open [$bus:on $b :t [?fn ($m) $m]] $s2
+      [?let [= $d [$bus:emit $b [do :t]]] $d@delivered]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=bus-028-isolate-sets-faulted level=core gate=enforced
+  [tags bus emit on-fault isolate faulted]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) [$bus:emit $b [do :x] {sync: false}]!]] $s
+    [?let [= $d [$bus:emit $b [do :t]]] $d@faulted]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=bus-029-collect-aggregates-faults level=core gate=enforced
+  [tags bus emit on-fault collect faults]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) [$bus:emit $b [do :x] {sync: false}]!]] $s
+    [?let [= $d [$bus:emit $b [do :t] {on-fault: :collect}]] $d/faults]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0001 message='call "bus:emit!" returned err: cx-err:CXER4665']
+#]]
+ ]
+
+ [case id=bus-030-halt-surfaces-handler-err level=core gate=enforced
+  [tags bus emit on-fault halt fault failure-channel]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) [$bus:emit $b [do :x] {sync: false}]!]] $s
+    [?let [= $d [$bus:emit $b [do :t] {on-fault: :halt}]] $d@code]]]
+#]]
+  [out-text [#
+'cx-err:CXER0001'
+#]]
+ ]
+
+ [- ── 031-037 negatives (band CXER4660-4665) ────────────────────────── -]
+
+ [case id=bus-031-non-callable-handler-CXER4660 level=core gate=enforced
+  [tags bus on CXER4660 arg-invalid negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b [$bus:on $b :t 42]]
+#]]
+  [out-err [#
+cx-err:CXER4660
+#]]
+ ]
+
+ [case id=bus-032-malformed-pattern-CXER4660 level=core gate=enforced
+  [tags bus on CXER4660 pattern negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b [$bus:on $b 42 [?fn ($m) $m]]]
+#]]
+  [out-err [#
+cx-err:CXER4660
+#]]
+ ]
+
+ [case id=bus-033-non-element-message-CXER4660 level=core gate=enforced
+  [tags bus emit CXER4660 message negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b [$bus:emit $b 42]]
+#]]
+  [out-err [#
+cx-err:CXER4660
+#]]
+ ]
+
+ [case id=bus-034-duplicate-id-CXER4662 level=core gate=enforced
+  [tags bus on CXER4662 duplicate-id negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?let [= $s1 [$bus:on $b :t [?fn ($m) $m] {id: 'dup'}]]
+    [$bus:on $b :t [?fn ($m) $m] {id: 'dup'}]]]
+#]]
+  [out-err [#
+cx-err:CXER4662
+#]]
+ ]
+
+ [case id=bus-035-cascade-limit-CXER4663 level=core gate=enforced
+  [tags bus emit CXER4663 cascade-limit bounded negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus {max-cascade-events: 5}] $b
+  [?with-open [$bus:on $b :loop [?fn ($m) [$bus:emit $b [do :loop]]]] $s
+    [$bus:emit $b [do :loop]]]]
+#]]
+  [out-err [#
+cx-err:CXER4663
+#]]
+ ]
+
+ [case id=bus-036-op-on-closed-bus-CXER4664 level=core gate=enforced
+  [tags bus emit CXER4664 handle-closed lifecycle negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?let [= $b [$bus:bus]]
+  [?let [= $c [$bus:close $b]]
+    [$bus:emit $b [do :t]]]]
+#]]
+  [out-err [#
+cx-err:CXER4664
+#]]
+ ]
+
+ [case id=bus-037-emit-sync-false-CXER4665 level=core gate=enforced
+  [tags bus emit CXER4665 async-unsupported N-BUS-1 negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b [$bus:emit $b [do :t] {sync: false}]]
+#]]
+  [out-err [#
+cx-err:CXER4665
+#]]
+ ]
+
+  [case id=bus-038-fire-order-byte-exact-3-subscribers level=core gate=enforced
+  [tags bus emit fire-order priority tie registration-order byte-exact hostile]
+  [doc [#
+HOSTILE (major): the existing fire-order fixtures assert only the COUNT or the
+FIRST fired subscription, so a tie-scramble (two subscribers at equal priority
+delivered out of registration order) would pass unnoticed. This pins the FULL
+ordered id list: two tied at priority 5 (s-1 before s-3 by registration order)
+then s-2 at priority 1 — descending priority, ties by ascending registration
+order (§4.1).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?with-open [$bus:bus] $b
+  [?with-open [$bus:on $b :t [?fn ($m) $m] {priority: 5}] $s1
+  [?with-open [$bus:on $b :t [?fn ($m) $m] {priority: 1}] $s2
+  [?with-open [$bus:on $b :t [?fn ($m) $m] {priority: 5}] $s3
+    [?let [= $d [$bus:emit $b [do :t]]]
+      [$map $d/fired/subscription [?fn ($x) $x@id]]]]]]]
+#]]
+  [out-text [#
+('s-1', 's-3', 's-2')
+#]]
+ ]
+]

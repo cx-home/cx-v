@@ -1,0 +1,603 @@
+[test-suite name=hash
+  [doc [#
+conformance fixtures for cx-stdlib/hash (spec/std-lib/hash.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/hash']
+   (resolver MUST be quoted) then calls [$hash:fn args]. The LAST
+   expression is the rendered result. Digests are bytes; fixtures render
+   them through hash/format-hex (or *-hex convenience fns) so the
+   out_text is a stable lowercase-hex string. Error fixtures use
+   --- out_err with the bare CXER code.
+
+   No inter-fixture [- comment -] dividers and no inline comments inside
+   in_code: the fixture harness splits on `=== test:` then extracts each
+   section to end-of-chunk, so any trailing comment after out_text would
+   be swallowed into the expected value. Section grouping is by id range:
+     001-006  empty + official non-empty digest vectors
+     007-009  bytes/format-hex + string-convenience equivalence
+     010-013  streaming == single-shot + purity
+     014-017  BLAKE3 XOF prefix-extending property
+     018-024  format conversion + round-trip + case
+     025-028  constant-time equals
+     029-032  SRI helpers + round-trip
+     033-040  error codes (spec §5)
+
+   Test vectors: SHA-256("")=e3b0c442...b7852b855, SHA-256("abc")=ba7816bf...f20015ad,
+   SHA-384("")=38b060a7...4898b95b, SHA-512("")=cf83e135...927da3e,
+   BLAKE3("")=af1349b9...e41f3262, BLAKE3("abc")=6437b3ac...d5bd9d85.
+#]]
+
+ [case id=hash-001-sha256-empty level=core
+  [tags hash sha256-hex empty nist]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:sha256-hex ""]
+#]]
+  [out-text [#
+'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+#]]
+ ]
+
+ [case id=hash-002-sha384-empty level=core
+  [tags hash sha384-hex empty nist]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:sha384-hex ""]
+#]]
+  [out-text [#
+'38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b'
+#]]
+ ]
+
+ [case id=hash-003-sha512-empty level=core
+  [tags hash sha512-hex empty nist]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:sha512-hex ""]
+#]]
+  [out-text [#
+'cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e'
+#]]
+ ]
+
+ [case id=hash-004-blake3-empty level=core
+  [tags hash blake3-hex empty official]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:blake3-hex ""]
+#]]
+  [out-text [#
+'af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262'
+#]]
+ ]
+
+ [case id=hash-005-sha256-abc level=core
+  [tags hash sha256-hex nist cavp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:sha256-hex "abc"]
+#]]
+  [out-text [#
+'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+#]]
+ ]
+
+ [case id=hash-006-blake3-abc level=core
+  [tags hash blake3-hex official]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:blake3-hex "abc"]
+#]]
+  [out-text [#
+'6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85'
+#]]
+ ]
+
+ [case id=hash-007-sha256-via-format-hex level=core
+  [tags hash sha256 format-hex bytes]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:sha256 "abc"]]
+#]]
+  [out-text [#
+'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+#]]
+ ]
+
+ [case id=hash-008-sha256-string-equals-bytes level=core
+  [tags hash sha256-string convenience]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:sha256-string "abc"] [$hash:sha256 "abc"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-009-blake3-string-equals-bytes level=core
+  [tags hash blake3-string convenience]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:blake3-string "abc"] [$hash:blake3 "abc"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-010-streaming-equals-single-shot level=core
+  [tags hash hasher streaming sha256]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:hasher-finalize [$hash:hasher-update [$hash:hasher-update [$hash:hasher-new "sha256"] "ab"] "c"]]]
+#]]
+  [out-text [#
+'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+#]]
+ ]
+
+ [case id=hash-011-streaming-empty-equals-single-shot level=core
+  [tags hash hasher streaming empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:hasher-finalize [$hash:hasher-new "sha256"]]]
+#]]
+  [out-text [#
+'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+#]]
+ ]
+
+ [case id=hash-012-streaming-blake3 level=core
+  [tags hash hasher streaming blake3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:hasher-finalize [$hash:hasher-update [$hash:hasher-new "blake3"] "abc"]]]
+#]]
+  [out-text [#
+'6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85'
+#]]
+ ]
+
+ [case id=hash-013-streaming-purity-original-unchanged level=core
+  [tags hash hasher purity immutable]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[?let [= $h0 [$hash:hasher-new "sha256"]] [$hash:format-hex [$hash:hasher-finalize $h0]]]
+#]]
+  [out-text [#
+'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+#]]
+ ]
+
+ [case id=hash-014-xof-len1 level=core
+  [tags hash blake3-xof xof]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:blake3-xof "abc" 1]]
+#]]
+  [out-text [#
+'64'
+#]]
+ ]
+
+ [case id=hash-015-xof-len2-prefix-extends level=core
+  [tags hash blake3-xof xof prefix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:blake3-xof "abc" 2]]
+#]]
+  [out-text [#
+'6437'
+#]]
+ ]
+
+ [case id=hash-016-xof-len32-equals-blake3 level=core
+  [tags hash blake3-xof xof default]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:blake3-xof "abc" 32] [$hash:blake3 "abc"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-017-xof-len-prefix-byte level=core
+  [tags hash blake3-xof xof prefix-byte]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:blake3-xof "abc" 1] [$hash:parse-hex "64"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-018-format-hex level=core
+  [tags hash format-hex]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:parse-hex "deadbeef"]]
+#]]
+  [out-text [#
+'deadbeef'
+#]]
+ ]
+
+ [case id=hash-019-format-base64-url level=core
+  [tags hash format-base64-url]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-base64-url [$hash:parse-hex "deadbeef"]]
+#]]
+  [out-text [#
+'3q2-7w'
+#]]
+ ]
+
+ [case id=hash-020-format-base32 level=core
+  [tags hash format-base32]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-base32 [$hash:parse-hex "deadbeef"]]
+#]]
+  [out-text [#
+'32W353Y='
+#]]
+ ]
+
+ [case id=hash-021-parse-hex-roundtrip level=core
+  [tags hash parse-hex format-hex roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:parse-hex [$hash:format-hex [$hash:sha256 "payload"]]] [$hash:sha256 "payload"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-022-base64-url-roundtrip level=core
+  [tags hash parse-base64-url format-base64-url roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[?let [= $d [$hash:sha256 "payload"]] [$hash:equals [$hash:parse-base64-url [$hash:format-base64-url $d]] $d]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-023-parse-hex-case-insensitive level=core
+  [tags hash parse-hex case-insensitive]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:parse-hex "ABCDef0123"] [$hash:parse-hex "abcdef0123"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-024-format-hex-emits-lowercase level=core
+  [tags hash format-hex lowercase]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:parse-hex "ABCDEF"]]
+#]]
+  [out-text [#
+'abcdef'
+#]]
+ ]
+
+ [case id=hash-025-equals-true level=core
+  [tags hash equals constant-time]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:sha256 "x"] [$hash:sha256 "x"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-026-equals-differ-first-byte level=core
+  [tags hash equals constant-time first-byte]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:parse-hex "00ff"] [$hash:parse-hex "ff00"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=hash-027-equals-differ-last-byte level=core
+  [tags hash equals constant-time last-byte]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:parse-hex "0000"] [$hash:parse-hex "0001"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=hash-028-equals-length-mismatch level=core
+  [tags hash equals constant-time length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:equals [$hash:parse-hex "00"] [$hash:parse-hex "0000"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=hash-029-sri-format-sha384 level=core
+  [tags hash sri-format sha384]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:sri-format [$hash:sha384 "hi"] "sha384"]
+#]]
+  [out-text [#
+'sha384-B5EAbfgShHckT1PQ/c4hDbgfVXV1EOJqzuNcGKa86qKNzbv9bcBBubTcextU439S'
+#]]
+ ]
+
+ [case id=hash-030-sri-roundtrip-algo level=core
+  [tags hash sri-parse sri-format roundtrip algo]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[?let [= $p [$hash:sri-parse [$hash:sri-format [$hash:sha384 "hi"] "sha384"]]] $p@algo]
+#]]
+  [out-text [#
+'sha384'
+#]]
+ ]
+
+ [case id=hash-031-sri-roundtrip-digest level=core
+  [tags hash sri-parse sri-format roundtrip digest]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[?let [= $p [$hash:sri-parse [$hash:sri-format [$hash:sha384 "hi"] "sha384"]]] [$hash:equals $p@digest [$hash:sha384 "hi"]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=hash-032-sri-roundtrip-sha256-algo level=core
+  [tags hash sri-parse sri-format roundtrip sha256]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[?let [= $p [$hash:sri-parse [$hash:sri-format [$hash:sha256 "abc"] "sha256"]]] $p@algo]
+#]]
+  [out-text [#
+'sha256'
+#]]
+ ]
+
+ [case id=hash-033-hasher-new-unknown-algo level=core
+  [tags hash hasher-new CXER2000]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:hasher-new "md5"]
+#]]
+  [out-err [#
+cx-err:CXER2000
+#]]
+ ]
+
+ [case id=hash-034-sri-format-wrong-length level=core
+  [tags hash sri-format CXER2001]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:sri-format [$hash:sha256 "x"] "sha384"]
+#]]
+  [out-err [#
+cx-err:CXER2001
+#]]
+ ]
+
+ [case id=hash-035-parse-hex-invalid level=core
+  [tags hash parse-hex CXER2002]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:parse-hex "xyz"]
+#]]
+  [out-err [#
+cx-err:CXER2002
+#]]
+ ]
+
+ [case id=hash-036-parse-hex-odd-length level=core
+  [tags hash parse-hex CXER2002 odd]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:parse-hex "abc"]
+#]]
+  [out-err [#
+cx-err:CXER2002
+#]]
+ ]
+
+ [case id=hash-037-parse-base64-url-invalid level=core
+  [tags hash parse-base64-url CXER2003]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:parse-base64-url "!!!"]
+#]]
+  [out-err [#
+cx-err:CXER2003
+#]]
+ ]
+
+ [case id=hash-038-sri-parse-malformed level=core
+  [tags hash sri-parse CXER2004]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:sri-parse "notvalid"]
+#]]
+  [out-err [#
+cx-err:CXER2004
+#]]
+ ]
+
+ [case id=hash-039-blake3-xof-zero-length level=core
+  [tags hash blake3-xof CXER2005]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:blake3-xof "x" 0]
+#]]
+  [out-err [#
+cx-err:CXER2005
+#]]
+ ]
+
+ [case id=hash-040-blake3-xof-negative-length level=core
+  [tags hash blake3-xof CXER2005 negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:blake3-xof "x" -5]
+#]]
+  [out-err [#
+cx-err:CXER2005
+#]]
+ ]
+
+ [case id=hash-041-sha512-bytes-abc level=core
+  [tags hash sha512 bytes format-hex nist cavp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/hash']
+[$hash:format-hex [$hash:sha512 "abc"]]
+#]]
+  [out-text [#
+'ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f'
+#]]
+ ]
+]

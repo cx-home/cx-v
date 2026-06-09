@@ -1,0 +1,1387 @@
+[test-suite name=crypto
+  [doc [#
+conformance fixtures for cx-stdlib/crypto (spec/std-lib/crypto.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/crypto']
+   (resolver MUST be quoted) and, where a byte result must be rendered or a
+   hex/utf8 input must be constructed, also [?lib 'cx-stdlib/bytes']. The
+   LAST expression is the rendered result.
+
+   Keys / messages / MACs / salts / IKM / PRK / info / OKM / signatures /
+   ciphertexts are all CXDM bytes (§2.1). Byte inputs are built with
+   bytes/from-string-utf8 or bytes/from-hex; byte results are rendered as
+   stable lowercase hex via bytes/to-hex, or asserted structurally via
+   bytes/length / bytes/equals when an exact golden is not grounded in the
+   spec/RFCs.
+
+   Determinism: pure single-shot HMAC / HKDF / keyed-BLAKE3 and ed25519-sign
+   are pinned to RFC golden vectors where available. The four impure
+   generating surfaces (aead-encrypt, ed25519-keypair, x25519-keypair,
+   password-hash) draw fresh randomness (§2.4) and are NEVER asserted by
+   literal value: fixtures pin only format / length / round-trip / error.
+
+   Grounded vectors:
+     RFC 4231 Test Case 2 (key="Jefe", msg="what do ya want for nothing?"):
+       hmac-sha256 = 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+       hmac-sha384 = af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649
+       hmac-sha512 = 164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737
+     RFC 5869 Test Case 1 (SHA-256):
+       ikm  = 0b*22, salt = 000102030405060708090a0b0c, info = f0f1f2f3f4f5f6f7f8f9, L=42
+       PRK  = 077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5
+       OKM  = 3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865
+
+   Id ranges:
+     001-006  HMAC single-shot RFC 4231 vectors + empty-message edge
+     007-010  HMAC streaming == single-shot + purity
+     011-015  keyed-BLAKE3 + blake3-mac-verify (§3.3, §3.6)
+     016-024  HKDF extract/expand/oneshot RFC 5869 + identity + bounds
+     025-028  hmac-verify constant-time contract (§3.6)
+     029-035  AEAD round-trip / freshness / tamper / errors (§3.7)
+     036-044  Ed25519 + X25519 (§3.8)
+     045-049  Argon2id password hashing (§3.9)
+     050-058  capability-GRANTED behavior twins (grant='random', §2.4): the
+              four impure generating surfaces under a least-privilege random
+              grant — round-trip / structural-length / verify outcomes
+              (deterministic despite fresh entropy). Effort-B granted-harness
+              lane; the 029-049 denial twins keep the no-cap CXER0271 contract.
+#]]
+
+ [case id=crypto-001-hmac-sha256-rfc4231-tc2 level=core
+  [tags crypto hmac-sha256 rfc4231 golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$crypto:hmac-sha256 [$bytes:from-string-utf8 "Jefe"] [$bytes:from-string-utf8 "what do ya want for nothing?"]]]
+#]]
+  [out-text [#
+'5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843'
+#]]
+ ]
+
+ [case id=crypto-002-hmac-sha384-rfc4231-tc2 level=core
+  [tags crypto hmac-sha384 rfc4231 golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$crypto:hmac-sha384 [$bytes:from-string-utf8 "Jefe"] [$bytes:from-string-utf8 "what do ya want for nothing?"]]]
+#]]
+  [out-text [#
+'af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649'
+#]]
+ ]
+
+ [case id=crypto-003-hmac-sha512-rfc4231-tc2 level=core
+  [tags crypto hmac-sha512 rfc4231 golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$crypto:hmac-sha512 [$bytes:from-string-utf8 "Jefe"] [$bytes:from-string-utf8 "what do ya want for nothing?"]]]
+#]]
+  [out-text [#
+'164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737'
+#]]
+ ]
+
+ [case id=crypto-004-hmac-sha256-output-length level=core
+  [tags crypto hmac-sha256 length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$crypto:hmac-sha256 [$bytes:from-string-utf8 "key"] [$bytes:from-string-utf8 "msg"]]]
+#]]
+  [out-text [#
+32
+#]]
+ ]
+
+ [case id=crypto-005-hmac-sha384-output-length level=core
+  [tags crypto hmac-sha384 length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$crypto:hmac-sha384 [$bytes:from-string-utf8 "key"] [$bytes:from-string-utf8 "msg"]]]
+#]]
+  [out-text [#
+48
+#]]
+ ]
+
+ [case id=crypto-006-hmac-sha512-empty-message level=core
+  [tags crypto hmac-sha512 empty length edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$crypto:hmac-sha512 [$bytes:from-string-utf8 "key"] [$bytes:from-string-utf8 ""]]]
+#]]
+  [out-text [#
+64
+#]]
+ ]
+
+ [case id=crypto-007-hmac-streaming-equals-single-shot level=core
+  [tags crypto hmac-new hmac-update hmac-finalize streaming]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:equals [$crypto:hmac-finalize [$crypto:hmac-update [$crypto:hmac-update [$crypto:hmac-new "sha256" [$bytes:from-string-utf8 "Jefe"]] [$bytes:from-string-utf8 "what do ya want "]] [$bytes:from-string-utf8 "for nothing?"]]] [$crypto:hmac-sha256 [$bytes:from-string-utf8 "Jefe"] [$bytes:from-string-utf8 "what do ya want for nothing?"]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-008-hmac-streaming-golden level=core
+  [tags crypto hmac-new hmac-finalize streaming golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$crypto:hmac-finalize [$crypto:hmac-update [$crypto:hmac-new "sha256" [$bytes:from-string-utf8 "Jefe"]] [$bytes:from-string-utf8 "what do ya want for nothing?"]]]]
+#]]
+  [out-text [#
+'5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843'
+#]]
+ ]
+
+ [case id=crypto-009-hmac-streaming-purity-original-unchanged level=core
+  [tags crypto hmac-update purity immutable]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $h0 [$crypto:hmac-new "sha256" [$bytes:from-string-utf8 "Jefe"]]] [?let [= $h1 [$crypto:hmac-update $h0 [$bytes:from-string-utf8 "what do ya want for nothing?"]]] [$bytes:equals [$crypto:hmac-finalize $h0] [$crypto:hmac-sha256 [$bytes:from-string-utf8 "Jefe"] [$bytes:from-string-utf8 ""]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-010-hmac-new-unknown-algo level=core
+  [tags crypto hmac-new CXER3700 unknown-algo]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:hmac-new "md5" [$bytes:from-string-utf8 "key"]]
+#]]
+  [out-err [#
+cx-err:CXER3700
+#]]
+ ]
+
+ [case id=crypto-011-blake3-keyed-output-length level=core
+  [tags crypto blake3-keyed length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$crypto:blake3-keyed [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"] [$bytes:from-string-utf8 "abc"]]]
+#]]
+  [out-text [#
+32
+#]]
+ ]
+
+ [case id=crypto-012-blake3-keyed-wrong-key-length level=core
+  [tags crypto blake3-keyed CXER3700 key-length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:blake3-keyed [$bytes:from-hex "0001020304"] [$bytes:from-string-utf8 "abc"]]
+#]]
+  [out-err [#
+cx-err:CXER3700
+#]]
+ ]
+
+ [case id=crypto-013-blake3-mac-verify-true level=core
+  [tags crypto blake3-mac-verify verify-contract]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $m [$bytes:from-string-utf8 "abc"]] [$crypto:blake3-mac-verify $k $m [$crypto:blake3-keyed $k $m]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-014-blake3-mac-verify-mismatch level=core
+  [tags crypto blake3-mac-verify CXER3701 mismatch]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [$crypto:blake3-mac-verify $k [$bytes:from-string-utf8 "abc"] [$crypto:blake3-keyed $k [$bytes:from-string-utf8 "abd"]]]]
+#]]
+  [out-err [#
+cx-err:CXER3701
+#]]
+ ]
+
+ [case id=crypto-015-blake3-keyed-via-fallback-on-wrong-mac level=core
+  [tags crypto blake3-mac-verify fallback false]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?fallback [$crypto:blake3-mac-verify $k [$bytes:from-string-utf8 "abc"] [$crypto:blake3-keyed $k [$bytes:from-string-utf8 "abd"]]] [recover-with false]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=crypto-016-hkdf-extract-rfc5869-tc1 level=core
+  [tags crypto hkdf-extract rfc5869 golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$crypto:hkdf-extract [$bytes:from-hex "000102030405060708090a0b0c"] [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"]]]
+#]]
+  [out-text [#
+'077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5'
+#]]
+ ]
+
+ [case id=crypto-017-hkdf-expand-rfc5869-tc1 level=core
+  [tags crypto hkdf-expand rfc5869 golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$crypto:hkdf-expand [$bytes:from-hex "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"] [$bytes:from-hex "f0f1f2f3f4f5f6f7f8f9"] 42]]
+#]]
+  [out-text [#
+'3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865'
+#]]
+ ]
+
+ [case id=crypto-018-hkdf-oneshot-rfc5869-tc1 level=core
+  [tags crypto hkdf rfc5869 golden oneshot]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$crypto:hkdf [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"] [$bytes:from-hex "000102030405060708090a0b0c"] [$bytes:from-hex "f0f1f2f3f4f5f6f7f8f9"] 42]]
+#]]
+  [out-text [#
+'3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865'
+#]]
+ ]
+
+ [case id=crypto-019-hkdf-oneshot-identity level=core
+  [tags crypto hkdf hkdf-extract hkdf-expand identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $ikm [$bytes:from-string-utf8 "input keying material"]] [?let [= $salt [$bytes:from-string-utf8 "salt"]] [?let [= $info [$bytes:from-string-utf8 "ctx"]] [$bytes:equals [$crypto:hkdf $ikm $salt $info 32] [$crypto:hkdf-expand [$crypto:hkdf-extract $salt $ikm] $info 32]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-020-hkdf-extract-empty-salt level=core
+  [tags crypto hkdf-extract empty-salt rfc5869 edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$crypto:hkdf-extract [$bytes:from-string-utf8 ""] [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"]]]
+#]]
+  [out-text [#
+'19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04'
+#]]
+ ]
+
+ [case id=crypto-021-hkdf-expand-zero-length level=core
+  [tags crypto hkdf-expand CXER3703 length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:hkdf-expand [$bytes:from-hex "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"] [$bytes:from-string-utf8 ""] 0]
+#]]
+  [out-err [#
+cx-err:CXER3703
+#]]
+ ]
+
+ [case id=crypto-022-hkdf-expand-too-long level=core
+  [tags crypto hkdf-expand CXER3703 length over-max]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:hkdf-expand [$bytes:from-hex "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"] [$bytes:from-string-utf8 ""] 8161]
+#]]
+  [out-err [#
+cx-err:CXER3703
+#]]
+ ]
+
+ [case id=crypto-023-hkdf-length-out-of-range level=core
+  [tags crypto hkdf CXER3703 length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:hkdf [$bytes:from-string-utf8 "ikm"] [$bytes:from-string-utf8 "salt"] [$bytes:from-string-utf8 "info"] 0]
+#]]
+  [out-err [#
+cx-err:CXER3703
+#]]
+ ]
+
+ [case id=crypto-024-hkdf-empty-info-well-defined level=core
+  [tags crypto hkdf empty-info length edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$crypto:hkdf [$bytes:from-string-utf8 "ikm"] [$bytes:from-string-utf8 "salt"] [$bytes:from-string-utf8 ""] 16]]
+#]]
+  [out-text [#
+16
+#]]
+ ]
+
+ [case id=crypto-025-hmac-verify-true level=core
+  [tags crypto hmac-verify verify-contract constant-time]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-string-utf8 "secret"]] [?let [= $m [$bytes:from-string-utf8 "raw-body"]] [$crypto:hmac-verify "sha256" $k $m [$crypto:hmac-sha256 $k $m]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-026-hmac-verify-tampered level=core
+  [tags crypto hmac-verify CXER3701 webhook tamper]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-string-utf8 "secret"]] [$crypto:hmac-verify "sha256" $k [$bytes:from-string-utf8 "tampered-body"] [$crypto:hmac-sha256 $k [$bytes:from-string-utf8 "raw-body"]]]]
+#]]
+  [out-err [#
+cx-err:CXER3701
+#]]
+ ]
+
+ [case id=crypto-027-hmac-verify-unknown-algo level=core
+  [tags crypto hmac-verify CXER3700 unknown-algo]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-string-utf8 "secret"]] [$crypto:hmac-verify "sha1" $k [$bytes:from-string-utf8 "m"] [$crypto:hmac-sha256 $k [$bytes:from-string-utf8 "m"]]]]
+#]]
+  [out-err [#
+cx-err:CXER3700
+#]]
+ ]
+
+ [case id=crypto-028-hmac-verify-via-fallback-false level=core
+  [tags crypto hmac-verify fallback false]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-string-utf8 "secret"]] [?fallback [$crypto:hmac-verify "sha256" $k [$bytes:from-string-utf8 "tampered"] [$crypto:hmac-sha256 $k [$bytes:from-string-utf8 "orig"]]] [recover-with false]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=crypto-029-aead-roundtrip-aes-gcm level=core gate=enforced
+  [tags crypto aead-encrypt aead-decrypt aes-256-gcm roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k $pt [$bytes:from-string-utf8 "hdr"]]] [$bytes:equals [$crypto:aead-decrypt "aes-256-gcm" $k $ct [$bytes:from-string-utf8 "hdr"]] $pt]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-030-aead-roundtrip-chacha20 level=core gate=enforced
+  [tags crypto aead-encrypt aead-decrypt chacha20-poly1305 roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [?let [= $ct [$crypto:aead-encrypt "chacha20-poly1305" $k $pt [$bytes:from-string-utf8 ""]]] [$bytes:equals [$crypto:aead-decrypt "chacha20-poly1305" $k $ct [$bytes:from-string-utf8 ""]] $pt]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-031-aead-result-tag-length level=core gate=enforced
+  [tags crypto aead-encrypt tag length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]] [$bytes:length $ct@tag]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-032-aead-result-nonce-length level=core gate=enforced
+  [tags crypto aead-encrypt nonce length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]] [$bytes:length $ct@nonce]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-033-aead-unknown-algo level=core gate=enforced
+  [tags crypto aead-encrypt CXER3700 unknown-algo]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:aead-encrypt "aes-128-gcm" [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"] [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-034-aead-wrong-key-length level=core gate=enforced
+  [tags crypto aead-encrypt CXER3700 key-length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:aead-encrypt "aes-256-gcm" [$bytes:from-hex "0001020304"] [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-035-aead-decrypt-wrong-nonce-length level=core
+  [tags crypto aead-decrypt CXER3707 nonce]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [$crypto:aead-decrypt "aes-256-gcm" $k [aead algo="aes-256-gcm" ciphertext=[$bytes:from-hex "00"] nonce=[$bytes:from-hex "0001"] tag=[$bytes:from-hex "000102030405060708090a0b0c0d0e0f"]] [$bytes:from-string-utf8 ""]]]
+#]]
+  [out-err [#
+cx-err:CXER3707
+#]]
+ ]
+
+ [case id=crypto-036-ed25519-keypair-public-length level=core gate=enforced
+  [tags crypto ed25519-keypair length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $kp [$crypto:ed25519-keypair]] [$bytes:length $kp@public]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-037-ed25519-keypair-private-length level=core gate=enforced
+  [tags crypto ed25519-keypair length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $kp [$crypto:ed25519-keypair]] [$bytes:length $kp@private]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-038-ed25519-sign-verify-roundtrip level=core gate=enforced
+  [tags crypto ed25519-sign ed25519-verify roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $kp [$crypto:ed25519-keypair]] [?let [= $m [$bytes:from-string-utf8 "sign me"]] [$crypto:ed25519-verify $kp@public $m [$crypto:ed25519-sign $kp@private $m]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-039-ed25519-sign-signature-length level=core gate=enforced
+  [tags crypto ed25519-sign length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $kp [$crypto:ed25519-keypair]] [$bytes:length [$crypto:ed25519-sign $kp@private [$bytes:from-string-utf8 "sign me"]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-040-ed25519-sign-wrong-key-length level=core
+  [tags crypto ed25519-sign CXER3700 key-length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:ed25519-sign [$bytes:from-hex "0001020304"] [$bytes:from-string-utf8 "m"]]
+#]]
+  [out-err [#
+cx-err:CXER3700
+#]]
+ ]
+
+ [case id=crypto-041-ed25519-verify-tampered-signature level=core gate=enforced
+  [tags crypto ed25519-verify CXER3705 tamper]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $kp [$crypto:ed25519-keypair]] [$crypto:ed25519-verify $kp@public [$bytes:from-string-utf8 "sign me"] [$crypto:ed25519-sign $kp@private [$bytes:from-string-utf8 "different msg"]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-042-x25519-keypair-length level=core gate=enforced
+  [tags crypto x25519-keypair length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $kp [$crypto:x25519-keypair]] [$bytes:length $kp@public]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-043-x25519-shared-secret-agreement level=core gate=enforced
+  [tags crypto x25519-shared-secret x25519-keypair diffie-hellman]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $a [$crypto:x25519-keypair]] [?let [= $b [$crypto:x25519-keypair]] [$bytes:equals [$crypto:x25519-shared-secret $a@private $b@public] [$crypto:x25519-shared-secret $b@private $a@public]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-044-x25519-shared-secret-length level=core gate=enforced
+  [tags crypto x25519-shared-secret length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $a [$crypto:x25519-keypair]] [?let [= $b [$crypto:x25519-keypair]] [$bytes:length [$crypto:x25519-shared-secret $a@private $b@public]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-045-password-hash-phc-prefix level=core gate=enforced
+  [tags crypto password-hash argon2id phc structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $enc [$crypto:password-hash [$bytes:from-string-utf8 "correct horse battery staple"] [argon2-cost memory-kib=65536 iterations=3 parallelism=4]]] [$starts-with $enc "$argon2id$v=19$"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-046-password-verify-roundtrip level=core gate=enforced
+  [tags crypto password-hash password-verify roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $pw [$bytes:from-string-utf8 "correct horse battery staple"]] [$crypto:password-verify $pw [$crypto:password-hash $pw [argon2-cost memory-kib=65536 iterations=3 parallelism=4]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-047-password-verify-wrong-password level=core gate=enforced
+  [tags crypto password-verify CXER3706 wrong-password]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:password-verify [$bytes:from-string-utf8 "wrong password"] [$crypto:password-hash [$bytes:from-string-utf8 "correct horse battery staple"] [argon2-cost memory-kib=65536 iterations=3 parallelism=4]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=crypto-048-password-verify-malformed-phc level=core
+  [tags crypto password-verify CXER3706 malformed-phc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:password-verify [$bytes:from-string-utf8 "pw"] "not-a-valid-phc-string"]
+#]]
+  [out-err [#
+cx-err:CXER3706
+#]]
+ ]
+
+ [case id=crypto-049-password-hash-malformed-cost level=core gate=enforced
+  [tags crypto password-hash CXER3700 malformed-cost]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:password-hash [$bytes:from-string-utf8 "pw"] [argon2-cost memory-kib=0 iterations=0 parallelism=0]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+ [case id=crypto-050-aead-roundtrip-aes-gcm-granted level=core gate=enforced grant='random'
+  [tags crypto aead-encrypt aead-decrypt aes-256-gcm roundtrip granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k $pt [$bytes:from-string-utf8 "hdr"]]] [$bytes:equals [$crypto:aead-decrypt "aes-256-gcm" $k $ct [$bytes:from-string-utf8 "hdr"]] $pt]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-051-aead-roundtrip-chacha20-granted level=core gate=enforced grant='random'
+  [tags crypto aead-encrypt aead-decrypt chacha20-poly1305 roundtrip granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [?let [= $ct [$crypto:aead-encrypt "chacha20-poly1305" $k $pt [$bytes:from-string-utf8 ""]]] [$bytes:equals [$crypto:aead-decrypt "chacha20-poly1305" $k $ct [$bytes:from-string-utf8 ""]] $pt]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-052-aead-tag-length-granted level=core gate=enforced grant='random'
+  [tags crypto aead-encrypt tag length structural granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"] [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]] [$bytes:length $ct@tag]]
+#]]
+  [out-text [#
+16
+#]]
+ ]
+
+ [case id=crypto-053-aead-nonce-length-granted level=core gate=enforced grant='random'
+  [tags crypto aead-encrypt nonce length structural granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"] [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]] [$bytes:length $ct@nonce]]
+#]]
+  [out-text [#
+12
+#]]
+ ]
+
+ [case id=crypto-054-ed25519-sign-verify-granted level=core gate=enforced grant='random'
+  [tags crypto ed25519-keypair ed25519-sign ed25519-verify roundtrip granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $kp [$crypto:ed25519-keypair]] [?let [= $m [$bytes:from-string-utf8 "sign me"]] [$crypto:ed25519-verify $kp@public $m [$crypto:ed25519-sign $kp@private $m]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-055-x25519-shared-secret-agreement-granted level=core gate=enforced grant='random'
+  [tags crypto x25519-keypair x25519-shared-secret agreement granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $a [$crypto:x25519-keypair]] [?let [= $b [$crypto:x25519-keypair]] [$bytes:equals [$crypto:x25519-shared-secret $a@private $b@public] [$crypto:x25519-shared-secret $b@private $a@public]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-056-password-hash-phc-prefix-granted level=core gate=enforced grant='random'
+  [tags crypto password-hash argon2id phc structural granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $enc [$crypto:password-hash [$bytes:from-string-utf8 "pw"] [argon2-cost memory-kib=8 iterations=1 parallelism=1]]] [$starts-with $enc "$argon2id$v=19$"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-057-password-verify-roundtrip-granted level=core gate=enforced grant='random'
+  [tags crypto password-hash password-verify roundtrip granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $pw [$bytes:from-string-utf8 "pw"]] [$crypto:password-verify $pw [$crypto:password-hash $pw [argon2-cost memory-kib=8 iterations=1 parallelism=1]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-058-password-verify-wrong-password-granted level=core gate=enforced grant='random'
+  [tags crypto password-verify CXER3706 wrong-password granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:password-verify [$bytes:from-string-utf8 "wrong"] [$crypto:password-hash [$bytes:from-string-utf8 "pw"] [argon2-cost memory-kib=8 iterations=1 parallelism=1]]]
+#]]
+  [out-err [#
+cx-err:CXER3706
+#]]
+ ]
+
+ [case id=crypto-059-hkdf-extract-sha512-prk-length level=core gate=enforced
+  [tags crypto hkdf-extract-sha512 length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [?let [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [$bytes:length [$crypto:hkdf-extract-sha512 $salt $ikm]]]]
+#]]
+  [out-text [#
+64
+#]]
+ ]
+
+ [case id=crypto-060-hkdf-sha512-oneshot-length level=core gate=enforced
+  [tags crypto hkdf-sha512 length structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [?let [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [?let [= $info [$bytes:from-hex "f0f1f2f3f4f5f6f7f8f9"]] [$bytes:length [$crypto:hkdf-sha512 $ikm $salt $info 42]]]]]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=crypto-061-hkdf-sha512-oneshot-identity level=core gate=enforced
+  [tags crypto hkdf-sha512 hkdf-extract-sha512 hkdf-expand-sha512 identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [?let [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [?let [= $info [$bytes:from-hex "f0f1f2f3f4f5f6f7f8f9"]] [$bytes:equals [$crypto:hkdf-sha512 $ikm $salt $info 42] [$crypto:hkdf-expand-sha512 [$crypto:hkdf-extract-sha512 $salt $ikm] $info 42]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-062-rsa-verify-rs256-valid level=core gate=enforced
+  [tags crypto rsa-verify rs256 golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:rsa-verify [rsa-public-key [n [$bytes:from-hex "8ddc3005c68c6502e848d6063449b7974dc7210aa9448bf47aa2d43540a4cafef2b15c388babd981d63171d5340f7912bd40888c7fa272a9383c20f1e40c2478da79e4daadeb02970eff531f9a6bf96737056999d6c10e130c8df10948f3fe44a58de2d70e6dcac0dd785ba247b04e8e9903e3d459cc5d186a39a872c078fe35e865c95d54d08e0a15c06c47cec3e06d8c5251374377124b32985e1ace47b2f10deb5f4eec5e44476af45f00e9e8c07d75f512f557e5e693f0d45fcc1247edb3765a7c1718ad2563e06cc9a7b33b1380442b4e14f0b2e32b9ddab327f9d0ec74e7b8ad8b5c41661705f0f4d003b29ab666742666237b0979c4606f16080a73c7"]] [e [$bytes:from-hex "010001"]]] [$bytes:from-hex "68656c6c6f2063782063727970746f"] [$bytes:from-hex "1569ad4ad6ac4d94167dc7dcac1bbfe8e263bdc974defeaa98ec51e45ff74ba1eb9084228b0914f3379f719af1fbb7f6848cfca6e89c37ea30511b06ab4cf9c25d1d39b930b4888d7d8b486c59d4b909c07594e37a087b3255c9c9396def19d2d897212a5a5b021c8ab49bd9071b27867b680b05f195081c2bd447ea961d3603aadb4cd5b28a5986df112ef2b04ed59326a78d5c03923dba456d7a5936b25d2b34c43b8ce4c9d76825236b33f91984a98a1d02df3ed64b1ef78ad1fef673f14e403da8e0fd4f713faf355b417a948de48ba64ab7718aeb0a61f2f90bb964fb07818d022c3bcebb0ae7866b65876390b8d8a3c11188973e0bfff1fde3c05e6a49"] {hash: "sha256"}]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-063-rsa-verify-tampered level=core gate=enforced
+  [tags crypto rsa-verify CXER3705 tamper]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:rsa-verify [rsa-public-key [n [$bytes:from-hex "8ddc3005c68c6502e848d6063449b7974dc7210aa9448bf47aa2d43540a4cafef2b15c388babd981d63171d5340f7912bd40888c7fa272a9383c20f1e40c2478da79e4daadeb02970eff531f9a6bf96737056999d6c10e130c8df10948f3fe44a58de2d70e6dcac0dd785ba247b04e8e9903e3d459cc5d186a39a872c078fe35e865c95d54d08e0a15c06c47cec3e06d8c5251374377124b32985e1ace47b2f10deb5f4eec5e44476af45f00e9e8c07d75f512f557e5e693f0d45fcc1247edb3765a7c1718ad2563e06cc9a7b33b1380442b4e14f0b2e32b9ddab327f9d0ec74e7b8ad8b5c41661705f0f4d003b29ab666742666237b0979c4606f16080a73c7"]] [e [$bytes:from-hex "010001"]]] [$bytes:from-hex "68656c6c6f2063782063727970746f"] [$bytes:from-hex "1569ad4ad6ac4d94167dc7dcac1bbfe8e263bdc974defeaa98ec51e45ff74ba1eb9084228b0914f3379f719af1fbb7f6848cfca6e89c37ea30511b06ab4cf9c25d1d39b930b4888d7d8b486c59d4b909c07594e37a087b3255c9c9396def19d2d897212a5a5b021c8ab49bd9071b27867b680b05f195081c2bd447ea961d36030adb4cd5b28a5986df112ef2b04ed59326a78d5c03923dba456d7a5936b25d2b34c43b8ce4c9d76825236b33f91984a98a1d02df3ed64b1ef78ad1fef673f14e403da8e0fd4f713faf355b417a948de48ba64ab7718aeb0a61f2f90bb964fb07818d022c3bcebb0ae7866b65876390b8d8a3c11188973e0bfff1fde3c05e6a49"] {hash: "sha256"}]
+#]]
+  [out-err [#
+cx-err:CXER3705
+#]]
+ ]
+
+ [case id=crypto-064-rsa-verify-wrong-hash level=core gate=enforced
+  [tags crypto rsa-verify CXER3705 wrong-hash]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:rsa-verify [rsa-public-key [n [$bytes:from-hex "8ddc3005c68c6502e848d6063449b7974dc7210aa9448bf47aa2d43540a4cafef2b15c388babd981d63171d5340f7912bd40888c7fa272a9383c20f1e40c2478da79e4daadeb02970eff531f9a6bf96737056999d6c10e130c8df10948f3fe44a58de2d70e6dcac0dd785ba247b04e8e9903e3d459cc5d186a39a872c078fe35e865c95d54d08e0a15c06c47cec3e06d8c5251374377124b32985e1ace47b2f10deb5f4eec5e44476af45f00e9e8c07d75f512f557e5e693f0d45fcc1247edb3765a7c1718ad2563e06cc9a7b33b1380442b4e14f0b2e32b9ddab327f9d0ec74e7b8ad8b5c41661705f0f4d003b29ab666742666237b0979c4606f16080a73c7"]] [e [$bytes:from-hex "010001"]]] [$bytes:from-hex "68656c6c6f2063782063727970746f"] [$bytes:from-hex "1569ad4ad6ac4d94167dc7dcac1bbfe8e263bdc974defeaa98ec51e45ff74ba1eb9084228b0914f3379f719af1fbb7f6848cfca6e89c37ea30511b06ab4cf9c25d1d39b930b4888d7d8b486c59d4b909c07594e37a087b3255c9c9396def19d2d897212a5a5b021c8ab49bd9071b27867b680b05f195081c2bd447ea961d3603aadb4cd5b28a5986df112ef2b04ed59326a78d5c03923dba456d7a5936b25d2b34c43b8ce4c9d76825236b33f91984a98a1d02df3ed64b1ef78ad1fef673f14e403da8e0fd4f713faf355b417a948de48ba64ab7718aeb0a61f2f90bb964fb07818d022c3bcebb0ae7866b65876390b8d8a3c11188973e0bfff1fde3c05e6a49"] {hash: "sha512"}]
+#]]
+  [out-err [#
+cx-err:CXER3705
+#]]
+ ]
+
+ [case id=crypto-065-ecdsa-verify-es256-valid level=core gate=enforced
+  [tags crypto ecdsa-verify es256 raw golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:ecdsa-verify [ec-public-key crv="P-256" [x [$bytes:from-hex "97d49c2f327683c64795ce33c7a8ea90b6ebc3d341fe3ece449d874d006019e4"]] [y [$bytes:from-hex "b29043a977e05ce76a0c6b38fd67a7644991166cbbd6ab6cd5d304a7cc6b83a3"]]] [$bytes:from-hex "68656c6c6f2063782063727970746f"] [$bytes:from-hex "5db3b4f367aa22dfa532452151d8a2bb9ecf0fdc968b82a0ad1ac5ed0b8a42cc15b1ce90768ccc59116297c0866874c416823cf92ed1d55b75ca828083d19920"] {curve: "P-256" hash: "sha256"}]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=crypto-066-ecdsa-verify-der-rejected level=core gate=enforced
+  [tags crypto ecdsa-verify CXER3705 der-not-accepted]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:ecdsa-verify [ec-public-key crv="P-256" [x [$bytes:from-hex "97d49c2f327683c64795ce33c7a8ea90b6ebc3d341fe3ece449d874d006019e4"]] [y [$bytes:from-hex "b29043a977e05ce76a0c6b38fd67a7644991166cbbd6ab6cd5d304a7cc6b83a3"]]] [$bytes:from-hex "68656c6c6f2063782063727970746f"] [$bytes:from-hex "304502210081d7b9628647b5228aae69c05141c49583131567727b116a11b8da1ae6eebdfd0220013f2200aa97c38808479496d8cc3e58f2c19e7568c1fe817bfc6692067938f1"] {curve: "P-256" hash: "sha256"}]
+#]]
+  [out-err [#
+cx-err:CXER3705
+#]]
+ ]
+
+ [case id=crypto-067-ecdsa-verify-p384-deferred level=core gate=enforced
+  [tags crypto ecdsa-verify CXER3700 p384-deferred]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[$crypto:ecdsa-verify [ec-public-key crv="P-256" [x [$bytes:from-hex "97d49c2f327683c64795ce33c7a8ea90b6ebc3d341fe3ece449d874d006019e4"]] [y [$bytes:from-hex "b29043a977e05ce76a0c6b38fd67a7644991166cbbd6ab6cd5d304a7cc6b83a3"]]] [$bytes:from-hex "68656c6c6f2063782063727970746f"] [$bytes:from-hex "5db3b4f367aa22dfa532452151d8a2bb9ecf0fdc968b82a0ad1ac5ed0b8a42cc15b1ce90768ccc59116297c0866874c416823cf92ed1d55b75ca828083d19920"] {curve: "P-384" hash: "sha384"}]
+#]]
+  [out-err [#
+cx-err:CXER3700
+#]]
+ ]
+
+ [case id=crypto-068-jwk-by-kid-selects level=core gate=enforced
+  [tags crypto jwk-by-kid select]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?let [= $k [$crypto:jwk-by-kid [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] "ec-1"]] $k@kty]
+#]]
+  [out-text [#
+'EC'
+#]]
+ ]
+
+ [case id=crypto-069-jwk-by-kid-absent level=core gate=enforced
+  [tags crypto jwk-by-kid absence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?else [$crypto:jwk-by-kid [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] "nope"] "ABSENT"]
+#]]
+  [out-text [#
+'ABSENT'
+#]]
+ ]
+
+ [case id=crypto-070-jwks-parse-inconsistent level=core gate=enforced
+  [tags crypto jwks-parse CXER3717 alg-kty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[$crypto:jwks-parse "{\"keys\": [{\"kid\": \"x\", \"kty\": \"RSA\", \"alg\": \"ES256\", \"n\": \"abc\", \"e\": \"AQAB\"}]}"]
+#]]
+  [out-err [#
+cx-err:CXER3717
+#]]
+ ]
+
+ [case id=crypto-071-jwt-verify-rs256 level=core gate=enforced
+  [tags crypto jwt-verify rs256 claims]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:claim [$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}] "iss"]
+#]]
+  [out-text [#
+'https://idp.example'
+#]]
+ ]
+
+ [case id=crypto-072-jwt-verify-es256 level=core gate=enforced
+  [tags crypto jwt-verify es256 claims]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:claim [$crypto:jwt-verify "eyJhbGciOiJFUzI1NiIsImtpZCI6ImVjLTEifQ.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.l0mSubU8fI2sAQ0nzuePVjUC5GI_7b8AUV1t4sLO7PP2SVucr0rEWMqSm71KbIYgL7Oi2qay6fkDPuQOskWYbg" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}] "sub"]
+#]]
+  [out-text [#
+'user-1'
+#]]
+ ]
+
+ [case id=crypto-073-jwt-verify-eddsa level=core gate=enforced
+  [tags crypto jwt-verify eddsa claims]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:claim [$crypto:jwt-verify "eyJhbGciOiJFZERTQSIsImtpZCI6ImVkLTEifQ.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.hbWfK_3KgwQ86Fw12wZdQrTDdQA_9YoG9fDmsyEj9cp4y9592OnzJ7fCKebr1LgH0IHanrhW66I4ZRDuC3qUAw" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}] "aud"]
+#]]
+  [out-text [#
+'my-api'
+#]]
+ ]
+
+ [case id=crypto-074-jwt-rs384 level=core gate=enforced
+  [tags crypto jwt-verify rs384]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:claim [$crypto:jwt-verify "eyJhbGciOiJSUzM4NCIsImtpZCI6InJzYS0xIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.hX-U2L1qoCNV9Hmd87LytngoyVm8zlcz81AM5DYz1xF2yh1Bn6ahlSWDieQirOBUdQFzTKYDrlXD3_XTxtMipQ3qxqgyHz3upaX_ZRCL0c3LJyfWT4pT4PiJ34xEFFdVsdBiBu1Xw7sC_lS6bigx46VtvmgvUoU5x22R0n9_f_jIZziOi2KpieEdEJ-8RxG3lb8vbsE-wTu9k_ZE9H-kR--4k4igtv3HSFb4oWkg3mBpFgb_saJkEXmwGlObJJuD4AP4YL5lrAWc8bThLAEIMIUm8_PcW0pUPLr55qsSPfgemxGwlqLtYuHYKcOwatppkwb5D0osYbF9DUNINKuu_Q" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}] "sub"]
+#]]
+  [out-text [#
+'user-1'
+#]]
+ ]
+
+ [case id=crypto-075-jwt-rs512 level=core gate=enforced
+  [tags crypto jwt-verify rs512]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:claim [$crypto:jwt-verify "eyJhbGciOiJSUzUxMiIsImtpZCI6InJzYS0xIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.X3gsUw7rGk3ReHiJk9ZknfU-3sD0w3qPX3x4oi0dyAvi2C4bwbiFGW-GwI19vJJH9vcmnJQxUD_lSAVaVj7GK7saDynoyTxV4NZVzp3_Cl74vm88ZF5941nuFsFkQqBNc7FadXIJlDfnRw4bN7e92BmCBtaMiIP9SbUqwfLgvrzTAmc1oO7t3S3liVDaBUobCpyUluu5tFvfeMnajRsHLzTA8akTilmcZ_rKCHVEZyWoiATDhRhJ3wuF5VSXafLLU1CgFanuaV-q2mfCMNuIkkHfdCW41bJFkom_IajOPP5JIBK9aMS8FsYWRMDxzTbQqH3HHV7XR7k4xLsRER4x8w" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}] "sub"]
+#]]
+  [out-text [#
+'user-1'
+#]]
+ ]
+
+ [case id=crypto-076-jwt-alg-none level=core gate=enforced
+  [tags crypto jwt-verify CXER3713 alg-none]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJub25lIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0." [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}]
+#]]
+  [out-err [#
+cx-err:CXER3713
+#]]
+ ]
+
+ [case id=crypto-077-jwt-alg-not-allowed level=core gate=enforced
+  [tags crypto jwt-verify CXER3713 expected-alg]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {expected-alg: ("ES256")}]
+#]]
+  [out-err [#
+cx-err:CXER3713
+#]]
+ ]
+
+ [case id=crypto-078-jwt-tampered-sig level=core gate=enforced
+  [tags crypto jwt-verify CXER3710 tampered]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJAreT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}]
+#]]
+  [out-err [#
+cx-err:CXER3710
+#]]
+ ]
+
+ [case id=crypto-079-jwt-expired level=core gate=enforced
+  [tags crypto jwt-verify CXER3711 expired]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNjk5OTk2NDAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.Ci3hP11n405irmwo1k6NNPc19bqXvDFKwd-ccETerl_7EqpTzKkGuuFgtSa6zWW2XosgErU91COpaw8ksv5YdMw2qGasXxaLW_3Q_msGRigs21gEZeCx0F8i9TaYzcrx4DpyB5rCPz3vlSdawMxoaWO6r_ARaPY-zXBNfyhKP5hcLTmNkz4m2WXroe7Qw41nZ3Iz68qFgmScljAGahFdEGCh7xvHUiEMHgELSXttAuc-DVI8IaKHdpSK44c1WCR_0Kg2kBLOXbhIm2-S29T1e-TjqrhiFcA3ceU4N6l6RUeGSHaQPm1YQBS5PQAxk4oszj7LQDkMzetgAPb2y3hlhg" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}]
+#]]
+  [out-err [#
+cx-err:CXER3711
+#]]
+ ]
+
+ [case id=crypto-080-jwt-expired-within-leeway level=core gate=enforced
+  [tags crypto jwt-verify leeway]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:claim [$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNjk5OTk2NDAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.Ci3hP11n405irmwo1k6NNPc19bqXvDFKwd-ccETerl_7EqpTzKkGuuFgtSa6zWW2XosgErU91COpaw8ksv5YdMw2qGasXxaLW_3Q_msGRigs21gEZeCx0F8i9TaYzcrx4DpyB5rCPz3vlSdawMxoaWO6r_ARaPY-zXBNfyhKP5hcLTmNkz4m2WXroe7Qw41nZ3Iz68qFgmScljAGahFdEGCh7xvHUiEMHgELSXttAuc-DVI8IaKHdpSK44c1WCR_0Kg2kBLOXbhIm2-S29T1e-TjqrhiFcA3ceU4N6l6RUeGSHaQPm1YQBS5PQAxk4oszj7LQDkMzetgAPb2y3hlhg" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {leeway: 7200}] "sub"]
+#]]
+  [out-text [#
+'user-1'
+#]]
+ ]
+
+ [case id=crypto-081-jwt-future-nbf level=core gate=enforced
+  [tags crypto jwt-verify CXER3712 nbf]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE3MDAwMDM2MDAsImlhdCI6MTY5OTk5OTk5MH0.Fb-YkeFYHHuCrSKXN8HcUuyKYVBACxwV4IScZjijyB6gD1sxMjwXRcRdkMRTFs7d-zSZ_BEKWuJ831T2y-VbiszerGoTU_vqtUxFHDOsKkkHg8Q3_A8CQL0fU6dVz0oNNuB5_zh-p5ZgbGOkxuru6geL0YKLXbNJ4jdOaM7OXSc7xKd-v3TxQ3qDLOcmEl721txSPlcdm-rr_0Tez3NqeAKJDkGHfu9JOdm8A_cSb9aPxJNTOrGmTzIHV-girYmimT0lVZFgE5tAfDb-f2-zTg9AxaqJJ2v4ZrkXeYvzaP7Pnuu5LfsoIcWk25dlR2YWyqBw4W3yYYBpy_ZmvvaIkg" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}]
+#]]
+  [out-err [#
+cx-err:CXER3712
+#]]
+ ]
+
+ [case id=crypto-082-jwt-wrong-iss level=core gate=enforced
+  [tags crypto jwt-verify CXER3715 iss]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {expected-iss: "https://evil"}]
+#]]
+  [out-err [#
+cx-err:CXER3715
+#]]
+ ]
+
+ [case id=crypto-083-jwt-wrong-aud level=core gate=enforced
+  [tags crypto jwt-verify CXER3715 aud]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {expected-aud: "other-api"}]
+#]]
+  [out-err [#
+cx-err:CXER3715
+#]]
+ ]
+
+ [case id=crypto-084-jwt-kid-not-found level=core gate=enforced
+  [tags crypto jwt-verify CXER3714 kid]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" [$crypto:jwks-parse "{\"keys\": [{\"kid\": \"ec-1\", \"kty\": \"EC\", \"crv\": \"P-256\", \"alg\": \"ES256\", \"x\": \"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\", \"y\": \"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"}, {\"kid\": \"ed-1\", \"kty\": \"OKP\", \"crv\": \"Ed25519\", \"alg\": \"EdDSA\", \"x\": \"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}]
+#]]
+  [out-err [#
+cx-err:CXER3714
+#]]
+ ]
+
+ [case id=crypto-085-jwt-kty-mismatch level=core gate=enforced
+  [tags crypto jwt-verify CXER3719 kty-alg]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" [$crypto:jwks-parse "{\"keys\": [{\"kid\": \"rsa-1\", \"kty\": \"EC\", \"crv\": \"P-256\", \"x\": \"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\", \"y\": \"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}]
+#]]
+  [out-err [#
+cx-err:CXER3719
+#]]
+ ]
+
+ [case id=crypto-086-jwt-require-absent level=core gate=enforced
+  [tags crypto jwt-verify CXER3709 require]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidSIsImF1ZCI6Im15LWFwaSJ9.BV1T18sGIVvKvTKIfA1FDYBySu26vx8zVSNJXHEZkIklqeUixJ3fF_hYjlX8UF1VyM7jESA2EXUYil5mTFk5eq4OM0Heu8GoaIi18MCciuT2OTwXnfaSADIoyNsHkgA-GQOnrURpp7qf5IPc6B_u9o1MzRCIjoAq7IcsgcrlRd4dRZ124zHeY9uiQDWi5lpMXvjbNMNtywszIgZJJ7aTkaQBUuGkyf7jfeeDWtxBEQB-GgeeRq0X5pYsUFiOLl5saM_n8Z4jzBXIHIWtLE5aVg5KSsXhz1TpvjV4nHRFxabu34hj4vpRlC2LwQv1g-Qelp1QVl2s67i3uNx0asEA0w" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}]
+#]]
+  [out-err [#
+cx-err:CXER3709
+#]]
+ ]
+
+ [case id=crypto-087-claim-non-claims level=core gate=enforced
+  [tags crypto claim CXER3718 arg]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[$crypto:claim [foo] "iss"]
+#]]
+  [out-err [#
+cx-err:CXER3718
+#]]
+ ]
+
+ [case id=crypto-088-jwks-fetch-denied level=core gate=enforced
+  [tags crypto jwks-fetch CXER0271 net-denial]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[$crypto:jwks-fetch "https://idp.example/.well-known/jwks.json" {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+
+ [case id=crypto-089-jwt-verify-nonurlsafe-key-rejected level=core gate=enforced
+  [tags crypto jwt-verify base64url strict CXER3718 hostile]
+  [doc [#
+HOSTILE (minor): the JWK/JWT base64url decoder claimed "strict" but accepted
+the standard-alphabet `+`/`/` glyphs (RFC 7515/7517 mandate url-safe). A key
+whose modulus carries a `+` is non-conformant and must be rejected, not
+silently decoded as if `+`==`-`. With the decoder tightened to url-safe only,
+verifying against such a key faults CXER3718 (unusable key material) instead of
+proceeding with a mis-decoded modulus. (crypto-071 verifies the same token with
+the correct url-safe key.)
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[$crypto:claim [$crypto:jwt-verify "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH+icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"},{\"kid\":\"ec-1\",\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"x\":\"l9ScLzJ2g8ZHlc4zx6jqkLbrw9NB_j7ORJ2HTQBgGeQ\",\"y\":\"spBDqXfgXOdqDGs4_WenZEmRFmy71qts1dMEp8xrg6M\"},{\"kid\":\"ed-1\",\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"x\":\"W7aFRt4kKu7VuwPv6oBWPpxSwy9jCzk2QqawxURsnsk\"}]}"] [$time:datetime 2023 11 14 22 13 20] {}] "iss"]
+#]]
+  [out-err [#
+cx-err:CXER3718
+#]]
+ ]
+]

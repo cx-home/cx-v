@@ -1,0 +1,278 @@
+[test-suite name=namespaces
+  [doc [#
+# CX Conformance — Namespace Tests
+# Version: 1.0 — 2026-05-08
+# Covers: — XML-style scoped namespaces.
+#   - Prefix declarations (xmlns:foo=URI)
+#   - Default-namespace declarations (xmlns=URI)
+#   - Prefix scoping and redeclaration
+#   - CX ↔ XML round-trip preserving xmlns declarations
+#   - Reserved xml:/cx: prefixes
+#
+# Verification is via behavior: input CX is reparsed, then re-emitted
+# to CX and to XML. Mismatch on either output fails the test. The
+# resolve_namespaces() post-parse pass populates Element.ns_uri /
+# Attribute.ns_uri internally; those are not currently exposed in the
+# AST-JSON wire shape (deliberate — internal resolution detail).
+#]]
+
+ [case id=ns-001-default-declaration level=core
+  [tags namespaces default]
+  [in-cx [#
+[doc xmlns=urn:example
+  [item value=42]
+]
+#]]
+  [out-xml [#
+<doc xmlns="urn:example">
+  <item value="42"/>
+</doc>
+#]]
+  [out-cx [#
+[doc xmlns=urn:example
+  [item value=42]
+]
+#]]
+ ]
+
+ [case id=ns-002-prefix-declaration level=core
+  [tags namespaces prefix]
+  [in-cx [#
+[doc xmlns:dc=http://purl.org/dc/elements/1.1/
+  [dc:title Hello]
+]
+#]]
+  [out-xml [#
+<doc xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <dc:title>Hello</dc:title>
+</doc>
+#]]
+  [out-cx [#
+[doc xmlns:dc=http://purl.org/dc/elements/1.1/
+  [dc:title Hello]
+]
+#]]
+ ]
+
+ [case id=ns-003-multiple-prefixes level=core
+  [tags namespaces prefix]
+  [in-cx [#
+[chapter xmlns=urn:doc xmlns:dc=http://purl.org/dc/elements/1.1/ xmlns:xl=http://www.w3.org/1999/xlink
+  [dc:title 'Intro']
+  [xl:link href=https://example.com 'See here']
+]
+#]]
+  [out-xml [#
+<chapter xmlns="urn:doc" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xl="http://www.w3.org/1999/xlink">
+  <dc:title>Intro</dc:title>
+  <xl:link href="https://example.com">See here</xl:link>
+</chapter>
+#]]
+ ]
+
+ [case id=ns-004-prefix-scoping-child level=core
+  [tags namespaces scoping]
+  [in-cx [#
+[outer xmlns:foo=urn:foo
+  [foo:a [foo:b 'nested']]
+]
+#]]
+  [out-xml [#
+<outer xmlns:foo="urn:foo">
+  <foo:a>
+    <foo:b>nested</foo:b>
+  </foo:a>
+</outer>
+#]]
+ ]
+
+ [case id=ns-005-prefix-redeclaration level=core
+  [tags namespaces scoping redeclare]
+  [in-cx [#
+[outer xmlns:p=urn:outer
+  [p:item 'outer-1']
+  [inner xmlns:p=urn:inner
+    [p:item 'inner']
+  ]
+  [p:item 'outer-2']
+]
+#]]
+  [out-xml [#
+<outer xmlns:p="urn:outer">
+  <p:item>outer-1</p:item>
+  <inner xmlns:p="urn:inner">
+    <p:item>inner</p:item>
+  </inner>
+  <p:item>outer-2</p:item>
+</outer>
+#]]
+ ]
+
+ [case id=ns-006-default-redeclaration level=core
+  [tags namespaces default scoping]
+  [in-cx [#
+[a xmlns=urn:a
+  [child]
+  [b xmlns=urn:b
+    [child]
+  ]
+]
+#]]
+  [out-xml [#
+<a xmlns="urn:a">
+  <child/>
+  <b xmlns="urn:b">
+    <child/>
+  </b>
+</a>
+#]]
+ ]
+
+ [case id=ns-007-undeclared-prefix-passthrough level=core
+  [tags namespaces unbound]
+  [in-cx [#
+[item foo:tag=value body]
+#]]
+  [out-xml [#
+<item foo:tag="value">body</item>
+#]]
+  [out-cx [#
+[item foo:tag=value body]
+#]]
+ ]
+
+ [case id=ns-008-xml-reserved-prefix level=core
+  [tags namespaces reserved xml]
+  [in-cx [#
+[doc xml:base=https://example.com content]
+#]]
+  [out-xml [#
+<doc xml:base="https://example.com">content</doc>
+#]]
+  [out-cx [#
+[doc xml:base=https://example.com content]
+#]]
+ ]
+
+ [case id=ns-009-attr-with-prefix level=core
+  [tags namespaces prefix attrs]
+  [in-cx [#
+[link xmlns:xl=http://www.w3.org/1999/xlink xl:href=https://example.com xl:type=simple click]
+#]]
+  [out-xml [#
+<link xmlns:xl="http://www.w3.org/1999/xlink" xl:href="https://example.com" xl:type="simple">click</link>
+#]]
+  [out-cx [#
+[link xmlns:xl=http://www.w3.org/1999/xlink xl:href=https://example.com xl:type=simple click]
+#]]
+ ]
+
+ [case id=ns-010-svg-inside-xhtml level=core
+  [tags namespaces svg embed]
+  [in-cx [#
+[html xmlns=http://www.w3.org/1999/xhtml
+  [body
+    [svg xmlns=http://www.w3.org/2000/svg
+      [circle r=10]
+    ]
+  ]
+]
+#]]
+  [out-xml [#
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <circle r="10"/>
+    </svg>
+  </body>
+</html>
+#]]
+ ]
+
+ [case id=ns-011-xml-roundtrip-multiple-prefixes level=core
+  [tags namespaces xml roundtrip]
+  [in-xml [#
+<root xmlns="urn:r" xmlns:a="urn:a" xmlns:b="urn:b">
+  <a:x/>
+  <b:y/>
+</root>
+#]]
+  [out-cx [#
+[root xmlns=urn:r xmlns:a=urn:a xmlns:b=urn:b
+  [a:x]
+  [b:y]
+]
+#]]
+  [out-xml [#
+<root xmlns="urn:r" xmlns:a="urn:a" xmlns:b="urn:b">
+  <a:x/>
+  <b:y/>
+</root>
+#]]
+ ]
+
+ [case id=ns-012-attr-without-prefix-no-default-ns level=core
+  [tags namespaces default attrs]
+  [in-cx [#
+[item xmlns=urn:foo name=widget count=3]
+#]]
+  [out-xml [#
+<item xmlns="urn:foo" name="widget" count="3"/>
+#]]
+  [out-cx [#
+[item xmlns=urn:foo name=widget count=3]
+#]]
+ ]
+
+ [case id=ns-013-canonical-prefix-rewrite level=core
+  [tags namespaces canonical D6]
+  [in-cx [#
+[root xmlns:b=urn:x xmlns:a=urn:x
+  [b:item b:tag=value body]
+]
+#]]
+  [out-canonical [#
+[root xmlns:a=urn:x xmlns:b=urn:x
+  [a:item a:tag=value body]
+]
+#]]
+ ]
+
+ [case id=ns-014-canonical-xmlns-sort level=core
+  [tags namespaces canonical declaration-order]
+  [in-cx [#
+[root xmlns:zeta=urn:z xmlns=urn:default xmlns:alpha=urn:a id=42 lang=en
+  [child]
+]
+#]]
+  [out-canonical [#
+[root xmlns=urn:default xmlns:alpha=urn:a xmlns:zeta=urn:z id=42 lang=en
+  [child]
+]
+#]]
+ ]
+
+ [case id=ns-015-canonical-equiv-different-prefixes level=core
+  [tags namespaces canonical equivalence]
+  [in-cx [#
+[svg xmlns:s=http://www.w3.org/2000/svg
+  [s:circle s:r=10]
+]
+#]]
+  [out-canonical [#
+[svg xmlns:s=http://www.w3.org/2000/svg
+  [s:circle s:r=10]
+]
+#]]
+ ]
+
+ [case id=ns-016-canonical-reserved-prefix level=core
+  [tags namespaces canonical reserved]
+  [in-cx [#
+[doc xml:base=https://example.com xml:id=root content]
+#]]
+  [out-canonical [#
+[doc xml:base=https://example.com xml:id=root content]
+#]]
+ ]
+]

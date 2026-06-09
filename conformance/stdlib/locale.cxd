@@ -1,0 +1,1030 @@
+[test-suite name=locale
+  [doc [#
+conformance fixtures for cx-stdlib/locale (spec/std-lib/locale.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/locale']
+   (resolver MUST be quoted) then calls [$locale:fn args]. The LAST
+   expression is the rendered result. String scalars render quoted ("…");
+   ints (collate -1/0/1) render bare; bools bare; atoms with leading colon
+   (:ltr / :rtl); sequences in paren form (a, b, c). Date values are
+   constructed via [?lib 'cx-stdlib/time'] + [time/parse-date …] since
+   locale has no date constructor (the §3.3 LDML token table is shared
+   between the two modules). Error cases use --- out_err with the bare
+   CXER code.
+
+   DETERMINISM: default-locale is impure (reads $LANG / Windows LCID) and
+   list-locales depends on the resolved catalog snapshot; collate-key
+   returns opaque UCA bytes. These are never asserted by literal value —
+   see the per-case spec-ambiguous notes.
+
+   Error codes (§5):
+     CXER3500 E_LOCALE_DATA_UNAVAILABLE
+     CXER3501 E_LOCALE_TAG_INVALID
+     CXER3502 E_LOCALE_PATTERN_INVALID
+     CXER3503 E_LOCALE_CURRENCY_INVALID
+     CXER3504 E_LOCALE_NUMBER_PARSE_FAILED
+#]]
+
+ # ── §3.1 Collation ─────────────────────────────────────────────────────────
+
+ [case id=locale-001-collate-less level=core
+  [tags locale collate ordering]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate "a" "b" "en-US"]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ [case id=locale-002-collate-equal level=core
+  [tags locale collate ordering equal]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate "a" "a" "en-US"]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=locale-003-collate-greater level=core
+  [tags locale collate ordering greater]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate "b" "a" "en-US"]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ # §4.2: collate("file10","file2","en-US") returns -1 lexicographically.
+ [case id=locale-004-collate-numeric-gotcha level=core
+  [tags locale collate numeric lexicographic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate "file10" "file2" "en-US"]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ [case id=locale-005-collate-tag-invalid level=core
+  [tags locale collate CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate "a" "b" "not a tag!"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # §6: German "ä" equals "a" at primary strength (base letter only).
+ [case id=locale-006-collate-opts-primary-equal level=core
+  [tags locale collate-with-opts strength primary]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate-with-opts "ä" "a" {locale: "de-DE", strength: "primary"}]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ # §6: at tertiary (default, +case +diacritics) "ä" sorts after "a".
+ [case id=locale-007-collate-opts-tertiary-after level=core
+  [tags locale collate-with-opts strength tertiary]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate-with-opts "ä" "a" {locale: "de-DE", strength: "tertiary"}]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ # §4.2 / §6: numeric=true gives natural sort — "file2" before "file10".
+ [case id=locale-008-collate-opts-numeric level=core
+  [tags locale collate-with-opts numeric natural-sort]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate-with-opts "file2" "file10" {locale: "en-US", numeric: true}]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ [case id=locale-009-collate-opts-tag-invalid level=core
+  [tags locale collate-with-opts CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate-with-opts "a" "b" {locale: "!!bad!!"}]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # §5 CXER3501: collate-key on a non-BCP-47 tag raises E_LOCALE_TAG_INVALID.
+ [case id=locale-010-collate-key-tag-invalid level=core
+  [tags locale collate-key CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate-key "abc" "@@bad-tag@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # ── §3.2 Number formatting ─────────────────────────────────────────────────
+
+ [case id=locale-011-format-number-en-us level=core
+  [tags locale format-number en-US grouping]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-number 1234567.89 "en-US"]
+#]]
+  [out-text [#
+'1,234,567.89'
+#]]
+ ]
+
+ [case id=locale-012-format-number-de-de level=core
+  [tags locale format-number de-DE grouping]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-number 1234567.89 "de-DE"]
+#]]
+  [out-text [#
+'1.234.567,89'
+#]]
+ ]
+
+ [case id=locale-013-format-number-fr-fr level=core
+  [tags locale format-number fr-FR grouping]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-number 1234567.89 "fr-FR"]
+#]]
+  [out-text [#
+'1 234 567,89'
+#]]
+ ]
+
+ [case id=locale-014-format-number-tag-invalid level=core
+  [tags locale format-number CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-number 1234.5 "@@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # §6: compact notation — 1234567 en-US → "1.2M".
+ [case id=locale-015-format-number-opts-compact level=core
+  [tags locale format-number-with-opts notation compact]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-number-with-opts 1234567 {locale: "en-US", notation: "compact"}]
+#]]
+  [out-text [#
+'1.2M'
+#]]
+ ]
+
+ # grouping=false drops the group separators (§3.2 opts table, en-US default).
+ [case id=locale-016-format-number-opts-no-grouping level=core
+  [tags locale format-number-with-opts grouping]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-number-with-opts 1234567.89 {locale: "en-US", grouping: false}]
+#]]
+  [out-text [#
+'1234567.89'
+#]]
+ ]
+
+ [case id=locale-017-format-number-opts-tag-invalid level=core
+  [tags locale format-number-with-opts CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-number-with-opts 1 {locale: "1234"}]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # §6 round-trip: parse-number-locale(format-number(n,l),l) ≈ n. en-US grouped.
+ [case id=locale-018-parse-number-en-us level=core tol=0.0000001
+  [tags locale parse-number-locale en-US round-trip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:parse-number-locale "1,234,567.89" "en-US"]
+#]]
+  [out-text [#
+1234567.89
+#]]
+ ]
+
+ [case id=locale-019-parse-number-de-de level=core tol=0.0000001
+  [tags locale parse-number-locale de-DE]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:parse-number-locale "1.234.567,89" "de-DE"]
+#]]
+  [out-text [#
+1234567.89
+#]]
+ ]
+
+ # §5 CXER3504: string does not match the locale's number conventions.
+ [case id=locale-020-parse-number-failed level=core
+  [tags locale parse-number-locale CXER3504]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:parse-number-locale "not-a-number" "en-US"]
+#]]
+  [out-err [#
+cx-err:CXER3504
+#]]
+ ]
+
+ [case id=locale-021-parse-number-tag-invalid level=core
+  [tags locale parse-number-locale CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:parse-number-locale "1.5" "@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # ── §3.3 Date / time formatting ────────────────────────────────────────────
+
+ # §3.3 example: fr-FR "EEEE d MMMM yyyy" on 2026-05-26 → "mardi 26 mai 2026".
+ [case id=locale-022-format-date-fr level=core
+  [tags locale format-date fr-FR ldml]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date [$time:parse-date "2026-05-26"] "fr-FR" "EEEE d MMMM yyyy"]
+#]]
+  [out-text [#
+'mardi 26 mai 2026'
+#]]
+ ]
+
+ # §6: ICU "yyyy-MM-dd" canonical pattern.
+ [case id=locale-023-format-date-iso-canonical level=core
+  [tags locale format-date en-US canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date [$time:parse-date "2026-05-26"] "en-US" "yyyy-MM-dd"]
+#]]
+  [out-text [#
+'2026-05-26'
+#]]
+ ]
+
+ # §5 CXER3502: unparseable ICU date pattern.
+ [case id=locale-024-format-date-pattern-invalid level=core
+  [tags locale format-date CXER3502]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date [$time:parse-date "2026-05-26"] "en-US" "Q"]
+#]]
+  [out-err [#
+cx-err:CXER3502
+#]]
+ ]
+
+ [case id=locale-025-format-date-tag-invalid level=core
+  [tags locale format-date CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date [$time:parse-date "2026-05-26"] "@@bad@@" "yyyy-MM-dd"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # §3.3 LDML tokens with a datetime: time component formats too.
+ [case id=locale-026-format-datetime-en-us level=core
+  [tags locale format-datetime en-US ldml]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-datetime [$time:parse-datetime "2026-05-26T14:30:00Z"] "en-US" "yyyy-MM-dd HH:mm:ss"]
+#]]
+  [out-text [#
+'2026-05-26 14:30:00'
+#]]
+ ]
+
+ [case id=locale-027-format-datetime-pattern-invalid level=core
+  [tags locale format-datetime CXER3502]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-datetime [$time:parse-datetime "2026-05-26T14:30:00Z"] "en-US" "Q"]
+#]]
+  [out-err [#
+cx-err:CXER3502
+#]]
+ ]
+
+ # §3.3 / §6: style :full en-US → "Tuesday, May 26, 2026".
+ [case id=locale-028-format-date-style-full-en level=core
+  [tags locale format-date-style en-US full]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date-style [$time:parse-date "2026-05-26"] "en-US" :full]
+#]]
+  [out-text [#
+'Tuesday, May 26, 2026'
+#]]
+ ]
+
+ # §3.3: style :short en-US → "5/26/26".
+ [case id=locale-029-format-date-style-short-en level=core
+  [tags locale format-date-style en-US short]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date-style [$time:parse-date "2026-05-26"] "en-US" :short]
+#]]
+  [out-text [#
+'5/26/26'
+#]]
+ ]
+
+ # §6: style :full ja-JP → "2026年5月26日火曜日".
+ [case id=locale-030-format-date-style-full-ja level=core
+  [tags locale format-date-style ja-JP full unicode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date-style [$time:parse-date "2026-05-26"] "ja-JP" :full]
+#]]
+  [out-text [#
+'2026年5月26日火曜日'
+#]]
+ ]
+
+ [case id=locale-031-format-date-style-tag-invalid level=core
+  [tags locale format-date-style CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/locale']
+[$locale:format-date-style [$time:parse-date "2026-05-26"] "@@@" :full]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # parse-date-locale round-trips the canonical pattern.
+ [case id=locale-032-parse-date-locale level=core
+  [tags locale parse-date-locale en-US round-trip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:parse-date-locale "2026-05-26" "en-US" "yyyy-MM-dd"]
+#]]
+  [out-text [#
+'2026-05-26'
+#]]
+ ]
+
+ [case id=locale-033-parse-date-locale-pattern-invalid level=core
+  [tags locale parse-date-locale CXER3502]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:parse-date-locale "2026-05-26" "en-US" "Q"]
+#]]
+  [out-err [#
+cx-err:CXER3502
+#]]
+ ]
+
+ [case id=locale-034-parse-date-locale-tag-invalid level=core
+  [tags locale parse-date-locale CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:parse-date-locale "2026-05-26" "@@@" "yyyy-MM-dd"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # ── §3.4 Currency formatting ───────────────────────────────────────────────
+
+ # §3.4 example: 1234.56 USD en-US → "$1,234.56".
+ [case id=locale-035-format-currency-usd level=core
+  [tags locale format-currency USD en-US]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-currency 1234.56 "USD" "en-US"]
+#]]
+  [out-text [#
+'$1,234.56'
+#]]
+ ]
+
+ # §3.4 example: 1234.56 EUR de-DE → "1.234,56 €".
+ [case id=locale-036-format-currency-eur level=core
+  [tags locale format-currency EUR de-DE]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-currency 1234.56 "EUR" "de-DE"]
+#]]
+  [out-text [#
+'1.234,56 €'
+#]]
+ ]
+
+ # §3.4 / §4.4 example: JPY has no fraction digits; 1234.56 rounds → "￥1,235".
+ [case id=locale-037-format-currency-jpy-no-fraction level=core
+  [tags locale format-currency JPY ja-JP minor-unit]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-currency 1234.56 "JPY" "ja-JP"]
+#]]
+  [out-text [#
+'￥1,235'
+#]]
+ ]
+
+ # §5 CXER3503: non-ISO-4217 currency code.
+ [case id=locale-038-format-currency-invalid level=core
+  [tags locale format-currency CXER3503]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-currency 1.0 "ZZZ" "en-US"]
+#]]
+  [out-err [#
+cx-err:CXER3503
+#]]
+ ]
+
+ [case id=locale-039-format-currency-tag-invalid level=core
+  [tags locale format-currency CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:format-currency 1.0 "USD" "@@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # currency-symbol: USD in en-US → "$".
+ [case id=locale-040-currency-symbol-usd level=core
+  [tags locale currency-symbol USD en-US]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:currency-symbol "USD" "en-US"]
+#]]
+  [out-text [#
+'$'
+#]]
+ ]
+
+ [case id=locale-041-currency-symbol-invalid level=core
+  [tags locale currency-symbol CXER3503]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:currency-symbol "ZZZ" "en-US"]
+#]]
+  [out-err [#
+cx-err:CXER3503
+#]]
+ ]
+
+ [case id=locale-042-currency-symbol-tag-invalid level=core
+  [tags locale currency-symbol CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:currency-symbol "USD" "@@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # ── §3.5 Locale information ────────────────────────────────────────────────
+
+ # NOTE(host-dependent): list-locales returns the resolved catalog's locale
+ # sequence (~80 per §2). The spec fixes neither the exact membership nor the
+ # ordering of the bundled snapshot, and §2.1 resolution can override it from
+ # CX_LOCALE_DIR / system data, so no literal sequence (count or contents) is
+ # assertable. Per the AUTHORING non-deterministic rule we assert a stable
+ # property via a pure wrapping call instead: §4.1 guarantees is-supported is
+ # true for any catalog entry, so the catalog's first entry is supported. This
+ # genuinely invokes list-locales and yields the deterministic result `true`.
+ # (Host-dependence of list-locales is declared in README.md "Reference
+ # platform — POSIX"; this case's assertion stays as the stable pure property.)
+ [case id=locale-043-list-locales-first-supported level=core
+  [tags locale list-locales is-supported spec-ambiguous]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:is-supported [$first [$locale:list-locales]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §4.1: is-supported returns true at any fallback level.
+ [case id=locale-044-is-supported-exact level=core
+  [tags locale is-supported exact]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:is-supported "de-DE"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §4.1: language match falls through — "en-GB-oxendict" → "en-GB" → "en".
+ [case id=locale-045-is-supported-fallback level=core
+  [tags locale is-supported fallback]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:is-supported "en-GB-oxendict"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=locale-046-is-supported-tag-invalid level=core
+  [tags locale is-supported CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:is-supported "!!!"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # NOTE(host-dependent): default-locale is impure (§3.5 — reads $LANG / Windows
+ # LCID) so its literal value is environment-dependent and cannot be asserted.
+ # §4.1 guarantees lookup falls back to "en-US", and is-supported is true at any
+ # fallback level, so the resolved default is always a supported tag. Best
+ # reading: compose default-locale through the pure is-supported predicate,
+ # whose result is the stable, spec-grounded property (always true).
+ # (Host-dependence of default-locale is declared in README.md "Reference
+ # platform — POSIX"; this case's assertion stays as the stable pure property.)
+ [case id=locale-047-default-locale-supported level=core
+  [tags locale default-locale impure is-supported spec-ambiguous]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:is-supported [$locale:default-locale]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # locale-name: display "de-DE" in en-US → "German (Germany)".
+ # Pinned by spec §3.5 (CLDR rendering worked example).
+ [case id=locale-048-locale-name level=core
+  [tags locale locale-name display]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:locale-name "de-DE" "en-US"]
+#]]
+  [out-text [#
+'German (Germany)'
+#]]
+ ]
+
+ [case id=locale-049-locale-name-tag-invalid level=core
+  [tags locale locale-name CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:locale-name "@@@" "en-US"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # language-of "zh-Hans-CN" → "zh" (BCP 47 language subtag).
+ [case id=locale-050-language-of level=core
+  [tags locale language-of subtag]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:language-of "zh-Hans-CN"]
+#]]
+  [out-text [#
+'zh'
+#]]
+ ]
+
+ [case id=locale-051-language-of-tag-invalid level=core
+  [tags locale language-of CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:language-of "1!2"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # country-of "en-US" → "US" (BCP 47 region subtag).
+ [case id=locale-052-country-of level=core
+  [tags locale country-of subtag]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:country-of "en-US"]
+#]]
+  [out-text [#
+'US'
+#]]
+ ]
+
+ [case id=locale-053-country-of-tag-invalid level=core
+  [tags locale country-of CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:country-of "%%"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # script-of "zh-Hans-CN" → "Hans" (BCP 47 script subtag).
+ [case id=locale-054-script-of level=core
+  [tags locale script-of subtag]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:script-of "zh-Hans-CN"]
+#]]
+  [out-text [#
+'Hans'
+#]]
+ ]
+
+ [case id=locale-055-script-of-tag-invalid level=core
+  [tags locale script-of CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:script-of "??"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # §3.5: text-direction returns :ltr or :rtl. en-US → :ltr.
+ [case id=locale-056-text-direction-ltr level=core
+  [tags locale text-direction ltr atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:text-direction "en-US"]
+#]]
+  [out-text [#
+:ltr
+#]]
+ ]
+
+ # §3.5: Arabic is right-to-left → :rtl.
+ [case id=locale-057-text-direction-rtl level=core
+  [tags locale text-direction rtl atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:text-direction "ar-SA"]
+#]]
+  [out-text [#
+:rtl
+#]]
+ ]
+
+ [case id=locale-058-text-direction-tag-invalid level=core
+  [tags locale text-direction CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:text-direction "@@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # ── §3.6 Locale-aware case mapping ─────────────────────────────────────────
+
+ # §6 / §3.6: Turkish dotted-i — upper-locale("i","tr-TR") → "İ".
+ [case id=locale-059-upper-locale-turkish level=core
+  [tags locale upper-locale tr-TR turkish unicode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:upper-locale "i" "tr-TR"]
+#]]
+  [out-text [#
+'İ'
+#]]
+ ]
+
+ # §3.6: German "ß" → "SS" when uppercased.
+ [case id=locale-060-upper-locale-german-eszett level=core
+  [tags locale upper-locale de-DE eszett unicode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:upper-locale "ß" "de-DE"]
+#]]
+  [out-text [#
+'SS'
+#]]
+ ]
+
+ [case id=locale-061-upper-locale-tag-invalid level=core
+  [tags locale upper-locale CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:upper-locale "abc" "@@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # §3.6: Turkish dotted/dotless-i — lower-locale("I","tr-TR") → "ı" (dotless).
+ [case id=locale-062-lower-locale-turkish level=core
+  [tags locale lower-locale tr-TR turkish unicode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:lower-locale "I" "tr-TR"]
+#]]
+  [out-text [#
+'ı'
+#]]
+ ]
+
+ [case id=locale-063-lower-locale-tag-invalid level=core
+  [tags locale lower-locale CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:lower-locale "ABC" "@@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # title-locale: per-word title casing, locale-aware (en-US baseline).
+ # Pinned by spec §3.6 (worked example).
+ [case id=locale-064-title-locale level=core
+  [tags locale title-locale en-US titlecase]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:title-locale "hello world" "en-US"]
+#]]
+  [out-text [#
+'Hello World'
+#]]
+ ]
+
+ [case id=locale-065-title-locale-tag-invalid level=core
+  [tags locale title-locale CXER3501]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:title-locale "abc" "@@@"]
+#]]
+  [out-err [#
+cx-err:CXER3501
+#]]
+ ]
+
+ # §5 CXER3500: operation requiring locale data the bundled catalog lacks.
+ # §4.1 fallback synthesizes minimal data for is-supported, but rich operations
+ # (collation tables / number patterns) can still hit unavailable data.
+ [case id=locale-066-collate-data-unavailable level=core
+  [tags locale collate CXER3500 data-unavailable]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:collate "a" "b" "tlh-Piqd"]
+#]]
+  [out-err [#
+cx-err:CXER3500
+#]]
+ ]
+]

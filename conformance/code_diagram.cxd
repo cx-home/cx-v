@@ -1,0 +1,1238 @@
+[test-suite name=code-diagram
+  [doc [#
+# CX code_diagram + code_tree Conformance Suite
+Version: 0.1 — 2026-05-23 (gate 37.10 scaffold).
+
+This file is the conformance home for `cx_code_diagram` (Mermaid
+text — `flowchart TD` for code sources, `erDiagram` for data
+sources) and `cx_code_tree` (JSON).
+
+Comparison against `:expected` is **structural**
+node-set + edge-set for Mermaid; key-order- and whitespace-tolerant
+recursive tree-shape compare for JSON. Byte-identical output is
+NOT required. See [`scripts/check_code_diagram_fixtures.py`](../scripts/check_code_diagram_fixtures.py)
+for the canonical runner.
+
+---
+
+## Status
+
+**Gate 37.10** (spec/v0_8_0_status.md §11.6) — this file + runner
++ `make test-code-diagram` wired. Initial scaffold (this commit):
+29 fixtures across the four taxonomies (ERD / CFG / Tree / auto-
+detection). The V-side emitter (`cx_code_diagram`,
+`cx_code_tree`) lands in Phase 7.1 / 7.6 / 7.7; the runner skips
+gracefully on missing binary so this file can stage immediately.
+
+---
+
+## Format
+
+Each fixture is a block of the form:
+
+
+The `view` slot selects the ABI export under test:
+- `view: graph` → runner invokes `cx_code_diagram(source)` and
+  compares Mermaid node-set + edge-set against `:expected`.
+- `view: tree` → runner invokes `cx_code_tree(source)` and
+  compares parsed JSON structurally; `loc` fields are validated for
+  presence + `start < end` + substring-of-source.
+
+`kind` is informational + cross-checks the auto-detect rule.
+Absent `kind` ⇒ auto-derive (code if source has ≥ 1 top-level
+EvalDirective `[?Name ...]`, else data; `[?cx ...]` PIs do NOT
+count).
+
+`level` selects the detail level:
+- `min` — shape-only overview (entity boxes for ERD, def boxes for
+  CFG, actor lanes only for SEQ).
+- `compact` — default. Preserves the baseline detail contracts.
+- `full` — exhaustive. Adds INPUT/OUTPUT terminals (CFG), synthetic
+  DOCUMENT root (ERD), policy parameter notes (SEQ).
+
+Absent `level` ⇒ `compact` (existing fixtures without a `level` line
+preserve their baseline expectations).
+
+---
+
+## Categories
+
+- **erd** — Graph View ERD mode (data sources).
+- **cfg** — Graph View CFG mode (code sources).
+- **tree** — Tree View JSON (universal).
+- **auto** — Auto-detection edge cases.
+
+---
+
+## Fixtures (erd — data-source ERD mode)
+#]]
+
+ [case id=erd-001-empty
+  [tags erd empty placeholder]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [##]]
+  [expected [#
+erDiagram
+#]]
+ ]
+
+ [case id=erd-002-single-element
+  [tags erd single-element minimal]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[user]
+#]]
+  [expected [#
+erDiagram
+  user {
+  }
+#]]
+ ]
+
+ [case id=erd-003-attributes-only
+  [tags erd attributes scalar-rows]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[user id=1 name='alice']
+#]]
+  [expected [#
+erDiagram
+  user {
+    int @id
+    string @name
+  }
+#]]
+ ]
+
+ [case id=erd-004-scalar-children-only
+  [tags erd scalar-children]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[user
+  [email 'a@x.test']
+  [phone '555-0100']
+]
+#]]
+  [expected [#
+erDiagram
+  user {
+    string email
+    string phone
+  }
+#]]
+ ]
+
+ [case id=erd-005-mixed-attrs-and-scalars
+  [tags erd mixed attrs scalars]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[user id=1 name='alice'
+  [email 'a@x.test']
+]
+#]]
+  [expected [#
+erDiagram
+  user {
+    int @id
+    string @name
+    string email
+  }
+#]]
+ ]
+
+ [case id=erd-006-repeating-children
+  [tags erd one-to-many cardinality]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[user id=1
+  [order id=100 total=42.0]
+  [order id=101 total=13.5]
+]
+#]]
+  [expected [#
+erDiagram
+  user ||--o{ order : has
+  user {
+    int @id
+  }
+  order {
+    int @id
+    float @total
+  }
+#]]
+ ]
+
+ [case id=erd-007-singleton-children
+  [tags erd one-to-one cardinality singleton]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[user id=1
+  [profile email='a@x.test']
+]
+#]]
+  [expected [#
+erDiagram
+  user ||--|| profile : has
+  user {
+    int @id
+  }
+  profile {
+    string @email
+  }
+#]]
+ ]
+
+ [case id=erd-008-name-collision
+  [tags erd merge-by-name globally]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[org
+  [team name='alpha'
+    [user id=1 name='alice']
+  ]
+  [project name='beta'
+    [user id=2 name='bob']
+  ]
+]
+#]]
+  [expected [#
+erDiagram
+  org ||--|| team : has
+  org ||--|| project : has
+  team ||--|| user : has
+  project ||--|| user : has
+  org {
+  }
+  team {
+    string @name
+  }
+  project {
+    string @name
+  }
+  user {
+    int @id
+    string @name
+  }
+#]]
+ ]
+
+ [case id=erd-009-deeply-nested
+  [tags erd nesting depth]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[doc
+  [section
+    [para
+      [span id=1]
+    ]
+  ]
+]
+#]]
+  [expected [#
+erDiagram
+  doc ||--|| section : has
+  section ||--|| para : has
+  para ||--|| span : has
+  doc {
+  }
+  section {
+  }
+  para {
+  }
+  span {
+    int @id
+  }
+#]]
+ ]
+
+ [case id=erd-010-non-identifier-entity-name
+  [tags erd quoting special-chars]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[+ 1 2 3 4 5]
+#]]
+  [expected [#
+erDiagram
+  "+" {
+  }
+
+---
+
+## Fixtures (cfg — code-source CFG mode)
+#]]
+ ]
+
+ [case id=cfg-001-bare-for
+  [tags cfg for loop-box]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?for [in $u /users/user] [yield $u]]
+#]]
+  [expected [#
+flowchart TD
+  start([entry]) --> lh{{"for $u :in /users/user"}}
+  lh -- "binds $u" --> lb["$u"]
+  lb --> lh
+  lh --> done([exit])
+#]]
+ ]
+
+ [case id=cfg-002-if-then-else
+  [tags cfg if diamond]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?if $x [then 'big'] [else 'small']]
+#]]
+  [expected [#
+flowchart TD
+  start([entry]) --> i{"if $x"}
+  i -- "true" --> t["'big'"]
+  i -- "false" --> e["'small'"]
+  t --> done([exit])
+  e --> done
+#]]
+ ]
+
+ [case id=cfg-003-match-two-arms
+  [tags cfg match dispatcher 2-arm]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?match $x
+  [case 1 'one']
+  [else  'other']
+]
+#]]
+  [expected [#
+flowchart TD
+  start([entry]) --> m{"match $x"}
+  m -- "1" --> a1["'one'"]
+  m -- "else" --> a2["'other'"]
+  a1 --> done([exit])
+  a2 --> done
+#]]
+ ]
+
+ [case id=cfg-004-match-three-arms
+  [tags cfg match dispatcher 3-arm]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?match $age
+  [case '< 13' 'child']
+  [case '< 18' 'teen']
+  [else        'adult']
+]
+#]]
+  [expected [#
+flowchart TD
+  start([entry]) --> m{"match $age"}
+  m -- "< 13" --> a1["'child'"]
+  m -- "< 18" --> a2["'teen'"]
+  m -- "else" --> a3["'adult'"]
+  a1 --> done([exit])
+  a2 --> done
+  a3 --> done
+#]]
+ ]
+
+ [case id=cfg-005-match-eight-arms
+  [tags cfg match dispatcher 8-arm]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?match $day
+  [case 1 'mon']
+  [case 2 'tue']
+  [case 3 'wed']
+  [case 4 'thu']
+  [case 5 'fri']
+  [case 6 'sat']
+  [case 7 'sun']
+  [else   'unknown']
+]
+#]]
+  [expected [#
+flowchart TD
+  start([entry]) --> m{"match $day"}
+  m -- "1" --> a1["'mon'"]
+  m -- "2" --> a2["'tue'"]
+  m -- "3" --> a3["'wed'"]
+  m -- "4" --> a4["'thu'"]
+  m -- "5" --> a5["'fri'"]
+  m -- "6" --> a6["'sat'"]
+  m -- "7" --> a7["'sun'"]
+  m -- "else" --> a8["'unknown'"]
+  a1 --> done([exit])
+  a2 --> done
+  a3 --> done
+  a4 --> done
+  a5 --> done
+  a6 --> done
+  a7 --> done
+  a8 --> done
+#]]
+ ]
+
+ [case id=cfg-006-for-containing-if
+  [tags cfg for if nested]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?for [in $u /users/user]
+  [yield [?if $u@active [then $u] [else 'skip']]]
+]
+#]]
+  [expected [#
+flowchart TD
+  start([entry]) --> lh{{"for $u :in /users/user"}}
+  lh -- "binds $u" --> i{"if $u@active"}
+  i -- "true" --> t["$u"]
+  i -- "false" --> e["'skip'"]
+  t --> lh
+  e --> lh
+  lh --> done([exit])
+#]]
+ ]
+
+ [case id=cfg-007-def-simple-body
+  [tags cfg def subgraph]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?def greet ($name) [concat 'hello ' $name]]
+#]]
+  [expected [#
+flowchart TD
+  subgraph greet
+    gs[/"def greet"/]
+    ge([exit])
+    gb["[concat 'hello ' $name]"]
+  gs --> gb
+  gb --> ge
+  end
+#]]
+ ]
+
+ [case id=cfg-008-def-recursion
+  [tags cfg def recursion self-edge]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?def countdown ($n) [?if [= $n 0] [then 'done'] [else [countdown [- $n 1]]]]]
+#]]
+  [expected [#
+flowchart TD
+  subgraph countdown
+    cs[/"def countdown"/]
+    ce([exit])
+  ci{"if [= $n 0]"}
+  ct["'done'"]
+  ci -- "true" --> ct
+  ct --> ce
+  cr["[countdown [- $n 1]]"]
+  ci -- "false" --> cr
+  cr --> cs
+  cs --> ci
+  end
+#]]
+ ]
+
+ [case id=cfg-009-modify-three-actions
+  [tags cfg modify update-block]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?modify /users/user[1]
+  [set-attr status 'active']
+  [delete-attr temp]
+  [append [tag 'vip']]
+]
+#]]
+  [expected [#
+flowchart TD
+  start([entry]) --> u["modify @ /users/user[1] | set | delete | append"]
+  u --> done([exit])
+#]]
+ ]
+
+ [case id=cfg-010-mixed-def-and-main
+  [tags cfg def main two-subgraphs]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?def classify ($age) [?match $age [case 13 'teen'] [else 'adult']]]
+[?for [in $u (1, 2, 3)] [yield [classify $u]]]
+#]]
+  [expected [#
+flowchart TD
+  subgraph classify
+    cs[/"def classify"/]
+    ce([exit])
+  cm{"match $age"}
+  ct1["'teen'"]
+  cm -- "13" --> ct1
+  ct1 --> ce
+  ct2["'adult'"]
+  cm -- "else" --> ct2
+  ct2 --> ce
+  cs --> cm
+  end
+  start([entry])
+  done([exit])
+  lh{{"for $u :in <lit>"}}
+  lb["[classify $u]"]
+  lb --> lh
+  lh -- "binds $u" --> lb
+  start --> lh
+  lh --> done
+
+---
+
+## Fixtures (tree — Tree View JSON)
+
+Tree fixtures use `view: tree`. Each `:expected` is a JSON object
+conforming to the tree-node contract (every node has `{kind, loc}`;
+optional `name` / `value` / `children` per the optional-field
+rules). The runner validates: tree shape, kind discriminator,
+`loc.start < loc.end`, and `loc` offsets resolve to substrings of
+`source`.
+#]]
+ ]
+
+ [case id=tree-001-element-kind
+  [tags tree element basic]
+  [meta [#
+view: tree
+kind: data
+#]]
+  [source [#
+[user]
+#]]
+  [expected [#
+{"kind":"element","name":"user","loc":{"start":0,"end":6}}
+#]]
+ ]
+
+ [case id=tree-002-attribute-kind
+  [tags tree attribute scalar-value]
+  [meta [#
+view: tree
+kind: data
+#]]
+  [source [#
+[user id=1]
+#]]
+  [expected [#
+{
+  "kind": "element",
+  "name": "user",
+  "loc": {"start": 0, "end": 11},
+  "children": [
+    {"kind": "attribute", "name": "id", "value": 1,
+     "loc": {"start": 6, "end": 10}}
+  ]
+}
+#]]
+ ]
+
+ [case id=tree-003-text-kind
+  [tags tree text leaf]
+  [meta [#
+view: tree
+kind: data
+#]]
+  [source [#
+[name 'alice']
+#]]
+  [expected [#
+{
+  "kind": "element",
+  "name": "name",
+  "loc": {"start": 0, "end": 14},
+  "children": [
+    {"kind": "text", "value": "alice",
+     "loc": {"start": 6, "end": 13}}
+  ]
+}
+#]]
+ ]
+
+ [case id=tree-004-directive-kind
+  [tags tree directive code]
+  [meta [#
+view: tree
+kind: code
+#]]
+  [source [#
+[?for [in $x /a] [yield $x]]
+#]]
+  [expected [#
+{
+  "kind": "directive",
+  "name": "for",
+  "loc": {"start": 0, "end": 28}
+}
+#]]
+ ]
+
+ [case id=tree-005-scalar-kind
+  [tags tree scalar bare]
+  [meta [#
+view: tree
+kind: data
+#]]
+  [source [#
+42
+#]]
+  [expected [#
+{
+  "kind": "scalar",
+  "value": 42,
+  "loc": {"start": 0, "end": 2}
+}
+#]]
+ ]
+
+ [case id=tree-006-path-kind
+  [tags tree path cxpath]
+  [meta [#
+view: tree
+kind: code
+#]]
+  [source [#
+/users/user
+#]]
+  [expected [#
+{
+  "kind": "path",
+  "value": "/users/user",
+  "loc": {"start": 0, "end": 11}
+}
+
+---
+
+## Fixtures (auto — auto-detection edge cases)
+#]]
+ ]
+
+ [case id=auto-001-pure-data
+  [tags auto data erDiagram]
+  [meta [#
+view: graph
+#]]
+  [source [#
+[user id=1 name='alice']
+#]]
+  [expected [#
+erDiagram
+  user {
+    int @id
+    string @name
+  }
+#]]
+ ]
+
+ [case id=auto-002-pure-code
+  [tags auto code flowchart]
+  [meta [#
+view: graph
+#]]
+  [source [#
+[?for [in $x /items] [yield $x]]
+#]]
+  [expected [#
+flowchart TD
+  start([entry]) --> lh{{"for $x :in /items"}}
+  lh -- "binds $x" --> lb["$x"]
+  lb --> lh
+  lh --> done([exit])
+#]]
+ ]
+
+ [case id=auto-003-mixed-def-then-data
+  [tags auto mixed code classification]
+  [meta [#
+view: graph
+#]]
+  [source [#
+[?def greet ($name) [concat 'hello ' $name]]
+[user id=1]
+#]]
+  [expected [#
+flowchart TD
+  subgraph greet
+    gs[/"def greet"/]
+    ge([exit])
+    gb["[concat 'hello ' $name]"]
+  gs --> gb
+  gb --> ge
+  end
+#]]
+ ]
+
+ [case id=auto-004-pi-then-data
+  [tags auto pi data classification]
+  [meta [#
+view: graph
+#]]
+  [source [#
+[?cx version=0.8.0]
+[user id=1]
+#]]
+  [expected [#
+erDiagram
+  user {
+    int @id
+  }
+
+---
+
+## Fixtures (seq — sequence-shape code source SEQ mode)
+#]]
+ ]
+
+ [case id=seq-001-worker-basic
+  [tags seq worker activation]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?worker name="task" [ok value="done"]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant task
+#]]
+ ]
+
+ [case id=seq-002-worker-channel-pair
+  [tags seq worker channel send receive]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?let [= $ch [?channel name="jobs" buffer=4]] [?let [= $_ [?worker name="producer" [?send 1 to=$ch]]] [?worker name="consumer" [?receive from=$ch]]]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant jobs
+  participant producer
+  participant consumer
+  producer ->>+ jobs : 1
+  jobs -->>- consumer : msg
+#]]
+ ]
+
+ [case id=seq-003-http-service
+  [tags seq http-service resource client]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?http-service name="hello" :on http [resource [get "/"] [response status=200 [body "hi"]]]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant hello
+  participant client
+  client ->>+ hello : GET /
+  hello -->>- client : response
+#]]
+ ]
+
+ [case id=seq-004-select-alt
+  [tags seq select alt timeout]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?let [= $ch1 [?channel name="a" buffer=1]] [?select [case [from $ch1 $v] [ok value=$v]] [case [timeout 50ms] [err code="timeout"]]]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant a
+  participant main
+  alt msg from $a
+  else timeout (50ms)
+  end
+#]]
+ ]
+
+ [case id=seq-005-multiple-receivers-same-channel
+  [tags seq activation channel-fan-out safety]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?let [= $ch [?channel name="ch" buffer=2]] [?let [= $_a [?worker name="wa" [?let [= $m [?receive from=$ch]] [ok value=$m]]]] [?worker name="wb" [?let [= $m [?receive from=$ch]] [ok value=$m]]]]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant ch
+  participant wa
+  participant wb
+  activate wa
+  ch -->> wa : msg
+  Note over wa : [ok]
+  deactivate wa
+  activate wb
+  ch -->> wb : msg
+  Note over wb : [ok]
+  deactivate wb
+
+---
+
+## Fixtures (min — detail-level overview rows)
+#]]
+ ]
+
+ [case id=min-data-erd level=min
+  [tags min erd shape-only]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[users [user id=1] [user id=2]]
+#]]
+  [expected [#
+erDiagram
+  users {
+  }
+  user {
+  }
+#]]
+ ]
+
+ [case id=min-code-cfg level=min
+  [tags min cfg overview]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?for [in $u /users] [yield $u]]
+#]]
+  [expected [#
+flowchart TD
+  main["main"]
+#]]
+ ]
+
+ [case id=min-seq-shape level=min
+  [tags min seq lanes-only]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?worker name="producer" [ok]]
+[?worker name="consumer" [ok]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant producer
+  participant consumer
+
+---
+
+## Fixtures (full — detail-level exhaustive rows)
+#]]
+ ]
+
+ [case id=full-data-erd-document-root level=full
+  [tags full erd document-root occurrence-badge value-enumeration]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[users [user id=1]]
+#]]
+  [expected [#
+erDiagram
+  DOCUMENT {
+    int node_count
+    int type_count
+    int max_depth
+    string source_path
+  }
+  users ||--|| user : has
+  users {
+    string note "appears 1× depth 0"
+  }
+  user {
+    int @id "1"
+    string note "appears 1× depth 1"
+  }
+#]]
+ ]
+
+ [case id=full-code-cfg-terminals level=full
+  [tags full cfg input-output yield-enum binding-bridge]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?for [in $u /users/user] [yield $u]]
+#]]
+  [expected [#
+flowchart TD
+  input([INPUT])
+  output([OUTPUT])
+  start([entry])
+  done([exit])
+  lh{{"for $u :in //users/user"}}
+  lb["$u"]
+  lh -- "binds $u" --> lb
+  lb --> lh
+  start --> lh
+  lh --> done
+  input --> start
+  done --> output
+  y1["yield #1"]
+  lh --> y1
+  b_u((("$u")))
+  b_u -. "resolves" .-> lb
+#]]
+ ]
+
+ [case id=full-seq-policy-notes level=full
+  [tags full seq resilience-notes input-output-lanes]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?worker name="w" [?retry max=3 [ok]]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+
+---
+
+## Fixtures (full — new rule classes, 2026-05-28)
+#]]
+ ]
+
+ [case id=full-data-erd-value-enumeration level=full
+  [tags full erd value-enumeration]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[users [user id=1] [user id=2] [user id=3]]
+#]]
+  [expected [#
+erDiagram
+  DOCUMENT {
+    int node_count
+    int type_count
+    int max_depth
+    string source_path
+  }
+  users ||--o{ user : has
+  users {
+    string note "appears 1× depth 0"
+  }
+  user {
+    int @id "1, 2, 3"
+    string note "appears 3× depth 1"
+  }
+#]]
+ ]
+
+ [case id=full-data-erd-fk-inference level=full
+  [tags full erd fk-inference]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[doc [user id=1] [order user-id=1]]
+#]]
+  [expected [#
+erDiagram
+  DOCUMENT {
+    int node_count
+    int type_count
+    int max_depth
+    string source_path
+  }
+  order }o--o{ user : FK
+  doc ||--|| user : has
+  doc ||--|| order : has
+  doc {
+    string note "appears 1× depth 0"
+  }
+  user {
+    int @id "1"
+    string note "appears 1× depth 1"
+  }
+  order {
+    int @user-id "1"
+    string note "appears 1× depth 1"
+  }
+#]]
+ ]
+
+ [case id=full-data-erd-occurrence-badge level=full
+  [tags full erd occurrence-badge]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [source [#
+[doc [user id=1] [user id=2] [user id=3] [user id=4]]
+#]]
+  [expected [#
+erDiagram
+  DOCUMENT {
+    int node_count
+    int type_count
+    int max_depth
+    string source_path
+  }
+  doc ||--o{ user : has
+  doc {
+    string note "appears 1× depth 0"
+  }
+  user {
+    int @id "1, 2, 3, 4"
+    string note "appears 4× depth 1"
+  }
+#]]
+ ]
+
+ [case id=full-code-cfg-color-classes level=full
+  [tags full cfg color-classes]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?if true [then 1] [else 0]]
+#]]
+  [expected [#
+flowchart TD
+  input([INPUT])
+  output([OUTPUT])
+  start([entry])
+  done([exit])
+  i{"if true"}
+  t["1"]
+  e["0"]
+  i -- "true" --> t
+  t --> done
+  i -- "false" --> e
+  e --> done
+  start --> i
+  input --> start
+  done --> output
+#]]
+ ]
+
+ [case id=full-code-cfg-yield-enumeration level=full
+  [tags full cfg yield-enum]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?for [in $x /xs/x] [yield $x]]
+#]]
+  [expected [#
+flowchart TD
+  input([INPUT])
+  output([OUTPUT])
+  start([entry])
+  done([exit])
+  lh{{"for $x :in //xs/x"}}
+  lb["$x"]
+  lh -- "binds $x" --> lb
+  lb --> lh
+  start --> lh
+  lh --> done
+  input --> start
+  done --> output
+  y1["yield #1"]
+  lh --> y1
+  b_x((("$x")))
+  b_x -. "resolves" .-> lb
+#]]
+ ]
+
+ [case id=full-code-cfg-binding-bridge level=full
+  [tags full cfg binding-bridge]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?let [= $x 1] [?if true [then $x] [else 0]]]
+#]]
+  [expected [#
+flowchart TD
+  input([INPUT])
+  output([OUTPUT])
+  start([entry])
+  done([exit])
+  b["[?let]"]
+  start --> b
+  b --> done
+  input --> start
+  done --> output
+  b_x((("$x")))
+  b_x -. "resolves" .-> b
+#]]
+ ]
+
+ [case id=full-code-cfg-cross-def-call level=full
+  [tags full cfg cross-def-call]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?def greet ($name) [concat "hi " $name]]
+[?def main () [greet "world"]]
+#]]
+  [expected [#
+flowchart TD
+  input([INPUT])
+  output([OUTPUT])
+  subgraph greet
+    gs[/"def greet"/]
+    ge([exit])
+    gb["[concat 'hi ' $name]"]
+  end
+  subgraph main
+    ms[/"def main"/]
+    me([exit])
+    mb["[greet 'world']"]
+  end
+  gs --> gb
+  gb --> ge
+  ms --> mb
+  mb --> me
+  ms -. "call" .-> gs
+#]]
+ ]
+
+ [case id=full-seq-payload-labels level=full
+  [tags full seq payload-labels]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?worker name="w" [?send $ch 42]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+  participant ch
+  w ->>+ ch : 42
+#]]
+ ]
+
+ [case id=full-seq-select-case-expansion level=full
+  [tags full seq select case-expansion]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?worker name="w" [?select [case [from $ch1 $msg] [ok]] [case [timeout 50ms] [skip]]]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+  participant ch1
+#]]
+ ]
+
+ [case id=full-seq-bulkhead-policy level=full
+  [tags full seq resilience-bulkhead]
+  [meta [#
+view: graph
+kind: code
+#]]
+  [source [#
+[?worker name="w" [?bulkhead max=2 [ok]]]
+#]]
+  [expected [#
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+#]]
+ ]
+]

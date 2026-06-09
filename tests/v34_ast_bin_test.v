@@ -85,7 +85,7 @@ fn test_ast_bin_rejects_size_exceeds_input() {
 }
 
 fn test_ast_bin_rejects_wrong_version() {
-	// Versions 1-5 are accepted (v0.6.0: 4 for fragment plumbing, 5 for
+	// Versions 1-5 are accepted (4 for fragment plumbing, 5 for
 	// grammar v3.5 nodes + BracketBody attr body tail). Use a value
 	// outside that set so the test stays a real reject-test.
 	mut bytes := []u8{}
@@ -119,10 +119,11 @@ fn test_ast_bin_v5_interpolation_round_trip() {
 }
 
 fn test_ast_bin_v5_eval_directive_round_trip() {
-	// `[?Name [arg, arg, arg]]` post-ADR-0017 uniform shape survives
-	// ast_bin emit/decode. EvalDirective.items holds a single ArrayNode
-	// per ADR 0017 §D6.
-	src := '[?for [v, items, [body @v]]]'
+	// `[?Name ['arg', arg, arg]]` uniform shape survives
+	// ast_bin emit/decode. EvalDirective.items holds a single ArrayNode.
+	// The leading array item is quoted: a bare-name leading item is reserved
+	// for the element head (3a / lexicon §collections [L83]).
+	src := "[?for ['v', items, [body @v]]]"
 	doc := cx.parse(src) or { panic(err) }
 	bytes := cx.emit_ast_bin(doc)
 	doc2 := cx.bin_to_doc(bytes) or { panic('decode: ${err}') }
@@ -147,33 +148,22 @@ fn test_ast_bin_v5_eval_directive_round_trip() {
 	assert found, 'EvalDirectiveNode must round-trip through ast_bin'
 }
 
-fn test_ast_bin_v5_attr_body_round_trip() {
-	// BracketBody attribute value `name=[BodyItem*]` (grammar [55c])
-	// survives ast_bin v5+ encoding. Post-ADR-0017, BracketBody no
-	// longer appears on EvalDirective attributes (§D7 drops the
-	// `:then=…/:else=…` slot convention) but remains a valid attribute
-	// value form on regular Elements.
+fn test_node_valued_attribute_rejected() {
+	// GR-NODE-ATTR (DECISION-NA, ruling 1a 2026-06-05): the retired grammar [55c]
+	// BracketBody attribute-value form `name=[BodyItem*]` put an element node in
+	// attribute position, which D2 (attributes are scalar-only) forbids. It is now
+	// a hard parse error (E211, a data-parse code per cxdm.md §11; NOT the program
+	// CXER0240 = AWAIT_ALL_FAILED) rather than a silently-accepted node attribute.
 	src := '[product spec=[length 10] notes=[size large]]'
-	doc := cx.parse(src) or { panic(err) }
-	bytes := cx.emit_ast_bin(doc)
-	doc2 := cx.bin_to_doc(bytes) or { panic('decode: ${err}') }
-	mut nodes := []cx.Node{}
-	nodes << doc2.prolog
-	nodes << doc2.elements
-	mut found_then := false
-	mut found_else := false
-	for n in nodes {
-		if n is cx.Element {
-			for a in n.attrs {
-				if a.name == 'spec' {
-					if body := a.body { assert body.len > 0; found_then = true }
-				}
-				if a.name == 'notes' {
-					if body := a.body { assert body.len > 0; found_else = true }
-				}
-			}
-		}
+	if _ := cx.parse(src) {
+		assert false, 'node-valued attribute `spec=[…]` must be rejected (D2 scalar-only)'
+	} else {
+		assert err.msg().contains('cx-err:E211'), 'reject must carry E211: ${err.msg()}'
 	}
-	assert found_then, 'BracketBody attr `spec` must round-trip through ast_bin'
-	assert found_else, 'BracketBody attr `notes` must round-trip through ast_bin'
+	// The scalar attribute-value forms that share the body carrier are unaffected:
+	// raw `[#…#]` and block `[|…|]` remain valid attribute values.
+	raw := cx.parse("[product note=[# raw <b> #]]") or {
+		panic('raw-text attribute value must still parse: ${err}')
+	}
+	assert raw.elements.len == 1
 }

@@ -1,0 +1,708 @@
+[test-suite name=i18n
+  [doc [#
+conformance fixtures for cx-stdlib/i18n (spec/std-lib/i18n.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/i18n']
+   (resolver MUST be quoted) then calls [$i18n:fn args]. The LAST
+   expression is the rendered result. String scalars render quoted;
+   bool bare; atoms with leading colon (:one); sequences in paren form
+   (a, b, c). Error fixtures use out-err with the bare CXER code.
+
+   Grounding: every expected value comes from spec examples (§3.2, §3.3,
+   §3.4, §3.5), the §6 conformance list, and the §4/§5 normative rules.
+   args maps and catalog-from-map inputs use CX map-literal {"k": v} form
+   (the spec's {n=5} shorthand is illustrative). Catalog values are opaque
+   [catalog …] elements; cases over them assert observable results
+   (resolved messages, locales, keys) rather than element rendering, except
+   where the spec pins the catalog's structural shape and round-trip.
+#]]
+
+ # ── §3.1 catalog-from-map ──────────────────────────────────────────────
+ [case id=i18n-001-catalog-from-map-locales level=core
+  [tags i18n catalog-from-map catalog]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-locales [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}]]
+#]]
+  [out-text [#
+('en', 'fr')
+#]]
+ ]
+
+ [case id=i18n-002-catalog-from-map-keys level=core
+  [tags i18n catalog-from-map catalog-keys]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-keys [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}, "farewell": {"en": "Bye, {name}!"}}]]
+#]]
+  [out-text [#
+('greeting', 'farewell')
+#]]
+ ]
+
+ # default-locale fallback: spec §3.1 — the optional "default" map entry sets
+ # the catalog default; resolving any locale ultimately falls through to it.
+ # This case asserts the resolved message (observable), grounded in the §3.2
+ # greeting example: the de→en→default chain (§2.2) reaches the "en" entry.
+ [case id=i18n-003-catalog-from-map-default level=core
+  [tags i18n catalog-from-map default message]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-from-map {"default": "en", "greeting": {"en": "Hello, {name}!"}}] "greeting" "de" {"name": "Ada"}]
+#]]
+  [out-text [#
+Hello, Ada!
+#]]
+ ]
+
+ # ── §3.1 / §6 catalog shape (catalog-from-map returns a [catalog …]) ─────
+ # §3.1/§2.1: a catalog with no declared default uses default="en". §2.2: the
+ # es→en→default chain reaches the "en" entry for an absent locale, so message
+ # resolution returns the §3.2-style "Hello!" — an observable, spec-pinned result.
+ [case id=i18n-004-catalog-from-map-default-absent level=core
+  [tags i18n catalog-from-map default edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-from-map {"greeting": {"en": "Hello!"}}] "greeting" "es" {}]
+#]]
+  [out-text [#
+Hello!
+#]]
+ ]
+
+ # ── §3.1 load-catalog (impure, read capability §7) ──────────────────────
+ # §7: load-catalog is the one capability-gated function (read). Under
+ # deny-by-default (security.md §2) the effect point checks the active set and
+ # raises CXER0271 before touching the filesystem, so the capability-denied
+ # error is deterministic regardless of whether the path exists.
+ [case id=i18n-005-load-catalog-cap-denied level=core
+  [tags i18n load-catalog capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:load-catalog "conformance/data/i18n/messages.cx"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ # ── §3.1 catalog-merge (variadic, last-writer-wins §3.1/§6) ─────────────
+ [case id=i18n-006-catalog-merge-last-writer level=core
+  [tags i18n catalog-merge variadic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-merge [$i18n:catalog-from-map {"k": {"en": "A"}}] [$i18n:catalog-from-map {"k": {"en": "B"}}]] "k" "en" {}]
+#]]
+  [out-text [#
+B
+#]]
+ ]
+
+ # §3.1: merging zero catalogs returns [catalog default="en"]. A catalog with
+ # no entries has no keys, so catalog-keys (§3.1) returns the empty sequence ().
+ [case id=i18n-007-catalog-merge-zero level=core
+  [tags i18n catalog-merge zero edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-keys [$i18n:catalog-merge]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=i18n-008-catalog-merge-not-a-catalog level=core
+  [tags i18n catalog-merge not-a-catalog CXER3805]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-merge [$i18n:catalog-from-map {"k": {"en": "A"}}] "not-a-catalog"]
+#]]
+  [out-err [#
+cx-err:CXER3805
+#]]
+ ]
+
+ # ── §3.1 catalog-merge-seq (programmatic companion, matches merge §6) ───
+ [case id=i18n-009-catalog-merge-seq-last-writer level=core
+  [tags i18n catalog-merge-seq sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-merge-seq ([$i18n:catalog-from-map {"k": {"en": "A"}}], [$i18n:catalog-from-map {"k": {"en": "B"}}])] "k" "en" {}]
+#]]
+  [out-text [#
+B
+#]]
+ ]
+
+ # ── §3.1 catalog-locales ────────────────────────────────────────────────
+ [case id=i18n-010-catalog-locales-multi level=core
+  [tags i18n catalog-locales]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-locales [$i18n:catalog-from-map {"k": {"en": "A", "ru": "B"}}]]
+#]]
+  [out-text [#
+('en', 'ru')
+#]]
+ ]
+
+ [case id=i18n-011-catalog-locales-not-a-catalog level=core
+  [tags i18n catalog-locales not-a-catalog CXER3805]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-locales "nope"]
+#]]
+  [out-err [#
+cx-err:CXER3805
+#]]
+ ]
+
+ # ── §3.1 catalog-keys ───────────────────────────────────────────────────
+ [case id=i18n-012-catalog-keys-not-a-catalog level=core
+  [tags i18n catalog-keys not-a-catalog CXER3805]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:catalog-keys "nope"]
+#]]
+  [out-err [#
+cx-err:CXER3805
+#]]
+ ]
+
+ # ── §3.2 message (strict resolution + plural; spec §3.2 example) ────────
+ [case id=i18n-013-message-plural-ru level=core
+  [tags i18n message plural ru]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-from-map {"inbox.unread-count": {"ru": "{n, plural, one {# непрочитанное} few {# непрочитанных} many {# непрочитанных} other {# непрочитанного}}"}}] "inbox.unread-count" "ru" {"n": 5}]
+#]]
+  [out-text [#
+5 непрочитанных
+#]]
+ ]
+
+ # §3.2 example: fr-CA → fr fallback.
+ [case id=i18n-014-message-fallback-region level=core
+  [tags i18n message fallback]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}] "greeting" "fr-CA" {"name": "Marie"}]
+#]]
+  [out-text [#
+Bonjour, Marie !
+#]]
+ ]
+
+ # §6: fallback chain es-MX → es → en.
+ [case id=i18n-015-message-fallback-chain-en level=core
+  [tags i18n message fallback chain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}}] "greeting" "es-MX" {"name": "Ada"}]
+#]]
+  [out-text [#
+Hello, Ada!
+#]]
+ ]
+
+ # §3.2: unknown key under message is strict → CXER3801.
+ [case id=i18n-016-message-key-not-found level=core
+  [tags i18n message key-not-found CXER3801]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-from-map {"greeting": {"en": "Hi"}}] "missing.key" "en" {}]
+#]]
+  [out-err [#
+cx-err:CXER3801
+#]]
+ ]
+
+ # §3.2/§6: a referenced-but-absent arg raises CXER3802.
+ [case id=i18n-017-message-missing-arg level=core
+  [tags i18n message missing-arg CXER3802]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}}] "greeting" "en" {}]
+#]]
+  [out-err [#
+cx-err:CXER3802
+#]]
+ ]
+
+ # §2.1/§5: a non-catalog value raises CXER3805.
+ [case id=i18n-018-message-not-a-catalog level=core
+  [tags i18n message not-a-catalog CXER3805]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message "nope" "greeting" "en" {}]
+#]]
+  [out-err [#
+cx-err:CXER3805
+#]]
+ ]
+
+ # ── §3.2 message-or (fallback string instead of CXER3801; §6) ───────────
+ [case id=i18n-019-message-or-uses-fallback level=core
+  [tags i18n message-or fallback]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message-or [$i18n:catalog-from-map {"greeting": {"en": "Hi"}}] "missing.key" "en" {"name": "Ada"} "Hello, {name}!"]
+#]]
+  [out-text [#
+Hello, Ada!
+#]]
+ ]
+
+ # §3.2: when the key exists, message-or resolves it (fallback unused).
+ [case id=i18n-020-message-or-key-present level=core
+  [tags i18n message-or present]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message-or [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}}] "greeting" "en" {"name": "Ada"} "FB"]
+#]]
+  [out-text [#
+Hello, Ada!
+#]]
+ ]
+
+ # §3.2: missing args still raise CXER3802 even under message-or.
+ [case id=i18n-021-message-or-missing-arg level=core
+  [tags i18n message-or missing-arg CXER3802]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message-or [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}}] "greeting" "en" {} "FB"]
+#]]
+  [out-err [#
+cx-err:CXER3802
+#]]
+ ]
+
+ [case id=i18n-022-message-or-not-a-catalog level=core
+  [tags i18n message-or not-a-catalog CXER3805]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:message-or "nope" "greeting" "en" {} "FB"]
+#]]
+  [out-err [#
+cx-err:CXER3805
+#]]
+ ]
+
+ # ── §3.3 format-message (direct MessageFormat) ──────────────────────────
+ # §3.3 example: exact =0 match priority.
+ [case id=i18n-023-format-message-exact-zero level=core
+  [tags i18n format-message plural exact]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{count, plural, =0 {no items} one {# item} other {# items}}" "en" {"count": 0}]
+#]]
+  [out-text [#
+no items
+#]]
+ ]
+
+ # §3.4 interpolation: bare {name} verbatim string.
+ [case id=i18n-024-format-message-interpolation level=core
+  [tags i18n format-message interpolation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "Hello, {name}!" "en" {"name": "Ada"}]
+#]]
+  [out-text [#
+Hello, Ada!
+#]]
+ ]
+
+ # §3.4/§6: numeric interpolation delegates to locale (en grouping).
+ [case id=i18n-025-format-message-number-en level=core
+  [tags i18n format-message interpolation number locale]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "Total: {n}" "en" {"n": 1234567}]
+#]]
+  [out-text [#
+Total: 1,234,567
+#]]
+ ]
+
+ # §6: CLDR plural en — one (n=1).
+ [case id=i18n-026-format-message-plural-en-one level=core
+  [tags i18n format-message plural en]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{n, plural, one {# item} other {# items}}" "en" {"n": 1}]
+#]]
+  [out-text [#
+1 item
+#]]
+ ]
+
+ # §6: CLDR plural en — other (n=2).
+ [case id=i18n-027-format-message-plural-en-other level=core
+  [tags i18n format-message plural en other]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{n, plural, one {# item} other {# items}}" "en" {"n": 2}]
+#]]
+  [out-text [#
+2 items
+#]]
+ ]
+
+ # §3.4/§6 SelectOrdinal en: 1 → 1st.
+ [case id=i18n-028-format-message-selectordinal-1st level=core
+  [tags i18n format-message selectordinal en]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{place, selectordinal, one {#st} two {#nd} few {#rd} other {#th}}" "en" {"place": 1}]
+#]]
+  [out-text [#
+1st
+#]]
+ ]
+
+ # §3.4/§6 SelectOrdinal en: 11 → 11th (teens override).
+ [case id=i18n-029-format-message-selectordinal-11th level=core
+  [tags i18n format-message selectordinal en teens]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{place, selectordinal, one {#st} two {#nd} few {#rd} other {#th}}" "en" {"place": 11}]
+#]]
+  [out-text [#
+11th
+#]]
+ ]
+
+ # §3.4/§6 Select: exact keyword match.
+ [case id=i18n-030-format-message-select-match level=core
+  [tags i18n format-message select]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{gender, select, male {He} female {She} other {They}}" "en" {"gender": "female"}]
+#]]
+  [out-text [#
+She
+#]]
+ ]
+
+ # §3.4/§6 Select: unmatched → other catch-all.
+ [case id=i18n-031-format-message-select-other level=core
+  [tags i18n format-message select other]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{gender, select, male {He} female {She} other {They}}" "en" {"gender": "nonbinary"}]
+#]]
+  [out-text [#
+They
+#]]
+ ]
+
+ # §5/§6: unbalanced braces → CXER3800 at parse.
+ [case id=i18n-032-format-message-unbalanced level=core
+  [tags i18n format-message invalid CXER3800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "Hello, {name" "en" {"name": "Ada"}]
+#]]
+  [out-err [#
+cx-err:CXER3800
+#]]
+ ]
+
+ # §4/§5/§6: plural form missing required other → CXER3800 at parse.
+ [case id=i18n-033-format-message-plural-no-other level=core
+  [tags i18n format-message invalid plural CXER3800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{n, plural, one {# item}}" "en" {"n": 1}]
+#]]
+  [out-err [#
+cx-err:CXER3800
+#]]
+ ]
+
+ # §5/§6: missing referenced arg → CXER3802.
+ [case id=i18n-034-format-message-missing-arg level=core
+  [tags i18n format-message missing-arg CXER3802]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "Hello, {name}!" "en" {}]
+#]]
+  [out-err [#
+cx-err:CXER3802
+#]]
+ ]
+
+ # §5: plural arg non-numeric → CXER3803.
+ [case id=i18n-035-format-message-arg-type-mismatch level=core
+  [tags i18n format-message arg-type CXER3803]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:format-message "{n, plural, one {# item} other {# items}}" "en" {"n": "lots"}]
+#]]
+  [out-err [#
+cx-err:CXER3803
+#]]
+ ]
+
+ # ── §3.5 plural-category (cardinal CLDR; spec examples) ─────────────────
+ [case id=i18n-036-plural-category-en-one level=core
+  [tags i18n plural-category en atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category 1 "en"]
+#]]
+  [out-text [#
+:one
+#]]
+ ]
+
+ # §3.5 example: ru n=2 → few.
+ [case id=i18n-037-plural-category-ru-few level=core
+  [tags i18n plural-category ru atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category 2 "ru"]
+#]]
+  [out-text [#
+:few
+#]]
+ ]
+
+ # §3.5 example: ru n=5 → many.
+ [case id=i18n-038-plural-category-ru-many level=core
+  [tags i18n plural-category ru atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category 5 "ru"]
+#]]
+  [out-text [#
+:many
+#]]
+ ]
+
+ # §3.5 example: ar n=0 → zero.
+ [case id=i18n-039-plural-category-ar-zero level=core
+  [tags i18n plural-category ar atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category 0 "ar"]
+#]]
+  [out-text [#
+:zero
+#]]
+ ]
+
+ # §4/§6: missing CLDR data degrades soft to :other (no raise).
+ # Uses a syntactically-valid but data-absent locale subtag.
+ [case id=i18n-040-plural-category-data-degrade level=core
+  [tags i18n plural-category degrade other atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category 2 "zxx"]
+#]]
+  [out-text [#
+:other
+#]]
+ ]
+
+ # ── §3.5 plural-category-ordinal (ordinal CLDR) ─────────────────────────
+ # §3.4 selectordinal en example basis: place=1 → one (ordinal).
+ [case id=i18n-041-plural-category-ordinal-en-one level=core
+  [tags i18n plural-category-ordinal en atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category-ordinal 1 "en"]
+#]]
+  [out-text [#
+:one
+#]]
+ ]
+
+ # §3.4 selectordinal en example basis: place=2 → two (ordinal).
+ [case id=i18n-042-plural-category-ordinal-en-two level=core
+  [tags i18n plural-category-ordinal en two atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category-ordinal 2 "en"]
+#]]
+  [out-text [#
+:two
+#]]
+ ]
+
+ # §3.4 selectordinal en example basis: place=11 → other (teens → th).
+ [case id=i18n-043-plural-category-ordinal-en-other level=core
+  [tags i18n plural-category-ordinal en other atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category-ordinal 11 "en"]
+#]]
+  [out-text [#
+:other
+#]]
+ ]
+
+ # §4/§6: missing CLDR ordinal data degrades soft to :other.
+ [case id=i18n-044-plural-category-ordinal-degrade level=core
+  [tags i18n plural-category-ordinal degrade other atom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/i18n']
+[$i18n:plural-category-ordinal 2 "zxx"]
+#]]
+  [out-text [#
+:other
+#]]
+ ]
+ [case id=i18n-045-load-catalog-granted level=core gate=enforced grant='read write'
+  [tags i18n load-catalog granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/i18n']
+[?let [= $d [$io:temp-dir "cxc"]]
+  [?let [= $p [$path:join $d "cat.cx"]]
+    [?let [= $w [$io:write-file $p "[catalog default=\"en\" [entry key=\"greeting\" [msg locale=\"en\" Hello]]]"]]
+      [?let [= $cat [$i18n:load-catalog $p]] $cat@default]]]]
+#]]
+  [out-text [#
+'en'
+#]]
+ ]
+
+]

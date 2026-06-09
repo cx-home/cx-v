@@ -1,0 +1,13 @@
+[?def pub-a
+  :scope public
+  (x)
+  x]
+
+[?def pub-b
+  :scope public
+  (x)
+  x]
+
+[?def hidden-c
+  (x)
+  [* x 100]]

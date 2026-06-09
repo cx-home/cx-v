@@ -156,6 +156,13 @@ for all language implementations.
 
 ## Conformance Contract
 
+### Reference platform — POSIX
+
+Fixtures with host-dependent output (`path/separator`, `path/list-separator`,
+`locale/default-locale`, `locale/list-locales`, `time/system-timezone`) assert
+the values correct on the POSIX reference host; on other platforms these are
+expected to differ.
+
 ### Format conformance
 
 The 122 format tests are distributed across 4 files:

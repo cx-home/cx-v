@@ -1,0 +1,633 @@
+[test-suite name=store
+  [doc [#
+conformance fixtures for cx-stdlib/store (spec/std-lib/store.md §8).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/store']
+   (resolver MUST be quoted) then calls [$store:fn args]. The LAST
+   expression is the rendered result. Multi-step programs thread a single
+   Store handle through nested [?let [= $s …] …] bindings.
+
+   TWO FIXTURE FAMILIES, split by backend tier (§2.2):
+
+   (A) mem:// FUNCTIONAL MATRIX — the Memory tier (§2.2.1) is pure
+   in-process: no filesystem, no network. Per §9 it requires NO host
+   capability (D-STORE-1), so these run to completion under the runner's
+   empty capability set and assert real content-addressed behavior:
+   round-trip, automatic dedup, doc identity (SHA-256 of strict canonical
+   bytes, §2.1), not-found / read-only / closed errors, the alias layer
+   (§3.9), immutable modify (§3.6), and lossless migrate (§3.10). The
+   `golden-hash`-tagged case pins the exact 64-char hex identity recorded
+   from the live binary; it equals `cx hash` of the same doc's canonical
+   form, confirming the Layer-1 hash surface (spec/misc/bindings.md).
+
+   (B) file:// CAPABILITY-DENY PATHS — a file/local backend touches the
+   filesystem, so per §9 `open`/`open-opts` are capability-gated. With no
+   active grant in the evaluator (deny-by-default, security.md §2/§4) the
+   gated open raises E_CAP_DENIED = cx-err:CXER0271. Only `open` and
+   `open-opts` are observable here: every other function takes a
+   $store::element that can only be produced by a SUCCESSFUL open, and CX
+   errors are values (not propagating exceptions) — a denied open in the
+   store-argument position yields an err-node VALUE, which the outer call
+   rejects as a bad operand (CXER0100), not a capability denial. The
+   per-function file:// deny paths (put/get/list/modify/delete/alias/
+   migrate requiring read/write) therefore need a backend whose open
+   SUCCEEDS under a partial grant; they are deferred to the
+   capability-granted integration harness along with the grant surface.
+
+   STORE-SPECIFIC ERROR CODES on the file:// backend (CXER1100/1101/1120/
+   1131/1132; §7) likewise fire only behind a granted open and are
+   deferred. The mem:// matrix asserts the store-specific codes it can
+   reach without a grant: CXER1110 (read-only), CXER1121 (not-found),
+   CXER1130 (closed).
+
+   DEFERRED to the integration suite (flagged, not dropped): cross-backend
+   / cross-encoding / cross-binding parity, compression, sharded layout,
+   integrity-corruption (CXER1120), auth (CXER1131), rate-limit (CXER1132),
+   alias-persistence-across-reopen, concurrent writers, streaming-memory
+   bounds, and `query` over CXPath (§3.5) — the path argument is evaluated
+   before reaching the call, so query needs CXPath-as-value semantics +
+   the full path engine, out of scope for this landing.
+
+   NOTE: no inter-fixture comment blocks appear between cases (a comment
+   between sections risks capture into the preceding section payload);
+   all explanatory prose lives in this doc header or in tags.
+#]]
+
+ [- ── (A) mem:// functional matrix — capability-free (§9, D-STORE-1) ── -]
+
+ [case id=store-rt-001-round-trip-get level=core
+  [tags store mem put-doc get-doc round-trip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:get-doc $s $h]]]
+#]]
+  [out-text [#
+[doc [item 'hello']]
+#]]
+ ]
+
+ [case id=store-rt-002-dedup-list level=core
+  [tags store mem put-doc list-docs dedup]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "hello"]]]] [$store:list-docs $s]]]]
+#]]
+  [out-text [#
+('01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9')
+#]]
+ ]
+
+ [case id=store-id-001-golden-hash level=core
+  [tags store mem put-doc identity golden-hash]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:put-doc $s [doc [item "hello"]]]]
+#]]
+  [out-text [#
+'01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'
+#]]
+ ]
+
+ [case id=store-id-002-put-twice-same-hash level=core
+  [tags store mem put-doc identity dedup]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "hello"]]]] [= $h1 $h2]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-id-003-distinct-docs-distinct-hash level=core
+  [tags store mem put-doc identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "a"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "b"]]]] [= $h1 $h2]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-ex-001-exists-true level=core
+  [tags store mem exists]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:exists $s $h]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-ex-002-exists-false level=core
+  [tags store mem exists]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:exists $s "deadbeef"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-err-001-get-not-found level=core
+  [tags store mem get-doc CXER1121]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:get-doc $s "deadbeef"]]
+#]]
+  [out-err [#
+cx-err:CXER1121
+#]]
+ ]
+
+ [case id=store-ro-001-readonly-put level=core
+  [tags store mem put-doc read-only CXER1110]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open-opts "mem://" [map read-only="true"]]] [$store:put-doc $s [doc [item "x"]]]]
+#]]
+  [out-err [#
+cx-err:CXER1110
+#]]
+ ]
+
+ [case id=store-ro-002-readonly-delete level=core
+  [tags store mem delete-doc read-only CXER1110]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open-opts "mem://" [map read-only="true"]]] [$store:delete-doc $s "deadbeef"]]
+#]]
+  [out-err [#
+cx-err:CXER1110
+#]]
+ ]
+
+ [case id=store-life-001-capabilities-shape level=core
+  [tags store mem capabilities]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:capabilities $s]]
+#]]
+  [out-text [#
+[map read=true write=true list=true backend=mem url='mem://' compression=none encoding=cxbin]
+#]]
+ ]
+
+ [case id=store-life-002-closed-store-errors level=core
+  [tags store mem close CXER1130]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $c [$store:close $s]] [$store:list-docs $s]]]
+#]]
+  [out-err [#
+cx-err:CXER1130
+#]]
+ ]
+
+ [case id=store-013-close-granted-behavior level=core
+  [tags store mem close]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:close $s]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=store-del-001-delete-true level=core
+  [tags store mem delete-doc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:delete-doc $s $h]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-del-002-delete-missing-false level=core
+  [tags store mem delete-doc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:delete-doc $s "deadbeef"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-del-003-delete-then-absent level=core
+  [tags store mem delete-doc exists]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $d [$store:delete-doc $s $h]] [$store:exists $s $h]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-alias-001-set-get level=core
+  [tags store mem set-alias get-alias]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:get-alias $s "latest"]]]]
+#]]
+  [out-text [#
+'01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'
+#]]
+ ]
+
+ [- SAP C1 §1: an alias miss is the ABSENCE channel (the empty sequence
+    `()`, code.md §9.1.2), NEVER `null` (the §9.1.2.1 no-conflation guard). -]
+ [case id=store-alias-002-get-missing-absence level=core
+  [tags store mem get-alias absence sap c1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:get-alias $s "nope"]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [- SAP C1: getOrElse over an alias miss — `[?else]` coalesces absence to the
+    default (§8.13), proving the alias-miss empty IS the absence channel. -]
+ [case id=sap-absence-store-01-alias-miss-else level=core
+  [tags store mem get-alias absence else getorelse sap c1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?else [$store:get-alias $s "nope"] "fallback"]]
+#]]
+  [out-text [#
+'fallback'
+#]]
+ ]
+
+ [- SAP C1: a RESOLVED alias still returns its hash (present value flows) —
+    pins that the cutover did not turn every alias return into absence. -]
+ [case id=sap-absence-store-02-alias-hit-value level=core
+  [tags store mem get-alias set-alias absence sap c1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "head" $h]] [$count [$store:get-alias $s "head"]]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=store-alias-003-list level=core
+  [tags store mem list-aliases]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:list-aliases $s]]]]
+#]]
+  [out-text [#
+([alias name=latest hash='01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'])
+#]]
+ ]
+
+ [case id=store-alias-004-delete-true level=core
+  [tags store mem delete-alias]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:delete-alias $s "latest"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-alias-005-set-missing-hash level=core
+  [tags store mem set-alias CXER1121]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:set-alias $s "x" "deadbeef"]]
+#]]
+  [out-err [#
+cx-err:CXER1121
+#]]
+ ]
+
+ [case id=store-alias-006-delete-missing-false level=core
+  [tags store mem delete-alias]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:delete-alias $s "nope"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-mod-001-immutable-new-hash level=core
+  [tags store mem modify-doc immutability]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:modify-doc $s $h [set-attr name=v value="x"]]] [= $h $h2]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-mod-002-original-retained level=core
+  [tags store mem modify-doc immutability]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:modify-doc $s $h [set-attr name=v value="x"]]] [$store:exists $s $h]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-mig-001-report level=core
+  [tags store mem migrate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $a [$store:open "mem://"]] [?let [= $h [$store:put-doc $a [doc [item "hello"]]]] [?let [= $b [$store:open "mem://"]] [$store:migrate $a $b]]]]
+#]]
+  [out-text [#
+[migration-report doc-count=1 hashes-verified=1 bytes-written=20]
+#]]
+ ]
+
+ [case id=store-mig-002-doc-preserved level=core
+  [tags store mem migrate get-doc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $a [$store:open "mem://"]] [?let [= $h [$store:put-doc $a [doc [item "hello"]]]] [?let [= $b [$store:open "mem://"]] [?let [= $m [$store:migrate $a $b]] [$store:get-doc $b $h]]]]]
+#]]
+  [out-text [#
+[doc [item 'hello']]
+#]]
+ ]
+
+ [case id=store-list-001-two-docs level=core
+  [tags store mem list-docs]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "a"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "b"]]]] [$store:list-docs $s]]]]
+#]]
+  [out-text [#
+('5983f412523c65a91811045dcec65275781457f0d986c09600740ca91cc96762', 'c04da92110f3dab497ddbc323581161da20b797a508958d8a624ef9f23a4de23')
+#]]
+ ]
+
+ [case id=store-iter-001-entry-pairs level=core
+  [tags store mem iter-docs]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:iter-docs $s]]]
+#]]
+  [out-text [#
+([entry hash='01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9' [doc [item 'hello']]])
+#]]
+ ]
+
+ [- ── (B) file:// open / open-opts capability-deny paths (CXER0271) ── -]
+
+ [case id=store-001-open-cap-denied level=core
+  [tags store open capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open "file:///var/data/store/"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=store-002-open-opts-cap-denied level=core
+  [tags store open-opts capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open-opts "file:///var/data/store/" [map compression="zst" encoding="cxbin"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- ── Effort B granted-harness pilot: `grant=` injects a least-privilege
+    capability set for this case (vs the empty deny-lane default). With the
+    read/write grant the file:// open clears the capability gate (no longer
+    CXER0271, cf. store-001) and reaches the now-functional file:// backend
+    (§2.2.1 LocalFiles), which opens a real on-disk Store. This proves the
+    per-fixture [grant] path end-to-end against the same effect point
+    store-001 denies. The file:// behavior cases below are kept hermetic by
+    rooting each Store at a fresh `io/temp-dir`. ── -]
+ [case id=store-003-open-file-granted-reaches-backend level=core grant='read write'
+  [tags store open capability grant effort-b file-backend]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [?let [= $s [$store:open $u]] $s@backend]]
+#]]
+  [out-text [#
+'file'
+#]]
+ ]
+
+ [case id=store-014-file-put-get-roundtrip-granted level=core grant='read write'
+  [tags store put-doc get-doc file-backend roundtrip granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [?let [= $s [$store:open $u]] [?let [= $h [$store:put-doc $s [user name=z]]] [$store:get-doc $s $h]]]]
+#]]
+  [out-text [#
+[user name=z]
+#]]
+ ]
+
+ [case id=store-015-file-persists-across-opens-granted level=core grant='read write'
+  [tags store put-doc list-docs file-backend persistence granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [?let [= $s1 [$store:open $u]] [?let [= $h [$store:put-doc $s1 [user name=z]]] [?let [= $s2 [$store:open $u]] [$count [$store:list-docs $s2]]]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=store-016-file-alias-persists-granted level=core grant='read write'
+  [tags store set-alias get-alias file-backend persistence granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [?let [= $s1 [$store:open $u]] [?let [= $h [$store:put-doc $s1 [user name=z]]] [?let [= $a [$store:set-alias $s1 "current" $h]] [?let [= $s2 [$store:open $u]] [= [$store:get-alias $s2 "current"] $h]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [- ── put-doc-stream + query (mem://, no host capability; §3.2 / §3.5) ── -]
+ [case id=store-017-put-doc-stream-equals-put-doc level=core
+  [tags store put-doc-stream put-doc mem]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $a [$store:put-doc $s [user name=al]]] [?let [= $b [$store:put-doc-stream $s [user name=al]]] [= $a $b]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-018-query-descendant-match level=core
+  [tags store query mem cxpath]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [root [user name=al]]]] [$count [$store:query $s "//user"]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=store-019-query-no-match-empty level=core
+  [tags store query mem empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [root [user name=al]]]] [$count [$store:query $s "//missing"]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+]

@@ -1,0 +1,178 @@
+[test-suite name=diff
+  [doc [#
+# CX Conformance — cx diff
+# Version: 1.0 — 2026-05-08
+# Covers: data-equivalence, attribute changes, element changes, body
+#         changes, type-annotation changes, format outputs (unified/
+#         json/summary), exit-code semantics.
+#
+# Each test runs `cx diff` on `in_a` and `in_b`. The empty
+# `expected_unified` / `expected_summary` sections mean "no output
+# expected" (data-equivalent inputs); the runner asserts the output
+# is empty AND that the change list is empty.
+#]]
+
+ [case id=001-data-equivalent-identical level=core
+  [tags diff equiv]
+  [in-a [#
+[server host=localhost]
+#]]
+  [in-b [#
+[server host=localhost]
+#]]
+  [expected-unified [##]]
+  [expected-summary [#
+no changes
+#]]
+ ]
+
+ [case id=002-data-equivalent-attribute-reorder level=core
+  [tags diff equiv attribute-order]
+  [in-a [#
+[server host=localhost tls=true port=8080]
+#]]
+  [in-b [#
+[server tls=true port=8080 host=localhost]
+#]]
+  [expected-unified [##]]
+  [expected-summary [#
+no changes
+#]]
+ ]
+
+ [case id=003-data-equivalent-comments-stripped level=core
+  [tags diff equiv comments]
+  [in-a [#
+[server host=localhost]
+#]]
+  [in-b [#
+[- a leading comment]
+[server host=localhost]
+[- a trailing comment]
+#]]
+  [expected-unified [##]]
+  [expected-summary [#
+no changes
+#]]
+ ]
+
+ [case id=004-data-equivalent-whitespace level=core
+  [tags diff equiv whitespace]
+  [in-a [#
+[server host=localhost
+  [port::u16 8080]
+]
+#]]
+  [in-b [#
+[server host=localhost [port::u16 8080]]
+#]]
+  [expected-unified [##]]
+  [expected-summary [#
+no changes
+#]]
+ ]
+
+ [case id=010-attribute-changed level=core
+  [tags diff attribute-changed]
+  [in-a [#
+[server host=localhost]
+#]]
+  [in-b [#
+[server host=acme.com]
+#]]
+  [expected-unified [#
+@@ /server/@host @@
+- host=localhost
++ host=acme.com
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 1 attribute, 0 body
+#]]
+ ]
+
+ [case id=011-attribute-added level=core
+  [tags diff attribute-added]
+  [in-a [#
+[server host=localhost]
+#]]
+  [in-b [#
+[server host=localhost tls=true]
+#]]
+  [expected-unified [#
+@@ /server/@tls @@
++ tls=true
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 1 attribute, 0 body
+#]]
+ ]
+
+ [case id=012-attribute-removed level=core
+  [tags diff attribute-removed]
+  [in-a [#
+[server host=localhost tls=true]
+#]]
+  [in-b [#
+[server host=localhost]
+#]]
+  [expected-unified [#
+@@ /server/@tls @@
+- tls=true
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 1 attribute, 0 body
+#]]
+ ]
+
+ [case id=020-element-added-tail level=core
+  [tags diff element-added]
+  [in-a [#
+[a 1] [b 2]
+#]]
+  [in-b [#
+[a 1] [b 2] [c 3]
+#]]
+  [expected-summary [#
+1 change(s): 1 element, 0 attribute, 0 body
+#]]
+ ]
+
+ [case id=021-element-removed-tail level=core
+  [tags diff element-removed]
+  [in-a [#
+[a 1] [b 2] [c 3]
+#]]
+  [in-b [#
+[a 1] [b 2]
+#]]
+  [expected-summary [#
+1 change(s): 1 element, 0 attribute, 0 body
+#]]
+ ]
+
+ [case id=030-body-scalar-changed level=core
+  [tags diff body-changed]
+  [in-a [#
+[port 8080]
+#]]
+  [in-b [#
+[port 443]
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 0 attribute, 1 body
+#]]
+ ]
+
+ [case id=040-type-annotation-changed level=core
+  [tags diff type-changed]
+  [in-a [#
+[port::u32 8080]
+#]]
+  [in-b [#
+[port::u16 8080]
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 0 attribute, 1 body
+#]]
+ ]
+]

@@ -1,12 +1,12 @@
-// T1 — evaluator-feature microbench harness (v0.7.0).
+// T1 — evaluator-feature microbench harness.
 //
 // Standalone runnable benchmark — `make bench-eval` (or `v run`).
-// Measures the median latency of each v0.7.0 evaluator-surface
-// addition on a representative input so per-feature regressions
-// show up in the V7 perf gate. Each bench case lives in its own
-// stanza for `scripts/run_bench_json.py` to parse.
+// Measures the median latency of each evaluator-surface addition on
+// a representative input so per-feature regressions show up in the
+// V7 perf gate. Each bench case lives in its own stanza for
+// `scripts/run_bench_json.py` to parse.
 //
-// Coverage per spec/v0_7_0_status.md T1:
+// Coverage (T1):
 //   - FLWOR clauses (where, count, order-by, group-by, tumbling)
 //   - ?fn calls (high-frequency invocation)
 //   - Partial application
@@ -20,7 +20,7 @@
 
 module main
 
-import cx
+import code
 import time
 import os
 
@@ -30,8 +30,8 @@ const measured_runs = 25
 
 fn run_once(input string, program string) i64 {
 	t0 := time.now()
-	_ := cx.eval_cxl(input, program, '') or {
-		panic('eval_cxl failed for "${program}": ${err}')
+	_ := code.eval_code(input, program, '') or {
+		panic('eval_code failed for "${program}": ${err}')
 	}
 	return time.since(t0).microseconds()
 }
@@ -60,13 +60,13 @@ fn main() {
 		panic('cannot read ${fixture_path}: ${err}')
 	}
 
-	println('Evaluator-feature microbench (T1 / v0.7.0)')
+	println('Evaluator-feature microbench (T1)')
 	println('  fixture        : ${fixture_path} (${input.len} bytes)')
 	println('  warmup runs    : ${warmup_runs}')
 	println('  measured runs  : ${measured_runs}')
 	println('')
 
-	// FLWOR — the v0.7.0 additions over the v0.6.0 ?for baseline.
+	// FLWOR — additions over the bare ?for baseline.
 	bench('flwor.where',
 		input,
 		'[?for s :in //service :where @id :return [?=s/@id];]')

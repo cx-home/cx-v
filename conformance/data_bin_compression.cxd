@@ -1,0 +1,155 @@
+[test-suite name=data-bin-compression
+  [doc [#
+# CX Conformance — data_bin page-compression round-trips
+# Version: 0.1 — 2026-05-09 (spec-lock; awaiting V core impl)
+# Covers: spec/core/data-bin.md §3.12, D2.
+#
+# These are SPEC-LOCK fixtures. Verification at impl time covers:
+#   1. cx_hash(plain_chunked) == cx_hash(zstd_compressed_chunked)
+#      — compression doesn't change the file hash.
+#   2. cx_hash is invariant across zstd compression levels (-1, -3, -19).
+#   3. A row group with an unknown codec id fails decode with `D005`.
+#   4. A document mixing plain + compressed row groups round-trips
+#      through cx_canonical to a document where compression decisions
+#      follow the writer's policy (typically: plain for small groups,
+#      compressed for >64 KiB groups).
+#]]
+
+ [case id=cmp-001-uncompressed-vs-zstd1-equal-hash level=extended
+  [tags data_bin compression hash_invariance]
+  [in-cx [#
+[logs [table[ts::datetime level::string msg::string]]
+  2026-05-09T10:00:00Z info 'request received from upstream'
+  2026-05-09T10:00:01Z warn 'slow database query on users table'
+  2026-05-09T10:00:02Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:03Z info 'request received from upstream'
+  2026-05-09T10:00:04Z warn 'slow database query on users table'
+  2026-05-09T10:00:05Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:06Z info 'request received from upstream'
+  2026-05-09T10:00:07Z warn 'slow database query on users table'
+  2026-05-09T10:00:08Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:09Z info 'request received from upstream'
+  2026-05-09T10:00:10Z warn 'slow database query on users table'
+  2026-05-09T10:00:11Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:12Z info 'request received from upstream'
+  2026-05-09T10:00:13Z warn 'slow database query on users table'
+  2026-05-09T10:00:14Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:15Z info 'request received from upstream'
+  2026-05-09T10:00:16Z warn 'slow database query on users table'
+  2026-05-09T10:00:17Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:18Z info 'request received from upstream'
+  2026-05-09T10:00:19Z warn 'slow database query on users table'
+  2026-05-09T10:00:20Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:21Z info 'request received from upstream'
+  2026-05-09T10:00:22Z warn 'slow database query on users table'
+  2026-05-09T10:00:23Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:24Z info 'request received from upstream'
+  2026-05-09T10:00:25Z warn 'slow database query on users table'
+  2026-05-09T10:00:26Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:27Z info 'request received from upstream'
+  2026-05-09T10:00:28Z warn 'slow database query on users table'
+  2026-05-09T10:00:29Z error 'database timeout — connection pool exhausted'
+]
+#]]
+  [assert-hash-compression-invariance [#
+plain zstd1 zstd19
+#]]
+  [assert-compressed-size-lt [#
+zstd1 plain
+#]]
+ ]
+
+ [case id=cmp-002-mixed-plain-and-compressed-row-groups level=extended
+  [tags data_bin compression mixed]
+  [meta [#
+chunk_at: 30
+#]]
+  [in-cx [#
+[logs [table[ts::datetime level::string msg::string]]
+  2026-05-09T10:00:00Z info 'request received from upstream'
+  2026-05-09T10:00:01Z warn 'slow database query on users table'
+  2026-05-09T10:00:02Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:03Z info 'request received from upstream'
+  2026-05-09T10:00:04Z warn 'slow database query on users table'
+  2026-05-09T10:00:05Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:06Z info 'request received from upstream'
+  2026-05-09T10:00:07Z warn 'slow database query on users table'
+  2026-05-09T10:00:08Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:09Z info 'request received from upstream'
+  2026-05-09T10:00:10Z warn 'slow database query on users table'
+  2026-05-09T10:00:11Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:12Z info 'request received from upstream'
+  2026-05-09T10:00:13Z warn 'slow database query on users table'
+  2026-05-09T10:00:14Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:15Z info 'request received from upstream'
+  2026-05-09T10:00:16Z warn 'slow database query on users table'
+  2026-05-09T10:00:17Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:18Z info 'request received from upstream'
+  2026-05-09T10:00:19Z warn 'slow database query on users table'
+  2026-05-09T10:00:20Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:21Z info 'request received from upstream'
+  2026-05-09T10:00:22Z warn 'slow database query on users table'
+  2026-05-09T10:00:23Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:24Z info 'request received from upstream'
+  2026-05-09T10:00:25Z warn 'slow database query on users table'
+  2026-05-09T10:00:26Z error 'database timeout — connection pool exhausted'
+  2026-05-09T10:00:27Z info 'request received from upstream'
+  2026-05-09T10:00:28Z warn 'slow database query on users table'
+  2026-05-09T10:00:29Z error 'database timeout — connection pool exhausted'
+]
+#]]
+  [assert-hash-compression-invariance [#
+plain auto zstd1 zstd19
+#]]
+ ]
+
+ [case id=cmp-003-unknown-codec-rejected level=extended
+  [tags data_bin compression error]
+  [in-data-bin-hex [#
+43 58 43 6F 6C 01 01 40 00 00 00 00    # CXCol header
+63 02 30 04 6E 61 6D 65 30 30 05 73 63 6F 72 65 12  # 0x63 + 2 cols
+07                                     # body_byte_len = 7
+90                                     # body-tag 0x90 (compressed)
+FF                                     # codec id 0xFF (unknown)
+05 03                                  # uncomp_len=5, comp_len=3
+DE AD BE                               # 3 frame bytes (garbage; rejected at codec-id check)
+00                                     # end-of-table marker
+#]]
+  [expected-decode-error [#
+D005: unknown compression codec id 0xff (zstd v1 = 0x01 expected)
+#]]
+ ]
+
+ [case id=cmp-004-codec-id-zero-rejected-in-canonical level=extended
+  [tags data_bin compression canonical]
+  [in-data-bin-hex [#
+43 58 43 6F 6C 01 01 40 00 00 00 00    # CXCol header
+63 02 30 04 6E 61 6D 65 30 30 05 73 63 6F 72 65 12  # 0x63 + 2 cols
+07                                     # body_byte_len = 7
+90                                     # body-tag 0x90 (compressed)
+00                                     # codec id 0x00 (reserved)
+05 03                                  # uncomp_len=5, comp_len=3
+DE AD BE                               # 3 frame bytes (garbage; rejected at codec-id check)
+00                                     # end-of-table marker
+#]]
+  [expected-decode-error [#
+D005: codec id 0x00 reserved; use plain body-tag 0x01 for uncompressed row groups
+#]]
+ ]
+
+ [case id=cmp-005-fd-streaming-write-bounded-memory level=extended
+  [tags data_bin compression streaming fd synth]
+  [meta [#
+chunk_at: 65536
+#]]
+  [synth-table-schema [#
+[t [table[id::int v::string]]]
+#]]
+  [synth-table-rows [#
+1
+#]]
+  [assert-streaming-write-bounded-memory [#
+65536 1 100 1.50
+#]]
+ ]
+]

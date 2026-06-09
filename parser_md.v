@@ -61,7 +61,7 @@ fn parse_yaml_frontmatter(lines []string) []Attribute {
 		key := line[..colon_idx].trim_space()
 		val := line[colon_idx + 1..].trim_space()
 		if key.len > 0 {
-			attrs << Attribute{ name: key, value: ScalarValue(val), data_type: none }
+			attrs << Attribute{ name: key, value: ScalarValue(val) }
 		}
 	}
 	return attrs
@@ -112,7 +112,7 @@ fn parse_md_block(lines []string, idx int) (?Node, int) {
 		code_text := code_lines.join('\n')
 		mut attrs := []Attribute{}
 		if lang.len > 0 {
-			attrs << Attribute{ name: 'lang', value: ScalarValue(lang), data_type: none }
+			attrs << Attribute{ name: 'lang', value: ScalarValue(lang) }
 		}
 		// Use RawTextNode ([#..#]) unless content contains #] which would
 		// prematurely terminate it. In that case use BlockContentNode ([|..|])
@@ -492,8 +492,8 @@ fn parse_md_inline_inner(src string, start int, stop_marker string) ([]Node, int
 						text_buf = ''
 					}
 					img_attrs := [
-						Attribute{ name: 'src', value: ScalarValue(url), data_type: none },
-						Attribute{ name: 'alt', value: ScalarValue(alt), data_type: none },
+						Attribute{ name: 'src', value: ScalarValue(url) },
+						Attribute{ name: 'alt', value: ScalarValue(alt) },
 					]
 					img_elem := Element{ name: 'img', attrs: img_attrs }
 					nodes << img_elem
@@ -527,7 +527,7 @@ fn parse_md_inline_inner(src string, start int, stop_marker string) ([]Node, int
 						text_buf = ''
 					}
 					link_inner := parse_md_inline(link_text)
-					a_attrs := [Attribute{ name: 'href', value: ScalarValue(url), data_type: none }]
+					a_attrs := [Attribute{ name: 'href', value: ScalarValue(url) }]
 					a_elem := Element{ name: 'a', attrs: a_attrs, items: link_inner }
 					nodes << a_elem
 					i = k + 1

@@ -51,7 +51,7 @@ pub fn (e Element) has_attr(name string) bool {
 }
 
 // attr_val returns the typed value of the named attribute, or none if absent.
-fn (e Element) attr_val(name string) ?ScalarValue {
+pub fn (e Element) attr_val(name string) ?ScalarValue {
 	for a in e.attrs {
 		if a.name == name {
 			return a.value

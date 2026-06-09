@@ -4,7 +4,7 @@ import strconv
 
 // CX schema validator (Phase 7.74c-schema-validator-v-core, bootstrap).
 //
-// Implements ADR 0009 + spec/schema.md §10 — walks a parsed Document
+// Implements spec/schema.md §10 — walks a parsed Document
 // against a parsed schema (`.cxs`), accumulating diagnostics in
 // document order without short-circuiting (spec §10.2).
 //
@@ -29,7 +29,7 @@ import strconv
 //   S018 — length violation (:len='M..N' — byte length)
 //   S019 — required content missing
 //   S020 — schema-version unsupported
-//   S023 — body :ref shape mismatch (v0.7.0 GG10 / ADR 0003 D1)
+// S023 — body :ref shape mismatch (GG10)
 //
 // The validator reads its rules from the unified SchemaModel (defined
 // in data_bin_schema_driven.v); no second AST walk happens here.
@@ -128,7 +128,7 @@ pub:
 	mode_override ?SchemaMode  // CLI `--mode=open|strict|closed` override
 }
 
-// validate runs the v0.6.0-bootstrap schema validator. Returns a
+// validate runs the bootstrap schema validator. Returns a
 // report with zero diagnostics when the document satisfies every
 // implemented rule.
 //
@@ -235,7 +235,7 @@ fn schema_load_diag(msg string) Diagnostic {
 // preserved in `modified_doc`; defaults only fill genuinely-missing
 // slots.
 //
-// v0.6.0 bootstrap: defaults are applied for missing attributes whose
+// Bootstrap: defaults are applied for missing attributes whose
 // schema declares `:def=<value>`. Body / child-element defaults are
 // TODO(phase-7.74d): rule S011.
 pub fn validate_with_defaults(doc Document, schema_text string, opts ValidateOptions) !ValidationReport {
@@ -469,7 +469,7 @@ fn validate_element(e Element, type_name string, sm SchemaModel, mut diags []Dia
 		}
 	}
 
-	// ADR 0017 §D15 — container productions `arr[T]` / `seq[T]` /
+	// container productions `arr[T]` / `seq[T]`
 	// `map[K, V]`. The body must carry exactly one collection literal
 	// of the declared kind, and each item must match the declared
 	// item type (and key type, for maps). Length constraints (`:len`)
@@ -478,13 +478,13 @@ fn validate_element(e Element, type_name string, sm SchemaModel, mut diags []Dia
 		validate_container_body(e, st.body, mut diags)
 	}
 
-	// v0.7.0 GG10 (ADR 0003 D1 second bullet): `body :ref` declares
+	// GG10: `body :ref` declares
 	// that the element must use the `[<name> @<id>]` body-position
 	// reference form — Element.body_ref is set and Element.items is
 	// empty. S023 fires when the element lacks body_ref OR has
 	// non-empty items.
 	if st.body.declared && st.body.kind == 'ref' {
-		has_body_ref := e.body_ref != none
+		has_body_ref := e.body_ref() != none
 		if !has_body_ref {
 			diags << Diagnostic{
 				code:    'S023'
@@ -590,17 +590,11 @@ fn apply_defaults_to_element(e Element, type_name string, sm SchemaModel) Elemen
 		}
 	}
 	return Element{
-		name:      e.name
-		anchor:    e.anchor
-		merge:     e.merge
-		data_type: e.data_type
-		attrs:     new_attrs
-		items:     new_items
-		table:     e.table
-		local:     e.local
-		ns_uri:    e.ns_uri
-		id:        e.id
-		body_ref:  e.body_ref
+		name:  e.name
+		attrs: new_attrs
+		items: new_items
+		meta:  e.meta
+		table: e.table
 	}
 }
 
@@ -660,8 +654,10 @@ fn scalar_value_matches_type(v ScalarValue, declared string) bool {
 }
 
 fn attr_value_matches_type(a Attribute, declared string) bool {
-	if dt := a.data_type {
-		dt_name := scalar_type_name(dt)
+	if dt := a.data_type() {
+		// Collapse the carrier's canonical name (which may be a sized
+		// numeric like `u16`/`f32`) to its base kind for the match below.
+		dt_name := scalar_type_name(scalar_type_from_name(dt) or { ScalarType.string_type })
 		match declared {
 			'string', 's' { return dt_name == 'string' }
 			'int', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64' {
@@ -751,10 +747,10 @@ fn check_enum(v ScalarValue, vals []string) bool {
 	return false
 }
 
-// ── Container productions (ADR 0017 §D15) ────────────────────────────────────
+// ── Container productions ────────────────────────────────────
 
 // validate_container_body checks an element whose schema declares a
-// container body kind (`arr[T]` / `seq[T]` / `map[K, V]` per ADR 0017
+// container body kind (`arr[T]` / `seq[T]` / `map[K, V]`
 // §D15). The element must carry exactly one ArrayNode (for `arr`),
 // SequenceNode (for `seq`), or MapNode (for `map`) as its sole body
 // item — adjacent comments / directives are ignored.
@@ -763,7 +759,7 @@ fn check_enum(v ScalarValue, vals []string) bool {
 //   - Wrong container shape emits S005 ("declared :arr, got :map" etc.).
 //   - `:len` on a container body applies to the item count, not byte
 //     length; out-of-bounds emits S018.
-//   - Map keys at v0.6.0 are strings per ADR §D4; non-string keys
+//   - Map keys are strings; non-string keys
 //     emit S005.
 //   - Nested productions recurse via parse_container_kind on the
 //     item_kind / key_kind text — `arr[arr[float]]` validates each
@@ -868,7 +864,7 @@ fn validate_collection_items(host string, body BodyRule, items []Node, mut diags
 }
 
 // validate_map_entries checks each MapEntry against the declared
-// `:map[K, V]` types. Keys are atomic scalars per ADR §D4; values
+// `:map[K, V]` types. Keys are atomic scalars; values
 // recurse through validate_container_item so nested productions
 // (`map[string, arr[u32]]`) are honoured.
 fn validate_map_entries(host string, body BodyRule, entries []MapEntry, mut diags []Diagnostic) {

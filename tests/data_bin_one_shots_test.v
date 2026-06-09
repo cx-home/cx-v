@@ -1,6 +1,10 @@
 module main
 
 import cx
+// imported for its `init()` side effect: registers the strict, lossless json
+// codec parser into the cx registry (item C). cx.parse_to_doc('json', …) below
+// resolves to it; without this import the json codec has no parser.
+import code as _
 
 // Round-trip tests for the data_bin one-shot loaders/dumpers per
 // spec/abi.md §2.4–§2.5. Each test exercises the same composition the
@@ -32,7 +36,7 @@ fn test_xml_round_trip_through_data_bin() {
 
 fn test_json_round_trip_through_data_bin() {
 	src := '{"name": "alice", "id": 1}'
-	doc := cx.parse_json(src) or { panic('parse_json: ${err}') }
+	doc := cx.parse_to_doc('json', src) or { panic('parse_json: ${err}') }
 	bytes := cx.emit_data_bin(doc)
 	assert bytes.len > 8
 	doc2 := cx.parse_data_bin(bytes) or { panic('parse_data_bin: ${err}') }
@@ -69,22 +73,6 @@ id = 1
 	assert out.contains('alice'), 'expected alice in toml output, got: ${out}'
 }
 
-// ── Markdown one-shot ────────────────────────────────────────────────────────
-
-fn test_md_round_trip_through_data_bin() {
-	src := '# Title
-
-A paragraph.
-'
-	res := cx.parse_md_cx(src) or { panic('parse_md_cx: ${err}') }
-	doc := res.single or { panic('expected single-doc markdown') }
-	bytes := cx.emit_data_bin(doc)
-	assert bytes.len > 8
-	doc2 := cx.parse_data_bin(bytes) or { panic('parse_data_bin: ${err}') }
-	out := cx.emit_md(doc2)
-	assert out.contains('Title'), 'expected Title in md output, got: ${out}'
-}
-
 // ── Cross-format dumper: xml → data_bin → json ────────────────────────────────
 
 fn test_xml_to_data_bin_to_json() {
@@ -101,7 +89,7 @@ fn test_xml_to_data_bin_to_json() {
 
 fn test_json_to_data_bin_to_yaml() {
 	src := '{"name": "alice", "active": true}'
-	doc := cx.parse_json(src) or { panic('parse_json: ${err}') }
+	doc := cx.parse_to_doc('json', src) or { panic('parse_json: ${err}') }
 	bytes := cx.emit_data_bin(doc)
 	doc2 := cx.parse_data_bin(bytes) or { panic('parse_data_bin: ${err}') }
 	out := cx.emit_yaml(doc2)

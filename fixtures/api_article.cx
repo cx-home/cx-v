@@ -1,7 +1,7 @@
 [article lang=en
   [head
     [title Getting Started with CX]
-    [tags :string[] tutorial beginner]
+    [tags::string[] tutorial beginner]
   ]
   [body
     [h1 Introduction]

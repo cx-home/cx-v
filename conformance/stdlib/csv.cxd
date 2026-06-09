@@ -1,0 +1,637 @@
+[test-suite name=csv
+  [doc [#
+conformance fixtures for cx-stdlib/csv (spec/std-lib/csv.md §3, §4, §5, §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/csv']
+   (resolver MUST be quoted) then calls [$csv:fn args]. The LAST
+   expression is the rendered result. String scalars render quoted
+   (single-quote preferred); ints/bools render bare; sequences in
+   paren form (a, b, c); maps in brace form {k: v}. Error fixtures
+   use out-err with the bare CXER code.
+
+   Public function surface (§3): parse, parse-with-dialect,
+   parse-with-schema, emit, emit-with-dialect, dialects-builtin.
+
+   Parse happy-paths assert deterministic projections (a single cell
+   via [$nth …]+field access, or [$count …] of the row sequence)
+   rather than rendering whole map sequences, because the canonical
+   inline rendering of a [sequence map] (key-quote / value-quote
+   choices) is not pinned by the spec. Emit cases assert the full
+   string result (spec gives exact RFC-4180 output text).
+#]]
+
+# ── §3.1 parse — default dialect (csv, with header) ──
+
+ [case id=csv-001-parse-header-row-count level=core
+  [tags csv parse header sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$count [$csv:parse "email,first_name,score\nalice@example.com,Alice,87"]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=csv-002-parse-header-cell-string level=core
+  [tags csv parse header map cell]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse "email,first_name,score\nalice@example.com,Alice,87"]]
+      [= $row [$nth $rows 1]]
+  $row/first_name]
+#]]
+  [out-text [#
+'Alice'
+#]]
+ ]
+
+ [case id=csv-003-parse-cell-values-are-strings level=core
+  [tags csv parse no-auto-type string]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse "email,first_name,score\nalice@example.com,Alice,87"]]
+      [= $row [$nth $rows 1]]
+  $row/score]
+#]]
+  [out-text [#
+'87'
+#]]
+ ]
+
+ [case id=csv-004-parse-empty-input level=core
+  [tags csv parse empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$count [$csv:parse ""]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=csv-005-parse-multi-row-count level=core
+  [tags csv parse header multi-row]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$count [$csv:parse "a,b\n1,2\n3,4\n5,6"]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=csv-006-parse-quoted-doubled-quote level=core
+  [tags csv parse quoting doubled-quote rfc4180]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse "msg\n\"He said \"\"hi\"\"\""]]
+      [= $row [$nth $rows 1]]
+  $row/msg]
+#]]
+  [out-text [#
+'He said "hi"'
+#]]
+ ]
+
+ [case id=csv-007-parse-quoted-embedded-delimiter level=core
+  [tags csv parse quoting delimiter rfc4180]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse "name,note\nAlice,\"a,b\""]]
+      [= $row [$nth $rows 1]]
+  $row/note]
+#]]
+  [out-text [#
+'a,b'
+#]]
+ ]
+
+ [case id=csv-008-parse-quoted-embedded-newline level=core
+  [tags csv parse quoting newline rfc4180]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse "name,note\nAlice,\"line1\nline2\""]]
+      [= $row [$nth $rows 1]]
+  $row/note]
+#]]
+  [out-text [#
+'line1
+line2'
+#]]
+ ]
+
+ [case id=csv-009-parse-header-verbatim level=core
+  [tags csv parse header verbatim]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse "First Name,e-mail\nAlice,alice@example.com"]]
+      [= $row [$nth $rows 1]]
+  [$nth [$keys $row] 1]]
+#]]
+  [out-text [#
+'First Name'
+#]]
+ ]
+
+ [case id=csv-010-parse-bom-stripped level=core
+  [tags csv parse bom unicode edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse "﻿email,score\na@e.com,9"]]
+      [= $row [$nth $rows 1]]
+  [$nth [$keys $row] 1]]
+#]]
+  [out-text [#
+'email'
+#]]
+ ]
+
+# Strict mode raises CXER1500 on unparseable input (unterminated quote).
+ [case id=csv-011-parse-malformed-strict level=core
+  [tags csv parse malformed strict CXER1500]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:parse "name\n\"unterminated"]
+#]]
+  [out-err [#
+cx-err:CXER1500
+#]]
+ ]
+
+# ── §3.1 parse-with-dialect ──
+
+ [case id=csv-012-parse-with-dialect-tsv level=core
+  [tags csv parse-with-dialect tsv builtin]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse-with-dialect "a\tb\n1\t2" [dialect [name "tsv"]]]]
+      [= $row [$nth $rows 1]]
+  $row/a]
+#]]
+  [out-text [#
+'1'
+#]]
+ ]
+
+ [case id=csv-013-parse-with-dialect-headless-array level=core
+  [tags csv parse-with-dialect headless array positional]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse-with-dialect "a,b,c" [dialect [header false]]]]
+      [= $row [$nth $rows 1]]
+  [$nth $row 1]]
+#]]
+  [out-text [#
+'a'
+#]]
+ ]
+
+ [case id=csv-014-parse-with-dialect-psv level=core
+  [tags csv parse-with-dialect psv builtin]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse-with-dialect "x|y\n7|8" [dialect [name "psv"]]]]
+      [= $row [$nth $rows 1]]
+  $row/y]
+#]]
+  [out-text [#
+'8'
+#]]
+ ]
+
+ [case id=csv-015-parse-with-dialect-trim-whitespace level=core
+  [tags csv parse-with-dialect trim-whitespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse-with-dialect "a,b\n  x  ,y" [dialect [trim-whitespace true]]]]
+      [= $row [$nth $rows 1]]
+  $row/a]
+#]]
+  [out-text [#
+'x'
+#]]
+ ]
+
+# Invalid dialect on parse → CXER1502. Per §2.2 Validity, an empty-string
+# delimiter is invalid (delimiter MUST be exactly one character), so this
+# dialect is rejected with CXER1502 before any parsing begins.
+ [case id=csv-016-parse-with-dialect-invalid level=core
+  [tags csv parse-with-dialect dialect-invalid CXER1502]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:parse-with-dialect "a,b\n1,2" [dialect [delimiter ""]]]
+#]]
+  [out-err [#
+cx-err:CXER1502
+#]]
+ ]
+
+# Row field count differs from header → CXER1503.
+ [case id=csv-017-parse-with-dialect-field-count-mismatch level=core
+  [tags csv parse-with-dialect field-count-mismatch CXER1503]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:parse-with-dialect "a,b\n1,2,3" [dialect [header true]]]
+#]]
+  [out-err [#
+cx-err:CXER1503
+#]]
+ ]
+
+# Strict malformed under a dialect → CXER1500.
+ [case id=csv-018-parse-with-dialect-malformed-strict level=core
+  [tags csv parse-with-dialect malformed strict CXER1500]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:parse-with-dialect "name\n\"oops" [dialect [on-error "raise"]]]
+#]]
+  [out-err [#
+cx-err:CXER1500
+#]]
+ ]
+
+# Lenient mode ([on-error "collect"]) returns a [csv-result …] element
+# instead of raising. Assert via the element head name to stay grounded.
+ [case id=csv-019-parse-with-dialect-collect-result level=core
+  [tags csv parse-with-dialect lenient collect csv-result]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$name [$csv:parse-with-dialect "name\n\"oops" [dialect [on-error "collect"]]]]
+#]]
+  [out-text [#
+'csv-result'
+#]]
+ ]
+
+# ── §3.1 parse-with-schema ──
+
+ [case id=csv-020-parse-with-schema-int level=core
+  [tags csv parse-with-schema coercion int]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse-with-schema "score\n87" {score: :int}]]
+      [= $row [$nth $rows 1]]
+  $row/score]
+#]]
+  [out-text [#
+87
+#]]
+ ]
+
+ [case id=csv-021-parse-with-schema-bool level=core
+  [tags csv parse-with-schema coercion bool]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse-with-schema "active\ntrue" {active: :bool}]]
+      [= $row [$nth $rows 1]]
+  $row/active]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=csv-022-parse-with-schema-float level=core
+  [tags csv parse-with-schema coercion float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse-with-schema "ratio\n1.5" {ratio: :float}]]
+      [= $row [$nth $rows 1]]
+  $row/ratio]
+#]]
+  [out-text [#
+1.5
+#]]
+ ]
+
+ [case id=csv-023-parse-with-schema-absent-column-stays-string level=core
+  [tags csv parse-with-schema absent-column string]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $rows [$csv:parse-with-schema "id,score\n007,87" {score: :int}]]
+      [= $row [$nth $rows 1]]
+  $row/id]
+#]]
+  [out-text [#
+'007'
+#]]
+ ]
+
+# Coercion failure in strict mode → CXER1504.
+ [case id=csv-024-parse-with-schema-coercion-failed level=core
+  [tags csv parse-with-schema coercion-failed strict CXER1504]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:parse-with-schema "score\nn/a" {score: :int}]
+#]]
+  [out-err [#
+cx-err:CXER1504
+#]]
+ ]
+
+# ── §3.2 emit ──
+
+ [case id=csv-025-emit-map-rows level=core
+  [tags csv emit map header rfc4180]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit ({a: "1", b: "2"})]
+#]]
+  [out-text [#
+'a,b
+1,2
+'
+#]]
+ ]
+
+ [case id=csv-026-emit-quotes-delimiter-cell level=core
+  [tags csv emit quoting delimiter rfc4180]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit ({name: "Alice", note: "a,b"})]
+#]]
+  [out-text [#
+'name,note
+Alice,"a,b"
+'
+#]]
+ ]
+
+ [case id=csv-027-emit-escapes-embedded-quote level=core
+  [tags csv emit quoting doubled-quote rfc4180]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit ({msg: "He said \"hi\""})]
+#]]
+  [out-text [#
+'msg
+"He said ""hi"""
+'
+#]]
+ ]
+
+ [case id=csv-028-emit-union-of-keys level=core
+  [tags csv emit union-of-keys heterogeneous]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit ({a: "1", b: "2"}, {a: "3", c: "4"})]
+#]]
+  [out-text [#
+'a,b,c
+1,2,
+3,,4
+'
+#]]
+ ]
+
+ [case id=csv-029-emit-headerless-array-rows level=core
+  [tags csv emit array positional]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit ([1, 2, 3], [4, 5, 6])]
+#]]
+  [out-text [#
+'1,2,3
+4,5,6
+'
+#]]
+ ]
+
+ [case id=csv-030-emit-ragged-array-pads level=core
+  [tags csv emit array ragged pad]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit ([1, 2, 3], [4, 5])]
+#]]
+  [out-text [#
+'1,2,3
+4,5,
+'
+#]]
+ ]
+
+# ── §3.2 emit-with-dialect ──
+
+ [case id=csv-031-emit-with-dialect-tsv level=core
+  [tags csv emit-with-dialect tsv builtin]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit-with-dialect ({a: "1", b: "2"}) [dialect [name "tsv"]]]
+#]]
+  [out-text [#
+'a	b
+1	2
+'
+#]]
+ ]
+
+ [case id=csv-032-emit-with-dialect-crlf level=core
+  [tags csv emit-with-dialect line-terminator crlf]
+  [# The CRLF terminators (\r\n) cannot be embedded literally in an out-text
+     payload, so assert the full expected content via strings:contains — the
+     in_code CX string literal CAN carry the \r\n escapes (code.md §6.5 escape
+     set). Confirms header + row are emitted with CRLF terminators. #]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[?lib 'cx-stdlib/csv']
+[$strings:contains [$csv:emit-with-dialect ({a: "1", b: "2"}) [dialect [line-terminator "crlf"]]] "a,b\r\n1,2\r\n"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=csv-033-emit-with-dialect-backslash-escape level=core
+  [tags csv emit-with-dialect escape backslash]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit-with-dialect ({msg: "He said \"hi\""}) [dialect [escape "backslash"]]]
+#]]
+  [out-text [#
+'msg
+"He said \\"hi\\""
+'
+#]]
+ ]
+
+ [case id=csv-034-emit-with-dialect-pinned-columns level=core
+  [tags csv emit-with-dialect columns pinned drop]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit-with-dialect ({a: "1", b: "2", c: "3"}) [dialect [columns [sequence "b" "a"]]]]
+#]]
+  [out-text [#
+'b,a
+2,1
+'
+#]]
+ ]
+
+# Invalid dialect on emit → CXER1502. Per §2.2 Validity, dialect validation
+# runs identically on the emit path: the empty-string delimiter is rejected
+# with CXER1502 before any emission work begins (mirrors csv-016 on parse).
+ [case id=csv-035-emit-with-dialect-invalid level=core
+  [tags csv emit-with-dialect dialect-invalid CXER1502]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$csv:emit-with-dialect ({a: "1"}) [dialect [delimiter ""]]]
+#]]
+  [out-err [#
+cx-err:CXER1502
+#]]
+ ]
+
+# ── §3.3 dialects-builtin ──
+
+ [case id=csv-036-dialects-builtin-count level=core
+  [tags csv dialects-builtin map count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[$count [$keys [$csv:dialects-builtin]]]
+#]]
+  [out-text [#
+7
+#]]
+ ]
+
+ [case id=csv-037-dialects-builtin-tsv-delimiter level=core
+  [tags csv dialects-builtin tsv access]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $dialects [$csv:dialects-builtin]]
+      [= $tsv $dialects/tsv]
+  $tsv/delimiter]
+#]]
+  [out-text [#
+'	'
+#]]
+ ]
+
+ [case id=csv-038-dialects-builtin-headless-header-false level=core
+  [tags csv dialects-builtin headless header]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/csv']
+[?let [= $dialects [$csv:dialects-builtin]]
+      [= $headless $dialects/headless]
+  $headless/header]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+]

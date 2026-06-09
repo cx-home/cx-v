@@ -1,0 +1,4 @@
+[?def decode
+  :scope public
+  (s:string)
+  [json-parse s]]

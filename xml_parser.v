@@ -129,7 +129,7 @@ fn (mut p XmlParser) parse_xml_document() !Document {
 
 	mut doc := Document{ prolog: prolog, doctype: doctype, elements: elements }
 	resolve_namespaces(mut doc)
-	// v3.4 (ADR 0003 D6): mark attrs whose values match a declared
+	// v3.4: mark attrs whose values match a declared
 	// xml:id (now hoisted to Element.id) as is_ref. Without an XML
 	// schema we can't disambiguate xs:IDREF from a plain string that
 	// happens to match an ID, so we adopt the conservative posture:
@@ -144,7 +144,46 @@ fn (mut p XmlParser) parse_xml_document() !Document {
 
 // mark_ref_attrs walks the document, builds the ID set, then walks
 // again marking every attribute whose string value is in the ID set
-// as is_ref. v3.4 (ADR 0003 D6).
+// as is_ref. v3.4.
+// apply_xml_attr_types re-types XML-imported attributes (D3). An entry in
+// the `cx:attr-types` sidecar (`name=type`) is authoritative: the value is
+// coerced to that type (a `string` entry pins the value to string, blocking
+// auto-typing). Every other attribute is auto-typed from its bare lexical
+// form — int / float / bool / null / date / datetime — exactly mirroring the
+// CX-side attribute auto-typer, so `cx_to_xml → xml_to_cx` round-trips.
+// Atom-shaped values are never auto-detected here; atoms arrive only via the
+// sidecar (their XML value is the bare name, with no `:` sigil).
+fn apply_xml_attr_types(mut attrs []Attribute, spec string) {
+	mut typemap := map[string]string{}
+	if spec.len > 0 {
+		for pair in spec.split(' ') {
+			if pair.len == 0 {
+				continue
+			}
+			eq := pair.index('=') or { continue }
+			typemap[pair[..eq]] = pair[eq + 1..]
+		}
+	}
+	for mut a in attrs {
+		if t := typemap[a.name] {
+			if t == 'string' {
+				// Explicit string — leave the raw value, no annotation.
+				a.set_data_type(none)
+			} else {
+				a.value = scalar_value_from_str(a.str_value(), t)
+				a.set_data_type(t)
+			}
+			continue
+		}
+		if sc := try_autotype(a.str_value()) {
+			if sc.data_type != .atom_type {
+				a.value = sc.value
+				a.set_data_type(scalar_type_name(sc.data_type))
+			}
+		}
+	}
+}
+
 fn mark_ref_attrs(mut doc Document) {
 	mut id_set := map[string]bool{}
 	collect_id_set(doc.elements, mut id_set)
@@ -157,7 +196,7 @@ fn mark_ref_attrs(mut doc Document) {
 fn collect_id_set(nodes []Node, mut id_set map[string]bool) {
 	for n in nodes {
 		if n is Element {
-			if id := n.id { id_set[id] = true }
+			if id := n.id() { id_set[id] = true }
 			collect_id_set(n.items, mut id_set)
 		}
 	}
@@ -205,7 +244,7 @@ fn (mut p XmlParser) parse_xml_pi() !Node {
 			ap.xml_expect(`=`) or { break }
 			ap.skip_ws()
 			aval := ap.xml_read_quoted() or { break }
-			attrs << Attribute{ name: aname, value: ScalarValue(aval), data_type: none }
+			attrs << Attribute{ name: aname, value: ScalarValue(aval) }
 		}
 		version := find_attr_value(attrs, 'version') or { '1.0' }
 		encoding := find_attr_value(attrs, 'encoding')
@@ -223,7 +262,7 @@ fn (mut p XmlParser) parse_xml_pi() !Node {
 			ap.xml_expect(`=`) or { break }
 			ap.skip_ws()
 			aval := ap.xml_read_quoted() or { break }
-			attrs << Attribute{ name: aname, value: ScalarValue(aval), data_type: none }
+			attrs << Attribute{ name: aname, value: ScalarValue(aval) }
 		}
 		return CXDirectiveNode{ attrs: attrs }
 	}
@@ -324,6 +363,17 @@ fn (mut p XmlParser) parse_xml_doctype() !DoctypeDecl {
 					for !p.at_end() && p.peek() != `>` { p.advance() }
 					if !p.at_end() { p.advance() }
 				}
+			} else if b2 == `%` {
+				// PEReference `%name;` as a DeclSep — preserve it as an
+				// opaque PEReferenceNode (previously dropped char-by-char).
+				p.advance() // consume '%'
+				mut nm := []u8{}
+				for !p.at_end() && p.peek() != `;` && p.peek() != `]` && !is_ws(p.peek()) {
+					nm << p.peek()
+					p.advance()
+				}
+				if !p.at_end() && p.peek() == `;` { p.advance() }
+				int_subset << PEReferenceNode{ name: nm.bytestr() }
 			} else {
 				p.advance()
 			}
@@ -384,6 +434,46 @@ fn (mut p XmlParser) parse_xml_entity_decl() !Node {
 	return EntityDeclNode{ kind: kind, name: name, def: def }
 }
 
+// xml_cx_scalar_node builds a typed ScalarNode from a `<cx:TYPE>` carrier's
+// local type name + decoded text content (the inverse of emit_xml_cx_typed_item).
+// atom / null / string are handled directly; every other (auto-recoverable)
+// type name routes through coerce_scalar, which reconstructs the value.
+fn xml_cx_scalar_node(local string, text string) Node {
+	match local {
+		'null' {
+			return ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) }
+		}
+		'atom' {
+			return ScalarNode{ data_type: .atom_type, value: ScalarValue(text) }
+		}
+		'string' {
+			return ScalarNode{ data_type: .string_type, value: ScalarValue(text) }
+		}
+		'duration' {
+			// The XML body is the ISO 8601 image; parse it back to the canonical
+			// CX duration form ([L25]). Fall back to verbatim text if not ISO.
+			cx_form := iso_to_duration_cx(text) or { text }
+			return ScalarNode{ data_type: .duration_type, value: ScalarValue(cx_form) }
+		}
+		'period' {
+			cx_form := iso_to_period_cx(text) or { text }
+			return ScalarNode{ data_type: .period_type, value: ScalarValue(cx_form) }
+		}
+		else {
+			return coerce_scalar(local, text)
+		}
+	}
+}
+
+// xml_unescape_text reverses xml_escape_text (the three predefined entities the
+// emitter writes). Applied to `<cx:TYPE>` text content on decode.
+fn xml_unescape_text(s string) string {
+	if !s.contains('&') {
+		return s
+	}
+	return s.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+}
+
 fn (mut p XmlParser) parse_xml_element() !Node {
 	name := p.xml_read_name()!
 	mut cx_anchor := ?string(none)
@@ -391,6 +481,7 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	mut cx_type := ?string(none)
 	mut cx_id := ?string(none)
 	mut cx_body_ref := ?string(none)
+	mut cx_attr_types := ''
 	mut attrs := []Attribute{}
 
 	// Read attributes
@@ -408,8 +499,14 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 		if aname == 'cx:anchor' { cx_anchor = aval }
 		else if aname == 'cx:merge' { cx_merge = aval }
 		else if aname == 'cx:type' { cx_type = aval }
+		else if aname == 'cx:attr-types' {
+			// D3: reserved per-attribute type sidecar. Consumed here;
+			// applied to the sibling attributes in a post-pass below so it
+			// works regardless of source ordering.
+			cx_attr_types = aval
+		}
 		else if aname == 'cx:body-ref' {
-			// v0.7.0 (ADR 0003 D1 second bullet / GG7): the
+			// GG7: the
 			// emitter writes body_ref as `cx:body-ref="<id>"`;
 			// the XML import path consumes the attribute and
 			// reconstructs Element.body_ref. The CX emitter
@@ -418,20 +515,25 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 			cx_body_ref = aval
 		}
 		else if aname == 'xml:id' {
-			// v3.4 (ADR 0003 D6): xml:id (XML built-in URI ns) hoists
+			// v3.4: xml:id (XML built-in URI ns) hoists
 			// to Element.id. The attribute is consumed; the bare CX
 			// emitter writes #id from the field, never as an attribute.
 			cx_id = aval
 		}
 		else {
-			// v3.4 (ADR 0002): xmlns / xmlns:foo declarations round-trip
+			// v3.4: xmlns / xmlns:foo declarations round-trip
 			// as plain attributes carrying the literal source name. The
 			// post-parse resolve_namespaces() pass sees them and uses
 			// them to fill Element.ns_uri / Attribute.ns_uri across the
 			// scope. The legacy `ns:foo` translation is dropped.
-			attrs << Attribute{ name: aname, value: ScalarValue(aval), data_type: none }
+			attrs << Attribute{ name: aname, value: ScalarValue(aval) }
 		}
 	}
+
+	// D3: re-type the imported attributes — explicit types from the
+	// `cx:attr-types` sidecar (overriding), else auto-type from the bare
+	// lexical form. Restores CX⇄XML round-trip fidelity for typed attrs.
+	apply_xml_attr_types(mut attrs, cx_attr_types)
 
 	// cx:alias → AliasNode (may appear at any level)
 	if name == 'cx:alias' {
@@ -442,12 +544,50 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 		return AliasNode{ name: alias_name }
 	}
 
+	// cx:TYPE scalar carriers (@CHOICE-1 typed-list item form, ruling a): a
+	// `<cx:int>10</cx:int>` / `<cx:atom>id</cx:atom>` / `<cx:null/>` child decodes
+	// back to a typed ScalarNode item (the inverse of emit_xml_cx_typed_item).
+	// `cx:alias` is handled above; the collection carriers (cx:arr/cx:seq/cx:map)
+	// and others fail is_valid_type_tag and fall through to normal element parsing.
+	if name.starts_with('cx:') {
+		local := name[3..]
+		if local == 'atom' || local == 'null' || is_valid_type_tag(local) {
+			p.skip_ws()
+			if !p.at_end() && p.peek() == `/` {
+				p.advance()
+				p.xml_expect(`>`)!
+				return xml_cx_scalar_node(local, '')
+			}
+			p.xml_expect(`>`)!
+			mut tb := []u8{}
+			for !p.at_end() && p.peek() != `<` {
+				tb << p.peek()
+				p.advance()
+			}
+			// consume the end tag </cx:local>
+			if !p.at_end() && p.peek() == `<` {
+				p.advance()
+				if !p.at_end() && p.peek() == `/` { p.advance() }
+				p.xml_read_name() or { '' }
+				p.skip_ws()
+				if !p.at_end() && p.peek() == `>` { p.advance() }
+			}
+			return xml_cx_scalar_node(local, xml_unescape_text(tb.bytestr()))
+		}
+	}
+
 	p.skip_ws()
 	b := p.peek()
 	if b == `/` {
 		p.advance() // '/'
 		p.xml_expect(`>`)!
-		return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, id: cx_id, body_ref: cx_body_ref, attrs: attrs, items: [] }
+		return new_element(name, ElementMeta{
+			anchor:    cx_anchor
+			merge:     cx_merge
+			data_type: cx_type
+			id:        cx_id
+			body_ref:  cx_body_ref
+		}, attrs, []Node{})
 	}
 
 	p.xml_expect(`>`)!
@@ -457,7 +597,13 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	p.parse_xml_content(name, cx_type, mut items)!
 
 	// If cx_type is an array type, items should already be Scalar nodes
-	return Element{ name: name, anchor: cx_anchor, merge: cx_merge, data_type: cx_type, id: cx_id, body_ref: cx_body_ref, attrs: attrs, items: items }
+	return new_element(name, ElementMeta{
+		anchor:    cx_anchor
+		merge:     cx_merge
+		data_type: cx_type
+		id:        cx_id
+		body_ref:  cx_body_ref
+	}, attrs, items)
 }
 
 fn (mut p XmlParser) parse_xml_content(parent_name string, cx_type ?string, mut items []Node) ! {

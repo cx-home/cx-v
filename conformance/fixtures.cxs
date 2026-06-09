@@ -1,0 +1,101 @@
+[?cx schema-of test-suite]
+[?cx schema-mode open]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CX-native conformance fixture schema (DRAFT).
+#
+# Replaces the line-delimited `=== test:` / `--- key` text format
+# (see conformance/README.md "File Format") with a CX document that the
+# stock parser reads and this schema validates. One `.cx` suite file =
+# one `[test-suite …]` document containing many `[case …]` children.
+#
+# Mode is `open`: the section vocabulary below is the *common* set; new
+# test families (data-bin, schema-validate, streaming, …) add their own
+# section tags freely and open mode admits them. Tighten to `strict`
+# per-family later if desired.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[test-suite
+ [attr name::string [req]]
+ [attr version::string [opt]]
+ [attr spec-date::date [opt]]
+ [elem doc [card "0..1"]]
+ [elem case [card "1..*"]]]
+
+[type doc::string]
+
+[case
+ [attr id::string [req]]
+ # `level` is a free-form, family-dependent label — the suite uses core,
+ # extended, must, resilience, services, async, md, … — so no enum.
+ [attr level::string [default core]]
+ [attr skip::bool [opt]]
+ # gate state (toggle): enforced = a failure BLOCKS the gate (default,
+ # deny-by-default); advisory = runs + reported but never blocks (spec-first
+ # frontier); pending = skipped, tracked with a reason; skip = excluded.
+ # A per-case gate overrides the per-module policy in conformance/gates.cxd.
+ # (string enum, not atom — atom enums mis-register in cx 0.8.0, see SPEC-FINDINGS.)
+ [attr gate::string [default enforced] [enum enforced advisory pending skip]]
+ # relative float tolerance: when > 0, out-text is matched as |actual-expected| <= tol*|expected| (absent = exact match).
+ [attr tol::float [opt]]
+
+ [elem title [card "0..1"]]    # free-text description (legacy: trailing words of the test name)
+ [elem tags [card "0..1"]]
+ [elem meta [card "0..1"]]     # verbatim extra header lines (view/kind/note/chunk_at/pending/…)
+
+ # ── input sections — verbatim RawText payloads ──
+ [elem in-cx     [card "0..1"]]    # CX source / data document under test
+ [elem in-code   [card "0..1"]]    # CX program to evaluate (eval fixtures)
+ [elem in-xml    [card "0..1"]]    # XML input (xml-import fixtures)
+ [elem in-md     [card "0..1"]]    # Markdown input
+ [elem in-a      [card "0..1"]]    # left operand  (diff fixtures)
+ [elem in-b      [card "0..1"]]    # right operand (diff fixtures)
+ [elem source    [card "0..1"]]    # document validated against a schema
+ [elem schema-cxs [card "0..1"]]   # inline .cxs schema text
+
+ # ── expected-output sections — verbatim RawText payloads ──
+ [elem out-ast   [card "0..1"]]    # expected AST JSON (key order insignificant)
+ [elem out-xml   [card "0..1"]]    # expected XML, exact after edge-trim
+ [elem out-cx    [card "0..1"]]    # expected CX round-trip, exact after edge-trim
+ [elem out-text  [card "0..1"]]    # expected stdout / eval result
+ [elem out-err   [card "0..1"]]    # expected error text / code
+ [elem out-md    [card "0..1"]]    # expected Markdown
+ [elem out-json  [card "0..1"]]    # expected JSON projection
+ [elem events    [card "0..1"]]    # expected streaming event sequence
+
+ # ── typed assertions — native CX scalars/sequences, not payloads ──
+ [elem expect-codes      [card "0..1"]]   # [:S002, :CXER0230] — error-severity codes
+ [elem expect-warn-codes [card "0..1"]]   # [:S001, :S012]      — warn-severity codes
+ [elem expect-count      [card "0..1"]]   # int, e.g. check count
+ [elem expect-valid      [card "0..1"]]   # bool — schema-validate pass/fail
+ [elem expect-severity   [card "0..1"]]]  # info | warn | error
+
+# tags is a whitespace-split string body (loader splits on space), matching
+# the legacy `tags:` header. Use [list string] + an array literal if you want
+# per-tag CXPath queries instead.
+[type title::string]
+[type tags::string]
+[type meta::any]
+
+[type in-cx::any]
+[type in-code::any]
+[type in-xml::any]
+[type in-md::any]
+[type in-a::any]
+[type in-b::any]
+[type source::any]
+[type schema-cxs::any]
+[type out-ast::any]
+[type out-xml::any]
+[type out-cx::any]
+[type out-text::any]
+[type out-err::any]
+[type out-md::any]
+[type out-json::any]
+[type events::any]
+
+[type expect-codes::[list atom]]
+[type expect-warn-codes::[list atom]]
+[type expect-count::int [min 0]]
+[type expect-valid::bool]
+[type expect-severity::string [enum info warn error]]

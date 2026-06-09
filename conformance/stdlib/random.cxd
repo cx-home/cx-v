@@ -1,0 +1,808 @@
+[test-suite name=random
+  [doc [#
+conformance fixtures for cx-stdlib/random (spec/std-lib/random.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/random']
+   (resolver MUST be quoted) then calls [$random:fn args] in the qualified
+ postfix-paren call form. The LAST expression is the rendered
+   result. Determinism: assertions pin only SEEDED outputs (random/from-seed
+   + the -with mirrors, or random/seed + process-global), or structural
+   properties (range membership via a degenerate range, sequence length,
+   error codes). Unseeded / global RNG values are never asserted by literal
+   value.
+
+   The seeded golden values below are produced by xoshiro256++ (§4.1) from
+   the SplitMix64 seed-expansion of the given seed; they are the pinned
+   cross-version / cross-binding reproducibility vector (§6).
+#]]
+
+ [case id=random-001-from-seed-next-int-golden level=core
+  [tags random prng from-seed golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:next-int-with [$random:from-seed 42]]] $r/value]
+#]]
+  [out-text [#
+7510639304993616975
+#]]
+ ]
+
+ [case id=random-002-from-seed-next-int-second level=core
+  [tags random prng from-seed thread golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r1 [$random:next-int-with [$random:from-seed 42]]] [?let [= $r2 [$random:next-int-with $r1/next-generator]] $r2/value]]
+#]]
+  [out-text [#
+2940605065665682376
+#]]
+ ]
+
+ [case id=random-003-from-seed-next-float-golden level=core
+  [tags random prng from-seed float golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:next-float-with [$random:from-seed 42]]] $r/value]
+#]]
+  [out-text [#
+0.8143051451229099
+#]]
+ ]
+
+ [case id=random-004-from-seed-next-bool-golden level=core
+  [tags random prng from-seed bool golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:next-bool-with [$random:from-seed 42]]] $r/value]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=random-005-seeded-global-reproducible level=core
+  [tags random prng seed global reproducible]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $a [$random:seed 42]] [$random:next-int]]
+#]]
+  [out-text [#
+7510639304993616975
+#]]
+ ]
+
+ [case id=random-006-int-range-degenerate level=core
+  [tags random prng int-range edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:int-range 5 5]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=random-007-int-range-with-degenerate level=core
+  [tags random prng int-range-with edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:int-range-with [$random:from-seed 7] 9 9]] $r/value]
+#]]
+  [out-text [#
+9
+#]]
+ ]
+
+ [case id=random-008-int-range-invalid level=core
+  [tags random prng int-range CXER1901]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:int-range 10 5]
+#]]
+  [out-err [#
+cx-err:CXER1901
+#]]
+ ]
+
+ [case id=random-009-int-range-with-invalid level=core
+  [tags random prng int-range-with CXER1901]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:int-range-with [$random:from-seed 1] 10 5]
+#]]
+  [out-err [#
+cx-err:CXER1901
+#]]
+ ]
+
+ [case id=random-010-float-range-degenerate level=core
+  [tags random prng float-range edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:float-range 2.5 2.5]
+#]]
+  [out-text [#
+2.5
+#]]
+ ]
+
+ [case id=random-011-choose-singleton level=core
+  [tags random prng choose]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:choose ("only")]
+#]]
+  [out-text [#
+'only'
+#]]
+ ]
+
+ [case id=random-012-choose-empty level=core
+  [tags random prng choose CXER1902]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:choose ()]
+#]]
+  [out-err [#
+cx-err:CXER1902
+#]]
+ ]
+
+ [case id=random-013-choose-with-singleton level=core
+  [tags random prng choose-with]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:choose-with [$random:from-seed 3] ("solo")]] $r/value]
+#]]
+  [out-text [#
+'solo'
+#]]
+ ]
+
+ [case id=random-014-sample-zero level=core
+  [tags random prng sample edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:sample (1, 2, 3) 0]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=random-015-sample-too-large level=core
+  [tags random prng sample CXER1903]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:sample (1, 2) 5]
+#]]
+  [out-err [#
+cx-err:CXER1903
+#]]
+ ]
+
+ [case id=random-016-shuffle-singleton level=core
+  [tags random prng shuffle]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:shuffle (42)]
+#]]
+  [out-text [#
+(42)
+#]]
+ ]
+
+ [case id=random-017-shuffle-with-deterministic level=core
+  [tags random prng shuffle-with deterministic golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:shuffle-with [$random:from-seed 42] (1, 2, 3, 4, 5)]] $r/value]
+#]]
+  [out-text [#
+(4, 3, 1, 5, 2)
+#]]
+ ]
+
+ [case id=random-018-sample-with-deterministic level=core
+  [tags random prng sample-with deterministic golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:sample-with [$random:from-seed 42] (10, 20, 30, 40, 50) 3]] $r/value]
+#]]
+  [out-text [#
+(40, 30, 10)
+#]]
+ ]
+
+ [case id=random-019-crypto-hex-length level=core
+  [tags random crypto crypto-hex length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$string-length [$random:crypto-hex 8]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=random-020-crypto-hex-length-16 level=core
+  [tags random crypto crypto-hex length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$string-length [$random:crypto-hex 16]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=random-021-crypto-base64-url-no-padding level=core
+  [tags random crypto crypto-base64-url padding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$contains [$random:crypto-base64-url 32] "="]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=random-022-crypto-int-degenerate level=core
+  [tags random crypto crypto-int edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:crypto-int 7 7]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=random-023-crypto-int-invalid level=core
+  [tags random crypto crypto-int CXER1901]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:crypto-int 9 2]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=random-024-crypto-bytes-negative level=core
+  [tags random crypto crypto-bytes CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:crypto-bytes -1]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=random-025-gaussian-zero-stddev level=core
+  [tags random distribution gaussian edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gaussian 5.0 0.0]
+#]]
+  [out-text [#
+5.0
+#]]
+ ]
+
+ [case id=random-026-gaussian-with-zero-stddev level=core
+  [tags random distribution gaussian-with edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:gaussian-with [$random:from-seed 11] 3.0 0.0]] $r/value]
+#]]
+  [out-text [#
+3.0
+#]]
+ ]
+
+ [case id=random-027-gaussian-negative-stddev level=core
+  [tags random distribution gaussian CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gaussian 0.0 -1.0]
+#]]
+  [out-err [#
+cx-err:CXER1905
+#]]
+ ]
+
+ [case id=random-028-exponential-nonpositive-lambda level=core
+  [tags random distribution exponential CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:exponential 0.0]
+#]]
+  [out-err [#
+cx-err:CXER1905
+#]]
+ ]
+
+ [case id=random-029-poisson-nonpositive-lambda level=core
+  [tags random distribution poisson CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:poisson -2.0]
+#]]
+  [out-err [#
+cx-err:CXER1905
+#]]
+ ]
+
+ [case id=random-030-exponential-with-deterministic level=core
+  [tags random distribution exponential-with golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:exponential-with [$random:from-seed 42] 1.0]] $r/value]
+#]]
+  [out-text [#
+1.683650517646569
+#]]
+ ]
+
+ [case id=random-031-poisson-with-deterministic level=core
+  [tags random distribution poisson-with golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:poisson-with [$random:from-seed 42] 4.0]] $r/value]
+#]]
+  [out-text [#
+6
+#]]
+ ]
+
+ [case id=random-032-choose-weighted-zero-weight-skipped level=core
+  [tags random weighted choose-weighted-with zero-weight]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:choose-weighted-with [$random:from-seed 5] ("a", "b") (0.0, 1.0)]] $r/value]
+#]]
+  [out-text [#
+'b'
+#]]
+ ]
+
+ [case id=random-033-choose-weighted-mismatch level=core
+  [tags random weighted choose-weighted CXER1904]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:choose-weighted ("a", "b") (1.0)]
+#]]
+  [out-err [#
+cx-err:CXER1904
+#]]
+ ]
+
+ [case id=random-034-choose-weighted-negative level=core
+  [tags random weighted choose-weighted CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:choose-weighted ("a") (-1.0)]
+#]]
+  [out-err [#
+cx-err:CXER1905
+#]]
+ ]
+
+ [case id=random-035-choose-weighted-all-zero level=core
+  [tags random weighted choose-weighted CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:choose-weighted ("a", "b") (0.0, 0.0)]
+#]]
+  [out-err [#
+cx-err:CXER1905
+#]]
+ ]
+
+ [case id=random-036-sample-weighted-too-large level=core
+  [tags random weighted sample-weighted CXER1903]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:sample-weighted ("a", "b") (1.0, 0.0) 2]
+#]]
+  [out-err [#
+cx-err:CXER1903
+#]]
+ ]
+
+ [case id=random-037-next-floats-shape level=core
+  [tags random vectorized next-floats length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$count [$random:next-floats 5]]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=random-038-next-ints-shape level=core
+  [tags random vectorized next-ints length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$count [$random:next-ints 7]]
+#]]
+  [out-text [#
+7
+#]]
+ ]
+
+ [case id=random-039-next-floats-empty level=core
+  [tags random vectorized next-floats edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:next-floats 0]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=random-040-next-floats-negative level=core
+  [tags random vectorized next-floats CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:next-floats -1]
+#]]
+  [out-err [#
+cx-err:CXER1905
+#]]
+ ]
+
+ [case id=random-041-next-ints-negative level=core
+  [tags random vectorized next-ints CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:next-ints -3]
+#]]
+  [out-err [#
+cx-err:CXER1905
+#]]
+ ]
+
+ [case id=random-042-vectorized-equals-scalar level=core
+  [tags random vectorized next-floats-with parity golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:next-floats-with [$random:from-seed 42] 3]] $r/value]
+#]]
+  [out-text [#
+(0.8143051451229099, 0.3188210400616611, 0.9838941681774888)
+#]]
+ ]
+
+ [case id=random-043-next-ints-with-deterministic level=core
+  [tags random vectorized next-ints-with golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:next-ints-with [$random:from-seed 42] 3]] $r/value]
+#]]
+  [out-text [#
+(7510639304993616975, 2940605065665682376, 9074821957992740550)
+#]]
+ ]
+
+ [case id=random-044-shuffle-with-preserves-count level=core
+  [tags random prng shuffle-with permutation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:shuffle-with [$random:from-seed 99] (1, 2, 3)]] [$count $r/value]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=random-045-sample-weighted-with-count level=core
+  [tags random weighted sample-weighted-with]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:sample-weighted-with [$random:from-seed 42] ("a", "b", "c") (1.0, 1.0, 1.0) 2]] [$count $r/value]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=random-046-crypto-token-urlsafe-no-padding level=core
+  [tags random crypto crypto-token-urlsafe padding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$contains [$random:crypto-token-urlsafe 32] "="]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=random-047-crypto-token-urlsafe-negative level=core
+  [tags random crypto crypto-token-urlsafe CXER1905]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:crypto-token-urlsafe -1]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=random-048-float-range-with-degenerate level=core
+  [tags random prng float-range-with edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $r [$random:float-range-with [$random:from-seed 7] 2.5 2.5]] $r/value]
+#]]
+  [out-text [#
+2.5
+#]]
+ ]
+
+ # TODO(spec pinned; impl pending): §5 now names all four range builtins
+ # (int-range, int-range-with, float-range, float-range-with) plus crypto-int
+ # for CXER1901 on lo > hi. This case asserts that now-required error for
+ # float-range-with; gate stays advisory until the (currently unimplemented)
+ # module raises it.
+ [case id=random-049-float-range-with-invalid level=core
+  [tags random prng float-range-with CXER1901]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:float-range-with [$random:from-seed 1] 9.0 2.0]
+#]]
+  [out-err [#
+cx-err:CXER1901
+#]]
+ ]
+
+ [case id=random-050-next-float-range level=core
+  [tags random prng next-float range property seeded]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $a [$random:seed 42]] [?let [= $f [$random:next-float]] [and [>= $f 0.0] [< $f 1.0]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=random-051-next-bool-is-bool level=core
+  [tags random prng next-bool property seeded]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $a [$random:seed 42]] [?let [= $b [$random:next-bool]] [or [= $b true] [= $b false]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+ [case id=random-052-crypto-hex-length-granted level=core gate=enforced grant='random'
+  [tags random crypto-hex length granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$string-length [$random:crypto-hex 8]]
+#]]
+  [out-text [#
+16
+#]]
+ ]
+
+ [case id=random-053-crypto-bytes-length-granted level=core gate=enforced grant='random'
+  [tags random crypto-bytes length granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?lib 'cx-stdlib/bytes']
+[$bytes:length [$random:crypto-bytes 16]]
+#]]
+  [out-text [#
+16
+#]]
+ ]
+
+ [case id=random-054-crypto-int-singleton-granted level=core gate=enforced grant='random'
+  [tags random crypto-int range granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:crypto-int 7 7]
+#]]
+  [out-text [#
+7
+#]]
+ ]
+
+ [case id=random-055-crypto-base64-url-unpadded-granted level=core gate=enforced grant='random'
+  [tags random crypto-base64-url padding granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$contains [$random:crypto-base64-url 32] "="]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=random-056-crypto-token-urlsafe-unpadded-granted level=core gate=enforced grant='random'
+  [tags random crypto-token-urlsafe padding granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$contains [$random:crypto-token-urlsafe 32] "="]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+]

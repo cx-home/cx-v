@@ -7,13 +7,13 @@ import cx
 // ── Header parsing ───────────────────────────────────────────────────────────
 
 fn test_table_header_typed_columns() {
-	src := '[users :table[name:string age:int active:bool]
+	src := '[users [table[name::string age::int active::bool]]
   alice 30 true
   bob 25 false
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data on element') }
+	t := root.table_opt() or { panic('expected table data on element') }
 	assert t.cols.len == 3
 	assert t.cols[0].name == 'name'
 	assert t.cols[0].type_name == 'string'
@@ -24,13 +24,13 @@ fn test_table_header_typed_columns() {
 }
 
 fn test_table_untyped_columns_default_string() {
-	src := '[t :table[a b c]
+	src := '[t [table[a b c]]
   x y z
   p q r
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	assert t.cols.len == 3
 	for col in t.cols {
 		assert col.type_name == ''
@@ -38,13 +38,13 @@ fn test_table_untyped_columns_default_string() {
 }
 
 fn test_table_mixed_typed_untyped() {
-	src := '[t :table[name age:int tag]
+	src := '[t [table[name age::int tag]]
   alice 30 admin
   bob 25 user
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	assert t.cols[0].type_name == ''
 	assert t.cols[1].type_name == 'int'
 	assert t.cols[2].type_name == ''
@@ -53,26 +53,26 @@ fn test_table_mixed_typed_untyped() {
 // ── Row parsing ──────────────────────────────────────────────────────────────
 
 fn test_table_row_count() {
-	src := '[t :table[a b]
+	src := '[t [table[a b]]
   x y
   p q
   m n
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	assert t.rows.len == 3
 }
 
 fn test_table_typed_int_cells() {
-	src := '[t :table[n:int]
+	src := '[t [table[n::int]]
   1
   2
   3
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	assert t.rows.len == 3
 	if v := t.rows[0][0] {
 		if v is i64 { assert v == 1 } else { assert false, 'expected i64' }
@@ -80,14 +80,14 @@ fn test_table_typed_int_cells() {
 }
 
 fn test_table_typed_bool_cells() {
-	src := '[t :table[active:bool]
+	src := '[t [table[active::bool]]
   true
   false
   true
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	assert t.rows.len == 3
 	for row in t.rows {
 		c := row[0]
@@ -96,14 +96,14 @@ fn test_table_typed_bool_cells() {
 }
 
 fn test_table_typed_float_cells() {
-	src := '[t :table[ratio:float]
+	src := '[t [table[ratio::float]]
   1.5
   2.5
   3.5
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	assert t.rows.len == 3
 	if v := t.rows[1][0] {
 		if v is f64 { assert v == 2.5 } else { assert false, 'expected f64' }
@@ -113,26 +113,26 @@ fn test_table_typed_float_cells() {
 // ── Quoted cells / null ──────────────────────────────────────────────────────
 
 fn test_table_quoted_cell() {
-	src := "[users :table[name:string age:int]
+	src := "[users [table[name::string age::int]]
   'alice jones' 30
   bob 25
 ]"
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	if v := t.rows[0][0] {
 		if v is string { assert v == 'alice jones' } else { assert false, 'expected string' }
 	}
 }
 
 fn test_table_null_cell() {
-	src := '[t :table[a b]
+	src := '[t [table[a b]]
   alice null
   bob 30
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	c := t.rows[0][1]
 	assert c is cx.NullValue, 'expected NullValue'
 }
@@ -140,24 +140,24 @@ fn test_table_null_cell() {
 // ── Edge cases ───────────────────────────────────────────────────────────────
 
 fn test_table_single_column_single_row() {
-	src := '[t :table[v:int]
+	src := '[t [table[v::int]]
   42
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	assert t.cols.len == 1
 	assert t.rows.len == 1
 }
 
 fn test_table_with_underscores_in_int_cells() {
-	src := '[stats :table[count:int]
+	src := '[stats [table[count::int]]
   1_000_000
   2_500_000
 ]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	t := root.table or { panic('expected table data') }
+	t := root.table_opt() or { panic('expected table data') }
 	if v := t.rows[0][0] {
 		if v is i64 { assert v == 1000000 } else { assert false, 'expected i64' }
 	}
@@ -170,7 +170,7 @@ fn test_regular_element_with_string_array_unaffected() {
 	src := '[tags :string[] web api docs]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	if _ := root.table {
+	if _ := root.table_opt() {
 		assert false, 'regular element should not have table data'
 	}
 }
@@ -179,7 +179,38 @@ fn test_regular_element_with_typed_scalar_unaffected() {
 	src := '[count :int 42]'
 	doc := cx.parse(src) or { panic(err) }
 	root := doc.root() or { panic('no root') }
-	if _ := root.table {
+	if _ := root.table_opt() {
 		assert false, 'scalar element should not have table data'
+	}
+}
+
+// ── v0.8.0 table-surface cutover guard (grammar [29]/[50]) ───────────────────
+
+fn test_grammar_table_block_clause_child_form() {
+	// The v0.8.0 form: `[NAME [table[col::T …]] rows]` — TABLE_OPEN clause-child
+	// `[table[` with glued `::T` columns. Must parse as a table.
+	src := '[users [table[name::string age::int active::bool]]
+	alice 30 true
+	bob 25 false
+	]'
+	doc := cx.parse(src) or { panic(err) }
+	root := doc.root() or { panic('no root') }
+	td := root.table_opt() or { panic('expected table data for [table[ … ]] form') }
+	assert td.cols.len == 3
+	assert td.cols[0].name == 'name'
+	assert td.cols[0].type_name == 'string'
+	assert td.cols[1].type_name == 'int'
+	assert td.rows.len == 2
+}
+
+fn test_retired_colon_table_opener_is_not_a_table() {
+	// The retired v0.7 `:table[ … ]` meta-slot opener was removed in the
+	// v0.8.0 table-surface cutover; `:table[ … ]` is no longer a TableBlock
+	// and MUST NOT produce table data.
+	src := '[users :table[name:string age:int] alice 30]'
+	doc := cx.parse(src) or { panic(err) }
+	root := doc.root() or { panic('no root') }
+	if _ := root.table_opt() {
+		assert false, 'retired :table[ opener must not parse as a table after cutover'
 	}
 }

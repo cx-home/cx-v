@@ -2,7 +2,7 @@ module main
 
 import cx
 
-// Tests for v0.6.0 / spec/schema.md v0.6.1 / ADR 0017 §D15 — schema
+// Tests for spec/schema.md schema
 // validator container productions `arr[T]`, `seq[T]`, `map[K, V]`.
 // Each test parses a schema declaring a container body, validates a
 // target document, and asserts the resulting diagnostics.
@@ -12,7 +12,7 @@ import cx
 fn test_arr_t_happy_path() {
 	schema := '[?cx schema-of ports]
 [ports
-  [body arr[u16] :len=\'1..16\']
+  [body arr[u16] [len 1..16]]
 ]'
 	doc := cx.parse('[ports [80, 443, 8080]]') or { panic(err) }
 	rep := cx.validate(doc, schema) or { panic(err) }
@@ -36,7 +36,7 @@ fn test_arr_t_item_type_mismatch() {
 fn test_arr_t_len_under_min() {
 	schema := '[?cx schema-of ports]
 [ports
-  [body arr[u16] :len=\'2..4\']
+  [body arr[u16] [len 2..4]]
 ]'
 	// Single-item arrays need trailing-comma form `[80,]` per the
 	// disambiguation rule (comma is the array marker; `[80]` without
@@ -53,7 +53,7 @@ fn test_arr_t_len_under_min() {
 fn test_arr_t_len_over_max() {
 	schema := '[?cx schema-of ports]
 [ports
-  [body arr[u16] :len=\'1..2\']
+  [body arr[u16] [len 1..2]]
 ]'
 	doc := cx.parse('[ports [80, 81, 82]]') or { panic(err) }
 	rep := cx.validate(doc, schema) or { panic(err) }
@@ -167,7 +167,7 @@ fn test_nested_map_of_arr() {
 	assert rep.is_valid(), 'unexpected: ${rep.diagnostics.map(it.code + " " + it.message)}'
 }
 
-// ── Legacy :T[] desugar (ADR 0017 §D19) ─────────────────────────────────────
+// ── Legacy :T[] desugar ─────────────────────────────────────
 
 fn test_legacy_t_brackets_desugars_to_arr() {
 	// `:i32[]` (legacy) parses identically to `arr[i32]` per §D19.
@@ -185,7 +185,7 @@ fn test_legacy_t_brackets_desugars_to_arr() {
 fn test_scalar_bodies_still_work() {
 	schema := '[?cx schema-of port]
 [port
-  [body :u16 :range=\'1..65535\']
+  [body u16 [range 1..65535]]
 ]'
 	good := cx.parse('[port 8080]') or { panic(err) }
 	bad := cx.parse('[port 99999]') or { panic(err) }

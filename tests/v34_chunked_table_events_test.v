@@ -3,7 +3,7 @@ module main
 import cx
 
 // Phase 7.74g G1 — read-side chunked-table events
-// (StreamStartTable / StreamRowGroup / StreamEndTable per ADR 0015 D10
+// (StreamStartTable / StreamRowGroup / StreamEndTable
 // + spec/streaming.md §1.1). Verifies:
 //   1. CX text source `:table` Element produces existing
 //      StartElement / per-cell-Scalar / EndElement (no chunked events).
@@ -12,7 +12,7 @@ import cx
 //   3. Round-trip — col_spec + plain-body bytes are well-formed and
 //      decode cleanly.
 
-const six_row_input = '[points :table[name:string score:i32]
+const six_row_input = '[points [table[name::string score::i32]]
   alice 91
   bob 88
   carol 73

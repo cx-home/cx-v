@@ -1,0 +1,701 @@
+[test-suite name=process
+  [doc [#
+conformance fixtures for cx-stdlib/process (spec/std-lib/process.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/process']
+   (resolver MUST be quoted) then calls [$process:fn args]. The LAST
+   expression is the rendered result.
+
+   DETERMINISM / EFFECTFUL MODULE: cx-stdlib/process is impure Tier-B
+   runtime (§1). EVERY public function is `impure` (§3) and operates on a
+   spawned child process, so EVERY one requires the `subprocess`
+   capability — both the spawn-family entry points AND the operations on
+   an already-spawned child (§7: "Every function in this module operates
+   on a spawned child process and therefore requires the `subprocess`
+   capability"). The stdlib eval runner evaluates each case under
+   `code.new_env()`, which grants NO capabilities (deny-by-default per
+   spec/core/security.md §2). At the effect point the active set is
+   checked FIRST; with the `subprocess` grant absent the function raises
+   E_CAP_DENIED = `cx-err:CXER0271` (security.md §4: "a denied effect at
+   the effect point raises CXER0271"; process.md §7: effectful functions
+   "raise cx-err:CXER0271 when the grant is absent").
+
+   Consequently the deterministic, runner-faithful, spec-grounded
+   assertion for the happy-path call of every process function is the
+   capability-denied error CXER0271 — real subprocess side effects
+   (spawning binaries, signalling, allocating ptys) are neither
+   reproducible nor safe inside the conformance harness, and AUTHORING.md
+   ("Capability-gated / effectful") directs us to fixture the
+   capability-denied error rather than real side effects. Each public
+   function therefore gets a CXER0271 case exercising its real call shape
+   (correct arity / arg kinds per the §3 [?def] signature). Several
+   functions additionally get distinct call-shape cases for spec-called-out
+   behaviors (argv-injection literal, empty-argv, env augment/clear, cwd,
+   timeout, $check, pipeline stages, signal atoms) — all still gated to
+   CXER0271 under the runner's empty capability set.
+
+   PROCESS-SPECIFIC ERROR CODES (CXER4000–CXER4012, §5): these are
+   documented behaviors that fire only AFTER the capability check passes
+   (a granted spawn that then hits empty-argv, missing-cwd, not-found,
+   timeout, pipefail+check, closed-handle, non-group-leader, pty-unsupported,
+   encoding-invalid, etc.). Under the runner's empty capability set the
+   capability check short-circuits FIRST, so a correct implementation
+   raises CXER0271 — NOT the CXER4xxx code — for every one of these
+   programs. Asserting CXER4001/4003/4006/4007/4009/4011/4012 here would
+   therefore FAIL a correct implementation (a wrong fixture is worse than
+   a missing one, AUTHORING.md "Grounding"). They are intentionally NOT
+   asserted as out-err in this suite; their scenarios are documented in
+   the spec's §6 conformance list and belong in a capability-granted
+   harness (conformance/stdlib/process.cxd) once the host-grant fixture surface
+   exists. See the report's `ambiguous` list.
+
+   NOTE: no inter-fixture comment blocks appear between cases (a comment
+   between sections risks capture into the preceding section payload);
+   all explanatory prose lives in this doc header or in tags.
+#]]
+
+ [case id=process-001-run-cap-denied level=core
+  [tags process run capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "hello")]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-002-run-argv-injection-literal level=core
+  [tags process run injection argv CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "a; rm b")]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-003-run-stdin-feed level=core
+  [tags process run stdin capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("cat") stdin="piped input"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-004-run-env-augment level=core
+  [tags process run env augment capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("printenv", "FOO") env=[map FOO="bar"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-005-run-env-clear level=core
+  [tags process run env env-clear hermetic capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("env") env-clear=true env=[map ONLY="x"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-006-run-cwd level=core
+  [tags process run cwd capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("pwd") cwd="/tmp"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-007-run-timeout-kill level=core
+  [tags process run timeout kill-on-timeout capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("sleep", "10") timeout-ms=100 kill-on-timeout=true]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-008-run-check-nonzero level=core
+  [tags process run check capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("false") check=true]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-009-spawn-cap-denied level=core
+  [tags process spawn capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:spawn ("tail", "-f", "/var/log/app.log")]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-010-stdin-cap-denied level=core
+  [tags process stdin handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:stdin [$process:spawn ("cat")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-011-stdout-cap-denied level=core
+  [tags process stdout handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:stdout [$process:spawn ("echo", "hi")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-012-stderr-cap-denied level=core
+  [tags process stderr handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:stderr [$process:spawn ("echo", "hi")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-013-pid-cap-denied level=core
+  [tags process pid handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pid [$process:spawn ("sleep", "30")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-014-wait-cap-denied level=core
+  [tags process wait handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:wait [$process:spawn ("echo", "hi")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-015-wait-timeout-cap-denied level=core
+  [tags process wait-timeout handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:wait-timeout [$process:spawn ("sleep", "30")] 100]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-016-poll-cap-denied level=core
+  [tags process poll handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:poll [$process:spawn ("sleep", "30")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-017-close-cap-denied level=core
+  [tags process close handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:close [$process:spawn ("echo", "hi")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-018-pipeline-pipefail level=core
+  [tags process pipeline pipefail stage capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "printf" "a\nb\nERR\n"]], [stage [argv "grep" "ERR"]])]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-019-pipeline-stage-opts level=core
+  [tags process pipeline stage opts cwd capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "grep" "-h" "ERROR"]], [stage [argv "sort" "-u"] [opts cwd="/tmp"]]) stdin="ERROR\n"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-020-send-signal-cap-denied level=core
+  [tags process send-signal handle atom capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:send-signal [$process:spawn ("sleep", "30")] :hup]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-021-terminate-cap-denied level=core
+  [tags process terminate handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:terminate [$process:spawn ("sleep", "30")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-022-kill-cap-denied level=core
+  [tags process kill handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:kill [$process:spawn ("sleep", "30")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-023-kill-group-cap-denied level=core
+  [tags process kill-group handle atom group capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:kill-group [$process:spawn ("./serve.sh") new-process-group=true] :term]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-024-spawn-pty-cap-denied level=core
+  [tags process spawn-pty pty capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:spawn-pty ("vi", "notes.txt")]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-025-pty-cap-denied level=core
+  [tags process pty handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pty [$process:spawn-pty ("vi", "notes.txt")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-026-window-size-cap-denied level=core
+  [tags process window-size pty handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:window-size [$process:spawn-pty ("vi", "notes.txt")]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=process-027-set-window-size-cap-denied level=core
+  [tags process set-window-size pty handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:set-window-size [$process:spawn-pty ("vi", "notes.txt")] 40 120]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+ [case id=process-028-run-echo-exit-granted level=core gate=enforced grant='subprocess'
+  [tags process run exit-code granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $r [$process:run ("echo", "hi")]] $r@exit-code]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=process-029-run-stdout-granted level=core gate=enforced grant='subprocess'
+  [tags process run stdout granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $r [$process:run ("echo", "hi")]] [$strings:contains $r@stdout "hi"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=process-030-run-false-nonzero-granted level=core gate=enforced grant='subprocess'
+  [tags process run exit-code nonzero granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $r [$process:run ("false",)]] $r@exit-code]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=process-031-spawn-pid-positive-granted level=core gate=enforced grant='subprocess'
+  [tags process spawn pid granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $p [> [$process:pid $h] 0]] [?let [= $w [$process:wait $h]] $p]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=process-032-wait-exit-granted level=core gate=enforced grant='subprocess'
+  [tags process spawn wait granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("echo", "x")]] [$process:wait $h]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=process-033-wait-timeout-granted level=core gate=enforced grant='subprocess'
+  [tags process wait-timeout granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("sleep", "0.05")]] [$process:wait-timeout $h 5000]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=process-034-poll-after-exit-granted level=core gate=enforced grant='subprocess'
+  [tags process poll granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $w [$process:wait $h]] [$process:poll $h]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=process-035-close-returns-null-granted level=core gate=enforced grant='subprocess'
+  [tags process close granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $w [$process:wait $h]] [$process:close $h]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=process-036-stdin-stream-granted level=core gate=enforced grant='subprocess'
+  [tags process stdin granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $si [$process:stdin $h]] [?let [= $w [$process:wait $h]] [$process:close $h]]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=process-037-stdout-stream-granted level=core gate=enforced grant='subprocess'
+  [tags process stdout granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $so [$process:stdout $h]] [?let [= $w [$process:wait $h]] [$process:close $h]]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=process-038-stderr-stream-granted level=core gate=enforced grant='subprocess'
+  [tags process stderr granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $se [$process:stderr $h]] [?let [= $w [$process:wait $h]] [$process:close $h]]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=process-039-pipeline-exit-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline exit-code granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $p [$process:pipeline ([stage [argv "echo" "hi"]])]] $p@exit-code]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=process-040-send-signal-term-granted level=core gate=enforced grant='subprocess'
+  [tags process send-signal wait granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("sleep", "5")]] [?let [= $s [$process:send-signal $h :term]] [$process:wait $h]]]
+#]]
+  [out-text [#
+143
+#]]
+ ]
+
+ [case id=process-041-terminate-wait-granted level=core gate=enforced grant='subprocess'
+  [tags process terminate wait granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("sleep", "5")]] [?let [= $t [$process:terminate $h]] [$process:wait $h]]]
+#]]
+  [out-text [#
+143
+#]]
+ ]
+
+ [case id=process-042-kill-wait-granted level=core gate=enforced grant='subprocess'
+  [tags process kill wait granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("sleep", "5")]] [?let [= $k [$process:kill $h]] [$process:wait $h]]]
+#]]
+  [out-text [#
+137
+#]]
+ ]
+
+ [case id=process-043-kill-group-granted level=core gate=enforced grant='subprocess'
+  [tags process kill-group wait granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("sleep", "5")]] [?let [= $k [$process:kill-group $h :kill]] [>= [$process:wait $h] 0]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=process-044-spawn-pty-pid-granted level=core gate=enforced grant='subprocess'
+  [tags process spawn-pty pid granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn-pty ("echo", "hi")]] [?let [= $p [> [$process:pid $h] 0]] [?let [= $w [$process:wait $h]] $p]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=process-045-window-size-rows-granted level=core gate=enforced grant='subprocess'
+  [tags process window-size spawn-pty granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn-pty ("sleep", "0.3")]] [?let [= $ws [$process:window-size $h]] [?let [= $r $ws@rows] [?let [= $w [$process:wait $h]] $r]]]]
+#]]
+  [out-text [#
+24
+#]]
+ ]
+
+ [case id=process-046-pty-set-window-size-granted level=core gate=enforced grant='subprocess'
+  [tags process pty set-window-size granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn-pty ("sleep", "0.3")]] [?let [= $sw [$process:set-window-size $h 30 100]] [?let [= $pt [$process:pty $h]] [?let [= $w [$process:wait $h]] [$process:close $h]]]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+]

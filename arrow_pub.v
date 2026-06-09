@@ -1,8 +1,8 @@
 module cx
 
 // Public surface used by the optional `vcx/arrow/` module
-// (libcx_arrow, ADR 0015 D9). Core libcx remains Arrow-free; this
-// file only exposes existing CXDB primitives via stable names that
+// (libcx_arrow). Core libcx remains Arrow-free; this
+// file only exposes existing CXCol primitives via stable names that
 // the arrow module can call without reaching into private symbols.
 //
 // Nothing here changes wire format or alters libcx's published C
@@ -27,7 +27,7 @@ pub fn col_spec_to_ast_bin_pub(cols []TableColumn) []u8 {
 }
 
 // encode_uvarint_pub appends an LEB128-style unsigned varint to
-// `buf` per spec/data_bin.md §3.2.
+// `buf` per spec/core/data-bin.md §3.2.
 pub fn encode_uvarint_pub(mut buf []u8, v u64) {
 	encode_uvarint(mut buf, v)
 }
@@ -46,7 +46,7 @@ pub fn new_bin_reader(payload []u8) PubBinReader {
 			buf:       payload
 			pos:       0
 			depth:     0
-			max_depth: int(cxdb_default_depth)
+			max_depth: int(cxcol_default_depth)
 		}
 	}
 }

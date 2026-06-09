@@ -1,0 +1,384 @@
+[test-suite name=identity
+  [doc [#
+# CX Conformance — ID/IDREF tests
+# Version: 1.0 — 2026-05-08
+# Covers: (ID declarations, attribute-
+#         value references, CXPath [#id] predicate, round-trip).
+#
+# v0 scope (per ): document-scope only. The CX → XML / JSON /
+# YAML / TOML / MD round-trip mappings (D6), canonical-form ID
+# renaming (D7), include-time ID merging (D3 second paragraph), and
+# the [ref @id] body-position node form (D1 second bullet) are
+# deferred to follow-up phases.
+#
+# Verification: parse `in_cx`, re-emit through emit_cx, compare
+# against `out_cx`. Mismatch on parse OR mismatch on round-trip
+# fails.
+#]]
+
+ [case id=id-001-declaration-only level=core
+  [tags identity declaration]
+  [in-cx [#
+[user #u-1 name=alice]
+#]]
+  [out-cx [#
+[user #u-1 name=alice]
+#]]
+ ]
+
+ [case id=id-002-declaration-with-anchor level=core
+  [tags identity declaration anchor]
+  [in-cx [#
+[item &a #u-1 v=42]
+#]]
+  [out-cx [#
+[item &a #u-1 v=42]
+#]]
+ ]
+
+ [case id=id-003-attribute-value-reference level=core
+  [tags identity reference]
+  [in-cx [#
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+]
+#]]
+  [out-cx [#
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+]
+#]]
+ ]
+
+ [case id=id-004-forward-reference-resolves level=core
+  [tags identity reference forward]
+  [in-cx [#
+[users
+  [reviewer assigned-to=@u-1]
+  [user #u-1 name=alice]
+]
+#]]
+  [out-cx [#
+[users
+  [reviewer assigned-to=@u-1]
+  [user #u-1 name=alice]
+]
+#]]
+ ]
+
+ [case id=id-005-quoted-at-literal-round-trips level=core
+  [tags identity reference quoting]
+  [in-cx [#
+[item label='@literal']
+#]]
+  [out-cx [#
+[item label='@literal']
+#]]
+ ]
+
+ [case id=id-006-multiple-ids-no-collision level=core
+  [tags identity declaration]
+  [in-cx [#
+[a #x v=1]
+[b #y v=2]
+[c #z v=3]
+#]]
+  [out-cx [#
+[a #x v=1]
+[b #y v=2]
+[c #z v=3]
+#]]
+ ]
+
+ [case id=id-007-ref-in-nested-element level=core
+  [tags identity reference nested]
+  [in-cx [#
+[doc
+  [users
+    [user #u-1 name=alice]
+  ]
+  [reviews
+    [review target=@u-1 score=5]
+  ]
+]
+#]]
+  [out-cx [#
+[doc
+  [users
+    [user #u-1 name=alice]
+  ]
+  [reviews
+    [review target=@u-1 score=5]
+  ]
+]
+#]]
+ ]
+
+ [case id=id-008-id-with-hyphens-and-digits level=core
+  [tags identity declaration charset]
+  [in-cx [#
+[user #user-42 name=alice]
+[reviewer assigned-to=@user-42]
+#]]
+  [out-cx [#
+[user #user-42 name=alice]
+[reviewer assigned-to=@user-42]
+#]]
+ ]
+
+ [case id=id-009-multiple-refs-to-same-id level=core
+  [tags identity reference multiple]
+  [in-cx [#
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+  [approver checked-by=@u-1]
+]
+#]]
+  [out-cx [#
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+  [approver checked-by=@u-1]
+]
+#]]
+ ]
+
+ [case id=id-010-xml-emit-id-as-xml-id level=core
+  [tags identity xml roundtrip]
+  [in-cx [#
+[user #u-1 name=alice]
+#]]
+  [out-xml [#
+<user xml:id="u-1" name="alice"/>
+#]]
+ ]
+
+ [case id=id-011-xml-parse-xml-id-to-hash level=core
+  [tags identity xml roundtrip]
+  [in-xml [#
+<user xml:id="u-1" name="alice"/>
+#]]
+  [out-cx [#
+[user #u-1 name=alice]
+#]]
+ ]
+
+ [case id=id-012-xml-emit-ref-as-plain-attr level=core
+  [tags identity reference xml]
+  [in-cx [#
+[users [user #u-1 name=alice] [reviewer assigned-to=@u-1]]
+#]]
+  [out-xml [#
+<users>
+  <user xml:id="u-1" name="alice"/>
+  <reviewer assigned-to="u-1"/>
+</users>
+#]]
+ ]
+
+ [case id=id-013-xml-parse-marks-matching-attr-as-ref level=core
+  [tags identity reference xml]
+  [in-xml [#
+<users>
+  <user xml:id="u-1" name="alice"/>
+  <reviewer assigned-to="u-1"/>
+</users>
+#]]
+  [out-cx [#
+[users
+  [user #u-1 name=alice]
+  [reviewer assigned-to=@u-1]
+]
+#]]
+ ]
+
+ [case id=id-014-xml-roundtrip-nested-ids-and-refs level=core
+  [tags identity xml nested roundtrip]
+  [in-cx [#
+[doc
+  [users
+    [user #u-1 name=alice]
+    [user #u-2 name=bob]
+  ]
+  [reviews
+    [review target=@u-1 score=5]
+    [review target=@u-2 score=4]
+  ]
+]
+#]]
+  [out-xml [#
+<doc>
+  <users>
+    <user xml:id="u-1" name="alice"/>
+    <user xml:id="u-2" name="bob"/>
+  </users>
+  <reviews>
+    <review target="u-1" score="5"/>
+    <review target="u-2" score="4"/>
+  </reviews>
+</doc>
+#]]
+ ]
+
+ [case id=id-015-canonical-renames-in-document-order level=core
+  [tags identity canonical]
+  [in-cx [#
+[users
+  [user #alice name=Alice]
+  [user #bob name=Bob]
+  [reviewer assigned-to=@alice]
+  [reviewer assigned-to=@bob]
+]
+#]]
+  [out-canonical [#
+[users
+  [user #id-1 name=Alice]
+  [user #id-2 name=Bob]
+  [reviewer assigned-to=@id-1]
+  [reviewer assigned-to=@id-2]
+]
+#]]
+ ]
+
+ [case id=id-016-canonical-spelling-independent-hash level=core
+  [tags identity canonical]
+  [in-cx [#
+[users
+  [user #zzz name=Alice]
+  [user #aaa name=Bob]
+  [reviewer assigned-to=@zzz]
+  [reviewer assigned-to=@aaa]
+]
+#]]
+  [out-canonical [#
+[users
+  [user #id-1 name=Alice]
+  [user #id-2 name=Bob]
+  [reviewer assigned-to=@id-1]
+  [reviewer assigned-to=@id-2]
+]
+#]]
+ ]
+
+ [case id=id-017-canonical-forward-reference-renamed level=core
+  [tags identity canonical forward]
+  [in-cx [#
+[doc
+  [pointer to=@target]
+  [thing #target value=42]
+]
+#]]
+  [out-canonical [#
+[doc
+  [pointer to=@id-1]
+  [thing #id-1 value=42]
+]
+#]]
+ ]
+
+ [case id=id-018-body-position-ref-round-trips level=core
+  [tags identity reference body-position]
+  [in-cx [#
+[doc
+  [thing #t-1 v=42]
+  [para See [ref @t-1] for details.]
+]
+#]]
+  [out-cx [#
+[doc
+  [thing #t-1 v=42]
+  [para 'See ' [ref @t-1] ' for details.']
+]
+#]]
+ ]
+
+ [case id=id-019-body-position-ref-canonical-rename level=core
+  [tags identity reference body-position canonical]
+  [in-cx [#
+[doc
+  [thing #target v=42]
+  [para See [ref @target] for details.]
+]
+#]]
+  [out-canonical [#
+[doc
+  [thing #id-1 v=42]
+  [para 'See ' [ref @id-1] ' for details.']
+]
+#]]
+ ]
+
+ [case id=id-020-body-position-ref-non-conforming-rejected level=core
+  [tags identity reference body-position strict-reservation GG12]
+  [in-cx [#
+[doc [ref note=hi]]
+#]]
+  [out-err [#
+E207
+#]]
+ ]
+
+ [case id=id-021-body-ref-xml-emits-cx-body-ref-attribute level=core
+  [tags identity reference body-position xml round-trip]
+  [in-cx [#
+[doc
+  [section #s-1
+    [title Intro]
+  ]
+  [para See [ref @s-1] for context.]
+]
+#]]
+  [out-xml [#
+<doc>
+  <section xml:id="s-1">
+    <title>Intro</title>
+  </section>
+  <para>See <ref cx:body-ref="s-1"/> for context.</para>
+</doc>
+#]]
+ ]
+
+ [case id=id-022-body-ref-xml-import-reconstructs-body-position-form level=core
+  [tags identity reference body-position xml import]
+  [in-xml [#
+<doc>
+  <section xml:id="s-1">
+    <title>Intro</title>
+  </section>
+  <para>See <ref cx:body-ref="s-1"/> for context.</para>
+</doc>
+#]]
+  [out-cx [#
+[doc
+  [section #s-1
+    [title Intro]
+  ]
+  [para 'See ' [ref @s-1] ' for context.']
+]
+#]]
+ ]
+
+ [case id=id-023-body-ref-json-semantic-emit level=extended
+  [tags identity reference body-position json semantic]
+  [in-cx [#
+[doc [section #s-1 [title T]] [para [ref @s-1]]]
+#]]
+  [out-json [#
+{
+  "doc": {
+    "section": {
+      "title": "T"
+    },
+    "para": {
+      "ref": {
+        "$ref": "s-1"
+      }
+    }
+  }
+}
+#]]
+ ]
+]

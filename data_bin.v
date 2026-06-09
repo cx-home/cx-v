@@ -2,10 +2,10 @@ module cx
 
 import math
 
-// CXDB v1 — strict canonical binary data format.
-// Specification: spec/data_bin.md.
+// CXCol v1 — strict canonical binary data format.
+// Specification: spec/core/data-bin.md.
 //
-// This file implements the encoder (emit_data_bin) per spec/data_bin.md
+// This file implements the encoder (emit_data_bin) per spec/core/data-bin.md
 // §3. The decoder (parse_data_bin) lives alongside in 2b.5. The C ABI
 // exports (cx_to_data_bin / cx_from_data_bin) live in cabi.v.
 //
@@ -17,7 +17,7 @@ import math
 //     emit_semantic_json's tree-shape rules) → binary bytes.
 //   - One pass, no intermediate JSON.
 
-// ── Tag bytes (spec/data_bin.md §3.2) ────────────────────────────────────────
+// ── Tag bytes (spec/core/data-bin.md §3.2) ────────────────────────────────────────
 
 const tag_null         = u8(0x00)
 const tag_false        = u8(0x01)
@@ -38,18 +38,21 @@ const tag_map_empty    = u8(0x51)
 const tag_table        = u8(0x60)
 const tag_table_empty  = u8(0x61)
 
-// CXDB header constants.
-const cxdb_magic       = [u8(0x43), 0x58, 0x44, 0x42]   // "CXDB"
-const cxdb_version     = u8(0x01)
-const cxdb_flags_le    = u8(0x01)
-const cxdb_default_depth = u32(64)
+// CXCol header constants. The 5-byte magic is "CXCol"; documents not
+// matching this magic are rejected at header parse (no fallback).
+// The header total is 12 bytes.
+const cxcol_magic_len   = 5
+const cxcol_magic       = [u8(0x43), 0x58, 0x43, 0x6F, 0x6C]   // "CXCol"
+const cxcol_version     = u8(0x01)
+const cxcol_flags_le    = u8(0x01)
+const cxcol_default_depth = u32(64)
 
 // ── Public entry points ──────────────────────────────────────────────────────
 
-// emit_data_bin encodes a Document as CXDB v1 strict-canonical bytes.
+// emit_data_bin encodes a Document as CXCol v1 strict-canonical bytes.
 // The output is the framing format `[u32 LE: payload_size][payload]`
 // matching cx_to_ast_bin / cx_to_events_bin. The first 4 bytes give
-// the payload size; payload is the CXDB document.
+// the payload size; payload is the CXCol document.
 pub fn emit_data_bin(doc Document) []u8 {
 	mut payload := []u8{cap: 256}
 	encode_header(mut payload)
@@ -69,17 +72,27 @@ fn frame_payload(payload []u8) []u8 {
 }
 
 fn encode_header(mut buf []u8) {
-	buf << cxdb_magic
-	buf << cxdb_version
-	buf << cxdb_flags_le
-	encode_u32_le(mut buf, cxdb_default_depth)
-	buf << u8(0)  // reserved
-	buf << u8(0)  // reserved
+	buf << cxcol_magic
+	buf << cxcol_version
+	buf << cxcol_flags_le
+	encode_u32_le(mut buf, cxcol_default_depth)
+	buf << u8(0)  // reserved (1 byte — magic grew from 4→5 in v0.8.0)
 }
 
 // ── Document → semantic-data projection ──────────────────────────────────────
 
 fn encode_document_root(doc Document, mut buf []u8) {
+	// Value-model document — a single CXDM value at top level (a Map / Array /
+	// Sequence / Scalar, not a named Element), as produced by the lossless
+	// JSON / value-codec read. Encode the value directly so it round-trips
+	// (the keyed-collection path below only sees named Elements).
+	if doc.elements.len == 1 {
+		only := doc.elements[0]
+		if only !is Element {
+			encode_dataval(node_to_dataval(only), mut buf)
+			return
+		}
+	}
 	roots := doc.elements.filter(it is Element)
 	if roots.len == 0 {
 		buf << tag_null
@@ -162,7 +175,7 @@ pub struct DataTable {
 pub mut:
 	cols []TableColumn
 	// rows admits both scalars and collection-literal cells per
-	// ADR 0018 §D4 + ADR 0017 §D1. DataVal's `[]DataVal` /
+	// DataVal's `[]DataVal`
 	// DataPairs variants already encode arrays and maps on the
 	// wire; collection-cell support reuses these paths (Phase 2.2,
 	// 2026-05-12). Pre-Phase-2.2 code that produced [][]ScalarValue
@@ -236,8 +249,8 @@ fn dataval_rows_to_table_cell_rows(rows [][]DataVal) ![][]TableCellValue {
 }
 
 fn element_to_dataval(e Element) DataVal {
-	if td := e.table {
-		// Phase 2.2 (ADR 0018 §D4 collection-cell rollout): DataTable.rows
+	if td := e.table_opt() {
+		// Phase 2.2 (collection-cell rollout): DataTable.rows
 		// is [][]DataVal — each cell may be a scalar OR a collection
 		// (array/map). table_cell_to_dataval handles per-cell
 		// conversion including recursive node→DataVal for nested
@@ -390,7 +403,7 @@ fn scalar_value_to_dataval(v ScalarValue) DataVal {
 	}
 }
 
-// table_cell_to_dataval converts a TableCellValue (ADR 0018 §D4
+// table_cell_to_dataval converts a TableCellValue
 // collection-cell-capable cell value) to DataVal for the data_bin
 // wire format. Scalars map 1:1 via the existing scalar-variant
 // branches; ArrayNode and MapNode delegate to node_to_dataval which
@@ -435,7 +448,7 @@ fn dataval_to_table_cell(v DataVal) !TableCellValue {
 // node_to_dataval converts an AST Node (typically a child of an
 // ArrayNode.items or MapNode.entries) into a DataVal for binary
 // encoding. Handles the AST node kinds that can appear as collection
-// items per ADR 0017 §D5: ScalarNode (typed scalar literal), TextNode
+// items: ScalarNode (typed scalar literal), TextNode
 // (string literal in bare/quoted form), ArrayNode / MapNode /
 // SequenceNode (nested collections). Other Node kinds (Element,
 // EvalDirective, Comment, ...) are not valid collection-item shapes
@@ -465,7 +478,7 @@ fn map_node_to_dataval(n MapNode) DataVal {
 	mut keys := []string{cap: n.entries.len}
 	mut vals := []DataVal{cap: n.entries.len}
 	for entry in n.entries {
-		// Map keys are atomic per ADR 0017 §D4; canonical-string
+		// Map keys are atomic; canonical-string
 		// form for the wire (DataPairs uses string keys).
 		keys << scalar_value_str(entry.key_value)
 		vals << node_to_dataval(entry.value)
@@ -613,7 +626,7 @@ fn encode_date(d DataDate, mut buf []u8) {
 
 fn encode_datetime(d DataDateTime, mut buf []u8) {
 	// Phase 7.74c-datetime-foundations: parse ISO-8601 source to
-	// strict-canonical 12-byte wire form per spec/data_bin.md §3.6.1.
+	// strict-canonical 12-byte wire form per spec/core/data-bin.md §3.6.1.
 	// On parse failure, emit zeros — encoder is best-effort here; the
 	// chunked strict-cell encoder (data_bin_chunked.v) returns errors
 	// up to the caller via its `!` signature.
@@ -638,15 +651,15 @@ fn encode_datetime(d DataDateTime, mut buf []u8) {
 //
 // - Fractional seconds beyond 9 digits are truncated (ns precision floor).
 // - Naive datetimes (no Z / ±HH:MM) are treated as UTC (offset = 0).
-// - Leap seconds (sec=60) are rejected; CXDB ns timeline ignores them.
+// - Leap seconds (sec=60) are rejected; CXCol ns timeline ignores them.
 // - i64-ns range overflow (year < 1677 or > 2262) is rejected.
 pub fn parse_iso_datetime_canonical(s string) !(i64, i16) {
 	if s.len < 19 {
-		return error('cxdb: datetime too short: "${s}"')
+		return error('cxcol: datetime too short: "${s}"')
 	}
 	bs := s.bytes()
 	if bs[4] != `-` || bs[7] != `-` || bs[10] != `T` || bs[13] != `:` || bs[16] != `:` {
-		return error('cxdb: malformed datetime "${s}" (expected YYYY-MM-DDTHH:MM:SS...)')
+		return error('cxcol: malformed datetime "${s}" (expected YYYY-MM-DDTHH:MM:SS...)')
 	}
 	year := s[0..4].i16()
 	month := s[5..7].u8()
@@ -654,12 +667,12 @@ pub fn parse_iso_datetime_canonical(s string) !(i64, i16) {
 	hour := s[11..13].u8()
 	minute := s[14..16].u8()
 	sec := s[17..19].u8()
-	if month < 1 || month > 12 { return error('cxdb: datetime invalid month ${month} in "${s}"') }
-	if day < 1 || day > 31     { return error('cxdb: datetime invalid day ${day} in "${s}"') }
-	if hour > 23               { return error('cxdb: datetime invalid hour ${hour} in "${s}"') }
-	if minute > 59             { return error('cxdb: datetime invalid minute ${minute} in "${s}"') }
-	if sec == 60               { return error('cxdb: datetime leap seconds not supported (sec=60) in "${s}"') }
-	if sec > 59                { return error('cxdb: datetime invalid second ${sec} in "${s}"') }
+	if month < 1 || month > 12 { return error('cxcol: datetime invalid month ${month} in "${s}"') }
+	if day < 1 || day > 31     { return error('cxcol: datetime invalid day ${day} in "${s}"') }
+	if hour > 23               { return error('cxcol: datetime invalid hour ${hour} in "${s}"') }
+	if minute > 59             { return error('cxcol: datetime invalid minute ${minute} in "${s}"') }
+	if sec == 60               { return error('cxcol: datetime leap seconds not supported (sec=60) in "${s}"') }
+	if sec > 59                { return error('cxcol: datetime invalid second ${sec} in "${s}"') }
 
 	mut pos := 19
 	mut frac_ns := i64(0)
@@ -689,25 +702,25 @@ pub fn parse_iso_datetime_canonical(s string) !(i64, i16) {
 			pos++
 		} else if ch == `+` || ch == `-` {
 			if pos + 6 > s.len || bs[pos + 3] != `:` {
-				return error('cxdb: malformed offset in datetime "${s}" (expected ±HH:MM)')
+				return error('cxcol: malformed offset in datetime "${s}" (expected ±HH:MM)')
 			}
 			oh := s[pos + 1..pos + 3].i16()
 			om := s[pos + 4..pos + 6].i16()
 			if oh > 18 || om > 59 {
-				return error('cxdb: offset out of range in datetime "${s}"')
+				return error('cxcol: offset out of range in datetime "${s}"')
 			}
 			signed := oh * 60 + om
 			offset_min = if ch == `+` { signed } else { -signed }
 			if offset_min < -1080 || offset_min > 1080 {
-				return error('cxdb: offset exceeds ±18:00 in datetime "${s}"')
+				return error('cxcol: offset exceeds ±18:00 in datetime "${s}"')
 			}
 			pos += 6
 		} else {
-			return error('cxdb: unexpected char in datetime "${s}" at byte ${pos}')
+			return error('cxcol: unexpected char in datetime "${s}" at byte ${pos}')
 		}
 	}
 	if pos != s.len {
-		return error('cxdb: trailing garbage in datetime "${s}" at byte ${pos}')
+		return error('cxcol: trailing garbage in datetime "${s}" at byte ${pos}')
 	}
 
 	days := date_to_days_proleptic(year, month, day)
@@ -715,7 +728,7 @@ pub fn parse_iso_datetime_canonical(s string) !(i64, i16) {
 	utc_secs := local_secs - i64(offset_min) * 60
 	// i64 ns range: ±9_223_372_036.854 seconds (~292 years from epoch).
 	if utc_secs > i64(9_223_372_036) || utc_secs < i64(-9_223_372_036) {
-		return error('cxdb: datetime "${s}" out of i64-ns range (year ~1677..2262)')
+		return error('cxcol: datetime "${s}" out of i64-ns range (year ~1677..2262)')
 	}
 	unix_nanos := utc_secs * i64(1_000_000_000) + frac_ns
 	return unix_nanos, offset_min
@@ -858,11 +871,11 @@ fn column_type_code(type_name string) u8 {
 fn encode_table_cell(v DataVal, _col_code u8, mut buf []u8) {
 	// In v1 we emit a per-cell tag for simplicity (mirrors plain
 	// container encoding). The columnar-omit-tag optimization per
-	// spec/data_bin.md §3.10.3 — where the column type is declared
+	// spec/core/data-bin.md §3.10.3 — where the column type is declared
 	// once and per-cell tags are dropped — is reserved for v1.1.
 	// _col_code is the planned input for that optimization.
 	//
-	// Phase 2.2 (ADR 0018 §D4): cell is DataVal (was ScalarValue),
+	// Phase 2.2: cell is DataVal (was ScalarValue),
 	// admitting `[]DataVal` (array) / DataPairs (map) variants for
 	// collection cells. encode_dataval already dispatches on all
 	// variants — no per-variant branching needed here.
@@ -898,9 +911,9 @@ fn encode_u64_le(mut buf []u8, v u64) {
 	buf << u8((v >> 56) & 0xFF)
 }
 
-// ── CXDB v1 decoder (Phase 2b.5) ─────────────────────────────────────────────
+// ── CXCol v1 decoder (Phase 2b.5) ─────────────────────────────────────────────
 
-// BinReader is a forward-only cursor over a CXDB payload. Tracks
+// BinReader is a forward-only cursor over a CXCol payload. Tracks
 // position and recursion depth; aborts on overflow per spec/policies.md
 // §5.4.
 struct BinReader {
@@ -911,29 +924,29 @@ mut:
 	max_depth int
 }
 
-// parse_data_bin decodes CXDB v1 framed bytes into a Document.
+// parse_data_bin decodes CXCol v1 framed bytes into a Document.
 // Input format: `[u32 LE: payload_size][payload bytes]` matching
 // emit_data_bin's output. Returns Document for use with emit_cx.
 pub fn parse_data_bin(input []u8) !Document {
 	if input.len < 4 {
-		return error('cxdb: input too short for size header')
+		return error('cxcol: input too short for size header')
 	}
 	payload_size := u32(input[0]) | (u32(input[1]) << 8)
 		| (u32(input[2]) << 16) | (u32(input[3]) << 24)
 	if 4 + int(payload_size) > input.len {
-		return error('cxdb: declared payload (${payload_size}) exceeds remaining input')
+		return error('cxcol: declared payload (${payload_size}) exceeds remaining input')
 	}
 	// Reader views the payload as a read-only slice; no clone needed.
 	mut r := BinReader{
 		buf:       unsafe { input[4 .. 4 + int(payload_size)] }
 		pos:       0
 		depth:     0
-		max_depth: int(cxdb_default_depth)
+		max_depth: int(cxcol_default_depth)
 	}
 	r.read_header()!
 	root := r.read_dataval()!
 	if r.pos != r.buf.len {
-		return error('cxdb: trailing bytes after root value (${r.buf.len - r.pos} bytes)')
+		return error('cxcol: trailing bytes after root value (${r.buf.len - r.pos} bytes)')
 	}
 	return dataval_to_document(root)!
 }
@@ -948,7 +961,7 @@ pub fn from_data_bin(input []u8) !string {
 
 fn (mut r BinReader) take(n int) ![]u8 {
 	if r.pos + n > r.buf.len {
-		return error('cxdb: ${n} bytes requested, only ${r.buf.len - r.pos} remaining')
+		return error('cxcol: ${n} bytes requested, only ${r.buf.len - r.pos} remaining')
 	}
 	out := r.buf[r.pos .. r.pos + n]
 	r.pos += n
@@ -956,7 +969,7 @@ fn (mut r BinReader) take(n int) ![]u8 {
 }
 
 fn (mut r BinReader) take_u8() !u8 {
-	if r.pos >= r.buf.len { return error('cxdb: unexpected end of input') }
+	if r.pos >= r.buf.len { return error('cxcol: unexpected end of input') }
 	v := r.buf[r.pos]
 	r.pos++
 	return v
@@ -966,15 +979,15 @@ fn (mut r BinReader) read_uvarint() !u64 {
 	mut x := u64(0)
 	mut s := u32(0)
 	for i in 0 .. 5 {
-		if r.pos >= r.buf.len { return error('cxdb: truncated varint') }
+		if r.pos >= r.buf.len { return error('cxcol: truncated varint') }
 		b := r.buf[r.pos]
 		r.pos++
 		if b < 0x80 {
 			if i == 4 && b > 0x0F {
-				return error('cxdb: varint overflow (>2^32-1)')
+				return error('cxcol: varint overflow (>2^32-1)')
 			}
 			if i > 0 && b == 0 {
-				return error('cxdb: non-canonical varint (extra zero byte)')
+				return error('cxcol: non-canonical varint (extra zero byte)')
 			}
 			x |= u64(b) << s
 			return x
@@ -982,7 +995,7 @@ fn (mut r BinReader) read_uvarint() !u64 {
 		x |= u64(b & 0x7F) << s
 		s += 7
 	}
-	return error('cxdb: varint exceeds 5 bytes')
+	return error('cxcol: varint exceeds 5 bytes')
 }
 
 fn (mut r BinReader) read_u32_le() !u32 {
@@ -1001,29 +1014,30 @@ fn (mut r BinReader) read_u64_le() !u64 {
 
 fn (mut r BinReader) read_header() ! {
 	if r.buf.len < 12 {
-		return error('cxdb: payload too short for 12-byte header')
+		return error('cxcol: payload too short for 12-byte header')
 	}
-	magic := r.take(4)!
-	if magic[0] != 0x43 || magic[1] != 0x58 || magic[2] != 0x44 || magic[3] != 0x42 {
-		return error('cxdb: bad magic (expected "CXDB")')
+	magic := r.take(cxcol_magic_len)!
+	if magic[0] != cxcol_magic[0] || magic[1] != cxcol_magic[1]
+		|| magic[2] != cxcol_magic[2] || magic[3] != cxcol_magic[3]
+		|| magic[4] != cxcol_magic[4] {
+		return error('cxcol: bad magic (expected "CXCol")')
 	}
 	version := r.take_u8()!
-	if version != cxdb_version {
-		return error('cxdb: unsupported version ${version} (this build supports ${cxdb_version})')
+	if version != cxcol_version {
+		return error('cxcol: unsupported version ${version} (this build supports ${cxcol_version})')
 	}
 	flags := r.take_u8()!
 	if flags & 0xFE != 0 {
-		return error('cxdb: reserved flag bits set in header')
+		return error('cxcol: reserved flag bits set in header')
 	}
 	if flags & 0x01 == 0 {
-		return error('cxdb: only little-endian payloads supported in v1')
+		return error('cxcol: only little-endian payloads supported in v1')
 	}
 	hdr_max_depth := r.read_u32_le()!
 	r.max_depth = int(hdr_max_depth)
 	rsv1 := r.take_u8()!
-	rsv2 := r.take_u8()!
-	if rsv1 != 0 || rsv2 != 0 {
-		return error('cxdb: reserved header bytes must be zero')
+	if rsv1 != 0 {
+		return error('cxcol: reserved header byte must be zero')
 	}
 }
 
@@ -1032,7 +1046,7 @@ fn (mut r BinReader) read_header() ! {
 fn (mut r BinReader) read_dataval() !DataVal {
 	r.depth++
 	if r.depth > r.max_depth {
-		return error('cxdb: recursion depth exceeds limit (${r.max_depth})')
+		return error('cxcol: recursion depth exceeds limit (${r.max_depth})')
 	}
 	defer { r.depth-- }
 	tag := r.take_u8()!
@@ -1056,7 +1070,7 @@ fn (mut r BinReader) read_dataval() !DataVal {
 		tag_table        { r.read_table_payload()! }
 		tag_table_empty  { DataVal(DataTable{ cols: []TableColumn{}, rows: [][]DataVal{} }) }
 		tag_table_chunked { r.read_chunked_table_payload()! }
-		else             { return error('cxdb: unknown tag 0x${tag:02x} at offset ${r.pos - 1}') }
+		else             { return error('cxcol: unknown tag 0x${tag:02x} at offset ${r.pos - 1}') }
 	}
 	return v
 }
@@ -1084,7 +1098,7 @@ fn (mut r BinReader) read_f64() !f64 {
 fn (mut r BinReader) read_string_payload() !string {
 	n := r.read_uvarint()!
 	if n > u64(r.buf.len - r.pos) {
-		return error('cxdb: string length ${n} exceeds remaining input')
+		return error('cxcol: string length ${n} exceeds remaining input')
 	}
 	bs := r.take(int(n))!
 	return bs.bytestr()
@@ -1093,7 +1107,7 @@ fn (mut r BinReader) read_string_payload() !string {
 fn (mut r BinReader) read_bytes_payload() ![]u8 {
 	n := r.read_uvarint()!
 	if n > u64(r.buf.len - r.pos) {
-		return error('cxdb: bytes length ${n} exceeds remaining input')
+		return error('cxcol: bytes length ${n} exceeds remaining input')
 	}
 	return r.take(int(n))!.clone()
 }
@@ -1103,22 +1117,22 @@ fn (mut r BinReader) read_date_payload() !DataDate {
 	year := i16(u16(bs[0]) | (u16(bs[1]) << 8))
 	month := bs[2]
 	day := bs[3]
-	if month < 1 || month > 12 { return error('cxdb: invalid date month ${month}') }
-	if day < 1 || day > 31 { return error('cxdb: invalid date day ${day}') }
+	if month < 1 || month > 12 { return error('cxcol: invalid date month ${month}') }
+	if day < 1 || day > 31 { return error('cxcol: invalid date day ${day}') }
 	return DataDate{ year: year, month: month, day: day }
 }
 
 fn (mut r BinReader) read_datetime_payload() !DataDateTime {
-	// Wire form per spec/data_bin.md §3.6.1:
+	// Wire form per spec/core/data-bin.md §3.6.1:
 	// i64 unix_nanos LE (8) + i16 offset_minutes LE (2) + u16 reserved (2).
 	unix_nanos := r.read_i64_le()!
 	offset_min := r.read_i16_le()!
 	reserved   := r.read_i16_le()!
 	if reserved != 0 {
-		return error('cxdb: datetime reserved bytes must be zero (got 0x${u16(reserved):04x})')
+		return error('cxcol: datetime reserved bytes must be zero (got 0x${u16(reserved):04x})')
 	}
 	if offset_min < -1080 || offset_min > 1080 {
-		return error('cxdb: datetime offset_minutes ${offset_min} exceeds ±1080 (±18:00)')
+		return error('cxcol: datetime offset_minutes ${offset_min} exceeds ±1080 (±18:00)')
 	}
 	src := format_iso_datetime_utc(unix_nanos, offset_min)
 	return DataDateTime{ source: src }
@@ -1127,7 +1141,7 @@ fn (mut r BinReader) read_datetime_payload() !DataDateTime {
 fn (mut r BinReader) read_array_payload() !DataVal {
 	count := r.read_uvarint()!
 	if count == 0 {
-		return error('cxdb: array tag 0x40 with count=0; use 0x41 for empty arrays')
+		return error('cxcol: array tag 0x40 with count=0; use 0x41 for empty arrays')
 	}
 	mut arr := []DataVal{cap: int(count)}
 	for _ in 0 .. int(count) {
@@ -1139,14 +1153,14 @@ fn (mut r BinReader) read_array_payload() !DataVal {
 fn (mut r BinReader) read_map_payload() !DataVal {
 	count := r.read_uvarint()!
 	if count == 0 {
-		return error('cxdb: map tag 0x50 with count=0; use 0x51 for empty maps')
+		return error('cxcol: map tag 0x50 with count=0; use 0x51 for empty maps')
 	}
 	mut keys := []string{cap: int(count)}
 	mut vals := []DataVal{cap: int(count)}
 	for _ in 0 .. int(count) {
 		key_tag := r.take_u8()!
 		if key_tag != tag_string {
-			return error('cxdb: map key must be string (tag 0x30); got 0x${key_tag:02x}')
+			return error('cxcol: map key must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		k := r.read_string_payload()!
 		v := r.read_dataval()!
@@ -1159,13 +1173,13 @@ fn (mut r BinReader) read_map_payload() !DataVal {
 fn (mut r BinReader) read_table_payload() !DataVal {
 	col_count := r.read_uvarint()!
 	if col_count == 0 {
-		return error('cxdb: table tag 0x60 with col_count=0; use 0x61 for empty tables')
+		return error('cxcol: table tag 0x60 with col_count=0; use 0x61 for empty tables')
 	}
 	mut cols := []TableColumn{cap: int(col_count)}
 	for _ in 0 .. int(col_count) {
 		key_tag := r.take_u8()!
 		if key_tag != tag_string {
-			return error('cxdb: table column name must be string (tag 0x30); got 0x${key_tag:02x}')
+			return error('cxcol: table column name must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		name := r.read_string_payload()!
 		col_type_byte := r.take_u8()!
@@ -1179,7 +1193,7 @@ fn (mut r BinReader) read_table_payload() !DataVal {
 	for col_idx in 0 .. int(col_count) {
 		for row_idx in 0 .. int(row_count) {
 			cell := r.read_dataval()!
-			// Phase 2.2 (ADR 0018 §D4): cells are DataVal — scalar
+			// Phase 2.2: cells are DataVal — scalar
 			// variants OR collection (`[]DataVal` / DataPairs). No
 			// per-variant unwrapping needed; the wire format dispatch
 			// already produced the right DataVal shape.
@@ -1245,14 +1259,14 @@ fn dataval_to_element(name string, v DataVal) Element {
 		t := v as DataTable
 		return Element{
 			name:  name
-			data_type: ?string('table')
-			table: ?TableData(TableData{
-			cols: t.cols
-			rows: dataval_rows_to_table_cell_rows(t.rows) or {
-				panic('data_bin: decode produced unparseable cell: ${err.msg()}')
+			meta:  &ElementMeta{ data_type: ?string('table') }
+			table: &TableData{
+				cols: t.cols
+				rows: dataval_rows_to_table_cell_rows(t.rows) or {
+					panic('data_bin: decode produced unparseable cell: ${err.msg()}')
+				}
+				from_chunked: t.from_chunked
 			}
-			from_chunked: t.from_chunked
-		})
 		}
 	}
 	if v is DataPairs {
@@ -1271,11 +1285,9 @@ fn dataval_to_element(name string, v DataVal) Element {
 			} else if vv is DataTable {
 				items << Node(dataval_to_element(k, vv))
 			} else {
-				attrs << Attribute{
-					name:      k
-					value:     dataval_to_scalar(vv)
-					data_type: dataval_to_scalar_type(vv)
-				}
+				attrs << new_attribute(k, dataval_to_scalar(vv), AttributeMeta{
+					data_type: opt_scalar_type_name(dataval_to_scalar_type(vv))
+				})
 			}
 		}
 		return Element{ name: name, attrs: attrs, items: items }

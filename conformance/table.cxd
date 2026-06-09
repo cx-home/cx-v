@@ -1,0 +1,262 @@
+[test-suite name=table
+  [doc [#
+# CX Conformance — :table block tests
+# Version: 1.0 — 2026-05-08
+# Covers: spec/grammar.ebnf [29], spec/misc/table-api.md, spec/canonical.md §2.
+#   - Header column declarations (typed, untyped, mixed)
+#   - Row parsing (typed cells preserve their type)
+#   - Quoted string cells
+#   - Null cells
+#   - Numeric underscores in typed-int cells
+#   - CX → CX lossless round-trip
+#   - Empty :table (header only, no rows)
+#
+# Verification is via the conformance_run.v out_cx section: parse the
+# input CX, re-emit through emit_cx, compare against the expected
+# output. Mismatch fails. The fixtures pin the grammar — in
+# particular ns-013-style colon handling: `name:string` in a :table
+# header MUST split into (name, string) regardless of whether `:` is
+# accepted as a name-character elsewhere in the parser (it is, for
+# namespace-prefixed identifiers like `xmlns:foo`).
+#]]
+
+ [case id=tab-001-typed-columns level=core
+  [tags table header typed]
+  [in-cx [#
+[users [table[name::string age::int active::bool]]
+  alice 30 true
+  bob 25 false
+]
+#]]
+  [out-cx [#
+[users [table[name::string age::int active::bool]]
+  alice 30 true
+  bob 25 false
+]
+#]]
+ ]
+
+ [case id=tab-002-untyped-columns level=core
+  [tags table header untyped]
+  [in-cx [#
+[t [table[a b c]]
+  x y z
+  p q r
+]
+#]]
+  [out-cx [#
+[t [table[a b c]]
+  x y z
+  p q r
+]
+#]]
+ ]
+
+ [case id=tab-003-mixed-typed-untyped level=core
+  [tags table header mixed]
+  [in-cx [#
+[t [table[name age::int tag]]
+  alice 30 admin
+  bob 25 user
+]
+#]]
+  [out-cx [#
+[t [table[name age::int tag]]
+  alice 30 admin
+  bob 25 user
+]
+#]]
+ ]
+
+ [case id=tab-004-single-column-single-row level=core
+  [tags table edge]
+  [in-cx [#
+[t [table[v::int]]
+  42
+]
+#]]
+  [out-cx [#
+[t [table[v::int]]
+  42
+]
+#]]
+ ]
+
+ [case id=tab-005-typed-int-cells level=core
+  [tags table cells int]
+  [in-cx [#
+[t [table[n::int]]
+  1
+  2
+  3
+]
+#]]
+  [out-cx [#
+[t [table[n::int]]
+  1
+  2
+  3
+]
+#]]
+ ]
+
+ [case id=tab-006-typed-bool-cells level=core
+  [tags table cells bool]
+  [in-cx [#
+[t [table[active::bool]]
+  true
+  false
+  true
+]
+#]]
+  [out-cx [#
+[t [table[active::bool]]
+  true
+  false
+  true
+]
+#]]
+ ]
+
+ [case id=tab-007-typed-float-cells level=core
+  [tags table cells float]
+  [in-cx [#
+[t [table[ratio::float]]
+  1.5
+  2.5
+  3.5
+]
+#]]
+  [out-cx [#
+[t [table[ratio::float]]
+  1.5
+  2.5
+  3.5
+]
+#]]
+ ]
+
+ [case id=tab-008-quoted-string-cell level=core
+  [tags table cells quoted]
+  [in-cx [#
+[users [table[name::string age::int]]
+  'alice jones' 30
+  bob 25
+]
+#]]
+  [out-cx [#
+[users [table[name::string age::int]]
+  'alice jones' 30
+  bob 25
+]
+#]]
+ ]
+
+ [case id=tab-009-null-cell level=core
+  [tags table cells null]
+  [in-cx [#
+[t [table[a b]]
+  alice null
+  bob 30
+]
+#]]
+  [out-cx [#
+[t [table[a b]]
+  alice null
+  bob 30
+]
+#]]
+ ]
+
+ [case id=tab-010-underscored-int-cells level=core
+  [tags table cells numerics]
+  [in-cx [#
+[stats [table[count::int]]
+  1000000
+  2500000
+]
+#]]
+  [out-cx [#
+[stats [table[count::int]]
+  1000000
+  2500000
+]
+#]]
+ ]
+
+ [case id=tab-011-empty-rows level=core
+  [tags table edge empty]
+  [in-cx [#
+[t [table[a b]]]
+#]]
+  [out-cx [#
+[t [table[a b]]]
+#]]
+ ]
+
+ [case id=tab-012-array-cells level=core
+  [tags table cells collection-literal]
+  [in-cx [#
+[t [table[name tags]]
+  alice [admin, user]
+  bob [user]
+]
+#]]
+  [out-cx [#
+[t [table[name tags]]
+  alice ['admin', 'user']
+  bob ['user']
+]
+#]]
+ ]
+
+ [case id=tab-013-map-cells level=core
+  [tags table cells collection-literal]
+  [in-cx [#
+[t [table[name attrs]]
+  alice {role: admin, age: 30}
+  bob {role: user, age: 25}
+]
+#]]
+  [out-cx [#
+[t [table[name attrs]]
+  alice {role: admin, age: 30}
+  bob {role: user, age: 25}
+]
+#]]
+ ]
+
+ [case id=tab-014-sequence-cells level=core
+  [tags table cells collection-literal]
+  [in-cx [#
+[t [table[name ports]]
+  web (80, 443)
+  db (5432, 6379)
+]
+#]]
+  [out-cx [#
+[t [table[name ports]]
+  web (80, 443)
+  db (5432, 6379)
+]
+#]]
+ ]
+
+ [case id=tab-015-mixed-scalar-and-collection-cells level=core
+  [tags table cells mixed]
+  [in-cx [#
+[t [table[name value]]
+  count 42
+  tags [admin, user]
+  meta {k: v}
+]
+#]]
+  [out-cx [#
+[t [table[name value]]
+  count 42
+  tags ['admin', 'user']
+  meta {k: v}
+]
+#]]
+ ]
+]

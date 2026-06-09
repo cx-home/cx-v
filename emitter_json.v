@@ -52,6 +52,8 @@ fn json_node(n Node) string {
 		ElementDeclNode  { '{"type":"ElementDecl","name":${json_str(n.name)},"contentspec":${json_str(n.contentspec)}}' }
 		AttlistDeclNode  { json_attlist_decl(n) }
 		NotationDeclNode { json_notation_decl(n) }
+		PEReferenceNode  { '{"type":"PEReference","name":${json_str(n.name)}}' }
+		DoctypeDecl      { json_doctype(n) }
 		ConditionalSectNode { json_conditional_sect(n) }
 		BlockContentNode {
 			items := n.items.map(json_node(it))
@@ -89,6 +91,41 @@ fn json_node(n Node) string {
 			}
 			'{"type":"Map","entries":[${entries.join(',')}]}'
 		}
+		IteratorNode {
+			// materialize to Sequence form at the host
+			// (JSON) boundary. The eval pipeline pulls the iterator
+			// before render; this arm serializes whatever has accumulated
+			// in `memo` as a Sequence-shaped JSON object.
+			seq := iterator_to_sequence(n)
+			items := seq.items.map(json_node(it))
+			'{"type":"Sequence","items":[${items.join(',')}]}'
+		}
+		MatchNode {
+			// v0.8.0 — delegate to the canonical AST-JSON
+			// projection in match_node.v (`"type":"ProgramMatchExpr"`,
+			// arm-kind discriminator, scrutinee + arms[]).
+			match_node_to_json(n)
+		}
+		ModifyNode {
+			// v0.8.0 — delegate to modify_node.v's
+			// AST-JSON projection (`"type":"ProgramModifyExpr"`,
+			// doc + focus + action-kind discriminator).
+			modify_node_to_json(n)
+		}
+		DocumentNode {
+			// D7 — transparent document carrier: project as a Document
+			// shell over its prolog/doctype/element children.
+			mut pairs := []string{}
+			pairs << '"type":"Document"'
+			if n.prolog.len > 0 {
+				pr := n.prolog.map(json_node(it))
+				pairs << '"prolog":[${pr.join(',')}]'
+			}
+			if dt := n.doctype { pairs << '"doctype":${json_doctype(dt)}' }
+			els := n.elements.map(json_node(it))
+			pairs << '"elements":[${els.join(',')}]'
+			'{${pairs.join(',')}}'
+		}
 	}
 }
 
@@ -96,14 +133,14 @@ fn json_element(e Element) string {
 	mut pairs := []string{}
 	pairs << '"type":"Element"'
 	pairs << '"name":${json_str(e.name)}'
-	if a := e.anchor   { pairs << '"anchor":${json_str(a)}' }
-	if m := e.merge    { pairs << '"merge":${json_str(m)}' }
-	if id := e.id      { pairs << '"id":${json_str(id)}' }
-	// v3.4 (ADR 0003 D1): body-position reference shape `[name @id]`.
-	if br := e.body_ref { pairs << '"bodyRef":${json_str(br)}' }
-	if dt := e.data_type { pairs << '"dataType":${json_str(dt)}' }
+	if a := e.anchor()   { pairs << '"anchor":${json_str(a)}' }
+	if m := e.merge()    { pairs << '"merge":${json_str(m)}' }
+	if id := e.id()      { pairs << '"id":${json_str(id)}' }
+	// v3.4: body-position reference shape `[name @id]`.
+	if br := e.body_ref() { pairs << '"bodyRef":${json_str(br)}' }
+	if dt := e.data_type() { pairs << '"dataType":${json_str(dt)}' }
 	if e.attrs.len > 0  { pairs << '"attrs":${json_attrs(e.attrs)}' }
-	if e.items.len > 0 || e.data_type != none {
+	if e.items.len > 0 || e.data_type() != none {
 		nodes := e.items.map(json_node(it))
 		pairs << '"items":[${nodes.join(',')}]'
 	}
@@ -157,14 +194,14 @@ fn json_attrs(attrs []Attribute) string {
 fn json_attr(a Attribute) string {
 	mut pairs := []string{}
 	pairs << '"name":${json_str(a.name)}'
-	if body_items := a.body {
-		// v3.5 (ADR 0016): BracketBody attribute value.
+	if body_items := a.body() {
+		// v3.5: BracketBody attribute value.
 		items := body_items.map(json_node(it))
 		pairs << '"body":[${items.join(',')}]'
 	} else {
 		pairs << '"value":${json_scalar_value(a.value)}'
-		if dt := a.data_type {
-			pairs << '"dataType":"${scalar_type_name(dt)}"'
+		if dt := a.data_type() {
+			pairs << '"dataType":"${dt}"'
 		}
 	}
 	if a.is_ref {

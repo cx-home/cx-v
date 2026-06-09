@@ -1,0 +1,905 @@
+[test-suite name=geo
+  [doc [#
+conformance fixtures for cx-stdlib/geo (spec/std-lib/geo.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/geo']
+   (resolver MUST be quoted) then calls [$geo:fn args]. The LAST expression
+   is the rendered result. String scalars render quoted; bool bare; floats
+   with a decimal point. Error fixtures use [out-err] with the bare CXER code.
+
+   Element-returning constructors/operations have NO spec-defined canonical
+   element render, so cases extract a scalar field (e.g. $p/lat) or feed the
+   element into a predicate / format function whose output IS spec-defined,
+   rather than asserting an unspecified element serialization.
+
+   Computed-float results (distance, bearing, area, perimeter) are given only
+   APPROXIMATELY in the spec (§6 tolerances, e.g. "≈ 3944 km within 1%"); the
+   exact float a conforming impl prints is unspecified, so those happy-path
+   cases carry a TODO(spec-ambiguous) marker. Their error/edge behavior and
+   the exactly-specified normalize/predicate results are pinned firmly.
+#]]
+
+ # ── §3.1 Construction ──────────────────────────────────────────────────
+
+ [case id=geo-001-point-lat level=core
+  [tags geo point construction]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:point 37.7749 -122.4194]] $p/lat]
+#]]
+  [out-text [#
+37.7749
+#]]
+ ]
+
+ [case id=geo-002-point-lon level=core
+  [tags geo point construction]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:point 37.7749 -122.4194]] $p/lon]
+#]]
+  [out-text [#
+-122.4194
+#]]
+ ]
+
+ [case id=geo-003-point-invalid-lat level=core
+  [tags geo point construction CXER3601]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:point 95.0 0.0]
+#]]
+  [out-err [#
+cx-err:CXER3601
+#]]
+ ]
+
+ # §2.1: longitude is CYCLIC — point wraps an out-of-range longitude into
+ # [-180, 180] losslessly (200 → -160), never raising. (Out-of-range LATITUDE
+ # is the hard error — see geo-003.)
+ [case id=geo-004-point-wrap-lon level=core
+  [tags geo point construction wrap-longitude]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:point 0.0 200.0]] $p/lon]
+#]]
+  [out-text [#
+-160.0
+#]]
+ ]
+
+ [case id=geo-005-bbox-min-lat level=core
+  [tags geo bbox construction]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $bb [$geo:bbox ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35])]] $bb/min-lat]
+#]]
+  [out-text [#
+37.7
+#]]
+ ]
+
+ [case id=geo-006-bbox-max-lon level=core
+  [tags geo bbox construction]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $bb [$geo:bbox ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35])]] $bb/max-lon]
+#]]
+  [out-text [#
+-122.35
+#]]
+ ]
+
+ [case id=geo-007-polygon-auto-closes level=core
+  [tags geo polygon construction auto-close]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-is-closed [$geo:polygon ([$geo:point 37.7 -122.5], [$geo:point 37.7 -122.4], [$geo:point 37.8 -122.4], [$geo:point 37.8 -122.5])]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=geo-008-polygon-with-holes-valid level=core
+  [tags geo polygon-with-holes construction holes]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-is-closed [$geo:polygon-with-holes ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 10.0 0.0], [$geo:point 0.0 0.0]) (([$geo:point 2.0 2.0], [$geo:point 2.0 4.0], [$geo:point 4.0 4.0], [$geo:point 4.0 2.0], [$geo:point 2.0 2.0]))]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # ── §3.2 Distance and bearing ──────────────────────────────────────────
+
+ # distance NYC→LAX is specified as "≈ 3944 km within 1% tolerance" (§6); the
+ # exact float a conforming Haversine impl prints is unspecified, so match the
+ # canonical band center with a relative tolerance rather than exact tokens.
+ [case id=geo-009-distance-haversine-nyc-lax level=core tol=0.01
+  [tags geo distance haversine]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:distance [$geo:point 40.7128 -74.0060] [$geo:point 33.9416 -118.4085] "km"]
+#]]
+  [out-text [#
+3944.0
+#]]
+ ]
+
+ [case id=geo-010-distance-invalid-unit level=core
+  [tags geo distance unit CXER3601]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:distance [$geo:point 0.0 0.0] [$geo:point 0.0 1.0] "furlongs"]
+#]]
+  [out-err [#
+cx-err:CXER3601
+#]]
+ ]
+
+ # Vincenty result is bounded as "within ~0.3-0.5% of Haversine" (§6); exact
+ # float unspecified, so center on the canonical Haversine band (~3944) and
+ # admit the Vincenty deviation via a relative tolerance.
+ [case id=geo-011-distance-vincenty-nyc-lax level=core tol=0.01
+  [tags geo distance-vincenty ellipsoid]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:distance-vincenty [$geo:point 40.7128 -74.0060] [$geo:point 33.9416 -118.4085] "km"]
+#]]
+  [out-text [#
+3960.0
+#]]
+ ]
+
+ [case id=geo-012-vincenty-antipodal-convergence level=core
+  [tags geo distance-vincenty antipodal CXER3600]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:distance-vincenty [$geo:point 0.0 0.0] [$geo:point 0.5 179.7] "km"]
+#]]
+  [out-err [#
+cx-err:CXER3600
+#]]
+ ]
+
+ [case id=geo-013-bearing-due-east level=core
+  [tags geo bearing]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:bearing [$geo:point 0.0 0.0] [$geo:point 0.0 1.0]]
+#]]
+  [out-text [#
+90.0
+#]]
+ ]
+
+ [case id=geo-014-destination-due-north-lon level=core
+  [tags geo destination]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $d [$geo:destination [$geo:point 0.0 0.0] 0.0 100.0 "km"]] $d/lon]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ # ── §3.3 Bounding-box operations ───────────────────────────────────────
+
+ [case id=geo-015-bbox-of-min-lat level=core
+  [tags geo bbox-of min-bbox]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $bb [$geo:bbox-of ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35], [$geo:point 37.8 -122.4])]] $bb/min-lat]
+#]]
+  [out-text [#
+37.7
+#]]
+ ]
+
+ [case id=geo-016-bbox-of-max-lon level=core
+  [tags geo bbox-of min-bbox]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $bb [$geo:bbox-of ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35], [$geo:point 37.8 -122.4])]] $bb/max-lon]
+#]]
+  [out-text [#
+-122.35
+#]]
+ ]
+
+ [case id=geo-017-bbox-of-polygon-min-lon level=core
+  [tags geo bbox-of-polygon]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $bb [$geo:bbox-of-polygon [$geo:polygon ([$geo:point 37.7 -122.5], [$geo:point 37.7 -122.4], [$geo:point 37.8 -122.4], [$geo:point 37.8 -122.5])]]] $bb/min-lon]
+#]]
+  [out-text [#
+-122.5
+#]]
+ ]
+
+ [case id=geo-018-within-bbox-inside level=core
+  [tags geo within-bbox inside]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:within-bbox [$geo:point 37.75 -122.45] [$geo:bbox ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35])]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=geo-019-within-bbox-outside level=core
+  [tags geo within-bbox outside]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:within-bbox [$geo:point 0.0 0.0] [$geo:bbox ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35])]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # §4: antimeridian bbox has min-lon > max-lon; a point at lon=179 is inside
+ # the wrap-around band [+170 .. -170].
+ [case id=geo-020-within-bbox-antimeridian level=core
+  [tags geo within-bbox antimeridian edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:within-bbox [$geo:point 0.0 179.0] [$geo:bbox ([$geo:point -10.0 170.0], [$geo:point 10.0 -170.0])]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=geo-021-bbox-intersects-overlap level=core
+  [tags geo bbox-intersects overlap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:bbox-intersects [$geo:bbox ([$geo:point 0.0 0.0], [$geo:point 10.0 10.0])] [$geo:bbox ([$geo:point 5.0 5.0], [$geo:point 15.0 15.0])]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=geo-022-bbox-intersects-disjoint level=core
+  [tags geo bbox-intersects disjoint]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:bbox-intersects [$geo:bbox ([$geo:point 0.0 0.0], [$geo:point 10.0 10.0])] [$geo:bbox ([$geo:point 20.0 20.0], [$geo:point 30.0 30.0])]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=geo-023-bbox-area-degenerate-zero level=core
+  [tags geo bbox-area degenerate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:bbox-area [$geo:bbox ([$geo:point 5.0 5.0], [$geo:point 5.0 5.0])] "km2"]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=geo-024-bbox-area-invalid-unit level=core
+  [tags geo bbox-area unit CXER3601]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:bbox-area [$geo:bbox ([$geo:point 0.0 0.0], [$geo:point 1.0 1.0])] "leagues2"]
+#]]
+  [out-err [#
+cx-err:CXER3601
+#]]
+ ]
+
+ [case id=geo-025-bbox-expand-zero-noop level=core
+  [tags geo bbox-expand identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $bb [$geo:bbox-expand [$geo:bbox ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35])] 0.0]] $bb/min-lat]
+#]]
+  [out-text [#
+37.7
+#]]
+ ]
+
+ [case id=geo-026-bbox-center-lat level=core
+  [tags geo bbox-center]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $c [$geo:bbox-center [$geo:bbox ([$geo:point 0.0 0.0], [$geo:point 10.0 20.0])]]] $c/lat]
+#]]
+  [out-text [#
+5.0
+#]]
+ ]
+
+ [case id=geo-027-bbox-center-lon level=core
+  [tags geo bbox-center]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $c [$geo:bbox-center [$geo:bbox ([$geo:point 0.0 0.0], [$geo:point 10.0 20.0])]]] $c/lon]
+#]]
+  [out-text [#
+10.0
+#]]
+ ]
+
+ # ── §3.4 Polygon operations ────────────────────────────────────────────
+
+ # Degenerate ring with zero enclosed area (fully collinear points) is INVALID
+ # per spec/std-lib/geo.md §3.4 — polygon-is-valid returns false and
+ # polygon-area raises CXER3602 (consistent with OGC SFA rejecting degenerate
+ # geometry); it does NOT return 0.0.
+ [case id=geo-028-polygon-area-degenerate-zero level=core
+  [tags geo polygon-area degenerate CXER3602]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-area [$geo:polygon ([$geo:point 0.0 0.0], [$geo:point 0.0 1.0], [$geo:point 0.0 2.0], [$geo:point 0.0 0.0])] "km2"]
+#]]
+  [out-err [#
+cx-err:CXER3602
+#]]
+ ]
+
+ [case id=geo-029-polygon-area-invalid level=core
+  [tags geo polygon-area invalid CXER3602]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-area [$geo:polygon-with-holes ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 0.0], [$geo:point 10.0 10.0], [$geo:point 0.0 0.0]) ()] "km2"]
+#]]
+  [out-err [#
+cx-err:CXER3602
+#]]
+ ]
+
+ [case id=geo-030-polygon-perimeter-degenerate level=core
+  [tags geo polygon-perimeter degenerate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-perimeter [$geo:polygon ([$geo:point 5.0 5.0], [$geo:point 5.0 5.0], [$geo:point 5.0 5.0], [$geo:point 5.0 5.0])] "km"]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=geo-031-polygon-centroid-lat level=core
+  [tags geo polygon-centroid]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $c [$geo:polygon-centroid [$geo:polygon ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 10.0 0.0], [$geo:point 0.0 0.0])]]] $c/lat]
+#]]
+  [out-text [#
+5.0
+#]]
+ ]
+
+ [case id=geo-032-point-in-polygon-interior level=core
+  [tags geo point-in-polygon interior]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:point-in-polygon [$geo:point 5.0 5.0] [$geo:polygon ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 10.0 0.0], [$geo:point 0.0 0.0])]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=geo-033-point-in-polygon-exterior level=core
+  [tags geo point-in-polygon exterior]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:point-in-polygon [$geo:point 50.0 50.0] [$geo:polygon ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 10.0 0.0], [$geo:point 0.0 0.0])]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # §6: "with a hole, point in hole returns false."
+ [case id=geo-034-point-in-polygon-hole level=core
+  [tags geo point-in-polygon hole]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:point-in-polygon [$geo:point 3.0 3.0] [$geo:polygon-with-holes ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 10.0 0.0], [$geo:point 0.0 0.0]) (([$geo:point 2.0 2.0], [$geo:point 4.0 2.0], [$geo:point 4.0 4.0], [$geo:point 2.0 4.0], [$geo:point 2.0 2.0]))]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # §6: "simple correctly-wound polygon with interior hole -> valid."
+ [case id=geo-035-polygon-is-valid-simple level=core
+  [tags geo polygon-is-valid ogc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-is-valid [$geo:polygon ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 10.0 0.0], [$geo:point 0.0 0.0])]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §6: "bowtie -> invalid" (self-intersecting ring).
+ [case id=geo-036-polygon-is-valid-bowtie level=core
+  [tags geo polygon-is-valid bowtie self-intersection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-is-valid [$geo:polygon-with-holes ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 0.0], [$geo:point 10.0 10.0], [$geo:point 0.0 0.0]) ()]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # §6: "reversed winding -> invalid" (outer must be counterclockwise).
+ [case id=geo-037-polygon-is-valid-reversed-winding level=core
+  [tags geo polygon-is-valid winding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-is-valid [$geo:polygon-with-holes ([$geo:point 0.0 0.0], [$geo:point 10.0 0.0], [$geo:point 10.0 10.0], [$geo:point 0.0 10.0], [$geo:point 0.0 0.0]) ()]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=geo-038-polygon-is-closed-true level=core
+  [tags geo polygon-is-closed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-is-closed [$geo:polygon-with-holes ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 0.0 0.0]) ()]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # §2.3 / §6: open ring (first != last) is not closed.
+ [case id=geo-039-polygon-is-closed-false level=core
+  [tags geo polygon-is-closed open edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:polygon-is-closed [$geo:polygon-with-holes ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 10.0 0.0]) ()]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # ── §3.5 Normalization ─────────────────────────────────────────────────
+
+ # §3.5: normalize-lat(95.0) -> 90.0 (clamp; latitudes do not wrap).
+ [case id=geo-040-normalize-lat-clamp level=core
+  [tags geo normalize-lat clamp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:normalize-lat 95.0]
+#]]
+  [out-text [#
+90.0
+#]]
+ ]
+
+ [case id=geo-041-normalize-lat-clamp-low level=core
+  [tags geo normalize-lat clamp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:normalize-lat -100.0]
+#]]
+  [out-text [#
+-90.0
+#]]
+ ]
+
+ # §3.5 / §6: normalize-lon(190.0) -> -170.0 (wrap to [-180, 180]).
+ [case id=geo-042-normalize-lon-wrap level=core
+  [tags geo normalize-lon wrap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:normalize-lon 190.0]
+#]]
+  [out-text [#
+-170.0
+#]]
+ ]
+
+ [case id=geo-043-normalize-point-lat level=core
+  [tags geo normalize-point]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:normalize-point [$geo:point 45.0 190.0]]] $p/lon]
+#]]
+  [out-text [#
+-170.0
+#]]
+ ]
+
+ [case id=geo-044-normalize-bbox-min-lon level=core
+  [tags geo normalize-bbox]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $bb [$geo:normalize-bbox [$geo:bbox ([$geo:point 0.0 170.0], [$geo:point 10.0 190.0])]]] $bb/max-lon]
+#]]
+  [out-text [#
+-170.0
+#]]
+ ]
+
+ [case id=geo-045-is-valid-lat-true level=core
+  [tags geo is-valid-lat predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:is-valid-lat 45.0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=geo-046-is-valid-lat-false level=core
+  [tags geo is-valid-lat predicate boundary]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:is-valid-lat 95.0]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=geo-047-is-valid-lon-true level=core
+  [tags geo is-valid-lon predicate boundary]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:is-valid-lon 180.0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=geo-048-is-valid-lon-false level=core
+  [tags geo is-valid-lon predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:is-valid-lon 181.0]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # ── §3.6 WKT format ────────────────────────────────────────────────────
+
+ # §3.6: WKT uses (lon lat) order; parse maps to named lat=/lon=.
+ [case id=geo-049-parse-wkt-point-lat level=core
+  [tags geo parse-wkt point]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:parse-wkt "POINT(-122.4194 37.7749)"]] $p/lat]
+#]]
+  [out-text [#
+37.7749
+#]]
+ ]
+
+ [case id=geo-050-parse-wkt-point-lon level=core
+  [tags geo parse-wkt point lon-lat-order]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:parse-wkt "POINT(-122.4194 37.7749)"]] $p/lon]
+#]]
+  [out-text [#
+-122.4194
+#]]
+ ]
+
+ [case id=geo-051-parse-wkt-malformed level=core
+  [tags geo parse-wkt malformed CXER3603]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:parse-wkt "POINT(not a coordinate"]
+#]]
+  [out-err [#
+cx-err:CXER3603
+#]]
+ ]
+
+ # §3.6 example: canonical POINT WKT form.
+ [case id=geo-052-format-wkt-point level=core
+  [tags geo format-wkt point canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:format-wkt [$geo:point 37.7749 -122.4194]]
+#]]
+  [out-text [#
+'POINT(-122.4194 37.7749)'
+#]]
+ ]
+
+ # §6: WKT round-trip parse -> format produces canonical form.
+ [case id=geo-053-wkt-roundtrip-polygon level=core
+  [tags geo parse-wkt format-wkt roundtrip polygon]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:format-wkt [$geo:parse-wkt "POLYGON((-122.5 37.7, -122.4 37.7, -122.4 37.8, -122.5 37.8, -122.5 37.7))"]]
+#]]
+  [out-text [#
+'POLYGON((-122.5 37.7, -122.4 37.7, -122.4 37.8, -122.5 37.8, -122.5 37.7))'
+#]]
+ ]
+
+ # ── §3.7 GeoJSON format ────────────────────────────────────────────────
+
+ # §3.7: GeoJSON uses [lon, lat]; parse maps to named lat=/lon=.
+ [case id=geo-054-parse-geojson-point-lat level=core
+  [tags geo parse-geojson point]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:parse-geojson "{\"type\":\"Point\",\"coordinates\":[-122.4194,37.7749]}"]] $p/lat]
+#]]
+  [out-text [#
+37.7749
+#]]
+ ]
+
+ [case id=geo-055-parse-geojson-point-lon level=core
+  [tags geo parse-geojson point lon-lat-order]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:parse-geojson "{\"type\":\"Point\",\"coordinates\":[-122.4194,37.7749]}"]] $p/lon]
+#]]
+  [out-text [#
+-122.4194
+#]]
+ ]
+
+ [case id=geo-056-parse-geojson-malformed level=core
+  [tags geo parse-geojson malformed CXER3604]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:parse-geojson "{not valid json"]
+#]]
+  [out-err [#
+cx-err:CXER3604
+#]]
+ ]
+
+ # §3.7 / §5: geometry type not in the v0.8.0 surface -> CXER3605.
+ [case id=geo-057-parse-geojson-unsupported-type level=core
+  [tags geo parse-geojson unsupported CXER3605]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:parse-geojson "{\"type\":\"Circle\",\"coordinates\":[0,0],\"radius\":5}"]
+#]]
+  [out-err [#
+cx-err:CXER3605
+#]]
+ ]
+
+ # §3.7: format-geojson inverts losslessly. We extract the geometry type to
+ # avoid asserting whitespace-sensitive full JSON, while still grounding the
+ # round-trip through the JSON map projection.
+ [case id=geo-058-geojson-roundtrip-point-lat level=core
+  [tags geo parse-geojson format-geojson roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?let [= $p [$geo:parse-geojson [$geo:format-geojson [$geo:point 37.7749 -122.4194]]]] $p/lat]
+#]]
+  [out-text [#
+37.7749
+#]]
+ ]
+ [case id=geo-059-normalize-lon-large-magnitude-no-hang level=core gate=enforced
+  [tags geo normalize-lon wrap large regression perf]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:normalize-lon 10000000000000.0]
+#]]
+  [out-text [#
+-80.0
+#]]
+ ]
+
+ [case id=geo-060-normalize-lon-540 level=core gate=enforced
+  [tags geo normalize-lon wrap regression]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[$geo:normalize-lon 540.0]
+#]]
+  [out-text [#
+180.0
+#]]
+ ]
+
+]

@@ -1,0 +1,225 @@
+[test-suite name=delimited
+  [doc [#
+# CX Conformance — delimited (CSV / TSV / PSV) tests
+# Version: 1.0 — 2026-05-08
+# Covers:
+#         and spec/conversions.md §8.
+#
+# Sections:
+#   in_cx   + out_csv  : parse CX, emit CSV (RFC 4180 default)
+#   in_cx   + out_tsv  : parse CX, emit TSV
+#   in_cx   + out_psv  : parse CX, emit PSV
+#   in_csv  + out_cx   : parse CSV, emit CX (auto-typing)
+#   in_tsv  + out_cx   : parse TSV, emit CX
+#   in_psv  + out_cx   : parse PSV, emit CX
+#
+# All emit fixtures use `\n` row terminators in expected text; runner
+# normalizes the emitter's `\r\n` (RFC 4180 default) to `\n` before
+# comparing.
+#]]
+
+ [case id=dlm-001-table-typed level=core
+  [tags delimited emit table]
+  [in-cx [#
+[users [table[name::string age::int active::bool]]
+  alice 30 true
+  bob 25 false
+]
+#]]
+  [out-csv [#
+name,age,active
+alice,30,true
+bob,25,false
+#]]
+ ]
+
+ [case id=dlm-002-repeated-row level=core
+  [tags delimited emit repeated-row]
+  [in-cx [#
+[users
+  [user id=1 name=alice admin=true]
+  [user id=2 name=bob]
+  [user id=3 name=carol admin=true]
+]
+#]]
+  [out-csv [#
+id,name,admin
+1,alice,true
+2,bob,
+3,carol,true
+#]]
+ ]
+
+ [case id=dlm-003-dotted-path level=core
+  [tags delimited emit dotted-path]
+  [in-cx [#
+[config
+  [server host=localhost port=8080 tls=true]
+  [logging level=info format=json]
+]
+#]]
+  [out-csv [#
+server.host,server.port,server.tls,logging.level,logging.format
+localhost,8080,true,info,json
+#]]
+ ]
+
+ [case id=dlm-004-quote-on-comma level=core
+  [tags delimited emit quoting]
+  [in-cx [#
+[t [table[name::string note::string]]
+  alice 'hello, world'
+  bob ok
+]
+#]]
+  [out-csv [#
+name,note
+alice,"hello, world"
+bob,ok
+#]]
+ ]
+
+ [case id=dlm-005-quote-doubling level=core
+  [tags delimited emit quoting]
+  [in-cx [#
+[t [table[name::string note::string]]
+  alice 'she said "hi"'
+]
+#]]
+  [out-csv [#
+name,note
+alice,"she said ""hi"""
+#]]
+ ]
+
+ [case id=dlm-007-tsv level=core
+  [tags delimited emit tsv]
+  [in-cx [#
+[t [table[name::string note::string]]
+  alice 'hello, world'
+  bob ok
+]
+#]]
+  [out-tsv [#
+name	note
+alice	hello, world
+bob	ok
+#]]
+ ]
+
+ [case id=dlm-008-psv level=core
+  [tags delimited emit psv]
+  [in-cx [#
+[t [table[a b]]
+  x y
+  p q
+]
+#]]
+  [out-psv [#
+a|b
+x|y
+p|q
+#]]
+ ]
+
+ [case id=dlm-009-parse-basic level=core
+  [tags delimited parse autotype]
+  [in-csv [#
+name,age,active
+alice,30,true
+bob,25,false
+#]]
+  [out-cx [#
+[table [table[name age::int active::bool]]
+  alice 30 true
+  bob 25 false
+]
+#]]
+ ]
+
+ [case id=dlm-010-parse-quoted-stays-string level=core
+  [tags delimited parse quoting]
+  [in-csv [#
+name,age
+alice,"30"
+bob,"25"
+#]]
+  [out-cx [#
+[table [table[name age]]
+  alice 30
+  bob 25
+]
+#]]
+ ]
+
+ [case id=dlm-011-parse-singlequote level=core
+  [tags delimited parse quoting]
+  [in-csv [#
+name,note
+alice,'hello, world'
+#]]
+  [out-cx [#
+[table [table[name note]]
+  alice 'hello, world'
+]
+#]]
+ ]
+
+ [case id=dlm-012-parse-empty-cell level=core
+  [tags delimited parse null]
+  [in-csv [#
+name,age
+alice,30
+bob,
+#]]
+  [out-cx [#
+[table [table[name age::int]]
+  alice 30
+  bob null
+]
+#]]
+ ]
+
+ [case id=dlm-013-parse-crlf level=core
+  [tags delimited parse line-ending]
+  [in-csv [#
+a,b
+1,2
+3,4
+#]]
+  [out-cx [#
+[table [table[a::int b::int]]
+  1 2
+  3 4
+]
+#]]
+ ]
+
+ [case id=dlm-014-parse-tsv level=core
+  [tags delimited parse tsv]
+  [in-tsv [#
+name	age	active
+alice	30	true
+bob	25	false
+#]]
+  [out-cx [#
+[table [table[name age::int active::bool]]
+  alice 30 true
+  bob 25 false
+]
+#]]
+ ]
+
+ [case id=dlm-015-parse-psv level=core
+  [tags delimited parse psv]
+  [in-psv [#
+a|b
+x|y
+#]]
+  [out-cx [#
+[table [table[a b]]
+  x y
+]
+#]]
+ ]
+]

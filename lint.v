@@ -10,9 +10,9 @@ module cx
 // lint_render_json(findings) -> string — JSON array
 // lint_render_summary(findings) -> string — counts per severity
 //
-// Five initial check IDs (ADR §D2):
+// Five initial check IDs:
 // CX-L001 — comment-style consistency (severity: info)
-// CX-L002 — type-annotation-position (severity: info)
+// CX-L002 — REMOVED (was long/short type-annotation mixing)
 // CX-L003 — unused anchor (severity: warn)
 // CX-L004 — dangling alias / merge (severity: error)
 // CX-L005 — v3.4 deprecated patterns (severity: warn)
@@ -69,9 +69,9 @@ pub fn cx_text_lint(input string, opts LintOptions) ![]Finding {
 	if check_enabled('CX-L001', opts) {
 		check_l001_comment_style(input, doc, mut findings)
 	}
-	if check_enabled('CX-L002', opts) {
-		check_l002_type_annotation_form(input, mut findings)
-	}
+	// CX-L002 (long/short type-annotation mixing) deleted by 
+	// short aliases (`:i`/`:s`/…) are removed, so there is no long/short
+	// mixing left to police.
 	if check_enabled('CX-L003', opts) {
 		check_l003_unused_anchors(doc, mut findings)
 	}
@@ -201,144 +201,9 @@ fn check_l001_comment_style(input string, doc Document, mut findings []Finding) 
 	_ = doc
 }
 
-// ── CX-L002 — type-annotation form consistency ───────────────────────────────
-
-// Detect mixed long-form (`:int`) and short-form (`:i`) type
-// annotations within a single document. Both are accepted by the
-// parser per spec/grammar.ebnf [26] note ("parsers MUST accept both
-// long and short in all TypeAnnotation contexts"); mixing them in
-// one document hurts readability. The original framing as
-// "position consistency" was based on a grammar that was not
-// actually implemented — typed annotations only appear in
-// ElementMeta position (after name, before body) per [50]/[51], so
-// position variation isn't possible in valid CX. The form-
-// consistency interpretation captures the same spirit (style drift)
-// against actual grammar behavior.
-//
-// Long-form ↔ short-form aliases (per cheatsheet + grammar):
-// :i / :int :u8/:u16/:u32/:u64 (sized — long-only)
-// :f / :float :f16/:f32/:f64
-// :b / :bool
-// :s / :string
-// :d / :date
-// :dt / :datetime
-//
-// Implementation note: the parser expands short-form aliases to
-// long form at parse time (read_type_annotation → expand_type_alias),
-// so the AST does NOT preserve the source form. Detection scans the
-// source text directly for `:` followed by an alias token, mirroring
-// CX-L001 / CX-L005's source-text approach.
-fn check_l002_type_annotation_form(input string, mut findings []Finding) {
-	mut long_hits := []TypeFormHit{}
-	mut short_hits := []TypeFormHit{}
-
-	mut i := 0
-	mut line := 1
-	mut col := 1
-	for i < input.len {
-		c := input[i]
-		if c == `\n` { line++; col = 1; i++; continue }
-		// Skip strings.
-		if c == `'` || c == `"` {
-			quote := c
-			i++; col++
-			for i < input.len && input[i] != quote {
-				if input[i] == `\n` { line++; col = 1 } else { col++ }
-				i++
-			}
-			if i < input.len { i++; col++ }
-			continue
-		}
-		// Skip line comments.
-		if c == `#` {
-			for i < input.len && input[i] != `\n` { i++; col++ }
-			continue
-		}
-		// Skip raw-text [# ... #].
-		if c == `[` && i + 1 < input.len && input[i + 1] == `#` {
-			i += 2; col += 2
-			for i + 1 < input.len && !(input[i] == `#` && input[i + 1] == `]`) {
-				if input[i] == `\n` { line++; col = 1 } else { col++ }
-				i++
-			}
-			if i + 1 < input.len { i += 2; col += 2 }
-			continue
-		}
-		// Skip block comments.
-		if c == `[` && i + 1 < input.len && input[i + 1] == `-` {
-			i += 2; col += 2
-			for i < input.len && input[i] != `]` {
-				if input[i] == `\n` { line++; col = 1 } else { col++ }
-				i++
-			}
-			if i < input.len { i++; col++ }
-			continue
-		}
-		// Type annotation: `:` at a token boundary, followed by a
-		// type-name token. Boundary = preceded by '[' or whitespace.
-		if c == `:` && i + 1 < input.len {
-			prev := if i == 0 { u8(` `) } else { input[i - 1] }
-			if prev == `[` || prev == ` ` || prev == `\t` || prev == `\n` {
-				start_col := col
-				start_line := line
-				i++; col++
-				name_start := i
-				for i < input.len && is_type_name_char(input[i]) {
-					i++; col++
-				}
-				name := input[name_start..i]
-				if is_short_form_type(name) {
-					short_hits << TypeFormHit{ form: name, line: start_line, col: start_col }
-				} else if is_long_form_type(name) {
-					long_hits << TypeFormHit{ form: name, line: start_line, col: start_col }
-				}
-				continue
-			}
-		}
-		i++
-		col++
-	}
-
-	if long_hits.len == 0 || short_hits.len == 0 {
-		return
-	}
-	// Both forms appear. Flag the minority — that's the one the user
-	// likely wants to align with the majority. On a tie, flag short
-	// (long form is the canonical preference per cheatsheet).
-	flag_short := short_hits.len <= long_hits.len
-	flagged := if flag_short { short_hits } else { long_hits }
-	target_form := if flag_short { 'long' } else { 'short' }
-	for h in flagged {
-		findings << Finding{
-			check: 'CX-L002'
-			severity: .info
-			message: "type annotation ':${h.form}' mixed with the other form in this document"
-			path: ''
-			line: h.line
-			col: h.col
-			suggestion: "use the ${target_form}-form alias for consistency across the document"
-		}
-	}
-}
-
-struct TypeFormHit {
-	form string
-	line int
-	col int
-}
-
-fn is_type_name_char(b u8) bool {
-	return (b >= `a` && b <= `z`) || (b >= `A` && b <= `Z`)
-}
-
-fn is_short_form_type(t string) bool {
-	return t == 'i' || t == 'f' || t == 'b' || t == 's' || t == 'd' || t == 'dt'
-}
-
-fn is_long_form_type(t string) bool {
-	return t == 'int' || t == 'float' || t == 'bool' || t == 'string'
-		|| t == 'date' || t == 'datetime'
-}
+// CX-L002 (long/short type-annotation mixing) removed by short
+// aliases (`:i`/`:s`/…) are gone, so there is no mixing to police and the
+// check, its source-scan helper, and the long/short alias tables are deleted.
 
 // ── CX-L003 — unused anchor ──────────────────────────────────────────────────
 
@@ -372,10 +237,10 @@ fn walk_collect_anchors_refs(parent string, nodes []Node, mut anchors map[string
 			idx := name_count[el.name]
 			name_count[el.name] = idx + 1
 			path := if parent == '' { '/' + el.name } else { parent + '/' + el.name }
-			if name := el.anchor {
+			if name := el.anchor() {
 				anchors[name] = path
 			}
-			if name := el.merge {
+			if name := el.merge() {
 				refs[name] = true
 			}
 			walk_collect_anchors_refs(path, el.items, mut anchors, mut refs)
@@ -405,7 +270,7 @@ fn walk_check_dangling(parent string, nodes []Node, anchors map[string]string,
 			idx := name_count[el.name]
 			name_count[el.name] = idx + 1
 			path := if parent == '' { '/' + el.name } else { parent + '/' + el.name }
-			if name := el.merge {
+			if name := el.merge() {
 				if name !in anchors {
 					findings << Finding{
 						check: 'CX-L004'

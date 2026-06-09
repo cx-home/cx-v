@@ -15,7 +15,7 @@ v install --git https://github.com/cx-home/cx-v
 ## What is CX?
 
 CX is a clean, readable format that can represent documents, configuration,
-and data. It reads and writes JSON, YAML, TOML, XML, and Markdown — parse any
+and data. It reads and writes JSON, YAML, TOML, and XML — parse any
 of those formats and emit any other.
 
 ```
@@ -61,9 +61,9 @@ import cx
 ## Parse any format
 
 ```v
-doc := cx.parse(cx_src)    or { panic(err) }
-doc := cx.parse_json(src)  or { panic(err) }
-doc := cx.parse_yaml(src)  or { panic(err) }
+doc := cx.parse(cx_src)            or { panic(err) }
+doc := cx.parse_to_doc('json', src) or { panic(err) } // lossless map/array/scalar read
+doc := cx.parse_yaml(src)          or { panic(err) }
 doc := cx.parse_toml(src)  or { panic(err) }
 doc := cx.parse_xml(src)   or { panic(err) }
 doc := cx.parse_md(src)    or { panic(err) }
@@ -77,7 +77,6 @@ doc.to_json()!        // JSON
 doc.to_yaml()!        // YAML
 doc.to_toml()!        // TOML
 doc.to_xml()!         // XML
-doc.to_md()!          // Markdown
 ```
 
 ## Navigate
@@ -98,54 +97,32 @@ for el in doc.find_all('server') {
 port := server.attr('port')
 ```
 
-## CXPath
+## Select and transform via CX code
+
+At v0.8.0, selection and transformation use the unified CX code
+language ([`spec/code.md`](../spec/code.md)) — CXPath `//path` literals
+for selection, `[?for]` comprehensions for pattern-generators and
+projection, combined with the V host data model.
 
 ```v
-// First match
-svc := doc.select('//service') or { panic('') }
+// All matches via a CXPath path value
+result := code.eval_code(src, '//service[@active=true]', 'text') or {
+    panic(err)
+}
+println(result)
 
-// All matches
-for svc in doc.select_all('//service[@active=true]') {
-    println(svc.attr('name'))
+// Numeric comparison via path predicate
+high := code.eval_code(src, '//service[@port>=8000]', 'cx') or {
+    panic(err)
 }
 
-// Numeric comparison
-high := doc.select_all('//service[@port>=8000]')
-
-// Position
-second := doc.select('//service[2]') or { panic('') }
+// Position via [?for]
+prog := '[?for \$s :in //service :limit 1 :yield \$s]'
 ```
 
-## Transform (immutable update)
-
-Documents are immutable values. `transform` returns a new document — the
-original is unchanged.
-
-```v
-updated := doc.transform('config/server', fn (el cx.Element) cx.Element {
-    mut e := el
-    e.set_attr('host', cx.ScalarValue('prod.example.com'))
-    return e
-})
-
-// Original unchanged
-println(doc.at('config/server') or { panic('') }.attr('host'))
-// localhost
-
-// New document has the update
-println(updated.at('config/server') or { panic('') }.attr('host'))
-// prod.example.com
-```
-
-## transform_all
-
-```v
-updated := doc.transform_all('//service', fn (el cx.Element) cx.Element {
-    mut e := el
-    e.set_attr('active', cx.ScalarValue(true))
-    return e
-})
-```
+Selection and comprehension both go through CX code: a CXPath
+literal (`//path`) is itself a value, and `[?for]` is the
+pattern-generator. See `spec/code.md` §5.5 for the surface map.
 
 ## Streaming
 
@@ -181,7 +158,6 @@ cx --json file.cx          # CX → JSON
 cx --yaml file.cx          # CX → YAML
 cx --xml  file.cx          # CX → XML
 cx --toml file.cx          # CX → TOML
-cx --md   file.cx          # CX → Markdown
 cx --cx   file.cx          # re-format as canonical CX
 cx --cx --compact file.cx  # compact single-line CX
 
@@ -217,7 +193,6 @@ cx_str   := cx.json_to_cx(json_src)!
 cx_str   := cx.yaml_to_cx(yaml_src)!
 cx_str   := cx.toml_to_cx(toml_src)!
 cx_str   := cx.from_xml(xml_src)!
-cx_str   := cx.from_md(md_src)!
 ```
 
 ## API Reference
@@ -227,11 +202,10 @@ cx_str   := cx.from_md(md_src)!
 | Function | Description |
 |---|---|
 | `parse(src) !Document` | Parse CX |
-| `parse_json(src) !Document` | Parse JSON |
+| `parse_to_doc('json', src) !Document` | Parse JSON (lossless map/array/scalar read; registry-backed) |
 | `parse_yaml(src) !Document` | Parse YAML |
 | `parse_toml(src) !Document` | Parse TOML |
 | `parse_xml(src) !Document` | Parse XML |
-| `parse_md(src) !Document` | Parse Markdown |
 
 ### Document
 
@@ -253,7 +227,6 @@ cx_str   := cx.from_md(md_src)!
 | `to_yaml() !string` | Emit YAML |
 | `to_toml() !string` | Emit TOML |
 | `to_xml() !string` | Emit XML |
-| `to_md() !string` | Emit Markdown |
 
 ### Element
 
@@ -279,22 +252,22 @@ cx_str   := cx.from_md(md_src)!
 | `remove_at(index)` | Remove child at index |
 | `remove_child(name)` | Remove all direct children with name |
 
-### CXPath syntax
+### CX code (selection + transformation)
 
-| Expression | Matches |
+CXPath was retired at v0.7.6 — the v0.7.6 / v0.8.0 selection +
+transformation surface is the CX code language. See
+[`spec/code.md`](../spec/code.md) for the full reference
+(grammar, semantics, fixtures). Quick map from the cxpath shapes
+that lived here previously:
+
+| Old cxpath | CX code equivalent (v0.8.0) |
 |---|---|
-| `//name` | All descendants named `name` |
-| `a/b/c` | Child path |
-| `*` | Any element |
-| `[@attr]` | Has attribute |
-| `[@attr=val]` | Attribute equals value |
-| `[@attr>=val]` | Numeric comparison (`>` `<` `>=` `<=`) |
-| `[@a=x and @b=y]` | Boolean `and` / `or` |
-| `[not(@attr)]` | Negation |
-| `[childname]` | Has direct child named `childname` |
-| `[1]` `[last()]` | Position (1-based) |
-| `[contains(@k, v)]` | Attribute contains substring |
-| `[starts-with(@k, v)]` | Attribute starts with prefix |
+| `//user` | `//user` (path-value literal) |
+| `//user[@active=true]` | `//user[@active=true]` |
+| `//service[@port>=8000]` | `//service[@port>=8000]` |
+| `//user[2]` | `//user[2]` (positional predicate) |
+| `//item[contains(@name, "x")]` | `//item[contains(@name, "x")]` |
+| transform `//service` → modify | `[?for \$s :in //service :yield (update-attr \$s "active" true)]` |
 
 ### Stream events
 

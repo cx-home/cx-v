@@ -1,0 +1,618 @@
+[test-suite name=url
+  [doc [#
+conformance fixtures for cx-stdlib/url (spec/std-lib/url.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/url']
+   (resolver MUST be quoted) then calls [$url:fn args]. The LAST expression
+   is the rendered result.
+
+   Rendering contract (code_eval_fixtures_test.v::render_value):
+   - parse* return an [url ...] element; string bodies render BARE when
+     BareChar-eligible (scheme/host/path) and SINGLE-QUOTED otherwise
+     (query 'q=1' has '='; empty host ''; numeric port '8080' auto-types).
+   - build / build-raw / normalize / encode / decode / join return a STRING,
+     which the runner double-quotes ("..."). Comparison is whitespace-
+     normalised token-by-token.
+   - is-absolute returns a bool (bare true/false).
+   - query-parse returns a map rendered {k: v}; sequence values render in
+     paren form (a, b). query-encode returns a string.
+   - Error fixtures use out-err with the bare CXERNNNN code.
+
+   Grounding: spec §3 normative descriptions, §3.1 parse examples, §4.3
+   canonicalization contract, §4.4 empty-component policy, §4.5 reserved-char
+   example, §5 error table, §6 conformance list.
+#]]
+
+ # ── §3.1 parse — RFC 3986 generic, strict ──
+
+ [case id=url-001-parse-https-full level=core
+  [tags url parse element happy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse "https://example.com/path?q=1"]
+#]]
+  [out-text [#
+[url [scheme 'https'] [host 'example.com'] [path '/path'] [query 'q=1']]
+#]]
+ ]
+
+ [case id=url-002-parse-scheme-relative level=core
+  [tags url parse scheme-relative authority]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse "//example.com/path"]
+#]]
+  [out-text [#
+[url [host 'example.com'] [path '/path']]
+#]]
+ ]
+
+ [case id=url-003-parse-path-only level=core
+  [tags url parse path query]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse "/path?q=1"]
+#]]
+  [out-text [#
+[url [path '/path'] [query 'q=1']]
+#]]
+ ]
+
+ [case id=url-004-parse-file-empty-host level=core
+  [tags url parse file empty-host edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse "file:///etc/passwd"]
+#]]
+  [out-text [#
+[url [scheme 'file'] [host ''] [path '/etc/passwd']]
+#]]
+ ]
+
+ [case id=url-005-parse-malformed level=core
+  [tags url parse error CXER1400]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse "://host/path"]
+#]]
+  [out-err [#
+cx-err:CXER1400
+#]]
+ ]
+
+ [case id=url-006-parse-empty-host-http-rejected level=core
+  [tags url parse error empty-host CXER1400]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse "http:///path"]
+#]]
+  [out-err [#
+cx-err:CXER1400
+#]]
+ ]
+
+ # IPv6 host: brackets stripped in the host field on parse (§4.1, §6).
+ [case id=url-007-parse-ipv6-host level=core
+  [tags url parse ipv6 host]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse "https://[2001:db8::1]:8080/path"]
+#]]
+  [out-text [#
+[url [scheme 'https'] [host '2001:db8::1'] [port '8080'] [path '/path']]
+#]]
+ ]
+
+ # ── §3.1 parse-lenient — best-effort recovery ──
+
+ # parse-lenient recovers messy input where parse raises CXER1400 (§6).
+ # Backslash in path is repaired to a forward slash on recovery (§3.1).
+ [case id=url-008-parse-lenient-recovers level=core
+  [tags url parse-lenient recovery]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [$url:parse-lenient "https://example.com\\path"]]
+#]]
+  [out-text [#
+'https://example.com/path'
+#]]
+ ]
+
+ # parse-lenient raises CXER1400 only when recovery is impossible (§3.1, §5).
+ [case id=url-009-parse-lenient-unrecoverable level=core
+  [tags url parse-lenient error CXER1400]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse-lenient "://"]
+#]]
+  [out-err [#
+cx-err:CXER1400
+#]]
+ ]
+
+ # ── §3.1 parse-whatwg — WHATWG URL model ──
+
+ # WHATWG treats backslash as slash for special schemes (§2.1.1, §6);
+ # asserted via canonical build of the parsed element.
+ [case id=url-010-parse-whatwg-backslash level=core
+  [tags url parse-whatwg backslash special-scheme]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [$url:parse-whatwg "https://example.com\\path"]]
+#]]
+  [out-text [#
+'https://example.com/path'
+#]]
+ ]
+
+ [case id=url-011-parse-whatwg-malformed level=core
+  [tags url parse-whatwg error CXER1400]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse-whatwg "://host"]
+#]]
+  [out-err [#
+cx-err:CXER1400
+#]]
+ ]
+
+ # ── §3.1 parse-with-opts — explicit options ──
+
+ # default-scheme prefixes a scheme-less input (§3.1 options table);
+ # asserted via canonical build.
+ [case id=url-012-parse-with-opts-default-scheme level=core
+  [tags url parse-with-opts default-scheme options]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [$url:parse-with-opts "example.com/path" {"default-scheme": "https"}]]
+#]]
+  [out-text [#
+'https://example.com/path'
+#]]
+ ]
+
+ # model="whatwg" selects WHATWG parsing via opts (§3.1 options table).
+ [case id=url-013-parse-with-opts-whatwg-model level=core
+  [tags url parse-with-opts model whatwg]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [$url:parse-with-opts "https://example.com\\path" {"model": "whatwg"}]]
+#]]
+  [out-text [#
+'https://example.com/path'
+#]]
+ ]
+
+ [case id=url-014-parse-with-opts-malformed level=core
+  [tags url parse-with-opts error CXER1400]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:parse-with-opts "://host" {"model": "rfc3986"}]
+#]]
+  [out-err [#
+cx-err:CXER1400
+#]]
+ ]
+
+ # ── §3.1 build — canonicalizing, auto-encoding ──
+
+ # Round-trip a simple URL through parse → build (§6 round-trip).
+ [case id=url-015-build-roundtrip level=core
+  [tags url build parse roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [$url:parse "https://example.com/path?q=1"]]
+#]]
+  [out-text [#
+'https://example.com/path?q=1'
+#]]
+ ]
+
+ # Default-port stripping for known scheme: https:443 dropped (§4.3, §6).
+ [case id=url-016-build-default-port-stripped level=core
+  [tags url build canonical default-port]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [$url:parse "https://example.com:443/"]]
+#]]
+  [out-text [#
+'https://example.com/'
+#]]
+ ]
+
+ # Non-default port preserved (§4.3, §6).
+ [case id=url-017-build-nondefault-port-kept level=core
+  [tags url build canonical port]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [$url:parse "https://example.com:8443/"]]
+#]]
+  [out-text [#
+'https://example.com:8443/'
+#]]
+ ]
+
+ # Auto-encoding: raw path "a/b c" produces ".../a%2Fb%20c" (§4.5, §6).
+ [case id=url-018-build-auto-encode-raw level=core
+  [tags url build auto-encode reserved]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [url [scheme "https"] [host "api.example.com"] [path "/users/a/b c/profile"]]]
+#]]
+  [out-text [#
+'https://api.example.com/users/a%2Fb%20c/profile'
+#]]
+ ]
+
+ # IPv6 host: build re-adds brackets when host contains colons (§4.1, §6).
+ [case id=url-019-build-ipv6-rebracket level=core
+  [tags url build ipv6 host]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [url [scheme "https"] [host "2001:db8::1"] [port "8080"] [path "/path"]]]
+#]]
+  [out-text [#
+'https://[2001:db8::1]:8080/path'
+#]]
+ ]
+
+ # build raises CXER1403 when a relative reference lacks a required scheme (§5).
+ [case id=url-020-build-scheme-required level=core
+  [tags url build error CXER1403]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [url [host "example.com"] [path "/path"]]]
+#]]
+  [out-err [#
+cx-err:CXER1403
+#]]
+ ]
+
+ # build raises CXER1402 when the host fails the IDNA round-trip (§4.2, §5).
+ # "-bad-" is a leading-hyphen label, invalid under IDNA 2008 / UTS #46 (§8).
+ [case id=url-021-build-idn-invalid level=core
+  [tags url build error idn CXER1402]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build [url [scheme "https"] [host "-bad-.test"] [path "/"]]]
+#]]
+  [out-err [#
+cx-err:CXER1402
+#]]
+ ]
+
+ # ── §3.1 build-raw — verbatim, no re-encoding ──
+
+ # Pre-encoded "a%2Fb%20c" produces the same path without double-encoding (§4.5, §6).
+ [case id=url-022-build-raw-no-reencode level=core
+  [tags url build-raw verbatim pre-encoded]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build-raw [url [scheme "https"] [host "api.example.com"] [path "/users/a%2Fb%20c/profile"]]]
+#]]
+  [out-text [#
+'https://api.example.com/users/a%2Fb%20c/profile'
+#]]
+ ]
+
+ # build-raw raises CXER1402 when the host fails the IDNA round-trip (§4.2, §5).
+ # "-bad-" is a leading-hyphen label, invalid under IDNA 2008 / UTS #46 (§8).
+ [case id=url-023-build-raw-idn-invalid level=core
+  [tags url build-raw error idn CXER1402]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:build-raw [url [scheme "https"] [host "-bad-.test"] [path "/"]]]
+#]]
+  [out-err [#
+cx-err:CXER1402
+#]]
+ ]
+
+ # ── §3.1 normalize — build(parse($s)) ──
+
+ # Canonicalizing build: HTTPS + :443 + lowercased host + uppercased %2f (§4.3, §6).
+ [case id=url-024-normalize-canonical level=core
+  [tags url normalize canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:normalize "HTTPS://EXAMPLE.com:443/%2f"]
+#]]
+  [out-text [#
+'https://example.com/%2F'
+#]]
+ ]
+
+ [case id=url-025-normalize-malformed level=core
+  [tags url normalize error CXER1400]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:normalize "://host"]
+#]]
+  [out-err [#
+cx-err:CXER1400
+#]]
+ ]
+
+ # ── §3.2 encode / decode ──
+
+ # Generic encode: unreserved left alone, space and reserved percent-encoded (§3.2, §2.2).
+ [case id=url-026-encode-space-reserved level=core
+  [tags url encode generic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:encode "a b/c"]
+#]]
+  [out-text [#
+'a%20b%2Fc'
+#]]
+ ]
+
+ # Unreserved set (A-Z a-z 0-9 - _ . ~) left untouched (§2.2 generic row).
+ [case id=url-027-encode-unreserved-untouched level=core
+  [tags url encode unreserved]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:encode "aZ9-_.~"]
+#]]
+  [out-text [#
+'aZ9-_.~'
+#]]
+ ]
+
+ # decode round-trips encode (§3.2).
+ [case id=url-028-decode-roundtrip level=core
+  [tags url decode percent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:decode "a%20b%2Fc"]
+#]]
+  [out-text [#
+'a b/c'
+#]]
+ ]
+
+ # decode raises CXER1401 on a malformed %XX sequence (§3.2, §5, §6).
+ [case id=url-029-decode-malformed-percent level=core
+  [tags url decode error CXER1401]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:decode "a%2"]
+#]]
+  [out-err [#
+cx-err:CXER1401
+#]]
+ ]
+
+ # ── §3.3 query-parse / query-encode ──
+
+ # Repeated keys produce a sequence value; key="" / bare key → empty string (§3.3).
+ [case id=url-030-query-parse-repeated level=core
+  [tags url query-parse map sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:query-parse "a=1&b=2&a=3"]
+#]]
+  [out-text [#
+{a: ('1', '3'), b: '2'}
+#]]
+ ]
+
+ # Empty query string parses to an empty map (§4.4).
+ [case id=url-031-query-parse-empty level=core
+  [tags url query-parse empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:query-parse ""]
+#]]
+  [out-text [#
+{}
+#]]
+ ]
+
+ # query-encode: sequence values produce repeated keys; insertion order kept;
+ # query-component percent-encoding applied (§3.3). Asserted via round-trip
+ # through query-parse to avoid relying on raw string-quote shape.
+ [case id=url-032-query-encode-roundtrip level=core
+  [tags url query-encode query-parse roundtrip]
+  [# query-parse keys by name, so the repeated key `a` groups its values
+     (1, 3); query-encode emits repeated keys in map-insertion key order
+     (url.md §124: "key order matches map insertion order") — a's values
+     together, then b. The original interleaved a/b/a order does NOT survive
+     a map round-trip by spec. #]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:query-encode [$url:query-parse "a=1&b=2&a=3"]]
+#]]
+  [out-text [#
+'a=1&a=3&b=2'
+#]]
+ ]
+
+ # query-encode applies query-component percent-encoding to a raw value (§3.3, §2.2).
+ [case id=url-033-query-encode-encodes level=core
+  [tags url query-encode percent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:query-encode {"a": "x y"}]
+#]]
+  [out-text [#
+'a=x%20y'
+#]]
+ ]
+
+ # ── §3.4 join / is-absolute ──
+
+ # RFC 3986 §5.4 normal example: relative path reference resolved against base (§3.4, §6).
+ [case id=url-034-join-relative level=core
+  [tags url join rfc3986]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:join "http://a/b/c/d;p?q" "g"]
+#]]
+  [out-text [#
+'http://a/b/c/g'
+#]]
+ ]
+
+ # RFC 3986 §5.4 example: absolute-path reference replaces base path (§3.4, §6).
+ [case id=url-035-join-absolute-path level=core
+  [tags url join rfc3986 absolute-path]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:join "http://a/b/c/d;p?q" "/g"]
+#]]
+  [out-text [#
+'http://a/g'
+#]]
+ ]
+
+ # RFC 3986 §5.4 example: absolute ref ignores base (§3.4, §6).
+ [case id=url-036-join-absolute-ref level=core
+  [tags url join rfc3986 absolute]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:join "http://a/b/c/d;p?q" "http://x/y"]
+#]]
+  [out-text [#
+'http://x/y'
+#]]
+ ]
+
+ # is-absolute true iff $s has a scheme component (§3.4).
+ [case id=url-037-is-absolute-true level=core
+  [tags url is-absolute predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:is-absolute "https://example.com/x"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # is-absolute false for a scheme-less reference (§3.4).
+ [case id=url-038-is-absolute-false level=core
+  [tags url is-absolute predicate relative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/url']
+[$url:is-absolute "/path?q=1"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+]

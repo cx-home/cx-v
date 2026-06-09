@@ -1,0 +1,646 @@
+[test-suite name=uuid
+  [doc [#
+conformance fixtures for cx-stdlib/uuid (spec/std-lib/uuid.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/uuid']
+   (resolver MUST be quoted) then calls [$uuid:fn args]. The LAST
+   expression is the rendered result. String scalars render quoted;
+   bool bare; int bare. Error fixtures use --- out_err with the bare
+   CXER code (matched as a substring of the rendered err value).
+
+   Determinism: v4 / v7 are random, so we never assert their literal
+   value. Instead we assert structural properties (validate / version /
+   variant / round-trip). v5 / v3 are deterministic, so the RFC test
+   vector and version/variant inspection are asserted directly.
+#]]
+
+ [case id=uuid-001-v4-validates level=core
+  [tags uuid v4 validate random]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:validate [$uuid:v4]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=uuid-002-v4-version level=core
+  [tags uuid v4 version random]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:parse [$uuid:v4]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=uuid-003-v4-variant level=core
+  [tags uuid v4 variant random]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:variant [$uuid:parse [$uuid:v4]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=uuid-004-v4-bytes-version level=core
+  [tags uuid v4 bytes version random]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:v4-bytes]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=uuid-005-v7-validates level=core
+  [tags uuid v7 validate time-ordered]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:validate [$uuid:v7]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=uuid-006-v7-version level=core
+  [tags uuid v7 version time-ordered]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:parse [$uuid:v7]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=uuid-007-v7-variant level=core
+  [tags uuid v7 variant time-ordered]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:variant [$uuid:v7-bytes]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=uuid-008-validate-bad level=core
+  [tags uuid validate negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:validate "not-a-uuid"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=uuid-009-validate-nil level=core
+  [tags uuid validate nil-uuid]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:validate [$uuid:nil-uuid]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=uuid-010-nil-value level=core
+  [tags uuid nil-uuid]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:nil-uuid]
+#]]
+  [out-text [#
+'00000000-0000-0000-0000-000000000000'
+#]]
+ ]
+
+ [case id=uuid-011-roundtrip level=core
+  [tags uuid parse format roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:parse "550e8400-e29b-41d4-a716-446655440000"]]
+#]]
+  [out-text [#
+'550e8400-e29b-41d4-a716-446655440000'
+#]]
+ ]
+
+ [case id=uuid-012-case-insensitive level=core
+  [tags uuid parse case-insensitive]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:parse "550E8400-E29B-41D4-A716-446655440000"]]
+#]]
+  [out-text [#
+'550e8400-e29b-41d4-a716-446655440000'
+#]]
+ ]
+
+ [case id=uuid-013-parsed-version level=core
+  [tags uuid parse version inspect]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:parse "550e8400-e29b-41d4-a716-446655440000"]]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ [case id=uuid-014-parsed-variant level=core
+  [tags uuid parse variant inspect]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:variant [$uuid:parse "550e8400-e29b-41d4-a716-446655440000"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=uuid-015-strict-rejects-hyphenless level=core
+  [tags uuid parse strict CXER1800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:parse "550e8400e29b41d4a716446655440000"]
+#]]
+  [out-err [#
+cx-err:CXER1800
+#]]
+ ]
+
+ [case id=uuid-016-strict-rejects-urn level=core
+  [tags uuid parse strict urn CXER1800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:parse "urn:uuid:550e8400-e29b-41d4-a716-446655440000"]
+#]]
+  [out-err [#
+cx-err:CXER1800
+#]]
+ ]
+
+ [case id=uuid-017-strict-rejects-braces level=core
+  [tags uuid parse strict braces CXER1800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:parse "{550e8400-e29b-41d4-a716-446655440000}"]
+#]]
+  [out-err [#
+cx-err:CXER1800
+#]]
+ ]
+
+ [case id=uuid-018-lenient-hyphenless level=core
+  [tags uuid parse lenient hyphenless]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:parse "550e8400e29b41d4a716446655440000" true]]
+#]]
+  [out-text [#
+'550e8400-e29b-41d4-a716-446655440000'
+#]]
+ ]
+
+ [case id=uuid-019-lenient-urn level=core
+  [tags uuid parse lenient urn]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:parse "urn:uuid:550e8400-e29b-41d4-a716-446655440000" true]]
+#]]
+  [out-text [#
+'550e8400-e29b-41d4-a716-446655440000'
+#]]
+ ]
+
+ [case id=uuid-020-lenient-braces level=core
+  [tags uuid parse lenient braces]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:parse "{550e8400-e29b-41d4-a716-446655440000}" true]]
+#]]
+  [out-text [#
+'550e8400-e29b-41d4-a716-446655440000'
+#]]
+ ]
+
+ [case id=uuid-021-malformed-length level=core
+  [tags uuid parse malformed CXER1800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:parse "550e8400-e29b-41d4-a716"]
+#]]
+  [out-err [#
+cx-err:CXER1800
+#]]
+ ]
+
+ [case id=uuid-022-malformed-nonhex level=core
+  [tags uuid parse malformed nonhex CXER1800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:parse "550e8400-e29b-41d4-a716-44665544000z"]
+#]]
+  [out-err [#
+cx-err:CXER1800
+#]]
+ ]
+
+ [case id=uuid-023-malformed-lenient-nonhex level=core
+  [tags uuid parse malformed lenient CXER1800]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:parse "nothex" true]
+#]]
+  [out-err [#
+cx-err:CXER1800
+#]]
+ ]
+
+ [case id=uuid-024-ns-dns-value level=core
+  [tags uuid ns-dns namespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:ns-dns]]
+#]]
+  [out-text [#
+'6ba7b810-9dad-11d1-80b4-00c04fd430c8'
+#]]
+ ]
+
+ [case id=uuid-025-ns-url-value level=core
+  [tags uuid ns-url namespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:ns-url]]
+#]]
+  [out-text [#
+'6ba7b811-9dad-11d1-80b4-00c04fd430c8'
+#]]
+ ]
+
+ [case id=uuid-026-ns-oid-value level=core
+  [tags uuid ns-oid namespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:ns-oid]]
+#]]
+  [out-text [#
+'6ba7b812-9dad-11d1-80b4-00c04fd430c8'
+#]]
+ ]
+
+ [case id=uuid-027-ns-x500-value level=core
+  [tags uuid ns-x500 namespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:ns-x500]]
+#]]
+  [out-text [#
+'6ba7b814-9dad-11d1-80b4-00c04fd430c8'
+#]]
+ ]
+
+ [case id=uuid-028-v5-rfc-vector level=core
+  [tags uuid v5 sha1 rfc-vector deterministic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:v5-bytes [$uuid:ns-dns] "www.example.com"]]
+#]]
+  [out-text [#
+'2ed6657d-e927-568b-95e1-2665a8aea6a2'
+#]]
+ ]
+
+ [case id=uuid-029-v5-determinism level=core
+  [tags uuid v5 deterministic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:v5 [$uuid:ns-url] "https://example.com"]
+#]]
+  [out-text [#
+'4fd35a71-71ef-5a55-a9d9-aa75c889a6d0'
+#]]
+ ]
+
+ [case id=uuid-030-v5-version level=core
+  [tags uuid v5 version]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:v5-bytes [$uuid:ns-dns] "x"]]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=uuid-031-v5-variant level=core
+  [tags uuid v5 variant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:variant [$uuid:v5-bytes [$uuid:ns-dns] "x"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=uuid-032-v3-version level=core
+  [tags uuid v3 md5 version]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:v3-bytes [$uuid:ns-dns] "x"]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=uuid-033-v3-variant level=core
+  [tags uuid v3 variant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:variant [$uuid:v3-bytes [$uuid:ns-dns] "x"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=uuid-034-v3-determinism level=core
+  [tags uuid v3 md5 deterministic rfc-vector]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format [$uuid:v3-bytes [$uuid:ns-dns] "www.example.com"]]
+#]]
+  [out-text [#
+'5df41881-3aed-3515-88a7-2f4a814cf09e'
+#]]
+ ]
+
+ [case id=uuid-035-bad-namespace-length level=core
+  [tags uuid v5 namespace-length CXER1801]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:v5 "x" "name"]
+#]]
+  [out-err [#
+cx-err:CXER1801
+#]]
+ ]
+
+ [case id=uuid-036-format-wrong-length level=core
+  [tags uuid format wrong-length CXER1801]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:format "x"]
+#]]
+  [out-err [#
+cx-err:CXER1801
+#]]
+ ]
+
+ [case id=uuid-037-version-external-v1 level=core
+  [tags uuid version external-variant inspect]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:parse "6ba7b810-9dad-11d1-80b4-00c04fd430c8"]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=uuid-038-v3-string-rfc-vector level=core
+  [tags uuid v3 md5 rfc-vector deterministic string]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:v3 [$uuid:ns-dns] "www.example.com"]
+#]]
+  [out-text [#
+'5df41881-3aed-3515-88a7-2f4a814cf09e'
+#]]
+ ]
+
+ [case id=uuid-039-v3-bad-namespace-length level=core
+  [tags uuid v3 namespace-length CXER1801]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:v3 "x" "name"]
+#]]
+  [out-err [#
+cx-err:CXER1801
+#]]
+ ]
+ [case id=uuid-040-v4-version-granted level=core gate=enforced grant='random'
+  [tags uuid v4 version granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:parse [$uuid:v4]]]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ [case id=uuid-041-v4-variant-granted level=core gate=enforced grant='random'
+  [tags uuid v4 variant granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:variant [$uuid:parse [$uuid:v4]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=uuid-042-v4-bytes-version-granted level=core gate=enforced grant='random'
+  [tags uuid v4-bytes version granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:v4-bytes]]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ [case id=uuid-043-v7-version-granted level=core gate=enforced grant='random'
+  [tags uuid v7 version granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:parse [$uuid:v7]]]
+#]]
+  [out-text [#
+7
+#]]
+ ]
+
+ [case id=uuid-044-v7-bytes-version-granted level=core gate=enforced grant='random'
+  [tags uuid v7-bytes version granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:version [$uuid:v7-bytes]]
+#]]
+  [out-text [#
+7
+#]]
+ ]
+
+ [case id=uuid-045-v7-validate-granted level=core gate=enforced grant='random'
+  [tags uuid v7 validate granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid']
+[$uuid:validate [$uuid:v7]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+]

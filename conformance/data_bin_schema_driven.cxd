@@ -1,0 +1,239 @@
+[test-suite name=data-bin-schema-driven
+  [doc [#
+# CX Conformance — data_bin schema-driven encoding round-trips
+# Version: 0.2 — 2026-05-10 (V core impl shipped in Phase 7.73)
+# Covers: spec/core/data-bin.md §3.13, D3 / D4 / D5 / D6.
+#
+# Section types used:
+#
+#   schema_cxs               — schema source text
+#   sd_ref_form              — "hash" | "inline" | "hash_with_name"
+#                              (default "hash")
+#   sd_name_hint             — name string for hash_with_name form
+#   sd_assert_round_trip     — "1" asserts encode → decode succeeds
+#   sd_expected_decoded_cx   — exact CX text after decode (optional;
+#                              compared only when present)
+#   sd_assert_flag_bit_1     — "1" asserts CXCol header flag bit 1 is set
+#   sd_assert_ref_tag        — expected first byte of schema reference
+#                              ("0x10" / "0x11" / "0x12")
+#   sd_expected_emit_error   — expected substring of encode error message
+#                              (skips round-trip if encode rejects)
+#   schema_cxs_a / schema_cxs_b + sd_assert_hash_equal:
+#                              hash-stability cross-check
+#   in_data_bin_hex + sd_expected_decode_error:
+#                              feed concrete framed bytes through the
+#                              decoder and assert error
+#
+# Hash placeholders are NOT byte-compared. The schema content-hash is
+# deterministic per but recomputing it on each test run
+# avoids embedding a 64-character hex literal in the fixture file.
+# Property tests (hash stability, ref-tag identity, flag bit identity,
+# decode round-trip) cover what byte-comparison would have.
+#]]
+
+ [case id=sd-001-content-hash-only-reference level=extended
+  [tags data_bin schema_driven content_hash]
+  [schema-cxs [#
+[?cx schema-of server]
+[server
+  [body elem]
+  [attr host::string [req]]
+  [attr port::u16 [req]]
+  [attr active::bool [default true]]
+]
+#]]
+  [in-cx [#
+[server host=localhost port=8080 active=true]
+#]]
+  [sd-ref-form [#
+hash
+#]]
+  [sd-assert-flag-bit-1 [#
+1
+#]]
+  [sd-assert-ref-tag [#
+0x10
+#]]
+  [sd-assert-round-trip [#
+1
+#]]
+  [sd-expected-decoded-cx [#
+[server host=localhost port=8080 active=true]
+#]]
+ ]
+
+ [case id=sd-002-inline-schema-reference level=extended
+  [tags data_bin schema_driven inline]
+  [schema-cxs [#
+[?cx schema-of port-only]
+[port-only
+  [body u16]
+]
+#]]
+  [in-cx [#
+[port-only::u16 8080]
+#]]
+  [sd-ref-form [#
+inline
+#]]
+  [sd-assert-flag-bit-1 [#
+1
+#]]
+  [sd-assert-ref-tag [#
+0x11
+#]]
+  [sd-assert-round-trip [#
+1
+#]]
+ ]
+
+ [case id=sd-003-content-hash-with-name-hint level=extended
+  [tags data_bin schema_driven hash_with_hint]
+  [schema-cxs [#
+[?cx schema-of server]
+[server
+  [body elem]
+  [attr host::string [req]]
+]
+#]]
+  [in-cx [#
+[server host=localhost]
+#]]
+  [sd-ref-form [#
+hash_with_name
+#]]
+  [sd-name-hint [#
+server.cxs
+#]]
+  [sd-assert-flag-bit-1 [#
+1
+#]]
+  [sd-assert-ref-tag [#
+0x12
+#]]
+  [sd-assert-round-trip [#
+1
+#]]
+  [sd-expected-decoded-cx [#
+[server host=localhost]
+#]]
+ ]
+
+ [case id=sd-004-partial-schema-open-mode-mixed-tags level=extended
+  [tags data_bin schema_driven partial open_mode]
+  [schema-cxs [#
+[?cx schema-of server]
+[server
+  [body elem]
+  [attr host::string [req]]
+  [attr port::u16 [req]]
+]
+#]]
+  [in-cx [#
+[server host=localhost port=8080 region=us-west]
+#]]
+  [sd-assert-flag-bit-1 [#
+1
+#]]
+  [sd-assert-ref-tag [#
+0x10
+#]]
+  [sd-assert-round-trip [#
+1
+#]]
+  [sd-expected-decoded-cx [#
+[server host=localhost port=8080 region=us-west]
+#]]
+ ]
+
+ [case id=sd-005-closed-mode-rejects-undeclared level=extended
+  [tags data_bin schema_driven closed_mode error]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx schema-mode closed]
+[server
+  [body elem]
+  [attr host::string [req]]
+]
+#]]
+  [in-cx [#
+[server host=localhost region=us-west]
+#]]
+  [sd-expected-emit-error [#
+S012: unknown attribute 'region'
+#]]
+ ]
+
+ [case id=sd-006-hash-stable-across-source-formatting level=extended
+  [tags data_bin schema_driven canonical]
+  [schema-cxs-a [#
+[?cx schema-of server]
+[server
+  [body elem]
+  [attr host::string [req]]
+]
+#]]
+  [schema-cxs-b [#
+[?cx schema-of server]
+
+[- a comment that does not change semantics -]
+[server [body elem] [attr host::string [req]] ]
+#]]
+  [sd-assert-hash-equal [#
+1
+#]]
+ ]
+
+ [case id=sd-007-flag-set-without-schema-ref-rejected level=extended
+  [tags data_bin schema_driven error]
+  [in-data-bin-hex [#
+43 58 43 6F 6C 01 03 40 00 00 00 00       # flag bit 1 set
+50 00                                      # root value: empty map (no schema-ref!)
+#]]
+  [sd-expected-decode-error [#
+expected schema-ref tag
+#]]
+ ]
+
+ [case id=sd-008-content-hash-mismatch-rejected level=extended
+  [tags data_bin schema_driven error hash_mismatch]
+  [schema-cxs [#
+[?cx schema-of server]
+[server [body elem] [attr host::string [opt]]]
+#]]
+  [in-cx [#
+[server host=localhost]
+#]]
+  [sd-decode-with-alt-schema [#
+[?cx schema-of server]
+[server [body elem] [attr host::string [opt]] [attr port::int [opt]]]
+#]]
+  [sd-expected-decode-error [#
+D002
+#]]
+ ]
+
+ [case id=sd-009-encoding-validation-decoupled level=extended
+  [tags data_bin schema_driven decoupled]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx schema-mode open]
+[server
+  [body elem]
+  [attr host::string [req]]
+]
+#]]
+  [in-cx [#
+[server host=localhost extra=42]
+#]]
+  [sd-assert-flag-bit-1 [#
+1
+#]]
+  [sd-assert-round-trip [#
+1
+#]]
+  [sd-expected-decoded-cx [#
+[server host=localhost extra=42]
+#]]
+ ]
+]

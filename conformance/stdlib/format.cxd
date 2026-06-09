@@ -1,0 +1,366 @@
+[test-suite name=format
+  [doc [#
+conformance fixtures for cx-stdlib/format (spec/std-lib/format.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/format']
+   (resolver MUST be quoted) then calls [$format:fn args]. The LAST
+   expression is the rendered result.
+
+   The test renderer wraps a string scalar result in double quotes, so a
+   function that returns canonical text [a 1] renders as "[a 1]" (the
+   whole string quoted). Comparison is whitespace-normalised token-by-
+   token, so multi-line pretty output compares by token sequence (indent
+   and newlines collapse). Error fixtures use --- out_err with the bare
+   CXER code.
+#]]
+
+ [case id=format-001-canonical-element level=core
+  [tags format canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:canonical [user [name "x"]]]
+#]]
+  [out-text [#
+"[user [name 'x']]"
+#]]
+ ]
+
+ [case id=format-002-canonical-scalar-int level=core
+  [tags format canonical scalar]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:canonical 42]
+#]]
+  [out-text [#
+'42'
+#]]
+ ]
+
+ [case id=format-003-canonical-scalar-bool level=core
+  [tags format canonical scalar bool]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:canonical true]
+#]]
+  [out-text [#
+'true'
+#]]
+ ]
+
+ [case id=format-004-canonical-sequence level=core
+  [tags format canonical sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:canonical (1, 2, 3)]
+#]]
+  [out-text [#
+'(1, 2, 3)'
+#]]
+ ]
+
+ [case id=format-005-canonical-attrs-order-preserved level=core
+  [tags format canonical attributes order]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:canonical [user role="admin" id="7"]]
+#]]
+  [out-text [#
+"[user role=admin id='7']"
+#]]
+ ]
+
+ [case id=format-006-compact-nested level=core
+  [tags format compact]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:compact [a [b [c]]]]
+#]]
+  [out-text [#
+'[a [b [c]]]'
+#]]
+ ]
+
+ [case id=format-007-compact-equals-canonical level=core
+  [tags format compact canonical single-source]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:compact [list [item "a"] [item "b"]]]
+#]]
+  [out-text [#
+"[list [item 'a'] [item 'b']]"
+#]]
+ ]
+
+ [case id=format-008-pretty-leaf level=core
+  [tags format pretty leaf]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty [user]]
+#]]
+  [out-text [#
+'[user]'
+#]]
+ ]
+
+ [case id=format-009-pretty-nested-tokens level=core
+  [tags format pretty nested]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty [a [b [c]]]]
+#]]
+  [out-text [#
+'[a [b [c] ] ]'
+#]]
+ ]
+
+ [case id=format-010-pretty-with-opts-indent level=core
+  [tags format pretty-with-opts indent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts [a [b [c]]] {indent: "    "}]
+#]]
+  [out-text [#
+'[a [b [c] ] ]'
+#]]
+ ]
+
+ [case id=format-011-pretty-with-opts-sort-attributes level=core
+  [tags format pretty-with-opts sort-attributes]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts [user role="admin" id="7"] {sort-attributes: true}]
+#]]
+  [out-text [#
+'[user id="7" role="admin"]'
+#]]
+ ]
+
+ [case id=format-012-pretty-with-opts-max-depth-truncate level=core
+  [tags format pretty-with-opts max-depth truncate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts [a [b [c [d]]]] {max-depth: 2}]
+#]]
+  [out-text [#
+'[a [b [c … ] ] ]'
+#]]
+ ]
+
+ [case id=format-013-pretty-with-opts-max-depth-error level=core
+  [tags format pretty-with-opts max-depth error CXER2701]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts [a [b [c [d]]]] {max-depth: 2, max-depth-policy: "error"}]
+#]]
+  [out-err [#
+cx-err:CXER2701
+#]]
+ ]
+
+ [case id=format-014-pretty-with-opts-invalid-opt level=core
+  [tags format pretty-with-opts invalid-opt CXER2702]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts [a] {bogus: 1}]
+#]]
+  [out-err [#
+cx-err:CXER2702
+#]]
+ ]
+
+ [case id=format-015-pretty-with-opts-invalid-value level=core
+  [tags format pretty-with-opts invalid-opt value CXER2702]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts [a] {string-quote: "triple"}]
+#]]
+  [out-err [#
+cx-err:CXER2702
+#]]
+ ]
+
+ [case id=format-016-pretty-string-quote-single level=core
+  [tags format pretty-with-opts string-quote]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts "hi" {string-quote: "single"}]
+#]]
+  [out-text [#
+"'hi'"
+#]]
+ ]
+
+ [case id=format-017-diff-friendly-sorts-attributes level=core
+  [tags format diff-friendly sorted]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:diff-friendly [user role="admin" id="7"]]
+#]]
+  [out-text [#
+'[user id="7" role="admin"]'
+#]]
+ ]
+
+ [case id=format-018-canonical-with-context-shape level=core
+  [tags format canonical-with-context record]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $r [$format:canonical-with-context [a 1]]] $r@length]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=format-019-canonical-with-context-text level=core
+  [tags format canonical-with-context text]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $r [$format:canonical-with-context [a 1]]] $r@text]
+#]]
+  [out-text [#
+'[a 1]'
+#]]
+ ]
+
+ [case id=format-020-canonical-with-context-tokens level=core
+  [tags format canonical-with-context tokens]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $r [$format:canonical-with-context [a 1]]] $r@tokens]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ [case id=format-021-emit-stream-leaf-single-chunk level=core
+  [tags format emit-stream sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:emit-stream [user] {}]
+#]]
+  [out-text [#
+([user])
+#]]
+ ]
+
+ [case id=format-022-emit-stream-invalid-opt level=core
+  [tags format emit-stream invalid-opt CXER2702]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:emit-stream [a] {bogus: 1}]
+#]]
+  [out-err [#
+cx-err:CXER2702
+#]]
+ ]
+
+ [case id=format-023-canonical-round-trip-empty-element level=core
+  [tags format canonical empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:canonical [empty]]
+#]]
+  [out-text [#
+'[empty]'
+#]]
+ ]
+
+ [case id=format-024-canonical-map-literal level=core
+  [tags format canonical map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:canonical {a: 1, b: 2}]
+#]]
+  [out-text [#
+'{a: 1, b: 2}'
+#]]
+ ]
+
+ [case id=format-025-canonical-array-literal level=core
+  [tags format canonical array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:canonical [1, 2, 3]]
+#]]
+  [out-text [#
+'[1, 2, 3]'
+#]]
+ ]
+]

@@ -1,0 +1,138 @@
+# CX formal parse-layer witness corpus
+# Transcribed verbatim from spec/02-inprogress/formal/{lexicon.ebnf,grammar.ebnf,
+# parser-rules-for-cx-meaning.txt}. Each row is a CX→XML (or CX→<cx:err>) witness.
+#
+# Format (TAB-separated, 5 fields):
+#   id <TAB> mode <TAB> kind <TAB> input <TAB> expect
+#
+#   id     = rule id + sequence (e.g. LX-INT-1)
+#   mode   = data | program        (program rows are deferred in harness pass 1)
+#   kind   = doc  -> compare emit_formal_doc(parse(input))  (whole-document image, M-DOC)
+#            node -> compare emit_formal_node(single root node)  (node-in-isolation image)
+#            err  -> input is rejected; expect carries <cx:err code offset>
+#   input  = the CX source. Literal newline encoded as the marker <NL>.
+#            Backslashes are LITERAL (so '\n' is a CX escape, two chars).
+#   expect = canonical XML, or the <cx:err .../> for err rows.
+#
+# The xmlns:cx binding mandated on the document root (parser-rules §P1-6) is
+# ELIDED here exactly as in the witness rows; the harness compares modulo it.
+# The two raw-byte witnesses (LR-UTF8 <0xFF>, LR-BOM <BOM>) are handled in-code,
+# not here (their input is not a UTF-8 string).
+
+# ════════════════ lexicon.ebnf ════════════════
+LX-WS-1	data	doc	[p a  b]	<p>a b</p>
+LX-WS-2	data	doc	[p a #c<NL>b]	<p>a b</p>
+LX-NAME-1	data	doc	[a.b 1]	<a.b cx:type="int">1</a.b>
+LX-NAME-2	data	doc	[_priv 1]	<_priv cx:type="int">1</_priv>
+LX-QNAME-1	data	doc	[svg:rect x=1]	<svg:rect x="1"/>
+LX-INT-1	data	doc	[n 1_000]	<n cx:type="int">1000</n>
+LX-INT-2	data	doc	[m 0xFF]	<m cx:type="int">255</m>
+LX-LEADZERO-1	data	doc	[zip 02134]	<zip>02134</zip>
+LX-FLOAT-1	data	doc	[r 4.2]	<r cx:type="float">4.2</r>
+LX-FLOAT-2	data	doc	[r 1e3]	<r cx:type="float">1000.0</r>
+LX-NUMSIGN-1	data	doc	[t -5]	<t cx:type="int">-5</t>
+LX-NUMSIGN-2	data	doc	[t a-b]	<t>a-b</t>
+LX-BOOL-1	data	doc	[a x=true]	<a x="true"/>
+LX-NULL-1	data	doc	[a n=null]	<a cx:attr-types="n=null"/>
+LX-DATE-1	data	doc	[d 2024-01-15]	<d cx:type="date">2024-01-15</d>
+LX-DATETIME-1	data	doc	[t 2024-01-15T10:30:00Z]	<t cx:type="datetime">2024-01-15T10:30:00Z</t>
+LX-DATE-BAD-1	data	doc	[d 2024-13-45]	<d>2024-13-45</d>
+LX-WORD-1	data	doc	[t a-b]	<t>a-b</t>
+LX-WORD-2	data	doc	[u http://h/p]	<u>http://h/p</u>
+LX-ATOM-1	data	doc	[s :ok]	<s><cx:atom>ok</cx:atom></s>
+LX-STRING-1	data	doc	[s 'hi']	<s>hi</s>
+LX-STRING-2	data	doc	[s "a'b"]	<s>a'b</s>
+LX-ESCAPE-1	data	doc	[s '\n']	<s>&#10;</s>
+LX-ESCAPE-2	data	doc	[s '\d+']	<s>\d+</s>
+LX-TYPEANN-1	data	doc	[port::u16 8080]	<port cx:type="u16">8080</port>
+LX-TYPEANN-2	data	doc	[xs::string[] a b]	<xs cx:type="string[]"><cx:string>a</cx:string><cx:string>b</cx:string></xs>
+# lexical reject rules
+LR-QNAME-1	data	err	[a:b:c]	<cx:err code="CXERLEX-QNAME" offset="4"/>
+LR-ATOM-1	data	err	[k :true]	<cx:err code="CXERLEX-ATOM" offset="3"/>
+LR-ESCAPE-1	data	err	[s 'ab\']	<cx:err code="CXERLEX-ESCAPE" offset="6"/>
+LR-CODEPOINT-1	data	err	[s '\uD800']	<cx:err code="CXERLEX-CODEPOINT" offset="4"/>
+LR-TYPETAG-1	data	err	[x::widget 1]	<cx:err code="CXER0107" offset="4"/>
+LR-RANGE-1	data	err	[p::u8 999]	<cx:err code="CXERLEX-RANGE" offset="7"/>
+
+# ════════════════ grammar.ebnf ════════════════
+G-DOC-1	data	doc	[a 1]	<a cx:type="int">1</a>
+G-DOC-2	data	doc	[a 1][b 2]	<cx:docs><a cx:type="int">1</a><b cx:type="int">2</b></cx:docs>
+G-DOC-3	data	doc	hello world	<cx:docs><cx:string>hello world</cx:string></cx:docs>
+G-MULTIDOC-1	data	doc	[a 1]<NL>---<NL>[b 2]	<cx:docs><cx:doc><a cx:type="int">1</a></cx:doc><cx:doc><b cx:type="int">2</b></cx:doc></cx:docs>
+G-NODE-1	data	doc	[x 1]	<x cx:type="int">1</x>
+G-NODE-2	data	node	'hi'	<cx:string>hi</cx:string>
+G-NODE-3	data	node	:ok	<cx:atom>ok</cx:atom>
+G-BRACKET-1	data	doc	[user x=1]	<user x="1"/>
+G-BRACKET-2	data	node	[1, 2]	<cx:array><cx:int>1</cx:int><cx:int>2</cx:int></cx:array>
+G-BRACKET-3	program	node	[+ 1 2]	<cx:call cx:head="+"><cx:int>1</cx:int><cx:int>2</cx:int></cx:call>
+G-FORM-1	data	doc	[box w=5 h=3]	<box w="5" h="3"/>
+G-META-1	data	doc	[p &base id=7 active=true]	<p cx:anchor="base" id="7" active="true"/>
+G-META-2	data	doc	[svg xmlns=http://www.w3.org/2000/svg]	<svg xmlns="http://www.w3.org/2000/svg"/>
+G-META-3	data	doc	[u name::string=42]	<u name="42" cx:attr-types="name=string"/>
+G-BODY-1	data	doc	[p the quick fox]	<p>the quick fox</p>
+G-BODY-2	data	doc	[note 42 4.2 'x' [b two]]	<note><cx:int>42</cx:int><cx:float>4.2</cx:float>x<b>two</b></note>
+G-BODY-3	data	doc	[ports 80 443]	<ports><cx:int>80</cx:int><cx:int>443</cx:int></ports>
+G-COMMABODY-1	data	doc	[ports 80, 443]	<ports><cx:array><cx:int>80</cx:int><cx:int>443</cx:int></cx:array></ports>
+G-COMMABODY-2	data	doc	[tags a, b]	<tags><cx:array><cx:string>a</cx:string><cx:string>b</cx:string></cx:array></tags>
+G-TYPED-ARRAY-1	data	doc	[xs::string[] a b]	<xs cx:type="string[]"><cx:string>a</cx:string><cx:string>b</cx:string></xs>
+G-ARRAY-1	data	node	[80 443]	<cx:array><cx:int>80</cx:int><cx:int>443</cx:int></cx:array>
+G-ARRAY-2	data	node	[1, [2, 3]]	<cx:array><cx:int>1</cx:int><cx:array><cx:int>2</cx:int><cx:int>3</cx:int></cx:array></cx:array>
+G-MAP-1	data	node	{k: 1}	<cx:map><cx:entry><cx:key><cx:string>k</cx:string></cx:key><cx:val><cx:int>1</cx:int></cx:val></cx:entry></cx:map>
+G-MARKUP-1	data	doc	[s &amp; '!']	<s><cx:entity-ref cx:name="amp"/>!</s>
+G-MARKUP-2	data	node	[*base]	<cx:alias cx:name="base"/>
+G-DECL-1	data	node	[!ENTITY x 'y']	<!ENTITY x 'y'>
+# structural reject rules
+GR-BAREWORD-COMMA-1	data	err	[web, prod]	<cx:err code="CXER0100" offset="4"/>
+GR-BAREWORD-COMMA-2	data	err	[web,]	<cx:err code="CXER0100" offset="4"/>
+GR-EMPTY-ITEM-1	data	err	[xs a,,b]	<cx:err code="CXER0100" offset="6"/>
+GR-EMPTY-ITEM-2	data	err	[1,,2]	<cx:err code="CXER0100" offset="3"/>
+GR-EMPTY-ITEM-3	data	err	[,1]	<cx:err code="CXER0100" offset="1"/>
+GR-UNTERMINATED-1	data	err	[p hi	<cx:err code="CXER0100" offset="0"/>
+GR-STRAY-CLOSE-1	data	err	]	<cx:err code="CXER0100" offset="0"/>
+GR-NODE-ATTR-1	data	err	[n a=[x]]	<cx:err code="E211" offset="5"/>
+GR-RESERVED-PREFIX-1	data	err	[cx:foo 1]	<cx:err code="E210" offset="1"/>
+GR-RESERVED-PREFIX-2	data	err	[cx:int 1]	<cx:err code="E210" offset="1"/>
+GR-DUP-ID-1	data	err	[a #x][b #x]	<cx:err code="CXER0208" offset="9"/>
+GR-DUP-KEY-1	data	err	{a:1, a:2}	<cx:err code="CXERMAP-DUPKEY" offset="6"/>
+GR-BAD-KEY-1	data	err	{:k: 1}	<cx:err code="CXERMAP-BADKEY" offset="1"/>
+GR-SLICE-STEP-ZERO-1	program	err	[out $m[::0]]	<cx:err code="CXER0100" offset="10"/>
+GR-META-ON-NONELEMENT-1	program	err	[$f #id]	<cx:err code="CXER0100" offset="4"/>
+GR-META-ON-NONELEMENT-2	program	err	[?if &a]	<cx:err code="CXER0100" offset="5"/>
+GR-BAD-PATH-1	program	err	[p /]	<cx:err code="CXER0100" offset="3"/>
+GR-BAD-BINDING-1	program	err	[p $+]	<cx:err code="CXER0100" offset="3"/>
+GR-BAD-BINDING-2	program	err	[p $5]	<cx:err code="CXER0100" offset="3"/>
+
+# ════════════════ parser-rules-for-cx-meaning.txt ════════════════
+M-DOC-1	data	doc	[a 1]	<a cx:type="int">1</a>
+M-DOC-2	data	doc	42	<cx:docs><cx:int>42</cx:int></cx:docs>
+M-DOC-3	data	doc	[a 1][b 2]	<cx:docs><a cx:type="int">1</a><b cx:type="int">2</b></cx:docs>
+M-DOC-4	data	doc	[a 1]<NL>---<NL>[b 2]	<cx:docs><cx:doc><a cx:type="int">1</a></cx:doc><cx:doc><b cx:type="int">2</b></cx:doc></cx:docs>
+M-SCALAR-SOLE-1	data	doc	[note 42]	<note cx:type="int">42</note>
+M-SCALAR-SOLE-2	data	doc	[r 4.2]	<r cx:type="float">4.2</r>
+M-SCALAR-ITEM-1	data	doc	[xs 80 443]	<xs><cx:int>80</cx:int><cx:int>443</cx:int></xs>
+M-STRING-1	data	doc	[note 'hi']	<note>hi</note>
+M-STRING-2	data	doc	[xs 'a', 'b']	<xs><cx:array><cx:string>a</cx:string><cx:string>b</cx:string></cx:array></xs>
+M-ATOM-1	data	doc	[s :ok]	<s><cx:atom>ok</cx:atom></s>
+M-NULL-1	data	doc	[x null]	<x cx:type="null"/>
+M-NULL-2	data	doc	[u a=null]	<u cx:attr-types="a=null"/>
+M-TYPED-ARRAY-1	data	doc	[xs::string[] a b]	<xs cx:type="string[]"><cx:string>a</cx:string><cx:string>b</cx:string></xs>
+M-TYPED-ARRAY-2	data	doc	[xs::[] 1 2.0]	<xs cx:type="[]"><cx:int>1</cx:int><cx:float>2.0</cx:float></xs>
+M-TYPED-ARRAY-3	data	doc	[port::u16 8080]	<port cx:type="u16">8080</port>
+M-ELEMENT-1	data	doc	[p hi [b x] yo]	<p>hi <b>x</b> yo</p>
+M-ELEMENT-2	data	doc	[u active=true]	<u active="true"/>
+M-ELEMENT-3	data	doc	[u name='42']	<u name="42" cx:attr-types="name=string"/>
+M-ARRAY-1	data	node	[1, [2,3]]	<cx:array><cx:int>1</cx:int><cx:array><cx:int>2</cx:int><cx:int>3</cx:int></cx:array></cx:array>
+M-MAP-1	data	node	{1: a}	<cx:map><cx:entry><cx:key><cx:int>1</cx:int></cx:key><cx:val><cx:string>a</cx:string></cx:val></cx:entry></cx:map>
+M-ENTITYREF-1	data	doc	[s &amp;]	<s><cx:entity-ref cx:name="amp"/></s>
+M-ENTITYREF-2	data	doc	[s '&']	<s>&amp;</s>
+M-RAW-1	data	node	[# a<b #]	<![CDATA[ a<b ]]>
+M-COMMENT-1	data	node	[- note]	<!-- note-->
+M-ALIAS-1	data	node	[*base]	<cx:alias cx:name="base"/>
+M-DECL-1	data	node	[!ENTITY x 'y']	<!ENTITY x 'y'>
+M-PI-1	data	node	[?php echo 1;]	<?php echo 1;?>
+M-PI-2	data	node	[?php a?>b]	<cx:pi cx:target="php">a?&gt;b</cx:pi>
+M-PI-3	data	node	[?xml version=1.0]	<cx:pi cx:target="xml">version=1.0</cx:pi>
+M-PROGRAM-1	program	node	[$inc $x]	<cx:call cx:head="inc"><cx:var cx:name="x"/></cx:call>
+M-XMLATTR-1	data	doc	[p xml:space=preserve 'a  b']	<p xml:space="preserve">a  b</p>
+M-ERR-1	data	err	[web, prod]	<cx:err code="CXER0100" offset="4"/>
+M-ERR-2	data	err	[n::int abc]	<cx:err code="CXER0109" offset="8"/>

@@ -1,0 +1,352 @@
+[test-suite name=atoms
+  [doc [#
+# CX Conformance — Atom scalar kind
+# Version: 1.1 — 2026-05-29
+# Covers: the atom scalar kind per spec/core/grammar.ebnf (surface `:NAME`,
+#         atom literal [122b]; auto-type [25]/[25a]) and the atom row of
+#         spec/core/conversions.md. Atom is a first-class atomic Scalar;
+#         canonical render is `:NAME`; type-strict equality with string;
+#         ast_bin round-trip; identity hash distinct from same-name string;
+#         reserved names `:true` / `:false` / `:null` are NOT atoms.
+#
+# Verification: parse `in_cx`, re-emit through emit_cx (or other `out_*`
+# section), compare against the expected output. Gated by capability bit
+# 33 per spec/abi.md §3.
+#
+# A bare single-colon `:NAME` is an atom literal, NOT a type annotation
+# (types are the glued `::T` form, grammar.ebnf:319). Where an atom value
+# is produced:
+#   - Sole body token:            [status :active]   → atom scalar body
+#   - Attribute-value position:   [event kind=:click]
+#   - Collection-literal items:   [tags [:a, :b, :c]]
+#   - Sequence / map literal:     [labels (:ok, :pending)]  /  {k: :v}
+# Atom is NOT an auto-array type (per [25a], only int/float/bool/date/
+# datetime auto-array), and a mixed bare body stays Text: `[user :id 1]`
+# is the Text node ":id 1", and `[tags :a :b]` is the Text ":a :b" — an
+# atom array must be written explicitly as `[tags [:a, :b]]`. Atoms in CX
+# *code* (e.g. `[?match $s [case :ok …]]`) are exercised by code.txt.
+#]]
+
+ [case id=atom-001-attribute-bare level=core
+  [tags atom literal attribute parse]
+  [in-cx [#
+[event kind=:click target=button]
+#]]
+  [out-cx [#
+[event kind=:click target=button]
+#]]
+ ]
+
+ [case id=atom-002-attribute-kebab level=core
+  [tags atom literal attribute kebab]
+  [in-cx [#
+[response code=:not-found]
+#]]
+  [out-cx [#
+[response code=:not-found]
+#]]
+ ]
+
+ [case id=atom-003-attribute-underscore-digit level=core
+  [tags atom literal attribute naming]
+  [in-cx [#
+[mode protocol=:http_2]
+#]]
+  [out-cx [#
+[mode protocol=:http_2]
+#]]
+ ]
+
+ [case id=atom-004-array-literal-of-atoms level=core
+  [tags atom literal array collection]
+  [in-cx [#
+[transitions [:idle, :running, :complete]]
+#]]
+  [out-cx [#
+[transitions [:idle, :running, :complete]]
+#]]
+ ]
+
+ [case id=atom-005-sequence-literal-of-atoms level=core
+  [tags atom literal sequence collection]
+  [in-cx [#
+[labels (:ok, :pending, :failed)]
+#]]
+  [out-cx [#
+[labels (:ok, :pending, :failed)]
+#]]
+ ]
+
+ [case id=atom-006-map-value-atom level=core
+  [tags atom literal map collection]
+  [in-cx [#
+[settings {level: :debug, mode: :strict}]
+#]]
+  [out-cx [#
+[settings {level: :debug, mode: :strict}]
+#]]
+ ]
+
+ [case id=atom-007-error-discriminator-shape level=core
+  [tags atom literal error-code tagged-shape]
+  [in-cx [#
+[result status=err code=:not-found message='resource missing']
+#]]
+  [out-cx [#
+[result status=err code=:not-found message='resource missing']
+#]]
+ ]
+
+ [case id=atom-008-reserved-true-falls-through level=core
+  [tags atom literal reserved-name bool]
+  [in-cx [#
+[flag value=':true']
+#]]
+  [out-cx [#
+[flag value=':true']
+#]]
+ ]
+
+ [case id=atom-009-reserved-false-falls-through level=core
+  [tags atom literal reserved-name bool]
+  [in-cx [#
+[flag value=':false']
+#]]
+  [out-cx [#
+[flag value=':false']
+#]]
+ ]
+
+ [case id=atom-010-reserved-null-falls-through level=core
+  [tags atom literal reserved-name null]
+  [in-cx [#
+[flag value=':null']
+#]]
+  [out-cx [#
+[flag value=':null']
+#]]
+ ]
+
+ [case id=atom-011-bool-vs-atom-coexist level=core
+  [tags atom literal bool type-strict]
+  [in-cx [#
+[logging enabled=true level=:debug]
+#]]
+  [out-cx [#
+[logging enabled=true level=:debug]
+#]]
+ ]
+
+ [case id=atom-012-int-vs-atom-coexist level=core
+  [tags atom literal int type-strict]
+  [in-cx [#
+[socket port=8080 protocol=:tcp]
+#]]
+  [out-cx [#
+[socket port=8080 protocol=:tcp]
+#]]
+ ]
+
+ [case id=atom-013-ast-json-atom-attribute-shape level=core
+  [tags atom literal ast-json]
+  [in-cx [#
+[event kind=:click]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Element", "name": "event",
+     "attrs": [{"name": "kind", "value": "click", "dataType": "atom"}]
+    }
+  ]
+}
+#]]
+ ]
+
+ [case id=atom-014-ast-json-atom-in-array level=core
+  [tags atom literal ast-json array]
+  [in-cx [#
+[transitions [:idle, :running]]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Element", "name": "transitions",
+     "items": [
+       {"type": "Array", "items": [
+         {"type": "Scalar", "dataType": "atom", "value": "idle"},
+         {"type": "Scalar", "dataType": "atom", "value": "running"}
+       ]}
+     ]
+    }
+  ]
+}
+#]]
+ ]
+
+ [case id=atom-015-body-sole-token-atom level=core
+  [tags atom literal body scalar parse]
+  [in-cx [#
+[status :active]
+#]]
+  [out-cx [#
+[status :active]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Element", "name": "status",
+     "items": [{"type": "Scalar", "dataType": "atom", "value": "active"}]
+    }
+  ]
+}
+#]]
+ ]
+
+ [case id=atom-016-mixed-atom-body-is-list level=core
+  [tags atom literal body self-delimiting-list]
+  # §9 [L25b] self-delimiting clause: a no-comma body bearing an ATOM token is a
+  # heterogeneous list of auto-typed items, NOT a prose Text run — `:id` is an
+  # atom, `1` an int. Atoms are self-delimiting, so no comma is needed.
+  [in-cx [#
+[user :id 1]
+#]]
+  [out-cx [#
+[user :id 1]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Element", "name": "user",
+     "items": [{"type": "Scalar", "dataType": "atom", "value": "id"},
+               {"type": "Scalar", "dataType": "int", "value": 1}]
+    }
+  ]
+}
+#]]
+ ]
+
+ [case id=atom-017-all-atom-body-is-list level=core
+  [tags atom literal body self-delimiting-list]
+  # §9 [L25b] self-delimiting clause: an all-atom no-comma body is a LIST of
+  # separate atom items (atoms are self-delimiting). It is still NOT an
+  # auto-array — atoms carry no `atom[]` element type; each `:a` / `:b` is its
+  # own atom scalar child.
+  [in-cx [#
+[tags :a :b]
+#]]
+  [out-cx [#
+[tags :a :b]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Element", "name": "tags",
+     "items": [{"type": "Scalar", "dataType": "atom", "value": "a"},
+               {"type": "Scalar", "dataType": "atom", "value": "b"}]
+    }
+  ]
+}
+
+# ── Atom format conversions (spec/core/conversions.md atom row) ─────────────
+# Default-mode emit per the matrix at conversions.md §0.2:
+#   JSON default → string ":NAME" (colon-prefixed surface form)
+#   YAML default → !!cx:atom "NAME" native tag (bare name; tag carries type)
+#   TOML default → string ":NAME" (no tag protocol — lossy surface form)
+# The XML lossless `cx:type="atom"` marker and the JSON `cx:type` sidecar are
+# lossless-mode features; no `--lossless` toggle exists yet, so they are not
+# exercised here (XML/JSON lossless scalar markers are unimplemented across
+# all types, not just atom).
+#]]
+ ]
+
+ [case id=atom-018-json-body-scalar level=core
+  [tags atom literal conversion json]
+  [in-cx [#
+[status :active]
+#]]
+  [out-json [#
+{
+  "status": ":active"
+}
+#]]
+ ]
+
+ [case id=atom-019-json-attribute level=core
+  [tags atom literal conversion json attribute]
+  [in-cx [#
+[event kind=:click]
+#]]
+  [out-json [#
+{
+  "event": {
+    "kind": ":click"
+  }
+}
+#]]
+ ]
+
+ [case id=atom-020-json-array-of-atoms level=core
+  [tags atom literal conversion json array]
+  [in-cx [#
+[transitions [:idle, :running]]
+#]]
+  [out-json [#
+{
+  "transitions": [
+    ":idle",
+    ":running"
+  ]
+}
+#]]
+ ]
+
+ [case id=atom-021-yaml-body-scalar level=core
+  [tags atom literal conversion yaml]
+  [in-cx [#
+[status :active]
+#]]
+  [out-yaml [#
+status: !!cx:atom "active"
+#]]
+ ]
+
+ [case id=atom-022-yaml-attribute level=core
+  [tags atom literal conversion yaml attribute]
+  [in-cx [#
+[event kind=:click]
+#]]
+  [out-yaml [#
+"event":
+  kind: !!cx:atom "click"
+#]]
+ ]
+
+ [case id=atom-023-yaml-array-of-atoms level=core
+  [tags atom literal conversion yaml array]
+  [in-cx [#
+[transitions [:idle, :running]]
+#]]
+  [out-yaml [#
+transitions:
+  - !!cx:atom "idle"
+  - !!cx:atom "running"
+#]]
+ ]
+
+ [case id=atom-024-toml-attribute level=core
+  [tags atom literal conversion toml attribute]
+  [in-cx [#
+[config mode=:strict]
+#]]
+  [out-toml [#
+[config]
+mode = ":strict"
+#]]
+ ]
+]

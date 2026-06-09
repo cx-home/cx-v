@@ -97,8 +97,35 @@ fn emit_md_block(n Node, mut out []string) {
 								out << '\`\`\`${lang}\n${rt.value}\n\`\`\`\n\n'
 							}
 						}
+					} else if e.items.len == 1 {
+						// Multi-line scalar/text body (e.g. a $-bound string
+						// from a CX program's `[code $s]` yield) → block-code
+						// fence. Single-line falls through to inline `code`.
+						first := e.items[0]
+						body_str := if first is ScalarNode {
+							scalar_value_str((first as ScalarNode).value)
+						} else if first is TextNode {
+							(first as TextNode).value
+						} else {
+							''
+						}
+						if body_str.contains('\n') {
+							lang := find_attr_value(e.attrs, 'lang') or { '' }
+							out << '\`\`\`${lang}\n${body_str}\n\`\`\`\n\n'
+						} else {
+							out << '\`${emit_md_children_inline(e.items)}\`\n\n'
+						}
 					} else {
 						out << '\`${emit_md_children_inline(e.items)}\`\n\n'
+					}
+				}
+				'pre' {
+					// `[pre [code …]]` is the standard block-code wrapper; the
+					// inner `[code …]` carries the language attr. Delegate
+					// each child to the block emitter so the code arm above
+					// produces a fenced block.
+					for child in e.items {
+						emit_md_block(child, mut out)
 					}
 				}
 				'a' {
@@ -137,7 +164,7 @@ fn emit_md_block(n Node, mut out []string) {
 					out << '${emit_md_inline(n)}\n\n'
 				}
 				else {
-					// ADR 0017 §D12 — an unknown element whose body is one
+					// an unknown element whose body is one
 					// or more collection literals renders the collection
 					// directly (sequence/array → bulleted list, map →
 					// definition list). The wrapper element name is
@@ -165,11 +192,16 @@ fn emit_md_block(n Node, mut out []string) {
 			c := n as CommentNode
 			out << '<!--${c.value}-->\n\n'
 		}
-		// ADR 0017 §D12 — sequence/array render as bulleted lists; maps
+		// sequence/array render as bulleted lists; maps
 		// render as definition lists. Block position uses indented forms.
 		SequenceNode { emit_md_collection_list(n.items, mut out) }
 		ArrayNode    { emit_md_collection_list(n.items, mut out) }
 		MapNode      { emit_md_collection_deflist(n.entries, mut out) }
+		IteratorNode {
+			// materialize then render as a bulleted list,
+			// matching SequenceNode's md projection.
+			emit_md_collection_list(iterator_to_sequence(n).items, mut out)
+		}
 		else {}
 	}
 }
@@ -199,6 +231,7 @@ fn md_render_collection_value(n Node) string {
 		SequenceNode  { md_render_inline_list(n.items) }
 		ArrayNode     { md_render_inline_list(n.items) }
 		MapNode       { md_render_inline_map(n.entries) }
+		IteratorNode  { md_render_inline_list(iterator_to_sequence(n).items) }
 		Element       { emit_md_inline(n) }
 		else          { '' }
 	}
@@ -284,8 +317,8 @@ fn emit_md_inline(n Node) string {
 
 fn emit_md_unknown_element(e Element) string {
 	mut s := e.name
-	if a := e.anchor { s += ' &${a}' }
-	if m := e.merge  { s += ' *${m}' }
+	if a := e.anchor() { s += ' &${a}' }
+	if m := e.merge()  { s += ' *${m}' }
 	for attr in e.attrs {
 		s += ' ${attr.name}:${cx_quote_attr_if_needed(attr.str_value())}'
 	}

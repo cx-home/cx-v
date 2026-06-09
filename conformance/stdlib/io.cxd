@@ -1,0 +1,1571 @@
+[test-suite name=io
+  [doc [#
+conformance fixtures for cx-stdlib/io (spec/std-lib/io.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/io']
+   (resolver MUST be quoted) then calls [$io:fn args]. The LAST
+   expression is the rendered result.
+
+   DETERMINISM / EFFECTFUL MODULE: cx-stdlib/io is a Tier-B, necessarily
+   impure module — EVERY public function is `impure` (§3) and every one
+   of its effect points is capability-gated (§7). The stdlib eval runner
+   evaluates each case under `code.new_env()`, which grants NO
+   capabilities (deny-by-default per spec/core/security.md §2). At the
+   effect point the active set is checked FIRST; with the grant absent
+   the function raises E_CAP_DENIED = `cx-err:CXER0271` (security.md §4:
+   "a denied effect at the effect point raises CXER0271"; io.md §7:
+   effectful functions "raise cx-err:CXER0271 when the grant is absent").
+
+   Consequently the deterministic, runner-faithful, spec-grounded
+   assertion for the happy-path call of every io function is the
+   capability-denied error CXER0271 — real side effects (touching the
+   filesystem, opening fds, deleting trees) are neither reproducible nor
+   safe inside the conformance harness, and AUTHORING.md ("Capability-
+   gated / effectful") directs us to fixture the capability-denied error
+   rather than real side effects. Each public function therefore gets a
+   CXER0271 case exercising its real call shape (correct arity / arg
+   kinds per the §3 [?def] signature).
+
+   IO-SPECIFIC ERROR CODES (CXER3400–CXER3411, §5): these are documented
+   behaviors that fire only AFTER the capability check passes (a granted
+   read/write that then hits invalid-UTF-8, not-found, permission, a
+   root-delete guard, etc.). Under the runner's empty capability set the
+   capability check short-circuits FIRST, so a correct implementation
+   raises CXER0271 — NOT the io-specific code — for every one of these
+   programs. Asserting CXER3400/3401/3402/3410/3411 here would therefore
+   FAIL a correct implementation (a wrong fixture is worse than a missing
+   one, AUTHORING.md "Grounding"). They are intentionally NOT asserted as
+   out-err in this suite; their scenarios are documented in the spec's §6
+   conformance list and belong in a capability-granted harness
+   (conformance/stdlib/io.cxd) once the host-grant fixture surface exists. See
+   the report's `ambiguous` list.
+
+   NOTE: no inter-fixture comment blocks appear between cases (a comment
+   between sections risks capture into the preceding section payload);
+   all explanatory prose lives in this doc header or in tags.
+#]]
+
+ [case id=io-001-read-file-cap-denied level=core
+  [tags io read-file capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:read-file "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-002-read-file-bytes-cap-denied level=core
+  [tags io read-file-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:read-file-bytes "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-003-read-file-lines-cap-denied level=core
+  [tags io read-file-lines capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:read-file-lines "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-004-write-file-cap-denied level=core
+  [tags io write-file capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:write-file "/tmp/out.txt" "hello"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-005-write-file-bytes-cap-denied level=core
+  [tags io write-file-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[?lib 'cx-stdlib/io']
+[$io:write-file-bytes "/tmp/out.bin" [$bytes:from-string-utf8 "hi"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-006-write-file-lines-cap-denied level=core
+  [tags io write-file-lines capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:write-file-lines "/tmp/out.txt" ("a", "b", "c")]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-007-append-file-cap-denied level=core
+  [tags io append-file capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:append-file "/tmp/out.txt" "more"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-008-append-file-bytes-cap-denied level=core
+  [tags io append-file-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes']
+[?lib 'cx-stdlib/io']
+[$io:append-file-bytes "/tmp/out.bin" [$bytes:from-string-utf8 "more"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-009-open-read-cap-denied level=core
+  [tags io open read capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:open "/var/log/app.log" "r"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-010-open-write-cap-denied level=core
+  [tags io open write capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:open "/tmp/out.txt" "w"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-011-open-with-opts-cap-denied level=core
+  [tags io open-with-opts capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:open-with-opts "/tmp/out.txt" [map mode="w" atomic=true]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-012-read-bytes-cap-denied level=core
+  [tags io read-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:read-bytes [$io:open "/var/log/app.log" "r"] 16]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-013-read-line-cap-denied level=core
+  [tags io read-line capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:read-line [$io:open "/var/log/app.log" "r"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-014-read-all-cap-denied level=core
+  [tags io read-all capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:read-all [$io:open "/var/log/app.log" "r"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-015-read-all-bytes-cap-denied level=core
+  [tags io read-all-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:read-all-bytes [$io:open "/var/log/app.log" "r"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-016-write-bytes-cap-denied level=core
+  [tags io write-bytes capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:write-bytes [$io:open "/tmp/out.bin" "w"] [$bytes:from-string "hi"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-017-write-string-cap-denied level=core
+  [tags io write-string capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:write-string [$io:open "/tmp/out.txt" "w"] "hi"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-018-write-line-cap-denied level=core
+  [tags io write-line capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:write-line [$io:open "/tmp/out.txt" "w"] "hi"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-019-flush-cap-denied level=core
+  [tags io flush capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:flush [$io:open "/tmp/out.txt" "w"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-020-seek-cap-denied level=core
+  [tags io seek capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:seek [$io:open "/var/log/app.log" "r"] 0 :start]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-021-tell-cap-denied level=core
+  [tags io tell capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:tell [$io:open "/var/log/app.log" "r"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-022-is-eof-cap-denied level=core
+  [tags io is-eof capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:is-eof [$io:open "/var/log/app.log" "r"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-023-line-iter-cap-denied level=core
+  [tags io line-iter capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:line-iter [$io:open "/var/log/app.log" "r"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-024-exists-cap-denied level=core
+  [tags io exists capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:exists "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-025-is-file-cap-denied level=core
+  [tags io is-file capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:is-file "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-026-is-directory-cap-denied level=core
+  [tags io is-directory capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:is-directory "/var/log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-027-is-symlink-cap-denied level=core
+  [tags io is-symlink capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:is-symlink "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-028-stat-cap-denied level=core
+  [tags io stat capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:stat "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-029-size-cap-denied level=core
+  [tags io size capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:size "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-030-modified-time-cap-denied level=core
+  [tags io modified-time capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:modified-time "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-031-created-time-cap-denied level=core
+  [tags io created-time capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:created-time "/var/log/app.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-032-list-dir-cap-denied level=core
+  [tags io list-dir capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:list-dir "/var/log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-033-make-dir-cap-denied level=core
+  [tags io make-dir capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:make-dir "/tmp/newdir"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-034-make-dirs-cap-denied level=core
+  [tags io make-dirs capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:make-dirs "/tmp/a/b/c"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-035-remove-cap-denied level=core
+  [tags io remove capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:remove "/tmp/out.txt"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-036-remove-dir-cap-denied level=core
+  [tags io remove-dir capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:remove-dir "/tmp/newdir"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-037-remove-tree-cap-denied level=core
+  [tags io remove-tree capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:remove-tree "/tmp/a"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-038-rename-cap-denied level=core
+  [tags io rename capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:rename "/tmp/a.txt" "/tmp/b.txt"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-039-copy-cap-denied level=core
+  [tags io copy capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:copy "/tmp/a.txt" "/tmp/b.txt"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-040-copy-tree-cap-denied level=core
+  [tags io copy-tree capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:copy-tree "/tmp/a" "/tmp/b"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-041-symlink-cap-denied level=core
+  [tags io symlink capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:symlink "/tmp/target" "/tmp/link"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-042-readlink-cap-denied level=core
+  [tags io readlink capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:readlink "/tmp/link"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-043-glob-cap-denied level=core
+  [tags io glob capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:glob "/var/log/*.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-044-glob-iter-cap-denied level=core
+  [tags io glob-iter capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:glob-iter "/var/log/*.log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-045-walk-cap-denied level=core
+  [tags io walk capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:walk "/var/log"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-046-temp-file-cap-denied level=core
+  [tags io temp-file capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:temp-file "pre" ".txt"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-047-temp-dir-cap-denied level=core
+  [tags io temp-dir capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:temp-dir "pre"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-048-system-temp-dir-cap-denied level=core
+  [tags io system-temp-dir capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:system-temp-dir]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-049-lock-cap-denied level=core
+  [tags io lock capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:lock [$io:open "/tmp/out.txt" "w"] :exclusive]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-050-unlock-cap-denied level=core
+  [tags io unlock capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:unlock [$io:open "/tmp/out.txt" "w"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ # close requires NO capability (io.md §7 — it only releases an already-granted
+ # handle). It therefore has no no-cap denial path: the only reason this program
+ # raises CXER0271 today is the nested `open` (covered directly by io-009/010/011).
+ # close's own behavior — releasing a real handle — needs a granted handle, so
+ # it belongs in the capability-granted harness. gate=pending until that lands.
+ [case id=io-051-close-granted-behavior level=core gate=pending
+  [tags io close granted-harness]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:close [$io:open "/var/log/app.log" "r"]]
+#]]
+  [out-text [#
+[granted-harness: open a real handle then close releases it]
+#]]
+ ]
+ [case id=io-052-read-file-roundtrip-granted level=core gate=enforced grant='read write'
+  [tags io read-file write-file roundtrip granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hello"]] [= [$io:read-file $p] "hello"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-053-write-file-creates-granted level=core gate=enforced grant='read write'
+  [tags io write-file exists granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "x"]] [$io:exists $p]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-054-read-file-bytes-roundtrip-granted level=core gate=enforced grant='read write'
+  [tags io read-file-bytes write-file-bytes granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/bytes']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [$bytes:length [$io:read-file-bytes $p]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=io-055-write-file-bytes-roundtrip-granted level=core gate=enforced grant='read write'
+  [tags io write-file-bytes read-file-bytes granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/bytes']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "abc"]]] [$bytes:length [$io:read-file-bytes $p]]]]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=io-056-read-file-lines-count-granted level=core gate=enforced grant='read write'
+  [tags io read-file-lines write-file-lines granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-lines $p ("a", "b", "c")]] [$count [$io:read-file-lines $p]]]]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=io-057-write-file-lines-count-granted level=core gate=enforced grant='read write'
+  [tags io write-file-lines read-file-lines granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-lines $p ("x", "y")]] [$count [$io:read-file-lines $p]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=io-058-append-file-granted level=core gate=enforced grant='read write'
+  [tags io append-file read-file granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $a [$io:append-file $p "a"]] [?let [= $b [$io:append-file $p "b"]] [$io:read-file $p]]]]]
+#]]
+  [out-text [#
+'ab'
+#]]
+ ]
+
+ [case id=io-059-append-file-bytes-granted level=core gate=enforced grant='read write'
+  [tags io append-file-bytes read-file-bytes granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/bytes']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $a [$io:append-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [$bytes:length [$io:read-file-bytes $p]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=io-060-open-read-all-granted level=core gate=enforced grant='read write'
+  [tags io open read-all close granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hi"]] [?let [= $h [$io:open $p "r"]] [?let [= $r [$io:read-all $h]] [?let [= $c [$io:close $h]] [= $r "hi"]]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-061-open-with-opts-granted level=core gate=enforced grant='read write'
+  [tags io open-with-opts close granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hi"]] [?let [= $h [$io:open-with-opts $p {mode: "r"}]] [$io:close $h]]]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=io-062-close-returns-null-granted level=core gate=enforced grant='read write'
+  [tags io close null granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hi"]] [?let [= $h [$io:open $p "r"]] [$io:close $h]]]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=io-063-read-bytes-granted level=core gate=enforced grant='read write'
+  [tags io read-bytes open granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/bytes']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "xy"]]] [?let [= $h [$io:open $p "r"]] [$bytes:length [$io:read-bytes $h 2]]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=io-064-read-line-granted level=core gate=enforced grant='read write'
+  [tags io read-line open granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "L1\nL2"]] [?let [= $h [$io:open $p "r"]] [$io:read-line $h]]]]]
+#]]
+  [out-text [#
+'L1'
+#]]
+ ]
+
+ [case id=io-065-read-all-handle-granted level=core gate=enforced grant='read write'
+  [tags io read-all write-string flush seek granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "abcdef"]] [?let [= $fl [$io:flush $h]] [?let [= $sk [$io:seek $h 0 :start]] [$io:read-all $h]]]]]
+#]]
+  [out-text [#
+'abcdef'
+#]]
+ ]
+
+ [case id=io-066-read-all-bytes-granted level=core gate=enforced grant='read write'
+  [tags io read-all-bytes open granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/bytes']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [?let [= $h [$io:open $p "r"]] [$bytes:length [$io:read-all-bytes $h]]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=io-067-write-bytes-handle-granted level=core gate=enforced grant='read write'
+  [tags io write-bytes seek read-all-bytes granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/bytes']
+[?let [= $h [$io:temp-file "cxc" ".bin"]] [?let [= $w [$io:write-bytes $h [$bytes:from-string-utf8 "xy"]]] [?let [= $sk [$io:seek $h 0 :start]] [$bytes:length [$io:read-all-bytes $h]]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=io-068-write-string-handle-granted level=core gate=enforced grant='read write'
+  [tags io write-string seek read-all granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "zz"]] [?let [= $sk [$io:seek $h 0 :start]] [= [$io:read-all $h] "zz"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-069-write-line-is-eof-granted level=core gate=enforced grant='read write'
+  [tags io write-line is-eof seek granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-line $h "x"]] [?let [= $sk [$io:seek $h 0 :start]] [$io:is-eof $h]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=io-070-flush-returns-null-granted level=core gate=enforced grant='read write'
+  [tags io flush null granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "x"]] [$io:flush $h]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=io-071-seek-tell-granted level=core gate=enforced grant='read write'
+  [tags io seek tell granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "abc"]] [?let [= $sk [$io:seek $h 0 :start]] [$io:tell $h]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=io-072-tell-after-write-granted level=core gate=enforced grant='read write'
+  [tags io tell write-string granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "abc"]] [$io:tell $h]]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=io-073-is-eof-false-granted level=core gate=enforced grant='read write'
+  [tags io is-eof seek granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "abc"]] [?let [= $sk [$io:seek $h 0 :start]] [$io:is-eof $h]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=io-074-line-iter-count-granted level=core gate=enforced grant='read write'
+  [tags io line-iter open granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "a\nb\nc"]] [?let [= $h [$io:open $p "r"]] [$count [$io:line-iter $h]]]]]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=io-075-exists-true-granted level=core gate=enforced grant='read write'
+  [tags io exists make-dir granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "s"]] [?let [= $m [$io:make-dir $p]] [$io:exists $p]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-076-is-file-true-granted level=core gate=enforced grant='read write'
+  [tags io is-file write-file granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [$io:is-file $p]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-077-is-directory-true-granted level=core gate=enforced grant='read write'
+  [tags io is-directory temp-dir granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $d [$io:temp-dir "cxc"]] [$io:is-directory $d]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-078-is-symlink-true-granted level=core gate=enforced grant='read write'
+  [tags io is-symlink symlink granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $t [$path:join $d "t"]] [?let [= $w [$io:write-file $t "1"]] [?let [= $l [$path:join $d "ln"]] [?let [= $s [$io:symlink $t $l]] [$io:is-symlink $l]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-079-stat-size-granted level=core gate=enforced grant='read write'
+  [tags io stat size granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hi"]] [?let [= $st [$io:stat $p]] $st@size]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=io-080-size-granted level=core gate=enforced grant='read write'
+  [tags io size write-file granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "abc"]] [$io:size $p]]]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=io-081-modified-time-year-granted level=core gate=enforced grant='read write'
+  [tags io modified-time granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/time']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [>= [$time:year [$io:modified-time $p]] 2026]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-082-created-time-year-granted level=core gate=enforced grant='read write'
+  [tags io created-time granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/time']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [>= [$time:year [$io:created-time $p]] 2026]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-083-list-dir-count-granted level=core gate=enforced grant='read write'
+  [tags io list-dir granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [$count [$io:list-dir $d]]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=io-084-make-dir-granted level=core gate=enforced grant='read write'
+  [tags io make-dir exists granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "s"]] [?let [= $m [$io:make-dir $p]] [$io:is-directory $p]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-085-make-dirs-granted level=core gate=enforced grant='read write'
+  [tags io make-dirs is-directory granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "x/y/z"]] [?let [= $m [$io:make-dirs $p]] [$io:is-directory $p]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-086-remove-granted level=core gate=enforced grant='read write'
+  [tags io remove exists granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [?let [= $r [$io:remove $p]] [$io:exists $p]]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=io-087-remove-dir-granted level=core gate=enforced grant='read write'
+  [tags io remove-dir make-dir granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "s"]] [?let [= $m [$io:make-dir $p]] [?let [= $r [$io:remove-dir $p]] [$io:exists $p]]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=io-088-remove-tree-granted level=core gate=enforced grant='read write'
+  [tags io remove-tree make-dirs granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $s [$path:join $d "s"]] [?let [= $m [$io:make-dirs [$path:join $s "x"]]] [?let [= $r [$io:remove-tree $s]] [$io:exists $s]]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=io-089-rename-granted level=core gate=enforced grant='read write'
+  [tags io rename exists granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $a [$path:join $d "a"]] [?let [= $w [$io:write-file $a "1"]] [?let [= $b [$path:join $d "b"]] [?let [= $r [$io:rename $a $b]] [$io:exists $b]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-090-copy-granted level=core gate=enforced grant='read write'
+  [tags io copy exists granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $a [$path:join $d "a"]] [?let [= $w [$io:write-file $a "1"]] [?let [= $b [$path:join $d "b"]] [?let [= $c [$io:copy $a $b]] [$io:exists $b]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-091-copy-tree-granted level=core gate=enforced grant='read write'
+  [tags io copy-tree is-directory granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $s [$path:join $d "s"]] [?let [= $m [$io:make-dir $s]] [?let [= $f [$path:join $s "x"]] [?let [= $w [$io:write-file $f "1"]] [?let [= $dst [$path:join $d "dd"]] [?let [= $c [$io:copy-tree $s $dst]] [$io:is-directory $dst]]]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-092-symlink-granted level=core gate=enforced grant='read write'
+  [tags io symlink is-symlink granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $t [$path:join $d "t"]] [?let [= $w [$io:write-file $t "1"]] [?let [= $l [$path:join $d "ln"]] [?let [= $s [$io:symlink $t $l]] [$io:is-symlink $l]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-093-readlink-granted level=core gate=enforced grant='read write'
+  [tags io readlink symlink granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $t [$path:join $d "t"]] [?let [= $w [$io:write-file $t "1"]] [?let [= $l [$path:join $d "ln"]] [?let [= $s [$io:symlink $t $l]] [$strings:is-empty [$io:readlink $l]]]]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=io-094-glob-count-granted level=core gate=enforced grant='read write'
+  [tags io glob granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "a.txt"]] [?let [= $w [$io:write-file $p "1"]] [$count [$io:glob [$path:join $d "*.txt"]]]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=io-095-glob-iter-count-granted level=core gate=enforced grant='read write'
+  [tags io glob-iter granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "a.txt"]] [?let [= $w [$io:write-file $p "1"]] [$count [$io:glob-iter [$path:join $d "*.txt"]]]]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=io-096-walk-nonempty-granted level=core gate=enforced grant='read write'
+  [tags io walk granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [> [$count [$io:walk $d]] 0]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-097-temp-file-path-granted level=core gate=enforced grant='read write'
+  [tags io temp-file granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $tf [$io:temp-file "cxc" ".txt"]] [$strings:is-empty $tf@path]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=io-098-temp-dir-granted level=core gate=enforced grant='read write'
+  [tags io temp-dir is-directory granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:is-directory [$io:temp-dir "cxc"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=io-099-system-temp-dir-granted level=core gate=enforced grant='read write'
+  [tags io system-temp-dir granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[$strings:is-empty [$io:system-temp-dir]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=io-100-lock-exclusive-granted level=core gate=enforced grant='read write'
+  [tags io lock unlock granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $l [$io:lock $h :exclusive]] [$io:unlock $h]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=io-101-unlock-returns-null-granted level=core gate=enforced grant='read write'
+  [tags io unlock lock granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $l [$io:lock $h :shared]] [$io:unlock $h]]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [- ── std-stream handles (cx-stdlib/env stdin/stdout/stderr) flow through
+    the ordinary io read/write surface. Regression guard for the defect
+    where io ops rejected the `[std-stream name=… fd=N]` handle shape with
+    CXER0100 (E_OPERAND_KIND), so a CX CLI could not write to stdout/stderr
+    at all. These assert the RETURN value only (null) and write the empty
+    string, so the in-process fixture harness emits nothing to its own
+    streams. The terminal-visibility + exit-flush behaviour is exercised
+    out of band (env.md §3.5: exit flushes pending I/O; exercising the
+    terminating path here would tear down the runner). ── -]
+ [case id=io-102-write-string-stdout-granted level=core gate=enforced grant='write'
+  [tags io write-string std-stream stdout granted]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/env']
+[$io:write-string [$env:stdout] ""]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=io-103-write-string-stderr-granted level=core gate=enforced grant='write'
+  [tags io write-string std-stream stderr granted]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/env']
+[$io:write-string [$env:stderr] ""]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=io-104-flush-stdout-granted level=core gate=enforced grant='write'
+  [tags io flush std-stream stdout granted]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/env']
+[$io:flush [$env:stdout]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+]

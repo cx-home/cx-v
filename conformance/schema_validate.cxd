@@ -1,0 +1,1156 @@
+[test-suite name=schema-validate
+  [doc [#
+# Schema validator conformance suite — Phase 7.74c-schema-validator-v-core
+#.
+#
+#: fixtures use the unified `name::T` ascription
+# + `[clause …]` constraint form throughout.  The legacy `:flag` /
+# `[body:T]` shape was removed in Drop 3 — see §1 and
+# vcx/cx/data_bin_schema_driven.v.
+#
+# Section types:
+#   in_cx          — target document
+#   schema_cxs     — schema source (.cxs)
+#   sv_assert_valid           — '1' to assert zero error diagnostics
+#                               (warnings / info do NOT invalidate)
+#   sv_expected_codes         — comma-separated error-severity codes
+#                               (S002,S003,...) in document order
+#   sv_expected_warn_codes    — comma-separated warn-severity codes
+#                               (Phase 7.74d: strict-mode S001/S012)
+#   sv_expected_info_codes    — comma-separated info-severity codes
+#                               (reserved)
+# Failure if codes don't match exactly. The runner only inspects codes,
+# not messages.
+#]]
+
+ [case id=sv-001 level=must
+  [title [#minimal valid book#]]
+  [tags schema]
+  [in-cx [#
+[book id='b1'
+  [title 'The Stand']
+  [author 'King']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+]
+
+[type title::string]
+[type author::string]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-002 level=must
+  [title [#S002 missing required attribute#]]
+  [tags schema S002]
+  [in-cx [#
+[book
+  [title 'X']
+  [author 'Y']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+]
+
+[type title::string]
+[type author::string]
+#]]
+  [expect-codes [:S002]]
+ ]
+
+ [case id=sv-003 level=must
+  [title [#S003 cardinality too few#]]
+  [tags schema S003]
+  [in-cx [#
+[book id='b1'
+  [author 'King']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+]
+
+[type title::string]
+[type author::string]
+#]]
+  [expect-codes [:S003]]
+ ]
+
+ [case id=sv-004 level=must
+  [title [#S004 cardinality too many#]]
+  [tags schema S004]
+  [in-cx [#
+[book id='b1'
+  [title 'A']
+  [title 'B']
+  [author 'K']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+]
+
+[type title::string]
+[type author::string]
+#]]
+  [expect-codes [:S004]]
+ ]
+
+ [case id=sv-005 level=must
+  [title [#S005 attr type mismatch#]]
+  [tags schema S005]
+  [in-cx [#
+[server port='not-an-int']
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr port::i32 [req]]
+]
+#]]
+  [expect-codes [:S005]]
+ ]
+
+ [case id=sv-006 level=must
+  [title [#S005 attr type ok (typed int)#]]
+  [tags schema S005]
+  [in-cx [#
+[server port=8080]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr port::i32 [req]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-007 level=must
+  [title [#S017 root mismatch#]]
+  [tags schema S017]
+  [in-cx [#
+[movie id='m1' [title 'X']]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+]
+
+[type title::string]
+#]]
+  [expect-codes [:S017]]
+ ]
+
+ [case id=sv-008 level=must
+  [title [#unbounded cardinality (1..*) accepts many#]]
+  [tags schema cardinality]
+  [in-cx [#
+[book id='b1'
+  [title 'A']
+  [author 'X']
+  [author 'Y']
+  [author 'Z']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+]
+
+[type title::string]
+[type author::string]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-009 level=must
+  [title [#multi-error collection (S002 + S003 + S004)#]]
+  [tags schema multi-error]
+  [in-cx [#
+[book
+  [title 'A']
+  [title 'B']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+]
+
+[type title::string]
+[type author::string]
+#]]
+  [expect-codes [:S002, :S004, :S003]]
+ ]
+
+ [case id=sv-010 level=must
+  [title [#nested element validation recurses#]]
+  [tags schema nested]
+  [in-cx [#
+[book id='b1'
+  [title 'X']
+  [author 'A']
+  [chapter
+    [title 'Ch1']
+  ]
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+  [elem chapter [card "0..*"]]
+]
+
+[type title::string]
+[type author::string]
+
+[chapter
+  [attr number::i32 [req]]
+  [elem title [card "1..1"]]
+]
+#]]
+  [expect-codes [:S002]]
+ ]
+
+ [case id=sv-011 level=must
+  [title [#opt attribute may be absent#]]
+  [tags schema opt]
+  [in-cx [#
+[server host='localhost']
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr host::string [req]]
+  [attr port::i32 [opt]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-012 level=must
+  [title [#attribute with [default ...] is implicit-opt#]]
+  [tags schema def]
+  [in-cx [#
+[server host='localhost']
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr host::string [req]]
+  [attr port::i32 [default 8080]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-013 level=must
+  [title [#S008 pattern match success (RE2)#]]
+  [tags schema S008 re2]
+  [in-cx [#
+[x name='hello']
+#]]
+  [schema-cxs [#
+[?cx schema-of x]
+
+[x
+  [attr name::string [pattern '\w+']]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-014 level=must
+  [title [#S008 pattern match failure (RE2)#]]
+  [tags schema S008 re2]
+  [in-cx [#
+[x name='hello world!']
+#]]
+  [schema-cxs [#
+[?cx schema-of x]
+
+[x
+  [attr name::string [pattern '\w+']]
+]
+#]]
+  [expect-codes [:S008]]
+ ]
+
+ [case id=sv-015 level=must
+  [title [#S008 anchored pattern (RE2 ^...$)#]]
+  [tags schema S008 re2]
+  [in-cx [#
+[x ver='1.2.3']
+#]]
+  [schema-cxs [#
+[?cx schema-of x]
+
+[x
+  [attr ver::string [pattern '^\d+\.\d+\.\d+$']]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-016 level=must
+  [title [#S008 anchored pattern rejects extra prefix#]]
+  [tags schema S008 re2]
+  [in-cx [#
+[x ver='vXYZ-1.2.3']
+#]]
+  [schema-cxs [#
+[?cx schema-of x]
+
+[x
+  [attr ver::string [pattern '^\d+\.\d+\.\d+$']]
+]
+#]]
+  [expect-codes [:S008]]
+ ]
+
+ [case id=sv-017 level=must
+  [title [#S001 open mode ignores unknown element#]]
+  [tags schema S001 open]
+  [in-cx [#
+[server host='localhost'
+  [unexpected]
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx schema-mode open]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-018 level=must
+  [title [#S001 strict mode warns on unknown element#]]
+  [tags schema S001 strict]
+  [in-cx [#
+[server host='localhost'
+  [unexpected]
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx schema-mode strict]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-warn-codes [:S001]]
+ ]
+
+ [case id=sv-019 level=must
+  [title [#S001 closed mode errors on unknown element#]]
+  [tags schema S001 closed]
+  [in-cx [#
+[server host='localhost'
+  [unexpected]
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx schema-mode closed]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-codes [:S001]]
+ ]
+
+ [case id=sv-020 level=must
+  [title [#S012 open mode ignores unknown attribute#]]
+  [tags schema S012 open]
+  [in-cx [#
+[server host='localhost' weird='1']
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx schema-mode open]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-021 level=must
+  [title [#S012 strict mode warns on unknown attribute#]]
+  [tags schema S012 strict]
+  [in-cx [#
+[server host='localhost' weird='1']
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx schema-mode strict]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-warn-codes [:S012]]
+ ]
+
+ [case id=sv-022 level=must
+  [title [#S012 closed mode errors on unknown attribute#]]
+  [tags schema S012 closed]
+  [in-cx [#
+[server host='localhost' weird='1']
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx schema-mode closed]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-codes [:S012]]
+ ]
+
+ [case id=sv-023 level=must
+  [title [#S006 attr range valid (port=8080 in 1..65535)#]]
+  [tags schema S006]
+  [in-cx [#
+[server port=8080]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr port::i32 [req] [range 1 65535]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-024 level=must
+  [title [#S006 attr range above max (port=99999)#]]
+  [tags schema S006]
+  [in-cx [#
+[server port=99999]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr port::i32 [req] [range 1 65535]]
+]
+#]]
+  [expect-codes [:S006]]
+ ]
+
+ [case id=sv-025 level=must
+  [title [#S006 attr range below min (port=0 in 1..65535)#]]
+  [tags schema S006]
+  [in-cx [#
+[server port=0]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr port::i32 [req] [range 1 65535]]
+]
+#]]
+  [expect-codes [:S006]]
+ ]
+
+ [case id=sv-026 level=must
+  [title [#S018 attr length valid (name='alice' in 3..10)#]]
+  [tags schema S018]
+  [in-cx [#
+[user name='alice']
+#]]
+  [schema-cxs [#
+[?cx schema-of user]
+
+[user
+  [attr name::string [req] [min-length 3] [max-length 10]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-027 level=must
+  [title [#S018 attr length below min (name='hi')#]]
+  [tags schema S018]
+  [in-cx [#
+[user name='hi']
+#]]
+  [schema-cxs [#
+[?cx schema-of user]
+
+[user
+  [attr name::string [req] [min-length 3] [max-length 10]]
+]
+#]]
+  [expect-codes [:S018]]
+ ]
+
+ [case id=sv-028 level=must
+  [title [#S018 attr length above max (name='thisistoolongname')#]]
+  [tags schema S018]
+  [in-cx [#
+[user name='thisistoolongname']
+#]]
+  [schema-cxs [#
+[?cx schema-of user]
+
+[user
+  [attr name::string [req] [min-length 3] [max-length 10]]
+]
+#]]
+  [expect-codes [:S018]]
+ ]
+
+ [case id=sv-029 level=must
+  [title [#S007 attr enum valid (status='active')#]]
+  [tags schema S007]
+  [in-cx [#
+[u status='active']
+#]]
+  [schema-cxs [#
+[?cx schema-of u]
+
+[u
+  [attr status::string [req] [enum active inactive]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-030 level=must
+  [title [#S007 attr enum invalid (status='unknown')#]]
+  [tags schema S007]
+  [in-cx [#
+[u status='unknown']
+#]]
+  [schema-cxs [#
+[?cx schema-of u]
+
+[u
+  [attr status::string [req] [enum active inactive]]
+]
+#]]
+  [expect-codes [:S007]]
+ ]
+
+ [case id=sv-031 level=must
+  [title [#S015 child-order strict — declared order accepted#]]
+  [tags schema S015]
+  [in-cx [#
+[book
+  [title 'X']
+  [author 'A']
+  [chapter 'C']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [check ordering=strict]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+  [elem chapter [card "0..*"]]
+]
+
+[type title::string]
+[type author::string]
+[type chapter::string]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-032 level=must
+  [title [#S015 child-order strict — chapter before title fails#]]
+  [tags schema S015]
+  [in-cx [#
+[book
+  [chapter 'C']
+  [title 'X']
+  [author 'A']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [check ordering=strict]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+  [elem chapter [card "0..*"]]
+]
+
+[type title::string]
+[type author::string]
+[type chapter::string]
+#]]
+  [expect-codes [:S015]]
+ ]
+
+ [case id=sv-033 level=must
+  [title [#S015 child-order strict — author before title fails#]]
+  [tags schema S015]
+  [in-cx [#
+[book
+  [author 'A']
+  [title 'X']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [check ordering=strict]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+]
+
+[type title::string]
+[type author::string]
+#]]
+  [expect-codes [:S015]]
+ ]
+
+ [case id=sv-034 level=must
+  [title [#S014 duplicate attribute declaration aborts schema-load#]]
+  [tags schema S014]
+  [in-cx [#
+[server host='localhost']
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr host::string [req]]
+  [attr host::string [opt]]
+]
+#]]
+  [expect-codes [:S014]]
+ ]
+
+ [case id=sv-035 level=must
+  [title [#S020 unsupported schema-version aborts schema-load#]]
+  [tags schema S020]
+  [in-cx [#
+[u]
+#]]
+  [schema-cxs [#
+[?cx schema-of u]
+[?cx schema-version 0.7]
+
+[u]
+#]]
+  [expect-codes [:S020]]
+ ]
+
+ [case id=sv-036 level=must
+  [title [#S019 missing required body content#]]
+  [tags schema S019]
+  [in-cx [#
+[name]
+#]]
+  [schema-cxs [#
+[?cx schema-of name]
+
+[type name::string [req]]
+#]]
+  [expect-codes [:S019]]
+ ]
+
+ [case id=sv-037 level=must
+  [title [#S019 — present scalar body satisfies :req#]]
+  [tags schema S019]
+  [in-cx [#
+[name 'alice']
+#]]
+  [schema-cxs [#
+[?cx schema-of name]
+
+[type name::string [req]]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-038 level=must
+  [title [#S009 empty schema (no schema-of, no types) aborts#]]
+  [tags schema S009]
+  [in-cx [#
+[u]
+#]]
+  [schema-cxs [#
+[?cx schema-name 'empty schema']
+#]]
+  [expect-codes [:S009]]
+ ]
+
+ [case id=sv-039 level=must
+  [title [#S011 default-value coercion failure (int default='abc')#]]
+  [tags schema S011]
+  [in-cx [#
+[server]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr port::i32 [default 'abc']]
+]
+#]]
+  [expect-codes [:S011]]
+ ]
+
+ [case id=sv-040 level=must
+  [title [#fragment via anchored type — type-body inlining valid#]]
+  [tags schema fragments]
+  [in-cx [#
+[database
+  [primary host='db1.example' port=5432]
+  [replica host='db2.example' port=5432]
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of database]
+
+[server-config &server-config
+  [attr host::string [req]]
+  [attr port::i32 [req]]
+]
+
+[database
+  [elem primary [card "1..1"]]
+  [elem replica [card "0..*"]]
+]
+
+[primary *server-config]
+[replica *server-config]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-041 level=must
+  [title [#fragment alias missing required attr — S002 fires from inlined attrs#]]
+  [tags schema fragments S002]
+  [in-cx [#
+[database
+  [primary host='db1.example']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of database]
+
+[server-config &server-config
+  [attr host::string [req]]
+  [attr port::i32 [req]]
+]
+
+[database
+  [elem primary [card "1..1"]]
+]
+
+[primary *server-config]
+#]]
+  [expect-codes [:S002]]
+ ]
+
+ [case id=sv-042 level=must
+  [title [#fragment alias references unknown anchor — S013#]]
+  [tags schema fragments S013]
+  [in-cx [#
+[database
+  [primary host='db1' port=5432]
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of database]
+
+[database
+  [elem primary [card "1..1"]]
+]
+
+[primary *missing-fragment]
+#]]
+  [expect-codes [:S013]]
+ ]
+
+ [case id=sv-043 level=must
+  [title [#self-referential fragment cycle — S016#]]
+  [tags schema fragments S016]
+  [in-cx [#
+[outer]
+#]]
+  [schema-cxs [#
+[?cx schema-of outer]
+
+[outer &outer
+  [elem outer]
+]
+
+[outer *outer]
+#]]
+  [expect-codes [:S016]]
+ ]
+
+ [case id=sv-044 level=must
+  [title [#standalone [?cx frag &name [body...]] directive form#]]
+  [tags schema fragments]
+  [in-cx [#
+[server port=8080]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx frag &port-range
+  [body i32 [range 1 65535]]
+]
+
+[server
+  [attr port *port-range [req]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-045 level=must
+  [title [#standalone fragment — range constraint inherited fires S006#]]
+  [tags schema fragments S006]
+  [in-cx [#
+[server port=99999]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx frag &port-range
+  [body i32 [range 1 65535]]
+]
+
+[server
+  [attr port *port-range [req]]
+]
+#]]
+  [expect-codes [:S006]]
+ ]
+
+ [case id=sv-046 level=must
+  [title [#attr-position fragment alias — required flag at site overrides#]]
+  [tags schema fragments S002]
+  [in-cx [#
+[server]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+[?cx frag &port-range
+  [body i32 [range 1 65535]]
+]
+
+[server
+  [attr port *port-range [req]]
+]
+#]]
+  [expect-codes [:S002]]
+ ]
+
+ [case id=sv-047 level=must
+  [title [#S008 pattern with `]` inside quoted [pattern '[a-z]+']#]]
+  [tags schema S008 re2]
+  [in-cx [#
+[x name='hello']
+#]]
+  [schema-cxs [#
+[?cx schema-of x]
+
+[x
+  [attr name::string [pattern '[a-z]+']]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-048 level=must
+  [title [#S008 anchored pattern with bracket char class fails#]]
+  [tags schema S008 re2]
+  [in-cx [#
+[x name='Hello']
+#]]
+  [schema-cxs [#
+[?cx schema-of x]
+
+[x
+  [attr name::string [pattern '^[a-z]+$']]
+]
+#]]
+  [expect-codes [:S008]]
+ ]
+
+ [case id=sv-049 level=must
+  [title [#S007 enum quoted whitespace-separated values#]]
+  [tags schema S007]
+  [in-cx [#
+[u status='active']
+#]]
+  [schema-cxs [#
+[?cx schema-of u]
+
+[u
+  [attr status::string [req] [enum active inactive pending]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-050 level=must
+  [title [#S007 enum bracket-form (spec syntax [enum v1 v2 v3])#]]
+  [tags schema S007]
+  [in-cx [#
+[u status='inactive']
+#]]
+  [schema-cxs [#
+[?cx schema-of u]
+
+[u
+  [attr status::string [req] [enum active inactive pending]]
+]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-051 level=must
+  [title [#S007 enum bracket-form invalid value#]]
+  [tags schema S007]
+  [in-cx [#
+[u status='unknown']
+#]]
+  [schema-cxs [#
+[?cx schema-of u]
+
+[u
+  [attr status::string [req] [enum active inactive pending]]
+]
+#]]
+  [expect-codes [:S007]]
+ ]
+
+ [case id=sv-052 level=must
+  [title [#S010 [?cx schema=PATH] directive in target doc, no schema source supplied#]]
+  [tags schema S010]
+  [in-cx [#
+[?cx schema=path/to/book.cxs]
+[book id='b1'
+  [title 'The Stand']
+]
+#]]
+  [schema-cxs [##]]
+  [expect-codes [:S010]]
+ ]
+
+ [case id=sv-053 level=must
+  [title [#S010 directive present + caller-supplied schema → directive ignored, normal validation#]]
+  [tags schema S010]
+  [in-cx [#
+[?cx schema=ignored/path.cxs]
+[book id='b1'
+  [title 'The Stand']
+  [author 'King']
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+
+[book
+  [attr id::string [req]]
+  [elem title [card "1..1"]]
+  [elem author [card "1..*"]]
+]
+
+[type title::string]
+[type author::string]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-054 level=must
+  [title [#S009 multiple [?cx schema=...] directives in target doc#]]
+  [tags schema S009 S010]
+  [in-cx [#
+[?cx schema=first.cxs]
+[?cx schema=second.cxs]
+[book
+  [title 'X']
+]
+#]]
+  [schema-cxs [##]]
+  [expect-codes [:S009]]
+ ]
+
+ [case id=sv-055 level=must
+  [title [#S010 directive after the root element still detected (mid-document position)#]]
+  [tags schema S010]
+  [in-cx [#
+[u]
+[?cx schema=after_root.cxs]
+#]]
+  [schema-cxs [##]]
+  [expect-codes [:S010]]
+ ]
+
+ [case id=sv-056 level=must
+  [title [#GG10 body :ref accepts ref element with body-position form#]]
+  [tags schema S023 body-ref GG10]
+  [in-cx [#
+[doc
+  [section #s-1
+    [title T]
+  ]
+  [para
+    [ref @s-1]
+  ]
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of doc]
+
+[doc
+  [elem section [card "1..*"]]
+  [elem para [card "0..*"]]
+]
+
+[section
+  [elem title [card "1..1"]]
+]
+
+[type title::string]
+
+[para]
+#]]
+  [expect-codes []]
+ ]
+
+ [case id=sv-057 level=must
+  [title [#GG10 body :ref rejects element lacking body_ref#]]
+  [tags schema S023 body-ref GG10]
+  [in-cx [#
+[doc
+  [xref no body ref here]
+]
+#]]
+  [schema-cxs [#
+[?cx schema-of doc]
+
+[doc
+  [elem xref [card "1..*"]]
+]
+
+[type xref::ref]
+#]]
+  [expect-codes [:S023]]
+ ]
+
+ [case id=sv-058 level=must
+  [title [#schema-name directive with quoted argument accepted#]]
+  [tags schema schema-name directive]
+  [in-cx [#
+[book id=x]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+[?cx schema-name 'Book schema v1']
+
+[book [attr id::string [req]]]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-059 level=must
+  [title [#schema-version 0.8 accepted#]]
+  [tags schema schema-version S020]
+  [in-cx [#
+[book id=x]
+#]]
+  [schema-cxs [#
+[?cx schema-of book]
+[?cx schema-version 0.8]
+
+[book [attr id::string [req]]]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-060 level=must
+  [title [#atom enum membership satisfied#]]
+  [tags schema enum atom S007]
+  [in-cx [#
+[r lvl=:core]
+#]]
+  [schema-cxs [#
+[?cx schema-of r]
+
+[r [attr lvl::atom [enum :core :extended]]]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-061 level=must
+  [title [#atom enum violation raises S007#]]
+  [tags schema enum atom S007]
+  [in-cx [#
+[r lvl=:bogus]
+#]]
+  [schema-cxs [#
+[?cx schema-of r]
+
+[r [attr lvl::atom [enum :core :extended]]]
+#]]
+  [expect-codes [:S007]]
+ ]
+]

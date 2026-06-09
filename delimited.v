@@ -127,7 +127,7 @@ pub fn emit_delimited(doc Document, opts EmitOptions) !string {
 	}
 	r := root or { return error('emit_delimited: no top-level element') }
 
-	if td := r.table {
+	if td := r.table_opt() {
 		return emit_table_delimited(td, opts)
 	}
 	// Inspect children of `r`. Repeated-row mode iff any child name
@@ -418,7 +418,7 @@ pub fn parse_delimited(src string, opts ParseOptions) !Document {
 		}
 		cols = new_cols.clone()
 	}
-	td := TableData{ cols: cols, rows: cell_rows_from_scalars(data_rows) }
+	td := &TableData{ cols: cols, rows: cell_rows_from_scalars(data_rows) }
 	root := Element{
 		name: opts.table_name
 		table: td

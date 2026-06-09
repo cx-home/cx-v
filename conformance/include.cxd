@@ -1,0 +1,48 @@
+[test-suite name=include
+  [doc [#
+# CX Include Resolution Conformance Suite
+# Version: 1.0 — 2026-05-18 (GG5 row at spec/v0_7_0_status.md)
+#
+# Cross-binding byte-identity discipline for the spec/include.md §1-§8
+# resolver. Fixtures use:
+#   --- include_root         — sentinel: runner materializes a temp
+#                              dir and passes it as the resolver root
+#   --- file_<rel/path>      — content for <root>/<rel/path> (created
+#                              before the resolver runs)
+#   --- in_cx                — the entry-document text
+#   --- out_cx               — expected resolved document text
+#   --- out_err              — substring of an E9xx parse error code
+#
+# Status:
+#
+#   Engine (vcx/cx/include.v):   fully implemented per GG1
+#   V regression tests:          13 fixtures in vcx/tests/include_test.v
+#                                cover splice / nested / diamond / E901
+#                                / E902 / E903 / E904 / E905 / E906 /
+#                                E908 / E911 / XMLDecl discard /
+#                                empty-root pass-through
+#   CX-level wrapper:            4 tests in vcx/tests/cx_module_test.v
+#                                cover DD18 cx:resolve-includes
+#   C ABI:                       cx_to_cx_with_include_root +
+#                                cx_to_data_bin_with_include_root
+#                                exports per GG3
+#   conformance fixtures:        inc-001 below covers the no-resolution
+#                                baseline (no FFI temp-dir interaction).
+#                                The remaining fixture cases live in
+#                                vcx/tests/include_test.v; cross-binding
+#                                parity ships when per-binding runners
+#                                adopt the `--- include_root` +
+#                                `--- file_<path>` section convention
+#                                this file documents.
+#]]
+
+ [case id=inc-001-empty-root-preserves-directive level=core
+  [tags include passthrough GG5]
+  [in-cx [#
+[?cx include=defaults.cx]
+#]]
+  [out-cx [#
+[?cx include=defaults.cx]
+#]]
+ ]
+]

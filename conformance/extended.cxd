@@ -1,0 +1,1245 @@
+[test-suite name=extended
+  [doc [#
+# CX Conformance — Extended Tests
+# Version: 1.0 — 2026-04-19
+# Covers: Scalar (auto-typed and explicit), TypeAnnotation, arrays,
+#         Alias, Anchor, Merge, MultiDoc.
+#]]
+
+ [case id=001-scalar-int level=extended
+  [tags scalar autotype int]
+  [in-cx [#
+[age 30]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "age",
+      "items": [{"type": "Scalar", "dataType": "int", "value": 30}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<age>30</age>
+#]]
+  [out-cx [#
+[age 30]
+#]]
+ ]
+
+ [case id=002-scalar-hex-int level=extended
+  [tags scalar autotype int hex]
+  [in-cx [#
+[flags 0xFF]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "flags",
+      "items": [{"type": "Scalar", "dataType": "int", "value": 255}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<flags>255</flags>
+#]]
+  [out-cx [#
+[flags 255]
+#]]
+ ]
+
+ [case id=003-scalar-float level=extended
+  [tags scalar autotype float]
+  [in-cx [#
+[price 3.14]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "price",
+      "items": [{"type": "Scalar", "dataType": "float", "value": 3.14}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<price>3.14</price>
+#]]
+  [out-cx [#
+[price 3.14]
+#]]
+ ]
+
+ [case id=004-scalar-bool-true level=extended
+  [tags scalar autotype bool]
+  [in-cx [#
+[active true]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "active",
+      "items": [{"type": "Scalar", "dataType": "bool", "value": true}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<active>true</active>
+#]]
+  [out-cx [#
+[active true]
+#]]
+ ]
+
+ [case id=005-scalar-bool-false level=extended
+  [tags scalar autotype bool]
+  [in-cx [#
+[debug false]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "debug",
+      "items": [{"type": "Scalar", "dataType": "bool", "value": false}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<debug>false</debug>
+#]]
+  [out-cx [#
+[debug false]
+#]]
+ ]
+
+ [case id=006-scalar-null level=extended
+  [tags scalar autotype null]
+  [in-cx [#
+[value null]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "value",
+      "items": [{"type": "Scalar", "dataType": "null", "value": null}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<value>null</value>
+#]]
+  [out-cx [#
+[value null]
+#]]
+ ]
+
+ [case id=007-scalar-date level=extended
+  [tags scalar autotype date]
+  [in-cx [#
+[born 2026-04-19]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "born",
+      "items": [{"type": "Scalar", "dataType": "date", "value": "2026-04-19"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<born>2026-04-19</born>
+#]]
+  [out-cx [#
+[born 2026-04-19]
+#]]
+ ]
+
+ [case id=008-scalar-datetime level=extended
+  [tags scalar autotype datetime]
+  [in-cx [#
+[created 2026-04-19T14:30:00Z]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "created",
+      "items": [{"type": "Scalar", "dataType": "datetime", "value": "2026-04-19T14:30:00Z"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<created>2026-04-19T14:30:00Z</created>
+#]]
+  [out-cx [#
+[created 2026-04-19T14:30:00Z]
+#]]
+ ]
+
+ [case id=009-no-autotype-multi-token level=extended
+  [tags scalar autotype text]
+  [in-cx [#
+[p Version 3.0]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "Version 3.0"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<p>Version 3.0</p>
+#]]
+  [out-cx [#
+[p Version 3.0]
+#]]
+ ]
+
+ [case id=010-no-autotype-quoted level=extended
+  [tags scalar autotype text quoted]
+  [in-cx [#
+[status 'true']
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "status",
+      "items": [{"type": "Text", "value": "true"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<status>true</status>
+#]]
+  [out-cx [#
+[status 'true']
+#]]
+ ]
+
+ [case id=011-no-autotype-child-element level=extended
+  [tags scalar autotype element mixed-content]
+  [- @CHOICE-1 / mixed-content (cxdm §1.2): a typed scalar token beside a
+     child element is a DISCRETE TYPED CHILD (not merged into untyped text).
+     `42` here is an int Scalar sibling of `[x]`, matching the program reader.
+     (The legacy id "no-autotype" predates @CHOICE-1; kept for ref stability.) ]
+  [in-cx [#
+[root 42 [x]]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "root",
+      "items": [
+        {"type": "Scalar", "dataType": "int", "value": 42},
+        {"type": "Element", "name": "x"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<root><cx:int>42</cx:int><x/></root>
+#]]
+  [out-cx [#
+[root 42 [x]]
+#]]
+ ]
+
+ [case id=012-explicit-type-int level=extended
+  [tags scalar explicit type xml]
+  [in-cx [#
+[age::int 30]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "age",
+      "dataType": "int",
+      "items": [{"type": "Scalar", "dataType": "int", "value": 30}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<age cx:type="int">30</age>
+#]]
+  [out-cx [#
+[age::int 30]
+#]]
+ ]
+
+ [case id=013-explicit-type-string-overrides level=extended
+  [tags scalar explicit type string]
+  [in-cx [#
+[zip::string 90210]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "zip",
+      "dataType": "string",
+      "items": [{"type": "Scalar", "dataType": "string", "value": "90210"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<zip cx:type="string">90210</zip>
+#]]
+  [out-cx [#
+[zip::string 90210]
+#]]
+ ]
+
+ [case id=014-explicit-type-array level=extended
+  [tags scalar array type]
+  [in-cx [#
+[tags::string[] admin user guest]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "tags",
+      "dataType": "string[]",
+      "items": [
+        {"type": "Scalar", "dataType": "string", "value": "admin"},
+        {"type": "Scalar", "dataType": "string", "value": "user"},
+        {"type": "Scalar", "dataType": "string", "value": "guest"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<tags cx:type="string[]"><item>admin</item><item>user</item><item>guest</item></tags>
+#]]
+  [out-cx [#
+[tags admin, user, guest]
+#]]
+ ]
+
+ [case id=015-explicit-type-int-array level=extended
+  [tags scalar array type int]
+  [in-cx [#
+[scores::int[] 10 20 30]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "scores",
+      "dataType": "int[]",
+      "items": [
+        {"type": "Scalar", "dataType": "int", "value": 10},
+        {"type": "Scalar", "dataType": "int", "value": 20},
+        {"type": "Scalar", "dataType": "int", "value": 30}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<scores cx:type="int[]"><item>10</item><item>20</item><item>30</item></scores>
+#]]
+  [out-cx [#
+[scores 10 20 30]
+#]]
+ ]
+
+ [case id=016-scalar-bytes level=extended
+  [tags scalar bytes explicit]
+  [in-cx [#
+[data::bytes SGVsbG8=]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "data",
+      "dataType": "bytes",
+      "items": [{"type": "Scalar", "dataType": "bytes", "value": "SGVsbG8="}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<data cx:type="bytes">SGVsbG8=</data>
+#]]
+  [out-cx [#
+[data::bytes SGVsbG8=]
+#]]
+ ]
+
+ [case id=017-anchor-define level=extended
+  [tags anchor parse-ast]
+  [in-cx [#
+[defaults &def timeout=30 retries=3]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "defaults",
+      "anchor": "def",
+      "attrs": [
+        {"name": "timeout", "value": 30, "dataType": "int"},
+        {"name": "retries", "value": 3, "dataType": "int"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<defaults cx:anchor="def" timeout="30" retries="3"/>
+#]]
+  [out-cx [#
+[defaults &def timeout=30 retries=3]
+#]]
+ ]
+
+ [case id=018-alias-node level=extended
+  [tags alias parse-ast]
+  [in-cx [#
+[defaults &def timeout=30]
+[*def]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "defaults",
+      "anchor": "def",
+      "attrs": [{"name": "timeout", "value": 30, "dataType": "int"}]
+    },
+    {
+      "type": "Alias",
+      "name": "def"
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<defaults cx:anchor="def" timeout="30"/>
+<cx:alias name="def"/>
+#]]
+  [out-cx [#
+[defaults &def timeout=30]
+[*def]
+#]]
+ ]
+
+ [case id=019-anchor-merge level=extended
+  [tags anchor merge parse-ast]
+  [in-cx [#
+[defaults &def timeout=30 retries=3]
+[production *def host=prod.example.com retries=5]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "defaults",
+      "anchor": "def",
+      "attrs": [
+        {"name": "timeout", "value": 30, "dataType": "int"},
+        {"name": "retries", "value": 3, "dataType": "int"}
+      ]
+    },
+    {
+      "type": "Element",
+      "name": "production",
+      "merge": "def",
+      "attrs": [
+        {"name": "host", "value": "prod.example.com"},
+        {"name": "retries", "value": 5, "dataType": "int"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<defaults cx:anchor="def" timeout="30" retries="3"/>
+<production cx:merge="def" host="prod.example.com" retries="5"/>
+#]]
+  [out-cx [#
+[defaults &def timeout=30 retries=3]
+[production *def host=prod.example.com retries=5]
+#]]
+ ]
+
+ [case id=020-multidoc level=extended
+  [tags multidoc document]
+  [in-cx [#
+[doc1
+  [item a]
+]
+---
+[doc2
+  [item b]
+]
+#]]
+  [out-ast [#
+[
+  {
+    "type": "Document",
+    "elements": [
+      {
+        "type": "Element",
+        "name": "doc1",
+        "items": [
+          {
+            "type": "Element",
+            "name": "item",
+            "items": [{"type": "Text", "value": "a"}]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "type": "Document",
+    "elements": [
+      {
+        "type": "Element",
+        "name": "doc2",
+        "items": [
+          {
+            "type": "Element",
+            "name": "item",
+            "items": [{"type": "Text", "value": "b"}]
+          }
+        ]
+      }
+    ]
+  }
+]
+#]]
+  [out-xml [#
+<doc1>
+  <item>a</item>
+</doc1>
+---
+<doc2>
+  <item>b</item>
+</doc2>
+#]]
+  [out-cx [#
+[doc1
+  [item a]
+]
+---
+[doc2
+  [item b]
+]
+#]]
+ ]
+
+ [case id=021-typed-object level=extended
+  [tags scalar typed object]
+  [in-cx [#
+[person
+  [name Alice]
+  [age 30]
+  [active true]
+  [score 9.5]
+]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "person",
+      "items": [
+        {
+          "type": "Element",
+          "name": "name",
+          "items": [{"type": "Text", "value": "Alice"}]
+        },
+        {
+          "type": "Element",
+          "name": "age",
+          "items": [{"type": "Scalar", "dataType": "int", "value": 30}]
+        },
+        {
+          "type": "Element",
+          "name": "active",
+          "items": [{"type": "Scalar", "dataType": "bool", "value": true}]
+        },
+        {
+          "type": "Element",
+          "name": "score",
+          "items": [{"type": "Scalar", "dataType": "float", "value": 9.5}]
+        }
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<person>
+  <name>Alice</name>
+  <age>30</age>
+  <active>true</active>
+  <score>9.5</score>
+</person>
+#]]
+  [out-cx [#
+[person
+  [name Alice]
+  [age 30]
+  [active true]
+  [score 9.5]
+]
+#]]
+ ]
+
+ [case id=022-semantic-scalar level=extended
+  [tags semantic json scalar]
+  [in-cx [#
+[port::int 8080]
+#]]
+  [out-json [#
+{"port": 8080}
+#]]
+ ]
+
+ [case id=023-semantic-nested level=extended
+  [tags semantic json nested]
+  [in-cx [#
+[config
+  [host localhost]
+  [port::int 8080]
+  [debug false]
+]
+#]]
+  [out-json [#
+{"config": {"host": "localhost", "port": 8080, "debug": false}}
+#]]
+ ]
+
+ [case id=024-semantic-array-elements level=extended
+  [tags semantic json array repeated]
+  [in-cx [#
+[users
+  [user [name Alice]]
+  [user [name Bob]]
+]
+#]]
+  [out-json [#
+{"users": {"user": [{"name": "Alice"}, {"name": "Bob"}]}}
+#]]
+ ]
+
+ [case id=025-semantic-multi-root level=extended
+  [tags semantic json multi-root]
+  [in-cx [#
+[host localhost]
+[port::int 8080]
+#]]
+  [out-json [#
+{"host": "localhost", "port": 8080}
+#]]
+ ]
+
+ [case id=026-semantic-array-type level=extended
+  [tags semantic json array-type]
+  [in-cx [#
+[tags::string[] admin user]
+#]]
+  [out-json [#
+{"tags": ["admin", "user"]}
+#]]
+ ]
+
+ [case id=027-attr-autotyping level=extended
+  [tags attribute autotype typed-attr]
+  [in-cx [#
+[server host=localhost port=8080 debug=false]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "server",
+      "attrs": [
+        {"name": "host", "value": "localhost"},
+        {"name": "port", "value": 8080, "dataType": "int"},
+        {"name": "debug", "value": false, "dataType": "bool"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<server host="localhost" port="8080" debug="false"/>
+#]]
+  [out-cx [#
+[server host=localhost port=8080 debug=false]
+#]]
+  [out-json [#
+{"server": {"debug": false, "host": "localhost", "port": 8080}}
+#]]
+ ]
+
+ [case id=028-auto-array level=extended
+  [tags array autotype typed-list]
+  # @CHOICE-1 §9-one-layer: a whitespace scalar run is a TYPED LIST of discrete
+  # typed children — NOT a `T[]` auto-array. No element cx:type; XML uses the
+  # per-item `<cx:int>` carrier (distinct from the explicit `::T[]` `<item>` form).
+  [in-cx [#
+[scores 10 20 30]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "scores",
+      "items": [
+        {"type": "Scalar", "dataType": "int", "value": 10},
+        {"type": "Scalar", "dataType": "int", "value": 20},
+        {"type": "Scalar", "dataType": "int", "value": 30}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<scores><cx:int>10</cx:int><cx:int>20</cx:int><cx:int>30</cx:int></scores>
+#]]
+  [out-cx [#
+[scores 10 20 30]
+#]]
+  [out-json [#
+{"scores": [10, 20, 30]}
+#]]
+ ]
+
+ [case id=029-inferred-array level=extended
+  [tags array inferred-type type-annotation]
+  # @CHOICE-1 §9-one-layer: the inferred-array annotation `::[]` KEEPS its `[]`
+  # marker and each item keeps its OWN auto-type — heterogeneous, no concrete-type
+  # inference, no int→float promotion (M-TYPED-ARRAY-2 / P2-INFERARR). Distinct
+  # from an explicit `::T[]` (a uniform `T[]`) and from a whitespace typed list.
+  [in-cx [#
+[data::[] 1 2.5 3]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "data",
+      "dataType": "[]",
+      "items": [
+        {"type": "Scalar", "dataType": "int", "value": 1},
+        {"type": "Scalar", "dataType": "float", "value": 2.5},
+        {"type": "Scalar", "dataType": "int", "value": 3}
+      ]
+    }
+  ]
+}
+#]]
+  [out-cx [#
+[data::[] 1 2.5 3]
+#]]
+ ]
+
+ [case id=034-empty-array level=extended
+  [tags array empty type-annotation]
+  [in-cx [#
+[tags::string[]]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "tags",
+      "dataType": "string[]",
+      "items": []
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<tags cx:type="string[]"/>
+#]]
+  [out-cx [#
+[tags::string[]]
+#]]
+ ]
+
+ [case id=035-single-item-array level=extended
+  [tags array single-item type-annotation]
+  [in-cx [#
+[tags::string[] solo]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "tags",
+      "dataType": "string[]",
+      "items": [{"type": "Scalar", "dataType": "string", "value": "solo"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<tags cx:type="string[]"><item>solo</item></tags>
+#]]
+  [out-cx [#
+[tags solo,]
+#]]
+ ]
+
+ [case id=036-float-array level=extended
+  [tags array float type-annotation]
+  [in-cx [#
+[scores::float[] 1.1 2.2 3.3]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "scores",
+      "dataType": "float[]",
+      "items": [
+        {"type": "Scalar", "dataType": "float", "value": 1.1},
+        {"type": "Scalar", "dataType": "float", "value": 2.2},
+        {"type": "Scalar", "dataType": "float", "value": 3.3}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<scores cx:type="float[]"><item>1.1</item><item>2.2</item><item>3.3</item></scores>
+#]]
+  [out-cx [#
+[scores 1.1 2.2 3.3]
+#]]
+ ]
+
+ [case id=037-bool-array level=extended
+  [tags array bool type-annotation]
+  [in-cx [#
+[flags::bool[] true false true]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "flags",
+      "dataType": "bool[]",
+      "items": [
+        {"type": "Scalar", "dataType": "bool", "value": true},
+        {"type": "Scalar", "dataType": "bool", "value": false},
+        {"type": "Scalar", "dataType": "bool", "value": true}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<flags cx:type="bool[]"><item>true</item><item>false</item><item>true</item></flags>
+#]]
+  [out-cx [#
+[flags true false true]
+#]]
+ ]
+
+ [case id=038-triple-quoted level=extended
+  [tags triple-quoted string multiline]
+  [in-cx [#
+[desc '''
+  hello
+  world
+''']
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "desc",
+      "items": [{"type": "Text", "value": "hello\nworld"}]
+    }
+  ]
+}
+#]]
+  [out-cx [#
+[desc 'hello
+world']
+#]]
+  [out-xml [#
+<desc>hello
+world</desc>
+#]]
+ ]
+
+ [case id=039-block-content level=extended
+  [tags block-content mixed-content]
+  [in-cx [#
+[p [|hello world|]]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [
+        {
+          "type": "BlockContent",
+          "items": [{"type": "Text", "value": "hello world"}]
+        }
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<p><cx:block>hello world</cx:block></p>
+#]]
+  [out-cx [#
+[p [|hello world|]]
+#]]
+ ]
+
+ [case id=040-interpolation-simple level=extended
+  [tags cx interpolation]
+  [in-cx [#
+[?=@name]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Interpolation", "expr": "@name"}
+  ]
+}
+#]]
+  [out-cx [#
+[?=@name]
+#]]
+ ]
+
+ [case id=041-interpolation-nested-brackets level=extended
+  [tags cx interpolation bracket-balance]
+  [in-cx [#
+[p [?=//service[@port=8080]/@host]]
+#]]
+  [out-cx [#
+[p [?=//service[@port=8080]/@host]]
+#]]
+ ]
+
+ [case id=042-eval-directive-single-slot level=extended
+  [tags cx eval-directive body-item]
+  [in-cx [#
+[?if [cond]]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "EvalDirective",
+      "name": "if",
+      "items": [
+        {"type": "Element", "name": "cond"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-cx [#
+[?if [cond]]
+#]]
+ ]
+
+ [case id=043-eval-directive-three-slot level=extended
+  [tags cx eval-directive]
+  [in-cx [#
+[?if [cond] [then [yes]] [else [no]]]
+#]]
+  [out-cx [#
+[?if [cond] [then [yes]] [else [no]]]
+#]]
+ ]
+
+ [case id=044-eval-directive-for-3slot level=extended
+  [tags cx eval-directive for]
+  [in-cx [#
+[?for [in $v //variant] [yield [card [?=$v/@sku]]]]
+#]]
+  [out-cx [#
+[?for [in $v //variant] [yield [card [?=$v/@sku]]]]
+#]]
+ ]
+
+ [case id=035-bare-text-doc-single-token level=extended
+  [tags doc-top bare-text]
+  [in-cx [#
+a
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Text","value":"a"}]}
+#]]
+ ]
+
+ [case id=036-bare-text-doc-multi-line-verbatim level=extended
+  [tags doc-top bare-text verbatim]
+  [in-cx [#
+1
+2
+3
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Text","value":"1\n2\n3"}]}
+#]]
+ ]
+
+ [case id=037-doc-top-double-quoted-scalar level=extended
+  [tags doc-top quoted-scalar]
+  [in-cx [#
+"hello"
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Scalar","dataType":"string","value":"hello"}]}
+#]]
+ ]
+
+ [case id=038-doc-top-triquote-scalar level=extended
+  [tags doc-top triquote]
+  [in-cx [#
+'''multi
+line'''
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Scalar","dataType":"string","value":"multi\nline"}]}
+#]]
+ ]
+
+ [case id=039-attr-triquote level=extended
+  [tags attribute triquote]
+  [in-cx [#
+[message body='''hello
+world''']
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","value":"hello\nworld"}]}]}
+#]]
+  [out-cx [#
+[message body='''hello
+world''']
+#]]
+ ]
+
+ [case id=040-attr-hash-raw-direct level=extended
+  [tags attribute hash-raw]
+  [in-cx [#
+[message body=[# raw [literal] content ##][#]]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","body":[{"type":"RawText","value":" raw [literal] content "}]}]}]}
+#]]
+  [out-cx [#
+[message body=[# raw [literal] content ##][#]]
+#]]
+ ]
+
+ [case id=041-attr-pipe-block-direct level=extended
+  [tags attribute pipe-block]
+  [in-cx [#
+[message body=[| hello world |]]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","body":[{"type":"BlockContent","items":[{"type":"Text","value":" hello world "}]}]}]}]}
+#]]
+  [out-cx [#
+[message body=[| hello world |]]
+#]]
+ ]
+
+ [case id=042-table-cell-double-quoted level=extended
+  [tags table-cell dquote]
+  [in-cx [#
+[users [table[name::string]]
+  alice
+  bob
+]
+#]]
+  [out-cx [#
+[users [table[name::string]]
+  alice
+  bob
+]
+#]]
+ ]
+
+ [case id=043-collection-item-double-quoted level=extended
+  [tags collection-item dquote]
+  [in-cx [#
+[tags::string[] "first" bare "third"]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"tags","dataType":"string[]","items":[{"type":"Text","value":"first"},{"type":"Scalar","dataType":"string","value":"bare"},{"type":"Text","value":"third"}]}]}
+#]]
+ ]
+
+ [case id=046-escaped-quote-in-body level=extended
+  [tags quoted-text escape body-position grammar-11]
+  [in-cx [#
+[title 'a \'x\' b']
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"title","items":[{"type":"Text","value":"a 'x' b"}]}]}
+#]]
+  [out-xml [#
+<title>a 'x' b</title>
+#]]
+  [out-cx [#
+[title "a 'x' b"]
+#]]
+ ]
+
+ [case id=047-escaped-quote-with-bracket-class-in-body level=extended
+  [tags quoted-text escape brackets body-position grammar-11]
+  [in-cx [#
+[title 'S008 pattern with [pattern \'[a-z]+\']']
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"title","items":[{"type":"Text","value":"S008 pattern with [pattern '[a-z]+']"}]}]}
+#]]
+  [out-xml [#
+<title>S008 pattern with [pattern '[a-z]+']</title>
+#]]
+  [out-cx [#
+[title "S008 pattern with [pattern '[a-z]+']"]
+#]]
+ ]
+
+ [case id=048-triple-quote-backslash-bijection level=extended
+  [tags triple-quoted string escape bijection roundtrip canonical-2-4]
+  [desc [#
+Triple-quoted strings are VERBATIM (lexicon §5 [L31]): the source `\"` is the
+two bytes backslash + quote, NOT an escaped quote. On canonical emit the
+backslash must be re-escaped (`\\`) because the following `"` would otherwise
+re-decode as an escape — the minimal re-escape (canonical.md §2.4) that keeps
+parse(emit(x)) ≡ x. The `"` itself needs no escape inside `'...'`.
+#]]
+  [in-cx [#
+[x """a\"b"""]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"x","items":[{"type":"Text","value":"a\\\"b"}]}]}
+#]]
+  [out-xml [#
+<x>a\"b</x>
+#]]
+  [out-cx [#
+[x 'a\\"b']
+#]]
+ ]
+
+ [case id=049-canonical-backslash-fixed-point level=extended
+  [tags string escape bijection idempotent canonical-2-4]
+  [desc [#
+The canonical form from case 048 is a FIXED POINT: emitting the re-parsed value
+reproduces it byte-for-byte, so parse(emit(parse(s))) ≡ parse(s) holds across
+any number of text stages in a pipeline (the R3 regression).
+#]]
+  [in-cx [#
+[x 'a\\"b']
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"x","items":[{"type":"Text","value":"a\\\"b"}]}]}
+#]]
+  [out-xml [#
+<x>a\"b</x>
+#]]
+  [out-cx [#
+[x 'a\\"b']
+#]]
+ ]
+]

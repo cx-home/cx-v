@@ -1,9 +1,9 @@
-// Streaming evaluator throughput benchmark (Y6 / v0.7.0).
+// Streaming evaluator throughput benchmark (Y6).
 //
 // Standalone runnable benchmark — `make bench-streaming` (or `v run`).
 // Measures the streaming-mode evaluator's sustained emit throughput
 // for a representative `?for`-over-large-sequence workload. Buffered
-// eval_cxl is included as a reference point; the streaming path's
+// eval_code (buffered) is included as a reference point; the streaming path's
 // win comes from not materialising the full output buffer when the
 // sink absorbs chunks as they arrive.
 //
@@ -12,7 +12,7 @@
 
 module main
 
-import cx
+import code
 import time
 import os
 
@@ -27,8 +27,8 @@ fn build_program(n int) string {
 
 fn run_buffered(input string, program string) (int, i64) {
 	start := time.now()
-	out := cx.eval_cxl(input, program, '') or {
-		panic('eval_cxl failed: ${err}')
+	out := code.eval_code(input, program, '') or {
+		panic('eval_code failed: ${err}')
 	}
 	elapsed_ms := time.since(start).milliseconds()
 	return out.len, elapsed_ms
@@ -47,8 +47,8 @@ fn run_streaming(input string, program string) (int, i64) {
 	// invariably want bigger chunks anyway (write(2) syscall amortisation,
 	// network MTU alignment, less per-callback allocator pressure).
 	// 64 KiB is the typical pipe-buffer / page-cluster size on macOS+Linux.
-	cx.eval_cxl_streaming(input, program, '', sink, 65536) or {
-		panic('eval_cxl_streaming failed: ${err}')
+	code.eval_code_streaming(input, program, '', sink) or {
+		panic('eval_code_streaming failed: ${err}')
 	}
 	elapsed_ms := time.since(start).milliseconds()
 	return bc.total, elapsed_ms

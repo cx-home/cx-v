@@ -1,0 +1,1672 @@
+[test-suite name=math
+  [doc [#
+conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/math']
+   (resolver MUST be quoted) then calls [$math:fn args]. The LAST
+   expression is the rendered result. Sequence arguments use paren
+   form (a, b, c). Error fixtures use out-err with the bare CXER code.
+
+   Float grounding policy: the runner renders floats at full IEEE-754
+   precision and compares token-by-token, while the spec quotes only
+   approximate (≈) values. So irrational / transcendental results are
+   asserted indirectly — via math/round-to to the spec's stated
+   precision, via exact-identity compositions (e.g. log(e)=1,
+   cos(0)=1), via predicates (is-finite / is-nan), or via the error
+   cases — never by an invented full-precision literal. Exact integral
+   results from §6 (pow(2,10)=1024, log10(100)=2, gcd(12,18)=6, …) are
+   asserted directly.
+
+   Error codes (§5): CXER3000 E_MATH_OVERFLOW, CXER3001
+   E_MATH_EMPTY_SEQUENCE, CXER3002 E_MATH_DECIMAL_NOT_SUPPORTED,
+   CXER3003 E_MATH_DOMAIN_ERROR.
+#]]
+
+ # ── §3.1 Basic ──────────────────────────────────────────────────────────
+ [case id=math-001-abs-negative-int level=core
+  [tags math abs basic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:abs -5]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=math-002-abs-float-preserves-kind level=core
+  [tags math abs float promotion]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:abs -2.5]
+#]]
+  [out-text [#
+2.5
+#]]
+ ]
+
+ [case id=math-003-sign-negative level=core
+  [tags math sign basic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:sign -7]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ [case id=math-004-sign-zero level=core
+  [tags math sign zero]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:sign 0]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=math-005-floor level=core
+  [tags math floor rounding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:floor 2.7]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=math-006-floor-negative level=core
+  [tags math floor rounding negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:floor -2.1]
+#]]
+  [out-text [#
+-3
+#]]
+ ]
+
+ [case id=math-007-ceiling level=core
+  [tags math ceiling rounding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:ceiling 2.1]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=math-008-round-banker-half-down level=core
+  [tags math round banker half]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round 0.5]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=math-009-round-banker-1.5 level=core
+  [tags math round banker half]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round 1.5]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=math-010-round-banker-2.5 level=core
+  [tags math round banker half]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round 2.5]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=math-011-round-half-up level=core
+  [tags math round-half-up commercial]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-half-up 0.5]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=math-012-round-half-up-negative level=core
+  [tags math round-half-up commercial negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-half-up -0.5]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ [case id=math-013-round-half-even-alias level=core
+  [tags math round-half-even banker alias]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-half-even 2.5]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=math-014-round-to-places level=core
+  [tags math round-to float places]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to 3.14159 2]
+#]]
+  [out-text [#
+3.14
+#]]
+ ]
+
+ [case id=math-015-truncate-toward-zero level=core
+  [tags math truncate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:truncate -2.9]
+#]]
+  [out-text [#
+-2
+#]]
+ ]
+
+ [case id=math-016-max-seq level=core
+  [tags math max sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:max (3, 7, 2, 9, 1)]
+#]]
+  [out-text [#
+9
+#]]
+ ]
+
+ [case id=math-017-min-seq level=core
+  [tags math min sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:min (3, 7, 2, 9, 1)]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=math-018-clamp-within level=core
+  [tags math clamp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:clamp 5 0 10]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=math-019-clamp-below level=core
+  [tags math clamp lo]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:clamp -3 0 10]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=math-020-clamp-above level=core
+  [tags math clamp hi]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:clamp 99 0 10]
+#]]
+  [out-text [#
+10
+#]]
+ ]
+
+ # ── §3.2 Powers, logs, roots ────────────────────────────────────────────
+ [case id=math-021-pow level=core
+  [tags math pow powers]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:pow 2.0 10.0] 0]
+#]]
+  [out-text [#
+1024.0
+#]]
+ ]
+
+ [case id=math-022-sqrt-perfect level=core
+  [tags math sqrt powers]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:sqrt 16.0] 0]
+#]]
+  [out-text [#
+4.0
+#]]
+ ]
+
+ [case id=math-023-sqrt-2-approx level=core
+  [tags math sqrt irrational round-to]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:sqrt 2.0] 8]
+#]]
+  [out-text [#
+1.41421356
+#]]
+ ]
+
+ [case id=math-024-cbrt level=core
+  [tags math cbrt powers]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:cbrt 27.0] 0]
+#]]
+  [out-text [#
+3.0
+#]]
+ ]
+
+ [case id=math-025-exp-zero level=core
+  [tags math exp identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:exp 0.0] 0]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=math-026-log-e-is-1 level=core
+  [tags math log natural identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:log [$math:e]] 8]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=math-027-log2-1024 level=core
+  [tags math log2 powers]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:log2 1024.0] 0]
+#]]
+  [out-text [#
+10.0
+#]]
+ ]
+
+ [case id=math-028-log10-100 level=core
+  [tags math log10 powers]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:log10 100.0] 0]
+#]]
+  [out-text [#
+2.0
+#]]
+ ]
+
+ [case id=math-029-log-base level=core
+  [tags math log-base powers]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:log-base 81.0 3.0] 0]
+#]]
+  [out-text [#
+4.0
+#]]
+ ]
+
+ # log domain errors return NaN per IEEE 754 (never raise) — §3.2.
+ [case id=math-030-log-negative-is-nan level=core
+  [tags math log domain nan ieee754]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-nan [$math:log -1.0]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # ── §3.3 Trigonometry ───────────────────────────────────────────────────
+ [case id=math-031-sin-zero level=core
+  [tags math sin trig identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:sin 0.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=math-032-cos-zero level=core
+  [tags math cos trig identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:cos 0.0] 0]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=math-033-tan-quarter-pi level=core
+  [tags math tan trig identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:tan [$math:round-to [$math:pi] 15]] 8]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ # tan(pi/4) ≈ 1 (§6). Build pi/4 from the constant to stay spec-grounded.
+ [case id=math-034-tan-pi-over-4 level=core
+  [tags math tan trig quarter-pi]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:tan [/ [$math:pi] 4.0]] 8]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=math-035-asin-zero level=core
+  [tags math asin trig inverse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:asin 0.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=math-036-acos-one level=core
+  [tags math acos trig inverse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:acos 1.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=math-037-atan-zero level=core
+  [tags math atan trig inverse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:atan 0.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ # atan2(1, 1) ≈ π/4 (§6); assert via round-to against pi/4.
+ [case id=math-038-atan2-quarter-pi level=core
+  [tags math atan2 trig quarter-pi]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:atan2 1.0 1.0] 8]
+#]]
+  [out-text [#
+0.78539816
+#]]
+ ]
+
+ [case id=math-039-sinh-zero level=core
+  [tags math sinh trig hyperbolic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:sinh 0.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=math-040-cosh-zero level=core
+  [tags math cosh trig hyperbolic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:cosh 0.0] 0]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=math-041-tanh-zero level=core
+  [tags math tanh trig hyperbolic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:tanh 0.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=math-042-asinh-zero level=core
+  [tags math asinh trig hyperbolic inverse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:asinh 0.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=math-043-acosh-one level=core
+  [tags math acosh trig hyperbolic inverse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:acosh 1.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=math-044-atanh-zero level=core
+  [tags math atanh trig hyperbolic inverse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:atanh 0.0] 0]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=math-045-deg-to-rad level=core
+  [tags math deg-to-rad conversion]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:deg-to-rad 180.0] 8]
+#]]
+  [out-text [#
+3.14159265
+#]]
+ ]
+
+ [case id=math-046-rad-to-deg level=core
+  [tags math rad-to-deg conversion]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:rad-to-deg [$math:pi]] 0]
+#]]
+  [out-text [#
+180.0
+#]]
+ ]
+
+ # ── §3.4 Statistical ────────────────────────────────────────────────────
+ [case id=math-047-sum level=core
+  [tags math sum statistics sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:sum (1, 2, 3, 4, 5)]
+#]]
+  [out-text [#
+15
+#]]
+ ]
+
+ [case id=math-048-product level=core
+  [tags math product statistics sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:product (1, 2, 3, 4, 5)]
+#]]
+  [out-text [#
+120
+#]]
+ ]
+
+ [case id=math-049-mean level=core
+  [tags math mean statistics sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:mean (2, 4, 6)] 1]
+#]]
+  [out-text [#
+4.0
+#]]
+ ]
+
+ [case id=math-050-median-odd level=core
+  [tags math median statistics odd]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:median (3, 1, 2)] 1]
+#]]
+  [out-text [#
+2.0
+#]]
+ ]
+
+ [case id=math-051-median-even level=core
+  [tags math median statistics even]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:median (1, 2, 3, 4)] 1]
+#]]
+  [out-text [#
+2.5
+#]]
+ ]
+
+ # mode — most-frequent; ties resolve to smallest tied value (§3.4).
+ [case id=math-052-mode level=core
+  [tags math mode statistics]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:mode (1, 2, 2, 3, 3, 3)]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ # mode tie resolves to smallest tied value (§3.4).
+ [case id=math-053-mode-tie-smallest level=core
+  [tags math mode statistics tie]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:mode (5, 5, 2, 2)]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # multimode — all values tied at max frequency, sorted ascending (§3.4).
+ [case id=math-054-multimode level=core
+  [tags math multimode statistics sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:multimode (5, 5, 2, 2)]
+#]]
+  [out-text [#
+(2, 5)
+#]]
+ ]
+
+ # stddev — sample (N-1). For (2,4,4,4,5,5,7,9): variance=4, stddev=2.
+ [case id=math-055-stddev-sample level=core
+  [tags math stddev statistics sample]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:stddev (2, 4, 4, 4, 5, 5, 7, 9)] 4]
+#]]
+  [out-text [#
+2.1381
+#]]
+ ]
+
+ # variance — sample (N-1). For (2,4,4,4,5,5,7,9): sample variance = 4.5714…
+ [case id=math-056-variance-sample level=core
+  [tags math variance statistics sample]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:variance (2, 4, 4, 4, 5, 5, 7, 9)] 4]
+#]]
+  [out-text [#
+4.5714
+#]]
+ ]
+
+ # variance-pop — population (N). For (2,4,4,4,5,5,7,9): pop variance = 4.
+ [case id=math-057-variance-pop level=core
+  [tags math variance-pop statistics population]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:variance-pop (2, 4, 4, 4, 5, 5, 7, 9)] 1]
+#]]
+  [out-text [#
+4.0
+#]]
+ ]
+
+ # stddev-pop — population (N) = sqrt(4) = 2.
+ [case id=math-058-stddev-pop level=core
+  [tags math stddev-pop statistics population]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:stddev-pop (2, 4, 4, 4, 5, 5, 7, 9)] 1]
+#]]
+  [out-text [#
+2.0
+#]]
+ ]
+
+ # percentile(xs, p), p in [0,100]. 50th percentile of (1..5) = median = 3.
+ [case id=math-059-percentile-50 level=core
+  [tags math percentile statistics]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:percentile (1, 2, 3, 4, 5) 50.0] 1]
+#]]
+  [out-text [#
+3.0
+#]]
+ ]
+
+ # quantile(xs, q), q in [0,1]. 0.5 quantile of (1..5) = median = 3.
+ [case id=math-060-quantile-half level=core
+  [tags math quantile statistics]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:quantile (1, 2, 3, 4, 5) 0.5] 1]
+#]]
+  [out-text [#
+3.0
+#]]
+ ]
+
+ # correlation — Pearson. [1..10] vs [2..20] is perfectly linear = 1.0 (§6).
+ [case id=math-061-correlation-perfect level=core
+  [tags math correlation statistics pearson]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:correlation (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0) (2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0)] 1]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ # covariance — sample (N-1) per §3.4. cov((1..5),(2..10 step2)) sample = 5.0.
+ [case id=math-062-covariance level=core
+  [tags math covariance statistics]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:covariance (1.0, 2.0, 3.0, 4.0, 5.0) (2.0, 4.0, 6.0, 8.0, 10.0)] 1]
+#]]
+  [out-text [#
+5.0
+#]]
+ ]
+
+ # Empty sequence raises CXER3001 on stats (§3.4 / §6).
+ [case id=math-063-mean-empty-raises level=core
+  [tags math mean empty CXER3001]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:mean ()]
+#]]
+  [out-err [#
+cx-err:CXER3001
+#]]
+ ]
+
+ [case id=math-064-median-empty-raises level=core
+  [tags math median empty CXER3001]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:median ()]
+#]]
+  [out-err [#
+cx-err:CXER3001
+#]]
+ ]
+
+ [case id=math-065-stddev-empty-raises level=core
+  [tags math stddev empty CXER3001]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:stddev ()]
+#]]
+  [out-err [#
+cx-err:CXER3001
+#]]
+ ]
+
+ # ── §3.5 Bit operations ─────────────────────────────────────────────────
+ [case id=math-066-bit-and level=core
+  [tags math bit-and bits]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-and 255 15]
+#]]
+  [out-text [#
+15
+#]]
+ ]
+
+ [case id=math-067-bit-or level=core
+  [tags math bit-or bits]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-or 240 15]
+#]]
+  [out-text [#
+255
+#]]
+ ]
+
+ [case id=math-068-bit-xor level=core
+  [tags math bit-xor bits]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-xor 255 15]
+#]]
+  [out-text [#
+240
+#]]
+ ]
+
+ [case id=math-069-bit-not level=core
+  [tags math bit-not bits]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-not 0]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ [case id=math-070-bit-shift-left level=core
+  [tags math bit-shift-left bits]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-shift-left 1 4]
+#]]
+  [out-text [#
+16
+#]]
+ ]
+
+ [case id=math-071-bit-shift-right-arithmetic level=core
+  [tags math bit-shift-right bits arithmetic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-shift-right -8 1]
+#]]
+  [out-text [#
+-4
+#]]
+ ]
+
+ # Shift count ≥ 64 saturates to 0 for left shift (§3.5 / §6).
+ [case id=math-072-bit-shift-left-saturate level=core
+  [tags math bit-shift-left saturate edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-shift-left 1 64]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ # Arithmetic right shift of negative x by ≥ 64 saturates to -1 (§3.5 / §6).
+ [case id=math-073-bit-shift-right-negative-saturate level=core
+  [tags math bit-shift-right saturate negative edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-shift-right -1 64]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ # Negative shift count raises CXER3003 (§3.5 / §4.5 / §6).
+ [case id=math-074-bit-shift-negative-count-raises level=core
+  [tags math bit-shift-left CXER3003 domain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-shift-left 1 -1]
+#]]
+  [out-err [#
+cx-err:CXER3003
+#]]
+ ]
+
+ [case id=math-075-bit-shift-right-negative-count-raises level=core
+  [tags math bit-shift-right CXER3003 domain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:bit-shift-right 8 -1]
+#]]
+  [out-err [#
+cx-err:CXER3003
+#]]
+ ]
+
+ # popcount of 0xFF = 8 (§6).
+ [case id=math-076-popcount level=core
+  [tags math popcount bits]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:popcount 255]
+#]]
+  [out-text [#
+8
+#]]
+ ]
+
+ [case id=math-077-leading-zeros level=core
+  [tags math leading-zeros bits]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:leading-zeros 1]
+#]]
+  [out-text [#
+63
+#]]
+ ]
+
+ [case id=math-078-trailing-zeros level=core
+  [tags math trailing-zeros bits]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:trailing-zeros 8]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ # ── §3.6 Predicates ─────────────────────────────────────────────────────
+ [case id=math-079-is-nan-true level=core
+  [tags math is-nan predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-nan [$math:nan]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-080-is-nan-false level=core
+  [tags math is-nan predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-nan 1.0]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=math-081-is-infinite-true level=core
+  [tags math is-infinite predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-infinite [$math:infinity]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-082-is-finite-true level=core
+  [tags math is-finite predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-finite 3.5]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-083-is-finite-false-on-inf level=core
+  [tags math is-finite predicate infinity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-finite [$math:infinity]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=math-084-is-integer-true level=core
+  [tags math is-integer predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-integer 4.0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-085-is-integer-false level=core
+  [tags math is-integer predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-integer 4.5]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=math-086-is-positive level=core
+  [tags math is-positive predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-positive 3]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-087-is-negative level=core
+  [tags math is-negative predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-negative -3]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-088-is-zero level=core
+  [tags math is-zero predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-zero 0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # ── §3.7 Number theory ──────────────────────────────────────────────────
+ [case id=math-089-gcd level=core
+  [tags math gcd number-theory]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:gcd 12 18]
+#]]
+  [out-text [#
+6
+#]]
+ ]
+
+ [case id=math-090-lcm level=core
+  [tags math lcm number-theory]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:lcm 4 6]
+#]]
+  [out-text [#
+12
+#]]
+ ]
+
+ [case id=math-091-is-prime-true level=core
+  [tags math is-prime number-theory miller-rabin]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-prime 97]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-092-is-prime-false level=core
+  [tags math is-prime number-theory composite]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-prime 91]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # Large Carmichael-resistant check: 2^61-1 (Mersenne prime) is prime under
+ # the deterministic Miller-Rabin witness set (§3.7).
+ [case id=math-093-is-prime-large-mersenne level=core
+  [tags math is-prime number-theory large miller-rabin]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-prime 2305843009213693951]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-094-factorial-zero level=core
+  [tags math factorial number-theory edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:factorial 0]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=math-095-factorial-20 level=core
+  [tags math factorial number-theory boundary]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:factorial 20]
+#]]
+  [out-text [#
+2432902008176640000
+#]]
+ ]
+
+ # factorial(21) overflows int64 → CXER3000 (§3.7 / §6).
+ [case id=math-096-factorial-21-overflow level=core
+  [tags math factorial CXER3000 overflow]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:factorial 21]
+#]]
+  [out-err [#
+cx-err:CXER3000
+#]]
+ ]
+
+ # ── §3.8 Constants ──────────────────────────────────────────────────────
+ [case id=math-097-pi level=core
+  [tags math pi constant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:pi] 8]
+#]]
+  [out-text [#
+3.14159265
+#]]
+ ]
+
+ [case id=math-098-e level=core
+  [tags math e constant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:e] 8]
+#]]
+  [out-text [#
+2.71828183
+#]]
+ ]
+
+ # tau = 2π (§3.8). tau/pi = 2 exactly.
+ [case id=math-099-tau-is-2pi level=core
+  [tags math tau pi constant identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [/ [$math:tau] [$math:pi]] 8]
+#]]
+  [out-text [#
+2.0
+#]]
+ ]
+
+ [case id=math-100-tau level=core
+  [tags math tau constant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:tau] 8]
+#]]
+  [out-text [#
+6.28318531
+#]]
+ ]
+
+ # golden = (1 + √5)/2 ≈ 1.61803398 (§3.8 / §6).
+ [case id=math-101-golden level=core
+  [tags math golden constant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:round-to [$math:golden] 8]
+#]]
+  [out-text [#
+1.61803399
+#]]
+ ]
+
+ [case id=math-102-infinity level=core
+  [tags math infinity constant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-infinite [$math:infinity]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=math-103-nan level=core
+  [tags math nan constant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-nan [$math:nan]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # epsilon = float64 machine epsilon ≈ 2.22e-16 > 0 and finite (§3.8).
+ [case id=math-104-epsilon-positive-finite level=core
+  [tags math epsilon constant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:is-finite [$math:epsilon]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # ── §3.9 Explicit modular arithmetic ────────────────────────────────────
+ # wrapping-add(i64-max, 1) = i64-min (§3.9 / §6).
+ [case id=math-105-wrapping-add-overflow level=core
+  [tags math wrapping-add modular wrap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:wrapping-add 9223372036854775807 1]
+#]]
+  [out-text [#
+-9223372036854775808
+#]]
+ ]
+
+ [case id=math-106-wrapping-add-normal level=core
+  [tags math wrapping-add modular]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:wrapping-add 2 3]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ # wrapping-sub(i64-min, 1) = i64-max (two's-complement wrap).
+ [case id=math-107-wrapping-sub-underflow level=core
+  [tags math wrapping-sub modular wrap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:wrapping-sub -9223372036854775808 1]
+#]]
+  [out-text [#
+9223372036854775807
+#]]
+ ]
+
+ [case id=math-108-wrapping-mul level=core
+  [tags math wrapping-mul modular]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:wrapping-mul 6 7]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=math-109-wrapping-pow level=core
+  [tags math wrapping-pow modular]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:wrapping-pow 2 10]
+#]]
+  [out-text [#
+1024
+#]]
+ ]
+
+ # ── §4.1 Checked overflow on the bare operators ─────────────────────────
+ # i64-max + 1 raises CXER3000 (checked by default, §4.1 / §6).
+ [case id=math-110-checked-add-overflow-raises level=core
+  [tags math overflow CXER3000 checked]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[+ 9223372036854775807 1]
+#]]
+  [out-err [#
+cx-err:CXER3000
+#]]
+ ]
+ [case id=math-111-percentile-out-of-domain-no-crash level=core gate=enforced
+  [tags math percentile CXER3003 domain regression]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:percentile (1, 2, 3, 4, 5) 150.0]
+#]]
+  [out-err [#
+cx-err:CXER3003
+#]]
+ ]
+
+ [case id=math-112-quantile-out-of-domain-no-crash level=core gate=enforced
+  [tags math quantile CXER3003 domain regression]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:quantile (1, 2, 3, 4, 5) 2.0]
+#]]
+  [out-err [#
+cx-err:CXER3003
+#]]
+ ]
+
+ [case id=math-113-lcm-overflow level=core gate=enforced
+  [tags math lcm CXER3000 overflow regression]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:lcm 9223372036854775807 2]
+#]]
+  [out-err [#
+cx-err:CXER3000
+#]]
+ ]
+
+ [case id=math-114-gcd-i64-min-overflow level=core gate=enforced
+  [tags math gcd CXER3000 overflow regression]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:gcd -9223372036854775808 0]
+#]]
+  [out-err [#
+cx-err:CXER3000
+#]]
+ ]
+
+ [case id=math-115-factorial-negative-domain level=core gate=enforced
+  [tags math factorial CXER3003 domain regression]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:factorial -3]
+#]]
+  [out-err [#
+cx-err:CXER3003
+#]]
+ ]
+
+]

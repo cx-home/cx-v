@@ -1,0 +1,242 @@
+[test-suite name=lint
+  [doc [#
+# CX Conformance — cx lint
+# Version: 1.0 — 2026-05-08
+# Covers: CX-L001 (comment-style), CX-L003 (unused anchor),
+# CX-L004 (dangling alias/merge), CX-L005 ( deprecated
+#         patterns — leading-zero numerics). CX-L002 (long/short type
+# mixing) was removed by — short aliases no longer exist.
+#
+# Each test runs `cx lint --format=json` on `in_cx` and asserts:
+#   - `expected_check_count` matches the number of findings
+#   - For tests with exactly 1 finding, also asserts `expected_check`
+#     and `expected_severity` match the first finding's check/severity.
+#]]
+
+ [case id=001-clean-no-findings level=core
+  [tags lint clean]
+  [in-cx [#
+[server host=localhost]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=002-clean-with-anchors-and-refs level=core
+  [tags lint l003 clean]
+  [in-cx [#
+[base &b host=localhost]
+[prod *b host=acme.com]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=010-l003-unused-anchor level=core
+  [tags lint l003]
+  [in-cx [#
+[base &b host=localhost]
+[other host=acme.com]
+#]]
+  [expected-check-count [#
+1
+#]]
+  [expected-check [#
+CX-L003
+#]]
+  [expected-severity [#
+warn
+#]]
+ ]
+
+ [case id=020-l004-dangling-alias level=core
+  [tags lint l004]
+  [in-cx [#
+[other host=localhost]
+[prod *base host=acme.com]
+#]]
+  [expected-check-count [#
+1
+#]]
+  [expected-check [#
+CX-L004
+#]]
+  [expected-severity [#
+error
+#]]
+ ]
+
+ [case id=030-l005-leading-zero-bare level=core
+  [tags lint l005 leading-zero]
+  [in-cx [#
+[zip 02134]
+#]]
+  [expected-check-count [#
+1
+#]]
+  [expected-check [#
+CX-L005
+#]]
+  [expected-severity [#
+warn
+#]]
+ ]
+
+ [case id=031-l005-leading-zero-no-warn-on-zero-itself level=core
+  [tags lint l005]
+  [in-cx [#
+[count 0]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=032-l005-leading-zero-no-warn-on-decimal level=core
+  [tags lint l005]
+  [in-cx [#
+[ratio 0.5]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=033-l005-leading-zero-no-warn-on-hex level=core
+  [tags lint l005]
+  [in-cx [#
+[mask 0xCAFE]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=034-l005-leading-zero-no-warn-on-quoted level=core
+  [tags lint l005 quoted]
+  [in-cx [#
+[zip '02134']
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=040-l001-mixed-comment-styles level=core
+  [tags lint l001]
+  [in-cx [#
+# top-level note
+[server [- single-line block ] host=localhost]
+#]]
+  [expected-check-count [#
+1
+#]]
+  [expected-check [#
+CX-L001
+#]]
+  [expected-severity [#
+info
+#]]
+ ]
+
+ [case id=041-l001-only-line-comments-no-warn level=core
+  [tags lint l001 clean]
+  [in-cx [#
+# top
+[server host=localhost]
+# bottom
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=042-l001-only-block-comments-no-warn level=core
+  [tags lint l001 clean]
+  [in-cx [#
+[- top-level note ]
+[server host=localhost]
+[- another single-liner ]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=043-l001-multiline-block-no-warn level=core
+  [tags lint l001 multiline]
+  [in-cx [#
+# header
+[- this is a
+   multi-line block comment ]
+[server host=localhost]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=060-suppression-disable-suppresses-l003 level=core
+  [tags lint suppression directive]
+  [in-cx [#
+[?cx lint-disable=CX-L003]
+[base &b host=localhost]
+[other host=acme.com]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=061-suppression-disable-all-suppresses-everything level=core
+  [tags lint suppression directive]
+  [in-cx [#
+[?cx lint-disable=all]
+[base &b host=localhost]
+[zip 02134]
+[other *missing host=acme.com]
+#]]
+  [expected-check-count [#
+0
+#]]
+ ]
+
+ [case id=062-suppression-enable-restores-check level=core
+  [tags lint suppression directive]
+  [in-cx [#
+[?cx lint-disable=CX-L003]
+[silent &s host=localhost]
+[?cx lint-enable=CX-L003]
+[loud &l host=acme.com]
+#]]
+  [expected-check-count [#
+1
+#]]
+  [expected-check [#
+CX-L003
+#]]
+  [expected-severity [#
+warn
+#]]
+ ]
+
+ [case id=063-suppression-targeted-leaves-others level=core
+  [tags lint suppression directive]
+  [in-cx [#
+[?cx lint-disable=CX-L003]
+[unused &u host=localhost]
+[broken *missing host=acme.com]
+#]]
+  [expected-check-count [#
+1
+#]]
+  [expected-check [#
+CX-L004
+#]]
+  [expected-severity [#
+error
+#]]
+ ]
+]

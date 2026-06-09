@@ -1,0 +1,543 @@
+[test-suite name=html
+  [doc [#
+Conformance fixtures for cx-stdlib/html (spec/std-lib/html.md §6).
+
+Each program imports the bundled module via [?lib 'cx-stdlib/html']
+(resolver MUST be quoted) then calls [$html:fn args]. The LAST expression
+is the rendered result. String scalars render quoted; bool bare;
+sequences in paren form (a, b, c). Error fixtures use out-err with the
+bare CXER code.
+
+Tree-returning functions (parse, sanitize-tree, sanitize-tree-with-policy)
+and the [sequence element] from parse-fragment are exercised by composing
+them into a string-returning surface (serialize / extract-text) or by a
+CXPath query (spec §6 guarantees the tree is queryable via //a/@href),
+so the asserted result is a spec-grounded string rather than an unpinned
+element-rendering. Per AUTHORING.md (non-deterministic/effectful), we
+assert deterministic, spec-grounded properties, never invented literals.
+
+All nine public functions are pure (§2.4). The module is NOT implemented
+yet, so these are red until then.
+#]]
+
+ # ── §3.1 parse ──
+
+ # parse returns an ordinary CXDM element tree (§2.2). Spec gives no
+ # canonical serialization literal, so we ground via CXPath //a/@href
+ # (the query surface §6 explicitly guarantees) to a concrete string.
+ [case id=html-001-parse-query-href level=core
+  [tags html parse cxpath query]
+  [# Bind the parsed tree (a call result cannot be path-navigated directly —
+     AUTHORING bind-first rule), then read the href via a simple field
+     accessor `$doc/a@href`. `a` is a direct child of html-document, so this
+     is a single-focus `/name`-chain + terminal `@attr` → code.md §6.2
+     terminal-attribute-unwrap yields the attribute VALUE (a descendant
+     `//a/@href` would instead return the node-set `[href …]` form). #]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[?let [= $doc [$html:parse "<a href=\"https://e.com\">x</a>"]] $doc/a@href]
+#]]
+  [out-text [#
+'https://e.com'
+#]]
+ ]
+
+ # Lenient parse of tag soup never raises; recovers a queryable tree (§4).
+ [case id=html-002-parse-tag-soup level=core
+  [tags html parse lenient tag-soup]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:extract-text [$html:parse "<p>a<p>b<li>c"]]
+#]]
+  [out-text [#
+'a b c'
+#]]
+ ]
+
+ # Empty input returns an empty document tree (§4) -> empty text.
+ [case id=html-003-parse-empty level=core
+  [tags html parse empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:extract-text [$html:parse ""]]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ # Non-string input cannot be recovered to any tree -> CXER3900 (§3.1, §5).
+ [case id=html-004-parse-nonstring-err level=core
+  [tags html parse error CXER3900]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:parse 42]
+#]]
+  [out-err [#
+cx-err:CXER3900
+#]]
+ ]
+
+ # parse-fragment returns a [sequence element] of top-level nodes with no
+ # implied <html>/<head>/<body> wrapper (§2.2, §6). Two sibling <li> ->
+ # a 2-element sequence; assert the count deterministically.
+ [case id=html-005-parse-fragment-count level=core
+  [tags html parse-fragment sequence no-wrapper]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$count [$html:parse-fragment "<li>a</li><li>b</li>"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ # parse-fragment("") returns an empty sequence (§4).
+ [case id=html-006-parse-fragment-empty level=core
+  [tags html parse-fragment empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$count [$html:parse-fragment ""]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ # parse-fragment shares the parse failure mode -> CXER3900 (§3.1, §5).
+ [case id=html-007-parse-fragment-nonstring-err level=core
+  [tags html parse-fragment error CXER3900]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:parse-fragment 42]
+#]]
+  [out-err [#
+cx-err:CXER3900
+#]]
+ ]
+
+ # ── §3.2 sanitize ──
+
+ # <script> and its text content always dropped; <p> kept (§3.2.1, §4).
+ [case id=html-008-sanitize-script-dropped level=core
+  [tags html sanitize script xss]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize "<script>alert(1)</script><p>hi</p>"]
+#]]
+  [out-text [#
+'<p>hi</p>'
+#]]
+ ]
+
+ # on* event-handler attribute dropped; src kept (§3.2.1, §4).
+ [case id=html-009-sanitize-onerror-dropped level=core
+  [tags html sanitize on-handler xss]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize "<img src=\"x\" onerror=\"alert(1)\">"]
+#]]
+  [out-text [#
+'<img src="x">'
+#]]
+ ]
+
+ # Idempotent: sanitize(sanitize(html)) == sanitize(html) (§4).
+ [case id=html-010-sanitize-idempotent level=core
+  [tags html sanitize idempotent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize [$html:sanitize "<script>x</script><p>hi</p>"]]
+#]]
+  [out-text [#
+'<p>hi</p>'
+#]]
+ ]
+
+ # javascript: URL scheme on a URL-bearing attribute is always dropped
+ # (§3.2.1, §4). The <a> element survives; the unsafe href is removed.
+ [case id=html-011-sanitize-javascript-href level=core
+  [tags html sanitize javascript-scheme xss]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize "<a href=\"javascript:alert(1)\">x</a>"]
+#]]
+  [out-text [#
+'<a>x</a>'
+#]]
+ ]
+
+ # data:image/png survives the data: MIME allowlist (§3.2.1, §4).
+ [case id=html-012-sanitize-data-png-survives level=core
+  [tags html sanitize data-uri allowlist]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize "<img src=\"data:image/png;base64,iVBOR\">"]
+#]]
+  [out-text [#
+'<img src="data:image/png;base64,iVBOR">'
+#]]
+ ]
+
+ # data:image/svg+xml is always denied (§3.2.1, §4); unsafe src dropped.
+ [case id=html-013-sanitize-data-svg-dropped level=core
+  [tags html sanitize data-uri svg xss]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize "<img src=\"data:image/svg+xml,<svg/>\">"]
+#]]
+  [out-text [#
+'<img>'
+#]]
+ ]
+
+ # <svg> is not on the allowlist -> dropped with content (§3.2.1, §4).
+ [case id=html-014-sanitize-svg-dropped level=core
+  [tags html sanitize svg xss]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize "<svg onload=\"alert(1)\"></svg><p>ok</p>"]
+#]]
+  [out-text [#
+'<p>ok</p>'
+#]]
+ ]
+
+ # Inline CSS: color:red survives, width:expression(...) dropped (§3.2.1, §4).
+ # §3.2.1 pins the canonical serialized form of a surviving declaration:
+ # lowercased property, single ':' with no surrounding space, declarations
+ # joined by ';' with no trailing semicolon -> "color:red".
+ [case id=html-015-sanitize-css-expression level=core
+  [tags html sanitize inline-css expression xss]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize "<p style=\"color:red;width:expression(alert(1))\">hi</p>"]
+#]]
+  [out-text [#
+'<p style="color:red">hi</p>'
+#]]
+ ]
+
+ # ── §3.2 sanitize-with-policy ──
+
+ # Empty [html-policy] equals the safe default (§3.2.2): script still dropped.
+ [case id=html-016-policy-empty-equals-default level=core
+  [tags html sanitize-with-policy policy default]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize-with-policy "<script>x</script><p>hi</p>" [html-policy]]
+#]]
+  [out-text [#
+'<p>hi</p>'
+#]]
+ ]
+
+ # deny-tags removes an otherwise-allowed tag (§3.2.2). img -> dropped.
+ [case id=html-017-policy-deny-tags-img level=core
+  [tags html sanitize-with-policy deny-tags]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize-with-policy "<p><img src=\"x\">hi</p>" [html-policy [deny-tags img]]]
+#]]
+  [out-text [#
+'<p>hi</p>'
+#]]
+ ]
+
+ # allow-data-mime with empty arg list denies all data: URLs (§3.2.2).
+ [case id=html-018-policy-data-mime-empty-denies level=core
+  [tags html sanitize-with-policy allow-data-mime deny-all]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize-with-policy "<img src=\"data:image/png;base64,iVBOR\">" [html-policy [allow-data-mime]]]
+#]]
+  [out-text [#
+'<img>'
+#]]
+ ]
+
+ # Re-allowing <script> raises CXER3901 (§3.2.2, §4, §5): unconditionally
+ # forbidden surfaces cannot be re-allowed by a policy.
+ [case id=html-019-policy-allow-script-err level=core
+  [tags html sanitize-with-policy invalid CXER3901]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize-with-policy "<p>hi</p>" [html-policy [allow-tags script]]]
+#]]
+  [out-err [#
+cx-err:CXER3901
+#]]
+ ]
+
+ # Listing text/html in allow-data-mime raises CXER3901 (§3.2.2): can
+ # never be allowed.
+ [case id=html-020-policy-data-mime-texthtml-err level=core
+  [tags html sanitize-with-policy allow-data-mime invalid CXER3901]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize-with-policy "<p>hi</p>" [html-policy [allow-data-mime text/html]]]
+#]]
+  [out-err [#
+cx-err:CXER3901
+#]]
+ ]
+
+ # ── §3.2 sanitize-tree ──
+
+ # sanitize-tree operates on an already-parsed tree (§3.2). Compose
+ # parse -> sanitize-tree -> serialize; script dropped, <p> kept.
+ [case id=html-021-sanitize-tree-script level=core
+  [tags html sanitize-tree compose]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:serialize [$html:sanitize-tree [$html:parse "<script>x</script><p>hi</p>"]]]
+#]]
+  [out-text [#
+'<p>hi</p>'
+#]]
+ ]
+
+ # sanitize-tree drops on* handlers on a parsed tree (§3.2.1).
+ [case id=html-022-sanitize-tree-onerror level=core
+  [tags html sanitize-tree on-handler xss]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:serialize [$html:sanitize-tree [$html:parse "<img src=\"x\" onerror=\"alert(1)\">"]]]
+#]]
+  [out-text [#
+'<img src="x">'
+#]]
+ ]
+
+ # ── §3.2 sanitize-tree-with-policy ──
+
+ # sanitize-tree-with-policy matches sanitize-with-policy on the
+ # equivalent string (§6). deny-tags img on a parsed tree.
+ [case id=html-023-sanitize-tree-policy-deny level=core
+  [tags html sanitize-tree-with-policy deny-tags compose]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:serialize [$html:sanitize-tree-with-policy [$html:parse "<p><img src=\"x\">hi</p>"] [html-policy [deny-tags img]]]]
+#]]
+  [out-text [#
+'<p>hi</p>'
+#]]
+ ]
+
+ # Malformed/forbidden policy raises CXER3901 even on the tree variant
+ # (§3.2.2, §5).
+ [case id=html-024-sanitize-tree-policy-err level=core
+  [tags html sanitize-tree-with-policy invalid CXER3901]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:sanitize-tree-with-policy [$html:parse "<p>hi</p>"] [html-policy [allow-tags script]]]
+#]]
+  [out-err [#
+cx-err:CXER3901
+#]]
+ ]
+
+ # ── §3.3 serialize ──
+
+ # serialize emits HTML5; serialize(parse(html)) re-parses to an equal
+ # tree (§3.3). Spec pins no canonical literal, so we assert the
+ # round-trip invariant via extract-text of the re-parsed serialization.
+ [case id=html-025-serialize-roundtrip-text level=core
+  [tags html serialize roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:extract-text [$html:parse [$html:serialize [$html:parse "<p>hi</p>"]]]]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ # serialize on a simple parsed paragraph. §3.3 adopts the WHATWG HTML
+ # serialization algorithm as normative: void elements without a trailing
+ # slash (<br>), attribute values double-quoted. A <p> with text serializes
+ # to the pinned "<p>hi</p>".
+ [case id=html-026-serialize-paragraph level=core
+  [tags html serialize html5]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:serialize [$html:parse "<p>hi</p>"]]
+#]]
+  [out-text [#
+'<p>hi</p>'
+#]]
+ ]
+
+ # serialize on a non-element value -> CXER3902 (§5).
+ [case id=html-027-serialize-nonelement-err level=core
+  [tags html serialize error CXER3902]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:serialize "not-a-tree"]
+#]]
+  [out-err [#
+cx-err:CXER3902
+#]]
+ ]
+
+ # ── §3.3 serialize-xhtml ──
+
+ # serialize-xhtml emits XHTML-well-formed output (§3.3). Round-trip
+ # invariant asserted via extract-text of the re-parsed serialization.
+ [case id=html-028-serialize-xhtml-roundtrip-text level=core
+  [tags html serialize-xhtml roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:extract-text [$html:parse [$html:serialize-xhtml [$html:parse "<p>hi</p>"]]]]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ # serialize-xhtml on a non-element value -> CXER3902 (§5).
+ [case id=html-029-serialize-xhtml-nonelement-err level=core
+  [tags html serialize-xhtml error CXER3902]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:serialize-xhtml "not-a-tree"]
+#]]
+  [out-err [#
+cx-err:CXER3902
+#]]
+ ]
+
+ # ── §3.4 extract-text ──
+
+ # Strip all tags; plain text body survives (§3.4).
+ [case id=html-030-extract-text-basic level=core
+  [tags html extract-text strip-tags]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:extract-text "<p>hello <b>world</b></p>"]
+#]]
+  [out-text [#
+'hello world'
+#]]
+ ]
+
+ # Decode named and numeric entities (§3.4).
+ [case id=html-031-extract-text-entities level=core
+  [tags html extract-text entities decode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:extract-text "<p>a&amp;b&#65;c</p>"]
+#]]
+  [out-text [#
+'a&bAc'
+#]]
+ ]
+
+ # Skip <script>/<style> content (§3.4).
+ [case id=html-032-extract-text-skip-script level=core
+  [tags html extract-text script skip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/html']
+[$html:extract-text "<style>p{}</style><script>x()</script><p>hi</p>"]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+]

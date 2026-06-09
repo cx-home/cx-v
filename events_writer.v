@@ -1,6 +1,6 @@
 module cx
 
-// CX streaming-write writer (ADR 0011 + spec/streaming.md §6).
+// CX streaming-write writer (+ spec/streaming.md §6).
 //
 // The writer is the symmetric counterpart to the read-side streaming
 // API (§3 / stream.v): adopters construct an event sequence
@@ -79,7 +79,7 @@ mut:
 	// Element nesting — names are pushed at StartElement and matched
 	// at EndElement (LIFO).
 	elem_stack []string
-	// Table state — only one open table at a time in v0.6.0 (W010
+	// Table state — only one open table at a time (W010
 	// rejects nested StartTable).
 	in_table        bool
 	table_name      string
@@ -91,7 +91,7 @@ mut:
 	err_msg    string
 	closed     bool
 	// CX output mode — pretty-printed by default (newlines + indents).
-	// v0.6.0 ships pretty mode only; compact-mode toggle is a follow-up.
+	// Pretty mode only; compact-mode toggle is a follow-up.
 	cx_pretty bool = true
 	// JSON / YAML AST-shape state — stack of per-level "first child of
 	// this array?" flags. Index 0 = Document.elements[] array; index N
@@ -132,15 +132,15 @@ pub fn new_events_writer_fd(output_format string, fd int) !&CxEventsWriter {
 }
 
 // (The `_shaped` open variants documented in earlier drafts of
-// ADR 0011 §2.15 were removed 2026-05-10 when ADR 0010 was
-// superseded by ADR 0016. CXL is the only output-shape mechanism;
+// were removed 2026-05-10 when was
+// superseded. CX code is the only output-shape mechanism;
 // see `vcx/cx/cxl.v` and `spec/abi.md §2.16`.)
 
 // close_get_bytes finalises an in-memory writer and returns its
 // accumulated buffer. Implicitly emits EndDoc (with W004 if elements
 // remain unclosed). For fd writers the buffer is empty (output is
 // already flushed); the symbol still returns a 0-byte heap-allocated
-// buffer so the per-binding wrapper has a uniform shape per ADR 0011
+// buffer so the per-binding wrapper has a uniform shape
 // (locked 2026-05-10). The caller frees the returned bytes via
 // cx_free.
 pub fn (mut w CxEventsWriter) close_get_bytes() ![]u8 {
@@ -429,7 +429,7 @@ pub fn (mut w CxEventsWriter) emit_start_table(col_spec_payload []u8) ! {
 	}
 	// CX-format chunked tables emit as a `:table` element. The element
 	// name is conventionally the most recent open StartElement; if no
-	// element is open the table is anonymous (uses `_`). v0.6.0 keeps
+	// element is open the table is anonymous (uses `_`). The writer keeps
 	// this simple and uses an anonymous-name '_' if elem_stack is empty.
 	name := if w.elem_stack.len > 0 { w.elem_stack[w.elem_stack.len - 1] } else { '_' }
 	w.in_table = true
@@ -537,24 +537,16 @@ fn parse_attrs_payload(payload []u8) ![]Attribute {
 		// can render it canonically. For unknown types fall back to
 		// string.
 		sv := coerce_attr_value(typ, value)
-		dt := if typ == 'string' { ?ScalarType(none) } else {
-			match typ {
-				'int'      { ?ScalarType(ScalarType.int_type) }
-				'float'    { ?ScalarType(ScalarType.float_type) }
-				'bool'     { ?ScalarType(ScalarType.bool_type) }
-				'null'     { ?ScalarType(ScalarType.null_type) }
-				'date'     { ?ScalarType(ScalarType.date_type) }
-				'datetime' { ?ScalarType(ScalarType.datetime_type) }
-				'bytes'    { ?ScalarType(ScalarType.bytes_type) }
-				else       { ?ScalarType(none) }
-			}
+		// D3: the carrier is the canonical type NAME; `string`/empty/unknown
+		// carry no annotation.
+		dt := if typ == '' || typ == 'string' || !is_valid_type_tag(typ) {
+			?string(none)
+		} else {
+			?string(typ)
 		}
-		out << Attribute{
-			name:      name
-			value:     sv
-			data_type: dt
-			is_ref:    is_ref
-		}
+		mut a := new_attribute(name, sv, AttributeMeta{ data_type: dt })
+		a.is_ref = is_ref
+		out << a
 	}
 	return out
 }
@@ -631,7 +623,7 @@ fn (mut w CxEventsWriter) cx_emit_start_element(name string, anchor ?string, dat
 		val_str := scalar_value_str(a.value)
 		emitted := if a.is_ref {
 			'@${val_str}'
-		} else if a.data_type == none && cx_would_autotype(val_str) {
+		} else if a.data_type() == none && cx_would_autotype(val_str) {
 			"'${val_str}'"
 		} else {
 			cx_quote_attr_if_needed(val_str)
@@ -716,7 +708,7 @@ fn (mut w CxEventsWriter) cx_emit_table_open(name string, cols []TableColumn) ! 
 // data_bin_chunked.v for byte-for-byte agreement with the canonical
 // chunked encoder.
 fn (mut w CxEventsWriter) cx_emit_table_row_group(payload []u8) ! {
-	mut br := BinReader{ buf: payload, pos: 0, depth: 0, max_depth: int(cxdb_default_depth) }
+	mut br := BinReader{ buf: payload, pos: 0, depth: 0, max_depth: int(cxcol_default_depth) }
 	row_count := br.read_uvarint()!
 	if row_count == 0 { return }
 	if w.table_col_count == 0 {
@@ -726,7 +718,7 @@ fn (mut w CxEventsWriter) cx_emit_table_row_group(payload []u8) ! {
 	// Resolve column types — re-parse from elem stack? No, we don't
 	// keep cols cached. Instead, we need them — store at StartTable.
 	// Keep it simple: re-decode types from stored col-spec context.
-	// For v0.6.0 we keep a small cache on the writer.
+	// We keep a small cache on the writer.
 	cols := w.table_cols
 	if cols.len != col_count {
 		return error(w.fail('W007', 'RowGroup col count mismatch'))
@@ -759,7 +751,7 @@ fn (mut w CxEventsWriter) cx_emit_table_row_group(payload []u8) ! {
 		for i, cell in row {
 			ct := if i < cols.len { cols[i].type_name } else { '' }
 			// row groups decoded from the chunked-table binary payload
-			// are scalar-only at v0.6.0 wire format (Phase 2.2 wire-
+			// are scalar-only in the wire format (Phase 2.2 wire-
 			// extension lands later). Wrap each ScalarValue cell as a
 			// TableCellValue for cx_format_table_cell.
 			cells << cx_format_table_cell(cell_value_from_scalar(cell), ct)
@@ -869,8 +861,8 @@ fn json_attr_v(a Attribute) string {
 	mut pairs := []string{}
 	pairs << '"name":${json_str(a.name)}'
 	pairs << '"value":${json_scalar_value(a.value)}'
-	if dt := a.data_type {
-		pairs << '"dataType":"${scalar_type_name(dt)}"'
+	if dt := a.data_type() {
+		pairs << '"dataType":"${dt}"'
 	}
 	if a.is_ref {
 		pairs << '"isRef":true'
@@ -1020,8 +1012,8 @@ fn (mut w CxEventsWriter) yaml_emit_start_element(name string, anchor ?string, d
 		for a in attrs {
 			s += '${attr_item_ind}- name: ${yaml_quote(a.name)}\n'
 			s += '${attr_key_ind}value: ${yaml_scalar_value(a.value)}\n'
-			if dt := a.data_type {
-				s += '${attr_key_ind}dataType: ${yaml_quote(scalar_type_name(dt))}\n'
+			if dt := a.data_type() {
+				s += '${attr_key_ind}dataType: ${yaml_quote(dt)}\n'
 			}
 			if a.is_ref {
 				s += '${attr_key_ind}isRef: true\n'

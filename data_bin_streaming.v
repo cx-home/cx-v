@@ -2,17 +2,17 @@ module cx
 
 import compress.zstd
 
-// CXDB v0.6.0 — streaming Table reader / writer.
+// CXCol — streaming Table reader / writer.
 //
-// Implements ADR 0015 D8 (spec/abi.md §2.10): a handle-based C ABI
+// Implements (spec/abi.md §2.10): a handle-based C ABI
 // surface that pulls / pushes one row group at a time over the
-// chunked-table wire format (`0x63`, spec/data_bin.md §3.11). Memory
+// chunked-table wire format (`0x63`, spec/core/data-bin.md §3.11). Memory
 // use is bounded by the largest single row group plus a constant
 // overhead.
 //
 // In-memory mode (`*_open`) consumes / produces the framed
-// `[u32 LE size][CXDB payload]` form used elsewhere in the C ABI.
-// Fd mode (`*_open_fd`) operates on bare CXDB bytes — no framing
+// `[u32 LE size][CXCol payload]` form used elsewhere in the C ABI.
+// Fd mode (`*_open_fd`) operates on bare CXCol bytes — no framing
 // prefix, since the file's length is implicit from the fd. Writers
 // must operate this way: total size is unknown until end-of-table.
 // Readers mirror the convention so a writer's output is directly
@@ -47,7 +47,7 @@ fn fd_read_n(fd int, n int) ![]u8 {
 		r := unsafe { C.read(fd, voidptr(&u8(out.data) + got), usize(need)) }
 		if r == 0 { break }  // EOF
 		if r < 0 {
-			return error('cxdb table: read(fd) failed')
+			return error('cxcol table: read(fd) failed')
 		}
 		got += int(r)
 	}
@@ -60,7 +60,7 @@ fn fd_read_byte(fd int) !(u8, bool) {
 	mut b := u8(0)
 	r := unsafe { C.read(fd, voidptr(&b), usize(1)) }
 	if r == 0 { return u8(0), true }
-	if r < 0 { return error('cxdb table: read(fd) failed') }
+	if r < 0 { return error('cxcol table: read(fd) failed') }
 	return b, false
 }
 
@@ -74,14 +74,14 @@ fn fd_read_uvarint(fd int) !(u64, bool) {
 		b, eof := fd_read_byte(fd)!
 		if eof {
 			if i == 0 { return u64(0), true }
-			return error('cxdb table: truncated varint from fd')
+			return error('cxcol table: truncated varint from fd')
 		}
 		if b < 0x80 {
 			if i == 4 && b > 0x0F {
-				return error('cxdb table: varint overflow (>2^32-1)')
+				return error('cxcol table: varint overflow (>2^32-1)')
 			}
 			if i > 0 && b == 0 {
-				return error('cxdb table: non-canonical varint (extra zero byte)')
+				return error('cxcol table: non-canonical varint (extra zero byte)')
 			}
 			x |= u64(b) << s
 			return x, false
@@ -89,7 +89,7 @@ fn fd_read_uvarint(fd int) !(u64, bool) {
 		x |= u64(b & 0x7F) << s
 		s += 7
 	}
-	return error('cxdb table: varint exceeds 5 bytes')
+	return error('cxcol table: varint exceeds 5 bytes')
 }
 
 fn fd_write_all(fd int, bytes []u8) ! {
@@ -97,8 +97,8 @@ fn fd_write_all(fd int, bytes []u8) ! {
 	for sent < bytes.len {
 		need := bytes.len - sent
 		r := unsafe { C.write(fd, voidptr(&u8(bytes.data) + sent), usize(need)) }
-		if r < 0 { return error('cxdb table: write(fd) failed') }
-		if r == 0 { return error('cxdb table: write(fd) returned 0') }
+		if r < 0 { return error('cxcol table: write(fd) failed') }
+		if r == 0 { return error('cxcol table: write(fd) returned 0') }
 		sent += int(r)
 	}
 }
@@ -135,15 +135,15 @@ fn col_spec_to_ast_bin(cols []TableColumn) []u8 {
 // TableColumn list.
 fn ast_bin_to_col_spec(framed []u8) ![]TableColumn {
 	doc := bin_to_doc(framed) or {
-		return error('cxdb table writer: invalid col-spec ast_bin: ${err.msg()}')
+		return error('cxcol table writer: invalid col-spec ast_bin: ${err.msg()}')
 	}
 	roots := doc.elements.filter(it is Element)
 	if roots.len != 1 {
-		return error('cxdb table writer: col-spec must have exactly one Element root (got ${roots.len})')
+		return error('cxcol table writer: col-spec must have exactly one Element root (got ${roots.len})')
 	}
 	e := roots[0] as Element
 	if e.attrs.len == 0 {
-		return error('cxdb table writer: empty col-spec (no attributes on root Element)')
+		return error('cxcol table writer: empty col-spec (no attributes on root Element)')
 	}
 	mut cols := []TableColumn{cap: e.attrs.len}
 	for a in e.attrs {
@@ -174,17 +174,17 @@ mut:
 }
 
 // new_table_reader_bytes opens a streaming reader over a framed
-// CXDB buffer (the [u32 LE size][payload] form). The reader parses
+// CXCol buffer (the [u32 LE size][payload] form). The reader parses
 // the header and col-spec eagerly (so schema() returns immediately);
 // row groups are pulled lazily via next().
 pub fn new_table_reader_bytes(framed []u8) !&CxTableReader {
 	if framed.len < 4 {
-		return error('cxdb table reader: input too short for size header')
+		return error('cxcol table reader: input too short for size header')
 	}
 	payload_size := u32(framed[0]) | (u32(framed[1]) << 8)
 		| (u32(framed[2]) << 16) | (u32(framed[3]) << 24)
 	if 4 + int(payload_size) > framed.len {
-		return error('cxdb table reader: declared payload (${payload_size}) exceeds remaining input')
+		return error('cxcol table reader: declared payload (${payload_size}) exceeds remaining input')
 	}
 	payload := unsafe { framed[4 .. 4 + int(payload_size)] }
 	mut r := &CxTableReader{ bytes_mode: true, buf: payload, pos: 0 }
@@ -193,7 +193,7 @@ pub fn new_table_reader_bytes(framed []u8) !&CxTableReader {
 }
 
 // new_table_reader_fd opens a streaming reader over an open file
-// descriptor positioned at the CXDB magic (no framing prefix).
+// descriptor positioned at the CXCol magic (no framing prefix).
 pub fn new_table_reader_fd(fd int) !&CxTableReader {
 	mut r := &CxTableReader{ bytes_mode: false, fd: fd }
 	r.consume_header_and_col_spec_fd()!
@@ -201,7 +201,7 @@ pub fn new_table_reader_fd(fd int) !&CxTableReader {
 }
 
 fn (mut r CxTableReader) consume_header_and_col_spec_bytes() ! {
-	mut br := BinReader{ buf: r.buf, pos: r.pos, depth: 0, max_depth: int(cxdb_default_depth) }
+	mut br := BinReader{ buf: r.buf, pos: r.pos, depth: 0, max_depth: int(cxcol_default_depth) }
 	br.read_header()!
 	// Optional outer single-pair map wrapper preserving the table's
 	// element name (mirrors emit_data_bin_chunked). Accept either
@@ -210,19 +210,19 @@ fn (mut r CxTableReader) consume_header_and_col_spec_bytes() ! {
 	if tag == tag_map {
 		pair_count := br.read_uvarint()!
 		if pair_count != u64(1) {
-			return error('cxdb table reader: outer map wrapper must have exactly one pair (got ${pair_count})')
+			return error('cxcol table reader: outer map wrapper must have exactly one pair (got ${pair_count})')
 		}
 		key_tag := br.take_u8()!
 		if key_tag != tag_string {
-			return error('cxdb table reader: outer map key must be string')
+			return error('cxcol table reader: outer map key must be string')
 		}
-		_ = br.read_string_payload()!  // table name; not surfaced separately at v0.6.0
+		_ = br.read_string_payload()!  // table name; not surfaced separately
 		next_tag := br.take_u8()!
 		if next_tag != tag_table_chunked {
-			return error('cxdb table reader: expected chunked-table tag 0x63; got 0x${next_tag:02x}')
+			return error('cxcol table reader: expected chunked-table tag 0x63; got 0x${next_tag:02x}')
 		}
 	} else if tag != tag_table_chunked {
-		return error('cxdb table reader: expected chunked-table tag 0x63 (or 0x50 wrapper); got 0x${tag:02x}')
+		return error('cxcol table reader: expected chunked-table tag 0x63 (or 0x50 wrapper); got 0x${tag:02x}')
 	}
 	r.cols = read_col_spec(mut br)!
 	r.pos = br.pos
@@ -233,45 +233,46 @@ fn (mut r CxTableReader) consume_header_and_col_spec_fd() ! {
 	// Header is fixed-size (12 bytes per encode_header).
 	hdr := fd_read_n(r.fd, 12)!
 	if hdr.len != 12 {
-		return error('cxdb table reader: short read on header (got ${hdr.len} bytes)')
+		return error('cxcol table reader: short read on header (got ${hdr.len} bytes)')
 	}
-	if hdr[0] != cxdb_magic[0] || hdr[1] != cxdb_magic[1]
-		|| hdr[2] != cxdb_magic[2] || hdr[3] != cxdb_magic[3] {
-		return error('cxdb table reader: bad CXDB magic')
+	if hdr[0] != cxcol_magic[0] || hdr[1] != cxcol_magic[1]
+		|| hdr[2] != cxcol_magic[2] || hdr[3] != cxcol_magic[3]
+		|| hdr[4] != cxcol_magic[4] {
+		return error('cxcol table reader: bad CXCol magic')
 	}
-	if hdr[4] != cxdb_version {
-		return error('cxdb table reader: unsupported CXDB version 0x${hdr[4]:02x}')
+	if hdr[cxcol_magic_len] != cxcol_version {
+		return error('cxcol table reader: unsupported CXCol version 0x${hdr[cxcol_magic_len]:02x}')
 	}
 	// Read tag byte; either chunked-table or single-pair map wrapper.
 	first, eof := fd_read_byte(r.fd)!
-	if eof { return error('cxdb table reader: truncated after header') }
+	if eof { return error('cxcol table reader: truncated after header') }
 	if first == tag_map {
 		pair_count, _ := fd_read_uvarint(r.fd)!
 		if pair_count != u64(1) {
-			return error('cxdb table reader: outer map wrapper must have exactly one pair')
+			return error('cxcol table reader: outer map wrapper must have exactly one pair')
 		}
 		key_tag, _ := fd_read_byte(r.fd)!
 		if key_tag != tag_string {
-			return error('cxdb table reader: outer map key must be string')
+			return error('cxcol table reader: outer map key must be string')
 		}
 		key_len, _ := fd_read_uvarint(r.fd)!
 		_ := fd_read_n(r.fd, int(key_len))!
 		next_tag, _ := fd_read_byte(r.fd)!
 		if next_tag != tag_table_chunked {
-			return error('cxdb table reader: expected chunked-table tag 0x63 after wrapper; got 0x${next_tag:02x}')
+			return error('cxcol table reader: expected chunked-table tag 0x63 after wrapper; got 0x${next_tag:02x}')
 		}
 	} else if first != tag_table_chunked {
-		return error('cxdb table reader: expected chunked-table tag 0x63; got 0x${first:02x}')
+		return error('cxcol table reader: expected chunked-table tag 0x63; got 0x${first:02x}')
 	}
 	col_count, _ := fd_read_uvarint(r.fd)!
 	if col_count == 0 {
-		return error('cxdb table reader: tag 0x63 with col_count=0')
+		return error('cxcol table reader: tag 0x63 with col_count=0')
 	}
 	mut cols := []TableColumn{cap: int(col_count)}
 	for _ in 0 .. int(col_count) {
 		key_tag, _ := fd_read_byte(r.fd)!
 		if key_tag != tag_string {
-			return error('cxdb table reader: column name must be string (tag 0x30)')
+			return error('cxcol table reader: column name must be string (tag 0x30)')
 		}
 		name_len, _ := fd_read_uvarint(r.fd)!
 		name_bytes := fd_read_n(r.fd, int(name_len))!
@@ -290,13 +291,13 @@ fn (mut r CxTableReader) consume_header_and_col_spec_fd() ! {
 fn read_col_spec(mut br BinReader) ![]TableColumn {
 	col_count := br.read_uvarint()!
 	if col_count == 0 {
-		return error('cxdb table reader: tag 0x63 with col_count=0')
+		return error('cxcol table reader: tag 0x63 with col_count=0')
 	}
 	mut cols := []TableColumn{cap: int(col_count)}
 	for _ in 0 .. int(col_count) {
 		key_tag := br.take_u8()!
 		if key_tag != tag_string {
-			return error('cxdb table reader: column name must be string (tag 0x30); got 0x${key_tag:02x}')
+			return error('cxcol table reader: column name must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		name := br.read_string_payload()!
 		col_type_byte := br.take_u8()!
@@ -311,7 +312,7 @@ fn read_col_spec(mut br BinReader) ![]TableColumn {
 // schema_bytes returns the col-spec as a framed ast_bin buffer.
 pub fn (r &CxTableReader) schema_bytes() ![]u8 {
 	if !r.header_consumed {
-		return error('cxdb table reader: handle uninitialized')
+		return error('cxcol table reader: handle uninitialized')
 	}
 	return col_spec_to_ast_bin(r.cols)
 }
@@ -347,14 +348,14 @@ pub fn (mut r CxTableReader) next_row_group_framed() ![]u8 {
 // next_body_bytes returns the next plain row-group body, or an empty
 // slice on end-of-table. Errors propagate normally.
 fn (mut r CxTableReader) next_body_bytes() ![]u8 {
-	mut br := BinReader{ buf: r.buf, pos: r.pos, depth: 0, max_depth: int(cxdb_default_depth) }
+	mut br := BinReader{ buf: r.buf, pos: r.pos, depth: 0, max_depth: int(cxcol_default_depth) }
 	body_byte_len := br.read_uvarint()!
 	if body_byte_len == 0 {
 		r.pos = br.pos
 		return []u8{}
 	}
 	if body_byte_len > u64(br.buf.len - br.pos) {
-		return error('cxdb table reader: row-group body_byte_len ${body_byte_len} exceeds remaining input')
+		return error('cxcol table reader: row-group body_byte_len ${body_byte_len} exceeds remaining input')
 	}
 	body_tag := br.take_u8()!
 	body_bytes_remaining := int(body_byte_len) - 1
@@ -368,7 +369,7 @@ fn (mut r CxTableReader) next_body_bytes() ![]u8 {
 			decompress_row_group(wrapper)!
 		}
 		else {
-			return error('cxdb table reader: reserved body-tag 0x${body_tag:02x} (expected 0x01 or 0x90)')
+			return error('cxcol table reader: reserved body-tag 0x${body_tag:02x} (expected 0x01 or 0x90)')
 		}
 	}
 	r.pos = br.pos
@@ -382,18 +383,18 @@ fn (mut r CxTableReader) next_body_fd() ![]u8 {
 	}
 	body_tag, eof2 := fd_read_byte(r.fd)!
 	if eof2 {
-		return error('cxdb table reader: truncated row-group (no body-tag)')
+		return error('cxcol table reader: truncated row-group (no body-tag)')
 	}
 	body_bytes_remaining := int(body_byte_len) - 1
 	body_raw := fd_read_n(r.fd, body_bytes_remaining)!
 	if body_raw.len != body_bytes_remaining {
-		return error('cxdb table reader: short read on row-group body (got ${body_raw.len}, need ${body_bytes_remaining})')
+		return error('cxcol table reader: short read on row-group body (got ${body_raw.len}, need ${body_bytes_remaining})')
 	}
 	plain := match body_tag {
 		body_tag_plain { body_raw }
 		body_tag_zstd  { decompress_row_group(body_raw)! }
 		else {
-			return error('cxdb table reader: reserved body-tag 0x${body_tag:02x}')
+			return error('cxcol table reader: reserved body-tag 0x${body_tag:02x}')
 		}
 	}
 	return plain
@@ -426,7 +427,7 @@ mut:
 
 // new_table_writer_bytes opens an in-memory writer. The caller-
 // supplied col-spec is taken as a framed ast_bin buffer (the same
-// shape cx_table_reader_schema returns). At v0.6.0 the writer's
+// shape cx_table_reader_schema returns). The writer's
 // chunk options are not configurable through the C ABI; the default
 // auto-zstd-above-64KiB policy applies.
 pub fn new_table_writer_bytes(col_spec_payload []u8) !&CxTableWriter {
@@ -482,10 +483,10 @@ fn (mut w CxTableWriter) write_header_and_col_spec_fd() ! {
 // active ChunkedEmitOptions policy.
 pub fn (mut w CxTableWriter) emit_row_group_payload(plain_body []u8) ! {
 	if w.closed {
-		return error('cxdb table writer: emit on closed writer')
+		return error('cxcol table writer: emit on closed writer')
 	}
 	if plain_body.len == 0 {
-		return error('cxdb table writer: empty row-group payload')
+		return error('cxcol table writer: empty row-group payload')
 	}
 	use_zstd := match w.opts.compress {
 		.never  { false }
@@ -500,7 +501,7 @@ pub fn (mut w CxTableWriter) emit_row_group_payload(plain_body []u8) ! {
 	} else {
 		level := if w.opts.compress_level == 0 { chunked_default_compress_level } else { w.opts.compress_level }
 		frame := zstd.compress(plain_body, compression_level: level) or {
-			return error('cxdb table writer: zstd compress failed: ${err}')
+			return error('cxcol table writer: zstd compress failed: ${err}')
 		}
 		mut wrapper := []u8{cap: frame.len + 16}
 		wrapper << codec_id_zstd
@@ -523,10 +524,10 @@ pub fn (mut w CxTableWriter) emit_row_group_payload(plain_body []u8) ! {
 // an empty slice (caller uses writer_close instead).
 pub fn (mut w CxTableWriter) close_get_bytes() ![]u8 {
 	if w.closed {
-		return error('cxdb table writer: already closed')
+		return error('cxcol table writer: already closed')
 	}
 	if !w.bytes_mode {
-		return error('cxdb table writer: close_get_bytes is in-memory only; use writer_close for fd writers')
+		return error('cxcol table writer: close_get_bytes is in-memory only; use writer_close for fd writers')
 	}
 	w.buf << u8(0)  // end-of-table marker
 	w.closed = true

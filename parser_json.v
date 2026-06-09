@@ -208,7 +208,7 @@ fn jv_to_nodes(name string, v JV) []Node {
 				for item in arr {
 					items << jv_to_scalar(item)
 				}
-				return [Element{ name: name, data_type: scalar_dt, items: items }]
+				return [new_element(name, ElementMeta{ data_type: scalar_dt }, [], items)]
 			}
 			// array of objects → repeated elements with same name
 			if arr.all(it is map[string]JV) {
@@ -327,19 +327,15 @@ fn jv_arr_scalar_type(arr []JV) (bool, ?string) {
 	return false, none
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
-pub fn parse_json(src string) !Document {
-	mut r := JReader{ src: src.bytes(), pos: 0 }
-	r.skip_ws()
-	if r.pos >= r.src.len { return Document{} }
-	v := r.read_val()
-	mut doc := jv_to_cx_doc(v)
-	resolve_namespaces(mut doc)
-	return doc
-}
-
-pub fn parse_json_cx(src string) !ParseResult {
-	doc := parse_json(src)!
-	return ParseResult{ is_multi: false, single: doc }
-}
+// ── Deprecated JSON entry points retired (item C, conversions.md §4.1) ───────
+//
+// `parse_json` / `parse_json_cx` synthesised named CX elements from JSON
+// (`{"a":1}` → `[a 1]`), a lossy invention. JSON → CX is now the lossless
+// map/array/scalar read performed by the strict parser in
+// vcx/code/stdlib_json.v (`json_do_parse`), registered as the canonical `json`
+// codec parse at init (cx.register_codec). The CLI, C ABI and convert_by_name
+// all route through that one parser via the registry.
+//
+// The JV / JReader machinery above is RETAINED: it is shared by the YAML, TOML
+// and AST-JSON parsers (parser_yaml.v / parser_toml.v / parser_ast_json.v),
+// which build a JV tree and reuse jv_to_cx_doc / JReader.read_val.

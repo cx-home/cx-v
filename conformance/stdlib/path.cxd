@@ -1,0 +1,757 @@
+[test-suite name=path
+  [doc [#
+conformance fixtures for cx-stdlib/path (spec/std-lib/path.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/path']
+   (resolver MUST be quoted) then calls [$path:fn args]. The LAST
+   expression is the rendered result. String scalars render quoted;
+   bool bare; sequences in paren form (a, b, c). Error fixtures use
+   --- out_err with the bare CXER code.
+#]]
+
+ [case id=path-001-dirname level=core
+  [tags path dirname]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:dirname "/a/b/c.txt"]
+#]]
+  [out-text [#
+'/a/b'
+#]]
+ ]
+
+ [case id=path-002-basename level=core
+  [tags path basename]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:basename "/a/b/c.txt"]
+#]]
+  [out-text [#
+'c.txt'
+#]]
+ ]
+
+ [case id=path-003-extension level=core
+  [tags path extension]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:extension "/a/b/c.txt"]
+#]]
+  [out-text [#
+'.txt'
+#]]
+ ]
+
+ [case id=path-004-extension-none level=core
+  [tags path extension empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:extension "/a/b/c"]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ [case id=path-005-stem level=core
+  [tags path stem]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:stem "/a/b/c.txt"]
+#]]
+  [out-text [#
+'c'
+#]]
+ ]
+
+ [case id=path-006-parent-alias level=core
+  [tags path parent dirname]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:parent "/a/b/c.txt"]
+#]]
+  [out-text [#
+'/a/b'
+#]]
+ ]
+
+ [case id=path-007-parts level=core
+  [tags path parts sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:parts "/a/b/c.txt"]
+#]]
+  [out-text [#
+('a', 'b', 'c.txt')
+#]]
+ ]
+
+ [case id=path-008-parts-root-empty level=core
+  [tags path parts root edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:parts "/"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=path-009-dirname-empty level=core
+  [tags path dirname empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:dirname ""]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ [case id=path-010-dirname-root level=core
+  [tags path dirname root edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:dirname "/"]
+#]]
+  [out-text [#
+'/'
+#]]
+ ]
+
+ [case id=path-011-dirname-trailing-slash level=core
+  [tags path dirname trailing-slash edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:dirname "/a/b/"]
+#]]
+  [out-text [#
+'/a'
+#]]
+ ]
+
+ [case id=path-012-multi-extension level=core
+  [tags path extension multi]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:extension "a.tar.gz"]
+#]]
+  [out-text [#
+'.gz'
+#]]
+ ]
+
+ [case id=path-013-multi-extension-stem level=core
+  [tags path stem multi]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:stem "a.tar.gz"]
+#]]
+  [out-text [#
+'a.tar'
+#]]
+ ]
+
+ [case id=path-014-join-variadic level=core
+  [tags path join variadic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:join "a" "b" "c"]
+#]]
+  [out-text [#
+'a/b/c'
+#]]
+ ]
+
+ [case id=path-015-join-collapse level=core
+  [tags path join collapse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:join "a/" "/b/" "/c"]
+#]]
+  [out-text [#
+'a/b/c'
+#]]
+ ]
+
+ [case id=path-016-join-seq level=core
+  [tags path join-seq sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:join-seq ("a/", "/b/", "/c")]
+#]]
+  [out-text [#
+'a/b/c'
+#]]
+ ]
+
+ [case id=path-017-normalize level=core
+  [tags path normalize]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:normalize "a/./b/../c"]
+#]]
+  [out-text [#
+'a/c'
+#]]
+ ]
+
+ [case id=path-018-relative level=core
+  [tags path relative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:relative "/a/b" "/a/c/d"]
+#]]
+  [out-text [#
+'../c/d'
+#]]
+ ]
+
+ [case id=path-019-with-extension level=core
+  [tags path with-extension replace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:with-extension "a.txt" ".md"]
+#]]
+  [out-text [#
+'a.md'
+#]]
+ ]
+
+ [case id=path-020-with-stem level=core
+  [tags path with-stem]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:with-stem "a/b.txt" "c"]
+#]]
+  [out-text [#
+'a/c.txt'
+#]]
+ ]
+
+ [case id=path-021-with-name level=core
+  [tags path with-name]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:with-name "a/b.txt" "c.md"]
+#]]
+  [out-text [#
+'a/c.md'
+#]]
+ ]
+
+ [case id=path-022-append level=core
+  [tags path append]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:append "a/b" "/c"]
+#]]
+  [out-text [#
+'a/b/c'
+#]]
+ ]
+
+ [case id=path-023-glob-star level=core
+  [tags path match-glob star]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:match-glob "*.txt" "b.txt"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-024-glob-star-no-cross level=core
+  [tags path match-glob star segment]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:match-glob "*.txt" "a/b.txt"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=path-025-glob-class level=core
+  [tags path match-glob class]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:match-glob "[abc]?.bin" "a1.bin"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-026-glob-doublestar-multi level=core
+  [tags path match-glob doublestar multi-segment]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:match-glob "**/*.cx" "a/b/c.cx"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-027-glob-doublestar-zero level=core
+  [tags path match-glob doublestar zero-segment]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:match-glob "**/*.cx" "c.cx"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-028-glob-invalid-pattern level=core
+  [tags path match-glob invalid CXER2602]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:match-glob "[abc" "a"]
+#]]
+  [out-err [#
+cx-err:CXER2602
+#]]
+ ]
+
+ [case id=path-029-is-within-true level=core
+  [tags path is-within safety]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-within "/srv/www" "/srv/www/a/b.txt"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-030-is-within-escape level=core
+  [tags path is-within safety escape]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-within "/srv/www" "/srv/www/../etc/passwd"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=path-031-is-within-self level=core
+  [tags path is-within safety self]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-within "/srv/www" "/srv/www"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-032-safe-join-ok level=core
+  [tags path safe-join safety]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:safe-join "/srv/www" "a/b.txt"]
+#]]
+  [out-text [#
+'/srv/www/a/b.txt'
+#]]
+ ]
+
+ [case id=path-033-safe-join-escape level=core
+  [tags path safe-join safety CXER2603]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:safe-join "/srv/www" "../etc/passwd"]
+#]]
+  [out-err [#
+cx-err:CXER2603
+#]]
+ ]
+
+ [case id=path-034-safe-join-empty-untrusted level=core
+  [tags path safe-join empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:safe-join "/srv/www" ""]
+#]]
+  [out-text [#
+'/srv/www'
+#]]
+ ]
+
+ [case id=path-035-is-absolute-posix level=core
+  [tags path is-absolute predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-absolute "/foo"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-036-is-absolute-dot-rel level=core
+  [tags path is-absolute predicate relative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-absolute "./foo"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=path-037-is-absolute-bare-rel level=core
+  [tags path is-absolute predicate relative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-absolute "foo"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=path-038-is-absolute-windows level=core
+  [tags path is-absolute predicate windows]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-absolute "C:\\foo"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-039-is-windows-style level=core
+  [tags path is-windows-style predicate windows]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-windows-style "C:\\foo\\bar"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-040-has-extension level=core
+  [tags path has-extension predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:has-extension "a.txt"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-041-equals-case-insensitive level=core
+  [tags path equals-case-insensitive]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:equals-case-insensitive "/A/B" "/a/b"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-042-absolute-predicate-compose level=core
+  [tags path absolute impure cwd]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-absolute [$path:absolute "x"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-043-canonical-not-found level=core
+  [tags path canonical impure CXER2600]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:canonical "/no/such/path/abcxyz-does-not-exist-12345"]
+#]]
+  [out-err [#
+cx-err:CXER2600
+#]]
+ ]
+
+ [case id=path-044-is-relative-bare level=core
+  [tags path is-relative predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-relative "foo"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-045-is-relative-dot level=core
+  [tags path is-relative predicate dot]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-relative "./foo"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-046-is-relative-absolute level=core
+  [tags path is-relative predicate absolute]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-relative "/foo"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=path-047-is-relative-windows level=core
+  [tags path is-relative predicate windows]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-relative "C:\\foo"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=path-048-is-posix-style-posix level=core
+  [tags path is-posix-style predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-posix-style "/foo/bar"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-049-is-posix-style-dot-rel level=core
+  [tags path is-posix-style predicate relative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-posix-style "./foo"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=path-050-is-posix-style-windows level=core
+  [tags path is-posix-style predicate windows]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-posix-style "C:\\foo\\bar"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=path-051-is-posix-style-mixed level=core
+  [tags path is-posix-style predicate mixed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:is-posix-style "a/b\\c"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # separator/list-separator are platform-specific (§3.7: `/` and `:` on POSIX,
+ # `\` and `;` on Windows). The POSIX values asserted below are correct on the
+ # conformance reference platform (see README.md "Reference platform — POSIX");
+ # on Windows these cases are expected to differ.
+ [case id=path-052-separator level=core
+  [tags path separator]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:separator]
+#]]
+  [out-text [#
+'/'
+#]]
+ ]
+
+ [case id=path-053-list-separator level=core
+  [tags path list-separator]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path']
+[$path:list-separator]
+#]]
+  [out-text [#
+':'
+#]]
+ ]
+]

@@ -2,7 +2,7 @@ module main
 
 import cx
 
-// Tests for v0.6.0 / spec/canonical.md v1.1 / ADR 0017 §D14 — canonical
+// Tests for spec/canonical.md canonical
 // form treatment of collection literals: map-key lex sort, sequence-
 // flat hash, array-nested hash, and diff round-trips.
 
@@ -22,7 +22,7 @@ fn test_map_canonical_sorts_keys_lex() {
 
 fn test_map_hash_invariant_under_insertion_order() {
 	// Two docs that differ only in map insertion order must hash the same
-	// after canonicalization per ADR §D14.
+	// after canonicalization.
 	a := "[r {alpha: 1, beta: 2, gamma: 3}]"
 	b := "[r {gamma: 3, alpha: 1, beta: 2}]"
 	hash_a := cx.cx_text_hash(a) or { panic(err) }
@@ -62,7 +62,7 @@ fn test_map_canonical_is_idempotent() {
 
 fn test_array_hash_preserves_nesting() {
 	// `[[1, 2], [3, 4]]` and `[1, 2, 3, 4]` are distinct Array values
-	// per ADR §D3. Their hashes must differ.
+	// Their hashes must differ.
 	a := '[r [[1, 2], [3, 4]]]'
 	b := '[r [1, 2, 3, 4]]'
 	hash_a := cx.cx_text_hash(a) or { panic(err) }
@@ -71,7 +71,7 @@ fn test_array_hash_preserves_nesting() {
 }
 
 fn test_sequence_hash_flattens() {
-	// Sequences flatten on construction per CXDM §1 / ADR §D2 — they
+	// Sequences flatten on construction per CXDM §1 — they
 	// flatten at PARSE time, before canonicalization. So nested and
 	// flat sources of the same final sequence hash identically.
 	a := '[r ((1, 2), 3)]'
@@ -89,7 +89,7 @@ fn test_sequence_vs_array_hash_distinct() {
 	assert hash_a != hash_b, 'sequence and array must hash differently; ${hash_a}'
 }
 
-// ── Diff round-trips (ADR §D14 + spec/canonical.md §11.4) ───────────────────
+// ── Diff round-trips (spec/canonical.md §11.4) ──────────────────────────────
 
 fn test_diff_map_reordered_is_empty() {
 	a := "[r {alpha: 1, beta: 2}]"

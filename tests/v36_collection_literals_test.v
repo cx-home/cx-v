@@ -2,7 +2,7 @@ module main
 
 import cx
 
-// Tests for v0.6.0 / grammar v3.6 / ADR 0017 collection-literal source
+// Tests for grammar v3.6 collection-literal source
 // productions: SequenceLiteral `(a, b, c)`, ArrayLiteral `[a, b, c]`,
 // MapLiteral `{k: v}`. Covers:
 //   - Parse: each literal at element-body position
@@ -11,15 +11,18 @@ import cx
 //   - ast_bin v6 round-trip: encode + decode through binary.v with the
 //     three new tag bytes (0x0F / 0x10 / 0x11)
 //   - Canonical CX emit: round-trip text matches the spec/canonical.md
-//     formatting rules per ADR 0017 §D14
+// formatting rules
 //   - Disambiguation: today's element form `[name body]` is unaffected;
-//     `[a, b, c]` becomes ArrayLiteral via the depth-0 comma marker;
-//     `(text)` and `{text}` without separators stay as body text.
+//     `[1, 2, 3]` / `['a', 'b', 'c']` becomes ArrayLiteral via the depth-0
+//     comma marker. A LEADING BARE WORD is reserved for the element head, so
+//     a bare-word string array MUST quote its items (`['web', 'api']`, not
+//     `[web, api]`) — 3a / lexicon §collections [L83]. `(text)` and `{text}`
+//     without separators stay as body text.
 
 // ── ArrayLiteral ─────────────────────────────────────────────────────────────
 
 fn test_array_literal_in_body() {
-	doc := cx.parse('[tags [web, api, native]]') or { panic(err) }
+	doc := cx.parse("[tags ['web', 'api', 'native']]") or { panic(err) }
 	root := doc.root() or { panic('no root') }
 	assert root.name == 'tags'
 	assert root.items.len == 1
@@ -53,7 +56,7 @@ fn test_array_literal_nested_preserves_structure() {
 }
 
 fn test_array_literal_trailing_comma() {
-	doc := cx.parse('[tags [a, b, c,]]') or { panic(err) }
+	doc := cx.parse("[tags ['a', 'b', 'c',]]") or { panic(err) }
 	root := doc.root() or { panic('no root') }
 	arr := root.items[0]
 	assert arr is cx.ArrayNode
@@ -149,7 +152,7 @@ fn test_brace_text_not_a_map() {
 // ── ast_bin v6 round-trip ────────────────────────────────────────────────────
 
 fn test_ast_bin_v6_array_round_trip() {
-	doc := cx.parse('[tags [web, api]]') or { panic(err) }
+	doc := cx.parse("[tags ['web', 'api']]") or { panic(err) }
 	bytes := cx.emit_ast_bin(doc)
 	// Confirm the version byte was bumped to 6.
 	assert bytes.len > 4
@@ -192,12 +195,14 @@ fn test_ast_bin_v6_map_round_trip() {
 // ── Canonical CX emit ────────────────────────────────────────────────────────
 
 fn test_canonical_emit_array() {
-	doc := cx.parse('[tags [web, api]]') or { panic(err) }
+	doc := cx.parse("[tags ['web', 'api']]") or { panic(err) }
 	out := cx.emit_cx(doc)
-	// Canonical form per ADR 0017 §D14: `[item, item]` with single space
-	// after comma. Embedded inside an element body, the array renders
-	// inline.
-	assert out.contains('[web, api]')
+	// Canonical form: `['item', 'item']` with single space after comma.
+	// Bare-name string items are QUOTED in array-literal position (3a /
+	// lexicon §collections [L83]) so they re-parse — an unquoted leading
+	// bareword would re-open the element-head disambiguation. Embedded
+	// inside an element body, the array renders inline.
+	assert out.contains("['web', 'api']")
 }
 
 fn test_canonical_emit_sequence() {
@@ -234,10 +239,10 @@ fn test_existing_element_with_body_still_parses() {
 	assert root.name == 'greeting'
 }
 
-// ── Data-shape JSON / YAML / TOML / MD emit (ADR 0017 §D12) ──────────────────
+// ── Data-shape JSON / YAML / TOML / MD emit ──────────────────
 
 fn test_semantic_json_array() {
-	doc := cx.parse('[tags [web, api, native]]') or { panic(err) }
+	doc := cx.parse("[tags ['web', 'api', 'native']]") or { panic(err) }
 	out := cx.emit_semantic_json(doc)
 	assert out.contains('"tags"'), 'expected key "tags"; got: ${out}'
 	assert out.contains('"web"') && out.contains('"api"') && out.contains('"native"')
@@ -270,7 +275,7 @@ fn test_semantic_json_nested_array() {
 }
 
 fn test_yaml_array_block_sequence() {
-	doc := cx.parse('[tags [web, api]]') or { panic(err) }
+	doc := cx.parse("[tags ['web', 'api']]") or { panic(err) }
 	out := cx.emit_yaml(doc)
 	// YAML block sequence under the `tags` key.
 	assert out.contains('tags:')
@@ -289,7 +294,7 @@ fn test_yaml_map_block_mapping() {
 }
 
 fn test_toml_array_inline() {
-	doc := cx.parse('[cfg tags=[web, api]]') or { return }
+	doc := cx.parse("[cfg tags=['web', 'api']]") or { return }
 	out := cx.emit_toml(doc)
 	// Sanity — emit doesn't crash on collection-literal content.
 	_ = out
@@ -299,21 +304,4 @@ fn test_toml_map_inline() {
 	doc := cx.parse("[doc [stats {region: 'us-west', servers: 12}]]") or { panic(err) }
 	out := cx.emit_toml(doc)
 	assert out.contains('region') && out.contains('servers')
-}
-
-fn test_md_array_bulleted_list() {
-	// Array in block position renders as a bulleted list per §D12.
-	doc := cx.parse('[doc [list [alpha, beta, gamma]]]') or { panic(err) }
-	out := cx.emit_md(doc)
-	// `list` element wraps the ArrayNode; the array becomes a bulleted list.
-	assert out.contains('- alpha') || out.contains('alpha'), 'got: ${out}'
-}
-
-fn test_md_map_definition_list() {
-	doc := cx.parse("[doc [meta {region: 'us-west', servers: 12}]]") or { panic(err) }
-	out := cx.emit_md(doc)
-	// Map renders as a definition list — key on its own line, `: value` after.
-	// At minimum keys + values should appear in output.
-	assert out.contains('region')
-	assert out.contains('servers')
 }

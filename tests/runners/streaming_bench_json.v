@@ -1,4 +1,4 @@
-// JSON-shape streaming throughput benchmark (Y6 / v0.7.0).
+// JSON-shape streaming throughput benchmark (Y6).
 //
 // Companion to streaming_bench.v. The original bench uses a 25-byte
 // per-iter body (`id:name;`) chosen for tight signal on the inner
@@ -24,6 +24,7 @@
 module main
 
 import cx
+import code
 import time
 import os
 import strings
@@ -48,8 +49,8 @@ fn build_json_program(n int) string {
 
 fn run_cx_buffered(input string, program string) (int, i64) {
 	start := time.now()
-	out := cx.eval_cxl(input, program, '') or {
-		panic('eval_cxl failed: ${err}')
+	out := code.eval_code(input, program, '') or {
+		panic('eval_code failed: ${err}')
 	}
 	elapsed_ms := time.since(start).milliseconds()
 	return out.len, elapsed_ms
@@ -61,8 +62,8 @@ fn run_cx_streaming(input string, program string) (int, i64) {
 		unsafe { bc.total += chunk.len }
 	}
 	start := time.now()
-	cx.eval_cxl_streaming(input, program, '', sink, 65536) or {
-		panic('eval_cxl_streaming failed: ${err}')
+	code.eval_code_streaming(input, program, '', sink) or {
+		panic('eval_code_streaming failed: ${err}')
 	}
 	elapsed_ms := time.since(start).milliseconds()
 	return bc.total, elapsed_ms

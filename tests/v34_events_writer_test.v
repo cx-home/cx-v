@@ -142,10 +142,10 @@ fn test_w013_end_table_without_start() {
 	assert false, 'expected W013 error'
 }
 
-// `test_w011_shape_engine_not_implemented` was removed when ADR 0010
-// was superseded by ADR 0016 (2026-05-10) — the declarative shape-
+// `test_w011_shape_engine_not_implemented` was removed when 
+// was superseded by (2026-05-10) — the declarative shape-
 // rewrite engine and its `new_events_writer_shaped` entry point were
-// deleted. CXL 1.0 is the sole output-shape mechanism; shape-engine
+// deleted. CX code 1.0 is the sole output-shape mechanism; shape-engine
 // W011 no longer exists as an error code.
 
 fn test_chunked_table_round_trip_through_writer() {
@@ -185,6 +185,72 @@ fn test_chunked_table_round_trip_through_writer() {
 	// Re-parse to assert structural integrity.
 	doc := cx.parse(s) or { panic('reparse failed (${err}); src=${s}') }
 	assert doc.elements.len > 0, 'expected non-empty round-trip parse'
+}
+
+// emit_xml_inline previously dropped SequenceNode / ArrayNode / MapNode
+// children of a named element (the inline dispatch's `else {}` arm).
+// Regression for Phase 3.11 follow-up — collection markers must round-
+// trip even when nested inside a named element body.
+fn test_xml_inline_sequence_round_trip() {
+	doc := cx.Document{
+		elements: [
+			cx.Node(cx.Element{
+				name:  'parent'
+				items: [cx.Node(cx.SequenceNode{
+					items: [
+						cx.Node(cx.ScalarNode{ value: i64(1), data_type: cx.ScalarType.int_type }),
+						cx.Node(cx.ScalarNode{ value: i64(2), data_type: cx.ScalarType.int_type }),
+					]
+				})]
+			}),
+		]
+	}
+	out := cx.emit_xml(doc)
+	assert out.contains('<cx:seq>'), 'expected nested <cx:seq> inside <parent>; got: ${out}'
+	assert out.contains('<item>1</item>'), 'expected <item>1</item>; got: ${out}'
+	assert out.contains('<item>2</item>'), 'expected <item>2</item>; got: ${out}'
+}
+
+fn test_xml_inline_array_round_trip() {
+	doc := cx.Document{
+		elements: [
+			cx.Node(cx.Element{
+				name:  'parent'
+				items: [cx.Node(cx.ArrayNode{
+					items: [
+						cx.Node(cx.ScalarNode{ value: 'a', data_type: cx.ScalarType.string_type }),
+						cx.Node(cx.ScalarNode{ value: 'b', data_type: cx.ScalarType.string_type }),
+					]
+				})]
+			}),
+		]
+	}
+	out := cx.emit_xml(doc)
+	assert out.contains('<cx:arr>'), 'expected nested <cx:arr> inside <parent>; got: ${out}'
+	assert out.contains('<item>a</item>'), 'expected <item>a</item>; got: ${out}'
+	assert out.contains('<item>b</item>'), 'expected <item>b</item>; got: ${out}'
+}
+
+fn test_xml_inline_map_round_trip() {
+	doc := cx.Document{
+		elements: [
+			cx.Node(cx.Element{
+				name:  'parent'
+				items: [cx.Node(cx.MapNode{
+					entries: [cx.MapEntry{
+						key_type:  cx.ScalarType.string_type
+						key_value: cx.ScalarValue('k')
+						value:     cx.Node(cx.ScalarNode{
+							value: 'v', data_type: cx.ScalarType.string_type
+						})
+					}]
+				})]
+			}),
+		]
+	}
+	out := cx.emit_xml(doc)
+	assert out.contains('<cx:map>'), 'expected nested <cx:map> inside <parent>; got: ${out}'
+	assert out.contains('<entry key="k">'), 'expected entry key="k"; got: ${out}'
 }
 
 fn test_xml_emit_basic() {

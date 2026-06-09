@@ -3,26 +3,26 @@ module cx
 import crypto.sha256
 import strconv
 
-// CXDB v0.6.0 — schema-driven encoding (header flag bit 1) per
-// spec/data_bin.md §3.13 and ADR 0015 D3 / D4 / D5 / D6.
+// CXCol — schema-driven encoding (header flag bit 1) per
+// spec/core/data-bin.md §3.13.
 //
 // Schema-driven encoding omits per-value type tags wherever the schema
 // declares the value's type. Tag-omission is per-field: declared keys
 // get typed-payload-only encoding; undeclared keys (under `open` mode)
-// fall back to self-describing CXDB encoding so schema-driven and
+// fall back to self-describing CXCol encoding so schema-driven and
 // self-describing form coexist within a single document.
 //
 // This module ships:
 //   - SchemaModel parsing (root type + body kind + per-attr types
 //     + nested element types + `[?cx schema-mode <mode>]` directive)
-//   - Schema content-hash per ADR 0015 D5: SHA-256 over
-//     emit_data_bin(parse(schema_text)) (the strict-canonical CXDB
+// Schema content-hash: SHA-256 over
+//     emit_data_bin(parse(schema_text)) (the strict-canonical CXCol
 //     form of the parsed schema)
 //   - Schema-driven encoder + decoder for the most common shapes:
 //     elements with declared attrs, scalar bodies, and nested
 //     declared elements
 //   - Three schema-reference forms per §3.13.1: 0x10 content-hash,
-//     0x11 inline schema (recursive CXDB blob), 0x12 hash + name hint
+//     0x11 inline schema (recursive CXCol blob), 0x12 hash + name hint
 //
 // Reader-side decode walks the schema cursor in lockstep with the
 // data; undeclared scopes (open mode) fall through to self-describing
@@ -31,7 +31,7 @@ import strconv
 
 // ── Tags / constants ─────────────────────────────────────────────────────────
 
-const cxdb_flags_schema_driven = u8(0x02)            // header flags bit 1
+const cxcol_flags_schema_driven = u8(0x02)            // header flags bit 1
 
 const tag_schema_ref_hash      = u8(0x10)
 const tag_schema_ref_inline    = u8(0x11)
@@ -46,10 +46,9 @@ pub enum SchemaMode {
 }
 
 // AttrRule carries every attribute-declaration constraint for one
-// `[attr <name> :type :flag1 :flag2=val]` schema entry. The set of
-// constraint sigils (req/opt/def/range/enum/pat/len) is the
-// spec/schema.md §7 catalog. `required` defaults to true per
-// spec/schema.md §5.
+// `[attr name::T [req] [default V] [range M N] [enum …] [pattern …]
+// [min-length N] [max-length N]]` schema entry.
+// `required` defaults to true per spec/schema.md §5.
 pub struct AttrRule {
 pub mut:
 	type_name string
@@ -62,14 +61,14 @@ pub mut:
 	range_max string    //        per declared scalar type
 	len_min   string    // S018
 	len_max   string
-	// v0.6.0 — attr-position fragment alias `[attr name *frag :flag]`.
+	// attr-position fragment alias `[attr name *frag [clause …]]`.
 	// At schema-load time the validator looks up `*frag` in
 	// SchemaModel.frags and inlines the fragment body's kind + range +
-	// enum + pat + len constraints into this AttrRule. Site-local flags
-	// (`:req`, `:opt`, `:def=`) take precedence over the fragment.
-	// Empty when no alias is referenced.
+	// enum + pat + len constraints into this AttrRule.  Site-local
+	// clauses ([req] / [opt] / [default V]) take precedence over the
+	// fragment.  Empty when no alias is referenced.
 	alias_target string
-	// ADR 0017 §D15 (v1.1) — attribute-position container productions.
+	// (v1.1) — attribute-position container productions.
 	// Same shape as BodyRule.item_kind / .key_kind. Attribute values
 	// that are collection literals (`name=[a, b, c]` for arr, etc.)
 	// validate against these.
@@ -78,8 +77,8 @@ pub mut:
 }
 
 // ElemRule carries the cardinality + type-to-recurse-into for one
-// `[elem <name> :card='M..N']` entry. `type_name` defaults to the
-// child element's name (the conventional case).
+// `[elem name [card "M..N"]]` entry. `type_name`
+// defaults to the child element's name (the conventional case).
 pub struct ElemRule {
 pub mut:
 	type_name     string
@@ -89,8 +88,9 @@ pub mut:
 }
 
 // BodyRule carries the body-declaration constraints for one
-// `[body :kind :flag1 :flag2=val]` entry. `kind` is the body kind
-// ('string', 'i32', 'elem', 'mixed', 'none', 'any', 'scalar', etc.).
+// `[body kind [clause …]]` entry. `kind` is the
+// body kind ('string', 'i32', 'elem', 'mixed', 'none', 'any',
+// 'scalar', etc.).
 pub struct BodyRule {
 pub mut:
 	declared  bool
@@ -102,11 +102,11 @@ pub mut:
 	range_max string
 	len_min   string
 	len_max   string
-	// ADR 0017 §D15 (v1.1) — container productions `arr[T]` / `seq[T]` /
+	// (v1.1) — container productions `arr[T]` / `seq[T]`
 	// `map[K, V]`. When `kind` is 'arr' or 'seq', `item_kind` carries the
 	// element kind ('u16', 'string', or a nested `arr[float]` / `map[…]`
 	// expression). When `kind` is 'map', `key_kind` carries the key
-	// type (atomic scalar, restricted to 'string' at v0.6.0 per ADR §D4)
+	// type (atomic scalar, restricted to 'string')
 	// and `item_kind` the value type. Recursive nesting (`arr[arr[float]]`,
 	// `map[string, arr[u32]]`) is preserved verbatim and re-parsed at
 	// validation time.
@@ -115,7 +115,7 @@ pub mut:
 }
 
 // SchemaType describes one named type in the schema. The unified
-// model lands at v0.6.0; it carries every constraint sigil the
+// model is unified; it carries every constraint sigil the
 // validator and the schema-driven encoder both need so neither side
 // re-walks the schema AST.
 //
@@ -131,7 +131,7 @@ pub mut:
 	elems               map[string]ElemRule
 	elems_order         []string  // declaration order — drives S015 child-order
 	child_order_strict  bool      // [check ordering=strict] under this type
-	// v0.6.0 — top-level fragment alias `[type-name *frag]` (parsed by
+	// Top-level fragment alias `[type-name *frag]` (parsed by
 	// the CX parser as `Element.merge = "frag"`). Resolution at schema-
 	// load time inlines the fragment's body+attrs+elems+elems_order into
 	// this SchemaType. Empty when no alias is referenced.
@@ -144,9 +144,10 @@ pub struct SchemaModel {
 pub mut:
 	mode  SchemaMode = SchemaMode.open
 	root  string
+	name  string // human-readable schema name from `[?cx schema-name '…']`
 	types map[string]SchemaType
 	src   string
-	// v0.6.0 — fragment registry per spec/schema.md §8. anchor name →
+	// Fragment registry per spec/schema.md §8. anchor name →
 	// fragment definition. Sources: (a) anchor on a top-level type-decl
 	// element (the type doubles as a fragment); (b) the standalone
 	// `[?cx frag &name [body...]]` directive form. Populated during
@@ -162,10 +163,10 @@ pub mut:
 // We then walk the AST extracting the root name from the schema-of
 // directive, the mode from any schema-mode directive, and the per-
 // type body / attr / elem declarations from each `[<type-name> ...]`
-// element. Per-attr declarations embed their type/flags as a single
-// trailing TextNode (e.g. `[attr host :string :req]` → TextNode
-// "host :string :req"); we split that text on whitespace to recover
-// the (name, type, flags) tuple.
+// element. Per, declarations carry the type via a
+// `name::T` glued ascription in the first body TextNode and the
+// constraints as `[clause …]` child Elements (`[req]`, `[default V]`,
+// `[range M N]`, …).  See the §6.f section below.
 pub fn parse_schema(schema_text string) !SchemaModel {
 	doc := parse(schema_text) or {
 		return error('S009: schema parse failure: ${err.msg()}')
@@ -194,7 +195,7 @@ pub fn parse_schema(schema_text string) !SchemaModel {
 		if n is Element {
 			st := schema_type_from_element(n)!
 			sm.types[st.name] = st
-			if anc := n.anchor {
+			if anc := n.anchor() {
 				if anc in sm.frags {
 					// Two fragments with the same name — schema-load fail.
 					return error('S014: duplicate fragment anchor \'&${anc}\'')
@@ -236,11 +237,11 @@ pub fn parse_schema(schema_text string) !SchemaModel {
 	return sm
 }
 
-// register_frag_directive recognizes `[?cx frag &name [body :TYPE :flags]]`
-// (spec/schema.md §8 standalone fragment form). The directive's first
-// positional attr name must be `frag`; the directive carries the
-// fragment anchor in `.anchor` and the fragment body declarations in
-// `.items`.
+// register_frag_directive recognizes `[?cx frag &name [body T [clause …]]]`
+// (spec/schema.md §8 standalone fragment form shape).
+// The directive's first positional attr name must be `frag`; the
+// directive carries the fragment anchor in `.anchor` and the fragment
+// body declarations in `.items`.
 fn register_frag_directive(d CXDirectiveNode, mut sm SchemaModel) ! {
 	if d.attrs.len == 0 || d.attrs[0].name != 'frag' { return }
 	anc := d.anchor or {
@@ -255,9 +256,10 @@ fn register_frag_directive(d CXDirectiveNode, mut sm SchemaModel) ! {
 }
 
 // resolve_aliases inlines `*frag` references at schema-load time per
-// spec §8 + §10.1 step 1. Type-level aliases (`[type *frag]` parsed as
-// Element.merge) run first via DFS with cycle detection. Attr-level
-// aliases (`[attr name *frag :flag]`) run after type resolution.
+// spec §8 + §10.1 step 1.  Type-level aliases (`[type *frag]` parsed
+// as Element.merge) run first via DFS with cycle detection.  Attr-
+// level aliases (`[attr name *frag [clause …]]`) run after type
+// resolution.
 fn resolve_aliases(mut sm SchemaModel) ! {
 	// Phase 1 — type-level aliases. DFS with three colors: 0 white
 	// (unvisited), 1 grey (in progress), 2 black (resolved).
@@ -346,7 +348,7 @@ fn merge_frag_into_type(mut st SchemaType, frag SchemaType) {
 // inline_frag_into_attr applies a fragment's body kind + constraints
 // to a referencing AttrRule. Site-local flags (req/opt/def) on the
 // referencing attr take precedence; the fragment supplies the type
-// shape (kind, range, enum, pat, len). v0.6.0 supports a single-step
+// shape (kind, range, enum, pat, len). A single-step
 // inlining; chained fragments resolve via Phase-1 type resolution.
 fn inline_frag_into_attr(mut ar AttrRule, frag SchemaType) {
 	if frag.body.declared {
@@ -365,8 +367,8 @@ fn inline_frag_into_attr(mut ar AttrRule, frag SchemaType) {
 }
 
 // default_value_coerces returns true when `raw` (the literal text from
-// `:def=<value>`) is a CX literal that matches the declared scalar
-// type. Used at schema-load time to enforce S011 fail-fast per
+// the `[default V]` clause) is a CX literal that matches the declared
+// scalar type.  Used at schema-load time to enforce S011 fail-fast per
 // spec/schema.md §11.
 fn default_value_coerces(raw string, declared string) bool {
 	s := strip_quotes(raw)
@@ -403,6 +405,15 @@ fn default_value_coerces(raw string, declared string) bool {
 	}
 }
 
+// directive_arg_text reads one positional directive argument as text.
+// Bareword args are stored in the attr `name` (value empty); quoted
+// args (e.g. `[?cx schema-name 'Book schema v1']`) are stored in `value`
+// with an empty name. This normalizes both forms to their text.
+fn directive_arg_text(a Attribute) string {
+	if a.name != '' { return a.name }
+	return a.str_value()
+}
+
 // schema_directive_apply consumes a `[?cx schema-of NAME]` /
 // `[?cx schema-mode MODE]` / `[?cx schema-version VER]` directive
 // (positional form). S020 fail-fasts on unsupported version.
@@ -412,6 +423,11 @@ fn schema_directive_apply(d CXDirectiveNode, mut sm SchemaModel) ! {
 	match first {
 		'schema-of' {
 			if d.attrs.len >= 2 { sm.root = d.attrs[1].name }
+		}
+		'schema-name' {
+			// Human-readable name; quoted positional arg lands in `value`
+			// (empty name), bareword in `name`. Diagnostic-only per §2.
+			if d.attrs.len >= 2 { sm.name = directive_arg_text(d.attrs[1]) }
 		}
 		'schema-mode' {
 			if d.attrs.len >= 2 {
@@ -426,8 +442,8 @@ fn schema_directive_apply(d CXDirectiveNode, mut sm SchemaModel) ! {
 		'schema-version' {
 			if d.attrs.len >= 2 {
 				ver := d.attrs[1].name
-				if ver != '0.6' {
-					return error('S020: schema-version \'${ver}\' is not supported (this implementation supports 0.6 only)')
+				if ver != '0.8' {
+					return error('S020: schema-version \'${ver}\' is not supported (this implementation supports 0.8 only)')
 				}
 			}
 		}
@@ -451,13 +467,13 @@ fn schema_directive_walk_for_mode(e Element, mut sm SchemaModel) ! {
 
 // schema_type_from_element walks one type-declaration element and
 // produces a SchemaType under the unified model. Recognized children:
-//   [body :TYPE :flag1 :flag2]           declares body kind / constraints
-//   [attr <name> :TYPE :flag1 :flag2]    declares an attribute
-//   [elem <name> :TYPE :flag]            declares a child element + cardinality
+//   [body kind [clause …]]               declares body kind / constraints
+//   [attr name::T [clause …]]            declares an attribute
+//   [elem name [clause …]]               declares a child element + cardinality
 //   [check ordering=strict]              parent-level child-order policy (S015)
 //   [<sub-type> ...]                     unrecognized; ignored at v0
 //
-// v0.6.0 — `[type-name *fragment-name]` (where the parser stores
+// `[type-name *fragment-name]` (where the parser stores
 // `*fragment-name` as `Element.merge`) records the fragment alias for
 // later resolution by resolve_aliases. The merge field's normal CX
 // "merge from anchor" semantics overlap exactly with the schema spec's
@@ -467,12 +483,125 @@ fn schema_directive_walk_for_mode(e Element, mut sm SchemaModel) ! {
 //   - duplicate `[attr <same-name> ...]` declarations on the same
 //     type (S014).
 fn schema_type_from_element(e Element) !SchemaType {
+	// top-level `[type Name::T]` / `[type Name [decls…]]`
+	// form.  The element name is the literal `type`; the actual type
+	// name is in the first body token (with an optional `::T` body-
+	// shape ascription).
+	if e.name == 'type' {
+		return schema_type_from_v0_8_type_decl(e)
+	}
 	mut st := SchemaType{ name: e.name }
-	if mt := e.merge {
+	if mt := e.merge() {
 		st.alias_target = mt
 	}
 	collect_decls(e.items, mut st)!
 	return st
+}
+
+// schema_type_from_v0_8_type_decl handles the top-level
+// `[type Name…]` form.  Three variants:
+//
+//   [type Name::T]                     ← scalar / composite body alias
+//   [type Name::[composite …]]         ← composite-body alias
+//   [type Name  [attr …] [elem …] …]   ← named record (attrs + elems)
+//
+// The Name lives in the first TextNode of the body; an optional `::T`
+// after Name carries the body-shape ascription (scalar or composite).
+// Constraint clauses directly under a `[type Name::T …]` declaration
+// (e.g. `[req]`, `[range M N]`, `[pattern …]`) fold into the body rule.
+fn schema_type_from_v0_8_type_decl(e Element) !SchemaType {
+	name, type_str := split_v0_8_name_type(e)
+	if name == '' {
+		return error('S009: `[type ...]` declaration missing type name')
+	}
+	mut st := SchemaType{ name: name }
+	if type_str != '' {
+		// Body-shape alias — `[type ID::string]` / `[type Path::[list T]]`.
+		apply_v0_8_type_str_to_body(type_str, mut st.body)
+	}
+	// Fold any body-level constraint clauses into the body rule.  attr /
+	// elem / check children flow through collect_decls below.
+	for n in e.items {
+		if n is Element {
+			if is_v0_8_clause_name(n.name) {
+				apply_v0_8_clause_to_body(n, mut st.body)
+			}
+		}
+	}
+	collect_decls(e.items, mut st)!
+	return st
+}
+
+// apply_v0_8_clause_to_body folds one constraint-clause child Element
+// into the BodyRule (parallel to apply_v0_8_clause_to_attr but writing
+// to the BodyRule slots).
+fn apply_v0_8_clause_to_body(n Element, mut br BodyRule) {
+	match n.name {
+		'req' { br.required = true }
+		'opt' { br.required = false }
+		'min' { br.range_min = clause_payload_text(n) }
+		'max' { br.range_max = clause_payload_text(n) }
+		'range' {
+			mn, mx := clause_payload_pair(n)
+			br.range_min = mn
+			br.range_max = mx
+		}
+		'min-length' { br.len_min = clause_payload_text(n) }
+		'max-length' { br.len_max = clause_payload_text(n) }
+		'len' {
+			mn, mx := clause_payload_pair(n)
+			br.len_min = mn
+			br.len_max = mx
+		}
+		'pattern' { br.pat = clause_payload_text(n) }
+		'enum' { br.enum_vals = clause_payload_list(n) }
+		else {}
+	}
+}
+
+// apply_v0_8_type_str_to_body resolves a body-shape ascription string
+// (scalar bareword OR composite `[…]`) into a BodyRule.
+fn apply_v0_8_type_str_to_body(typ string, mut br BodyRule) {
+	t := typ.trim_space()
+	if t == '' { return }
+	br.declared = true
+	if t.starts_with('[') && t.ends_with(']') && t.len >= 2 {
+		inner := t[1..t.len - 1].trim_space()
+		toks := split_ws_quote_bracket(inner)
+		if toks.len == 0 { return }
+		head := toks[0]
+		match head {
+			'enum' {
+				br.kind = 'string'
+				mut vals := []string{}
+				for v in toks[1..] {
+					vv := strip_quotes(v.trim_space())
+					if vv != '' { vals << vv }
+				}
+				br.enum_vals = vals
+			}
+			'list', 'seq' {
+				br.kind = 'arr'
+				if toks.len > 1 { br.item_kind = toks[1..].join(' ') }
+			}
+			'map' {
+				br.kind = 'map'
+				if toks.len > 1 { br.key_kind = toks[1] }
+				if toks.len > 2 { br.item_kind = toks[2..].join(' ') }
+			}
+			else {
+				// Unknown / opaque composite — leave kind empty.
+			}
+		}
+		if is_scalar_kind(br.kind) || is_container_collection_kind(br.kind) {
+			br.required = true
+		}
+		return
+	}
+	br.kind = t
+	if is_scalar_kind(br.kind) || is_container_collection_kind(br.kind) {
+		br.required = true
+	}
 }
 
 // collect_decls walks a list of items (from a type-decl element or a
@@ -521,80 +650,14 @@ fn collect_decls(items []Node, mut st SchemaType) ! {
 	st.elems_order = elems_order
 }
 
-// body_rule_from_element parses `[body :kind :flag1 :flag2=val ...]`.
+// body_rule_from_element parses an body declaration of
+// the shape `[body kind [clause …] …]` (bareword kind + clause-children).
+// The legacy `[body :kind :flag …]` shape was removed in Drop 3.
 fn body_rule_from_element(e Element) BodyRule {
-	mut br := BodyRule{ declared: true }
-	if dt := e.data_type {
-		br.kind = dt
-	}
-	// ADR 0017 §D19 — legacy `:T[]` annotation desugars to `arr[T]`.
-	// Normalize at schema-load so downstream validators only see the
-	// container form. The bare `:[]` (no inner type) is non-canonical
-	// at v1.1 and not handled here; schemas that emit it would have
-	// been rejected upstream.
-	if br.kind.ends_with('[]') && br.kind.len > 2 {
-		inner := br.kind[..br.kind.len - 2]
-		if inner != '' {
-			br.kind = 'arr'
-			br.item_kind = inner
-		}
-	}
-	// ADR 0017 §D15 — collection-literal productions written without
-	// the `:`-prefix sigil land in body text tokens (e.g. `arr[u16]`).
-	// Walk the body items for the first token that matches
-	// `arr[T]` / `seq[T]` / `map[K, V]` and adopt its kind. Existing
-	// `:type` annotation (handled above) wins when both are present,
-	// since the annotation is the documented v1.0 form and a schema
-	// that mixes both shapes most likely had the annotation typed
-	// first.
-	if br.kind == '' {
-		for n in e.items {
-			if n is TextNode {
-				toks := split_ws_quote_bracket(n.value.trim_space())
-				for tok in toks {
-					if k, kk, ik := parse_container_kind(tok) {
-						br.kind = k
-						br.key_kind = kk
-						br.item_kind = ik
-						break
-					}
-				}
-				if br.kind != '' { break }
-			}
-		}
-	}
-	// spec/schema.md §4: `:req` is implicit for non-:none shapes;
-	// every scalar kind requires content unless an explicit `:opt`
-	// (not in v0.6.0 catalog for body) overrides. We mark scalar
-	// kinds implicit-required so S019 fires on empty `[name]` forms
-	// declared with a scalar body. Container productions
-	// (`arr` / `seq` / `map`) are also implicit-required since they
-	// describe content shape, not absence.
-	if is_scalar_kind(br.kind) || is_container_collection_kind(br.kind) {
-		br.required = true
-	}
-	for tok in collect_decl_tokens(e) {
-		match true {
-			tok == 'req' { br.required = true }
-			tok.starts_with('pat=')   { br.pat = strip_quotes(tok[4..]) }
-			tok.starts_with('range=') {
-				min_v, max_v := split_range(strip_quotes(tok[6..]))
-				br.range_min = min_v
-				br.range_max = max_v
-			}
-			tok.starts_with('len=') {
-				min_v, max_v := split_range(strip_quotes(tok[4..]))
-				br.len_min = min_v
-				br.len_max = max_v
-			}
-			tok.starts_with('enum=') { br.enum_vals = parse_enum_list(strip_quotes(tok[5..])) }
-			else {}
-		}
-	}
-	return br
+	return body_rule_from_element_v0_8(e)
 }
 
-// parse_container_kind matches ADR 0017 §D15 container productions
+// parse_container_kind matches container productions
 // `arr[T]` / `seq[T]` / `map[K, V]`. Returns (kind, key_kind,
 // item_kind) on a match, none otherwise. The inner `[...]` payload is
 // extracted with balanced-bracket awareness so nested productions
@@ -634,172 +697,365 @@ fn is_container_collection_kind(k string) bool {
 	return k == 'arr' || k == 'seq' || k == 'map'
 }
 
-// attr_rule_from_element parses `[attr NAME :TYPE :flag1 :flag2=val ...]`.
-// v0.6.0 also recognizes attr-position fragment alias `[attr NAME *FRAG :flag]`;
-// the alias target is stashed in ar.alias_target for resolve_aliases to
-// inline the fragment body's kind+constraints into this rule.
+// attr_rule_from_element parses an attr declaration of
+// the shape `[attr name::T [clause …] …]`.  Fragment-alias references
+// (`[attr name *frag [clause …]]`) are preserved via ar.alias_target.
+// The legacy `[attr name :T :flag …]` shape was removed in Drop 3.
 fn attr_rule_from_element(e Element) AttrRule {
-	mut ar := AttrRule{ required: true }  // spec/schema.md §5 default
-	_, type_name, flags, def_val, alias_target := decl_split(e)
-	ar.type_name = type_name
-	ar.alias_target = alias_target
-	if def_val != '' {
-		ar.has_def = true
-		ar.def_value = def_val
-		ar.required = false  // :def implies :opt (§5)
-	}
-	mut req := ar.required
-	mut has_explicit_opt := false
-	for tok in flags {
-		match true {
-			tok == 'req' { req = true }
-			tok == 'opt' { req = false; has_explicit_opt = true }
-			tok.starts_with('pat=')   { ar.pat       = strip_quotes(tok[4..]) }
-			tok.starts_with('range=') {
-				min_v, max_v := split_range(strip_quotes(tok[6..]))
-				ar.range_min = min_v
-				ar.range_max = max_v
-			}
-			tok.starts_with('len=') {
-				min_v, max_v := split_range(strip_quotes(tok[4..]))
-				ar.len_min = min_v
-				ar.len_max = max_v
-			}
-			tok.starts_with('enum=') {
-				ar.enum_vals = parse_enum_list(strip_quotes(tok[5..]))
-			}
-			else {}
-		}
-	}
-	if !has_explicit_opt && !ar.has_def { ar.required = req }
-	else { ar.required = req }
-	return ar
+	return attr_rule_from_element_v0_8(e)
 }
 
-// elem_rule_from_element parses `[elem NAME :card='M..N' :flag]`.
-// type_name defaults to the element name when no `:type` is given.
+// elem_rule_from_element parses an elem declaration of
+// the shape `[elem name [card "M..N"] …]` (or `[elem name::T …]` for a
+// named-type / composite element ascription).  The legacy
+// `[elem name :flag]` shape was removed in Drop 3.
 fn elem_rule_from_element(e Element) ElemRule {
-	mut er := ElemRule{ min: 1, max: 1 }
-	name, type_name, flags, _, _ := decl_split(e)
-	er.type_name = if type_name != '' { type_name } else { name }
-	for tok in flags {
-		match true {
-			tok == 'req' { er.min = 1; er.max = 1; er.max_unbounded = false }
-			tok == 'opt' { er.min = 0; er.max = 1; er.max_unbounded = false }
-			tok.starts_with('card=') {
-				min_v, max_v, unbounded := parse_card_range(strip_quotes(tok[5..]))
-				er.min = min_v
-				er.max = max_v
-				er.max_unbounded = unbounded
-			}
-			else {}
-		}
-	}
-	return er
+	return elem_rule_from_element_v0_8(e)
 }
 
 fn decl_name_from_element(e Element) string {
-	name, _, _, _, _ := decl_split(e)
+	return decl_name_from_element_v0_8(e)
+}
+
+// ── 6.f — schema vocabulary (constraint clauses) ────────────────────
+//
+// The v0.8.0 schema shape drops the legacy `:flag`
+// trailing-sigil convention in favour of explicit `[clause …]` child
+// elements and a `name::T` glued type ascription:
+//
+//   [user
+//     [attr id::string   [req] [min-length 3] [max-length 20]]
+//     [attr name::string [default "anon"]]
+//     [attr role::string [req] [enum admin user guest]]
+//     [elem address [card "1..1"]]]
+//
+// The CX parser already returns the natural shape for these — `name::T` /
+// `name::[composite T]` lands as a single TextNode in the element's body,
+// and each `[clause …]` lands as a child Element.  The §6.f extractors
+// below fold both into the AttrRule / ElemRule / BodyRule shapes.
+
+// body_rule_from_element_v0_8 parses the §6.f `[body kind [clause …] …]`
+// shape.  The element's first body TextNode carries the kind (bareword
+// or container literal `arr[T]` / `seq[T]` / `map[K, V]`); each child
+// Element is a constraint clause.
+fn body_rule_from_element_v0_8(e Element) BodyRule {
+	mut br := BodyRule{ declared: true }
+	// First text token is the kind (bareword or container literal).
+	for n in e.items {
+		if n is TextNode {
+			toks := split_ws_quote_bracket(n.value.trim_space())
+			if toks.len == 0 { continue }
+			first := toks[0]
+			if k, kk, ik := parse_container_kind(first) {
+				br.kind = k
+				br.key_kind = kk
+				br.item_kind = ik
+			} else {
+				br.kind = first
+			}
+			break
+		}
+	}
+	if is_scalar_kind(br.kind) || is_container_collection_kind(br.kind) {
+		br.required = true
+	}
+	for n in e.items {
+		if n is Element {
+			apply_v0_8_clause_to_body(n, mut br)
+		}
+	}
+	return br
+}
+
+// is_v0_8_clause_name returns true when a child Element's name matches
+// the constraint-clause vocabulary specified.
+fn is_v0_8_clause_name(name string) bool {
+	return name in [
+		'req', 'opt', 'default', 'min', 'max',
+		'min-length', 'max-length', 'pattern', 'enum',
+		'card', 'ref', 'len', 'range', 'open', 'closed',
+	]
+}
+
+// decl_name_from_element_v0_8 extracts the declaration name from the
+// first body text token, splitting on the `::` ascription if present.
+fn decl_name_from_element_v0_8(e Element) string {
+	name, _ := split_v0_8_name_type(e)
 	return name
 }
 
-// decl_split parses an `[attr|elem NAME :TYPE :flag1 :flag2=val ...]`
-// declaration. Returns (name, type, flags, def_value, alias_target).
-// The schema parser sometimes folds the `:type` annotation into
-// Element.data_type with the bare name as a single ScalarNode; we
-// handle both layouts.
-//
-// v0.6.0 — also recognizes `*name` tokens as fragment alias references
-// (used by `[attr NAME *FRAG :flag]` per spec/schema.md §8). The
-// alias_target return value is empty when no `*name` token appears.
-// The CX parser today flattens `[attr NAME *FRAG :flag]` into a single
-// TextNode whose value is `NAME *FRAG :flag`, so we walk the token
-// stream looking for a `*<name>` token (only the first one matters
-// per spec).
-fn decl_split(e Element) (string, string, []string, string, string) {
-	mut name := ''
-	mut type_name := ''
-	mut flags := []string{}
-	mut def_value := ''
-	mut alias_target := ''
-
-	if dt := e.data_type {
-		if e.items.len >= 1 {
-			if e.items[0] is ScalarNode {
-				s := e.items[0] as ScalarNode
-				name = scalar_value_str(s.value).trim_space()
-			}
-		}
-		type_name = dt
-		for i, n in e.items {
-			if i == 0 { continue }
-			if n is TextNode {
-				for tok in tokenize_decl_flags(n.value) {
-					if tok.starts_with('def=') {
-						def_value = tok[4..]
-					} else {
-						flags << tok
-					}
-				}
-			}
-		}
-		return name, type_name, flags, def_value, alias_target
-	}
-
+// split_v0_8_name_type returns (name, type_str).  The type_str is the
+// raw post-`::` ascription text — a bareword like 'string' or a balanced
+// `[list T]` / `[enum a b c]` / `[record …]` expression.  An untyped
+// decl returns (name, '').
+fn split_v0_8_name_type(e Element) (string, string) {
 	for n in e.items {
 		if n is TextNode {
-			parts := split_ws_quote_bracket(n.value.trim_space())
-			if parts.len == 0 { continue }
-			name = parts[0]
-			for p in parts[1..] {
-				if p.starts_with('*') && p.len > 1 && alias_target == '' {
-					alias_target = p[1..]
-					continue
+			t := n.value.trim_space()
+			if t == '' { continue }
+			toks := split_ws_quote_bracket(t)
+			if toks.len == 0 { continue }
+			first := toks[0]
+			// Split on `::` only when not at offset 0 (`::T` alone is
+			// not a valid ascription form here — the leading `:` would
+			// have been a parse error in the data parser, so we never
+			// see that shape on the schema side).
+			if idx := first.index('::') {
+				if idx > 0 {
+					name := first[..idx]
+					typ := first[idx + 2..]
+					return name, typ
 				}
-				if !p.starts_with(':') { continue }
-				tok := p[1..]
-				if tok.starts_with('def=') {
-					def_value = tok[4..]
-					continue
-				}
-				if tok == 'req' || tok == 'opt' || tok.starts_with('card=')
-					|| tok.starts_with('range=') || tok.starts_with('enum=')
-					|| tok.starts_with('pat=') || tok.starts_with('len=') {
-					flags << tok
-					continue
-				}
-				if type_name == '' {
-					type_name = tok
-				} else {
-					flags << tok
+			}
+			return first, ''
+		}
+	}
+	return '', ''
+}
+
+// attr_rule_from_element_v0_8 parses the §6.f attr-decl form.  The
+// element's first body TextNode carries `name` or `name::T`; each
+// child Element is a constraint clause.  Composite type ascriptions
+// (`[list T]`, `[enum …]`, `[ref Name]`, …) embed in the type_str.
+// A `*frag` token in the body text is preserved as the alias_target
+// for resolve_aliases (CX merge-sigil form, reused for fragment
+// inlining — schema vocab doesn't redefine it).
+fn attr_rule_from_element_v0_8(e Element) AttrRule {
+	mut ar := AttrRule{ required: true }  // default
+	_, type_str := split_v0_8_name_type(e)
+	apply_v0_8_type_str_to_attr(type_str, mut ar)
+	// Scan first TextNode for a `*frag` alias token after the name.
+	for n in e.items {
+		if n is TextNode {
+			toks := split_ws_quote_bracket(n.value.trim_space())
+			for i, t in toks {
+				if i == 0 { continue }  // skip the name / name::T token
+				if t.starts_with('*') && t.len > 1 && ar.alias_target == '' {
+					ar.alias_target = t[1..]
+					break
 				}
 			}
 			break
 		}
 	}
-	return name, type_name, flags, def_value, alias_target
-}
-
-fn collect_decl_tokens(e Element) []string {
-	mut out := []string{}
 	for n in e.items {
-		if n is TextNode {
-			out << tokenize_decl_flags(n.value)
+		if n is Element {
+			apply_v0_8_clause_to_attr(n, mut ar)
 		}
 	}
-	return out
+	return ar
 }
 
-// tokenize_decl_flags returns the `:`-stripped sigil tokens from a
-// schema-decl TextNode body. Quote- and bracket-aware (v0.6.0
-// Phase 7.74e) so `:pat='a b c'`, `:enum='a,b,c'`, and
-// `:enum=[v1 v2 v3]` survive intact rather than being whitespace-split
-// into fragments.
-fn tokenize_decl_flags(s string) []string {
+// apply_v0_8_type_str_to_attr resolves the post-`::` ascription text
+// into the AttrRule slots.  Composite types (enum/list/map/ref) flow
+// into the matching constraint slots in addition to (or instead of)
+// type_name.
+fn apply_v0_8_type_str_to_attr(typ string, mut ar AttrRule) {
+	t := typ.trim_space()
+	if t == '' { return }
+	if t.starts_with('[') && t.ends_with(']') && t.len >= 2 {
+		inner := t[1..t.len - 1].trim_space()
+		toks := split_ws_quote_bracket(inner)
+		if toks.len == 0 { return }
+		head := toks[0]
+		match head {
+			'enum' {
+				mut vals := []string{}
+				for v in toks[1..] {
+					vv := strip_quotes(v.trim_space())
+					if vv != '' { vals << vv }
+				}
+				ar.enum_vals = vals
+				ar.type_name = 'string'  // enum members are string atoms
+			}
+			'list', 'seq' {
+				ar.type_name = 'arr'
+				if toks.len > 1 { ar.item_kind = toks[1..].join(' ') }
+			}
+			'map' {
+				ar.type_name = 'map'
+				if toks.len > 1 { ar.key_kind = toks[1] }
+				if toks.len > 2 { ar.item_kind = toks[2..].join(' ') }
+			}
+			'or' {
+				// We keep the union shape opaque; the validator
+				// will skip type-mismatch checking on union-typed attrs.
+				ar.type_name = ''
+			}
+			'ref' {
+				// `[ref Name]` — reference to a named type / id.  Stored
+				// in alias_target so resolve_aliases / S023 paths can see
+				// it; type_name stays empty so S005 doesn't fire.
+				if toks.len > 1 { ar.alias_target = toks[1] }
+			}
+			'record', 'tuple' {
+				// Composite shapes — kept opaque (full shape
+				// validation is future work).  Mark type_name so the
+				// schema-load default-coercion check skips.
+				ar.type_name = ''
+			}
+			else {
+				// Unknown bracket-head — leave type opaque.
+				ar.type_name = ''
+			}
+		}
+		return
+	}
+	// Bareword type ascription — atomic scalar (or a named type alias).
+	ar.type_name = t
+}
+
+// apply_v0_8_clause_to_attr folds one constraint-clause child Element
+// into the AttrRule.  Unknown clauses are silently ignored (forward-
+// compatibility — future clauses won't break older validators).
+fn apply_v0_8_clause_to_attr(n Element, mut ar AttrRule) {
+	match n.name {
+		'req' { ar.required = true }
+		'opt' { ar.required = false }
+		'default' {
+			ar.has_def = true
+			ar.def_value = clause_payload_text(n)
+			ar.required = false  // [default V] implies optional (§5)
+		}
+		'min' { ar.range_min = clause_payload_text(n) }
+		'max' { ar.range_max = clause_payload_text(n) }
+		'range' {
+			mn, mx := clause_payload_pair(n)
+			ar.range_min = mn
+			ar.range_max = mx
+		}
+		'min-length' { ar.len_min = clause_payload_text(n) }
+		'max-length' { ar.len_max = clause_payload_text(n) }
+		'len' {
+			mn, mx := clause_payload_pair(n)
+			ar.len_min = mn
+			ar.len_max = mx
+		}
+		'pattern' { ar.pat = clause_payload_text(n) }
+		'enum' { ar.enum_vals = clause_payload_list(n) }
+		'ref' {
+			tgt := clause_payload_text(n)
+			if tgt != '' { ar.alias_target = tgt }
+		}
+		else {}
+	}
+}
+
+// elem_rule_from_element_v0_8 parses the 6.f elem-decl form.
+fn elem_rule_from_element_v0_8(e Element) ElemRule {
+	mut er := ElemRule{ min: 1, max: 1 }
+	name, type_str := split_v0_8_name_type(e)
+	if type_str != '' {
+		// Composite ascriptions on elem decls are typically `::TypeName`
+		// (named-type reference) or `::[list T]`.  For named-type the
+		// type_name is the bareword; for [list T] the type_name is the
+		// inner T (the elem is one item; cardinality is on the parent).
+		t := type_str.trim_space()
+		if t.starts_with('[') && t.ends_with(']') && t.len >= 2 {
+			inner := t[1..t.len - 1].trim_space()
+			toks := split_ws_quote_bracket(inner)
+			if toks.len >= 2 && (toks[0] == 'list' || toks[0] == 'seq') {
+				er.type_name = toks[1]
+			} else {
+				er.type_name = name
+			}
+		} else {
+			er.type_name = t
+		}
+	} else {
+		er.type_name = name
+	}
+	for n in e.items {
+		if n is Element {
+			match n.name {
+				'req' { er.min = 1; er.max = 1; er.max_unbounded = false }
+				'opt' { er.min = 0; er.max = 1; er.max_unbounded = false }
+				'card' {
+					raw := clause_payload_text(n)
+					mn, mx, unb := parse_card_range(raw)
+					er.min = mn
+					er.max = mx
+					er.max_unbounded = unb
+				}
+				else {}
+			}
+		}
+	}
+	return er
+}
+
+// clause_payload_text returns the single scalar / text payload of a
+// constraint clause Element (e.g. `[min 3]` → '3', `[pattern '^x$']`
+// → '^x$', `[default "anon"]` → 'anon').  Returns '' on an empty
+// clause body.
+fn clause_payload_text(e Element) string {
+	for n in e.items {
+		if n is ScalarNode {
+			return scalar_value_str(n.value)
+		}
+		if n is TextNode {
+			t := n.value.trim_space()
+			if t != '' { return strip_quotes(t) }
+		}
+	}
+	return ''
+}
+
+// clause_payload_pair returns the first two whitespace-separated tokens
+// from a clause body — used by `[range M N]` / `[len M N]`.  Also
+// accepts a single `'M..N'` text token for back-compat with quoted ranges.
+fn clause_payload_pair(e Element) (string, string) {
+	mut tokens := []string{}
+	for n in e.items {
+		if n is ScalarNode {
+			tokens << scalar_value_str(n.value)
+		} else if n is TextNode {
+			t := n.value.trim_space()
+			if t == '' { continue }
+			parts := split_ws_quote_bracket(t)
+			for p in parts {
+				tokens << strip_quotes(p)
+			}
+		}
+	}
+	if tokens.len == 1 && tokens[0].contains('..') {
+		return split_range(tokens[0])
+	}
+	if tokens.len >= 2 {
+		return tokens[0], tokens[1]
+	}
+	if tokens.len == 1 {
+		return tokens[0], ''
+	}
+	return '', ''
+}
+
+// clause_payload_list returns the whitespace-separated tokens from an
+// enum clause body — `[enum admin user guest]` → ['admin', 'user',
+// 'guest'].  Quoted values survive intact (`[enum "a b" c]`).
+fn clause_payload_list(e Element) []string {
 	mut out := []string{}
-	for p in split_ws_quote_bracket(s.trim_space()) {
-		if p.starts_with(':') {
-			out << p[1..]
+	for n in e.items {
+		if n is ScalarNode {
+			out << scalar_value_str(n.value)
+		} else if n is TextNode {
+			t := n.value.trim_space()
+			if t == '' { continue }
+			for p in split_ws_quote_bracket(t) {
+				pt := p.trim_space()
+				if pt == '' { continue }
+				// Quoted members survive verbatim; unquoted atom members
+				// (`:NAME`) are stored canonically without the `:` sigil so
+				// they compare equal to atom-typed attribute / body values
+				// (which the data parser stores as the bare atom name). See
+				// spec/schema.md §3 `[enum :ok :err]`.
+				quoted := pt.starts_with("'") || pt.starts_with('"')
+				mut v := strip_quotes(pt)
+				if !quoted && v.len > 1 && v[0] == `:` {
+					v = v[1..]
+				}
+				if v != '' { out << v }
+			}
 		}
 	}
 	return out
@@ -836,39 +1092,15 @@ fn strip_quotes(s string) string {
 	return t
 }
 
-// parse_enum_list splits enum value lists into a list of trimmed/
-// unquoted strings. Accepted shapes (all supported as of v0.6.0
-// Phase 7.74e quote/bracket-aware tokenizer fix):
-//   `[v1 v2 v3]`       (spec syntax — bracket-aware)
-//   `['a' 'b' 'c']`    (spec syntax with quoted values)
-//   `'a b c'`          (quoted whitespace-separated)
-//   `v1,v2,v3`         (comma-separated)
-//   `'v1,v2,v3'`       (quoted comma-separated)
-fn parse_enum_list(raw string) []string {
-	mut t := raw.trim_space()
-	// Strip outer quotes BEFORE bracket-stripping so `'a b c'` and
-	// `'v1,v2'` flatten cleanly without leaving stray quote chars on
-	// the first/last value after split.
-	t = strip_quotes(t)
-	if t.starts_with('[') { t = t[1..] }
-	if t.ends_with(']') { t = t[..t.len-1] }
-	mut out := []string{}
-	for p in t.split_any(' \t,') {
-		s := strip_quotes(p.trim_space())
-		if s != '' { out << s }
-	}
-	return out
-}
-
 fn is_container_kind(dt string) bool {
 	return dt == 'elem' || dt == 'mixed' || dt == 'table' || dt == 'frag'
 }
 
 
-// ── Schema content-hash (ADR 0015 D5) ────────────────────────────────────────
+// ── Schema content-hash ────────────────────────────────────────
 
 // schema_content_hash returns the 32-byte SHA-256 of the schema's
-// CXDB strict-canonical encoding. This is the same primitive
+// CXCol strict-canonical encoding. This is the same primitive
 // `cx_hash` applies to data documents: parse → emit_data_bin → hash.
 // Comments and whitespace in the schema source are stripped by the
 // parse → emit_data_bin pipeline, so reformatted-but-semantically-
@@ -876,7 +1108,7 @@ fn is_container_kind(dt string) bool {
 pub fn schema_content_hash(schema_text string) ![]u8 {
 	doc := parse(schema_text)!
 	bytes := emit_data_bin(doc)
-	// Strip the 4-byte framing prefix; the hash is over the CXDB
+	// Strip the 4-byte framing prefix; the hash is over the CXCol
 	// payload (header + values), not the framing wrapper.
 	if bytes.len < 4 {
 		return error('schema content-hash: short emit')
@@ -920,12 +1152,11 @@ pub fn emit_data_bin_schema_driven(doc Document, opts SchemaDrivenEmitOptions) !
 }
 
 fn encode_header_schema_driven(mut buf []u8) {
-	buf << cxdb_magic
-	buf << cxdb_version
-	buf << (cxdb_flags_le | cxdb_flags_schema_driven)
-	encode_u32_le(mut buf, cxdb_default_depth)
-	buf << u8(0)  // reserved
-	buf << u8(0)  // reserved
+	buf << cxcol_magic
+	buf << cxcol_version
+	buf << (cxcol_flags_le | cxcol_flags_schema_driven)
+	encode_u32_le(mut buf, cxcol_default_depth)
+	buf << u8(0)  // reserved (1 byte — magic grew from 4→5 in v0.8.0)
 }
 
 fn encode_schema_reference(opts SchemaDrivenEmitOptions, _sm SchemaModel, mut buf []u8) ! {
@@ -986,7 +1217,7 @@ fn encode_root_with_schema(doc Document, sm SchemaModel, mut buf []u8) ! {
 //   - Anything not covered falls back to a self-describing emit by
 //     projecting through element_to_dataval + encode_dataval.
 fn encode_element_with_schema(e Element, st SchemaType, sm SchemaModel, mut buf []u8) ! {
-	// Closed mode rejects undeclared attrs at emit time per ADR 0015 D6.
+	// Closed mode rejects undeclared attrs at emit time.
 	if sm.mode == .closed {
 		for a in e.attrs {
 			if a.name !in st.attrs {
@@ -1156,25 +1387,25 @@ fn single_scalar_value(e Element) ?ScalarValue {
 
 // ── Schema-driven decoder ────────────────────────────────────────────────────
 
-// parse_data_bin_schema_driven decodes a framed CXDB blob whose
+// parse_data_bin_schema_driven decodes a framed CXCol blob whose
 // header flag bit 1 is set. `schema_hint` carries the schema source
 // the consumer expects; the decoder verifies the embedded reference
 // against the hint's content-hash (D002 on mismatch) and uses the
 // hint to recover omitted type tags.
 pub fn parse_data_bin_schema_driven(input []u8, schema_hint string) !Document {
 	if input.len < 4 {
-		return error('cxdb: input too short for size header')
+		return error('cxcol: input too short for size header')
 	}
 	payload_size := u32(input[0]) | (u32(input[1]) << 8)
 		| (u32(input[2]) << 16) | (u32(input[3]) << 24)
 	if 4 + int(payload_size) > input.len {
-		return error('cxdb: declared payload (${payload_size}) exceeds remaining input')
+		return error('cxcol: declared payload (${payload_size}) exceeds remaining input')
 	}
 	mut r := BinReader{
 		buf:       unsafe { input[4 .. 4 + int(payload_size)] }
 		pos:       0
 		depth:     0
-		max_depth: int(cxdb_default_depth)
+		max_depth: int(cxcol_default_depth)
 	}
 	schema_driven := r.read_header_for_schema_driven()!
 	if !schema_driven {
@@ -1184,38 +1415,39 @@ pub fn parse_data_bin_schema_driven(input []u8, schema_hint string) !Document {
 	root_type := sm.types[sm.root] or { SchemaType{} }
 	root_val := r.read_dataval_with_schema(root_type, sm)!
 	if r.pos != r.buf.len {
-		return error('cxdb: trailing bytes after root value (${r.buf.len - r.pos} bytes)')
+		return error('cxcol: trailing bytes after root value (${r.buf.len - r.pos} bytes)')
 	}
 	return root_val_to_document(sm.root, root_val)
 }
 
 fn (mut r BinReader) read_header_for_schema_driven() !bool {
 	if r.buf.len < 12 {
-		return error('cxdb: payload too short for 12-byte header')
+		return error('cxcol: payload too short for 12-byte header')
 	}
-	magic := r.take(4)!
-	if magic[0] != 0x43 || magic[1] != 0x58 || magic[2] != 0x44 || magic[3] != 0x42 {
-		return error('cxdb: bad magic')
+	magic := r.take(cxcol_magic_len)!
+	if magic[0] != cxcol_magic[0] || magic[1] != cxcol_magic[1]
+		|| magic[2] != cxcol_magic[2] || magic[3] != cxcol_magic[3]
+		|| magic[4] != cxcol_magic[4] {
+		return error('cxcol: bad magic')
 	}
 	version := r.take_u8()!
-	if version != cxdb_version {
-		return error('cxdb: unsupported version ${version}')
+	if version != cxcol_version {
+		return error('cxcol: unsupported version ${version}')
 	}
 	flags := r.take_u8()!
 	if flags & 0xFC != 0 {
-		return error('cxdb: reserved flag bits set in header')
+		return error('cxcol: reserved flag bits set in header')
 	}
 	if flags & 0x01 == 0 {
-		return error('cxdb: only little-endian payloads supported in v1')
+		return error('cxcol: only little-endian payloads supported in v1')
 	}
 	hdr_max_depth := r.read_u32_le()!
 	r.max_depth = int(hdr_max_depth)
 	rsv1 := r.take_u8()!
-	rsv2 := r.take_u8()!
-	if rsv1 != 0 || rsv2 != 0 {
-		return error('cxdb: reserved header bytes must be zero')
+	if rsv1 != 0 {
+		return error('cxcol: reserved header byte must be zero')
 	}
-	return (flags & cxdb_flags_schema_driven) != 0
+	return (flags & cxcol_flags_schema_driven) != 0
 }
 
 fn (mut r BinReader) read_schema_reference(schema_hint string) !SchemaModel {
@@ -1235,7 +1467,7 @@ fn (mut r BinReader) read_schema_reference(schema_hint string) !SchemaModel {
 		tag_schema_ref_inline {
 			n := r.read_uvarint()!
 			if n > u64(r.buf.len - r.pos) {
-				return error('cxdb: inline schema length ${n} exceeds remaining input')
+				return error('cxcol: inline schema length ${n} exceeds remaining input')
 			}
 			_ := r.take(int(n))!
 			// We re-parse from the hint when present (richer source for
@@ -1251,7 +1483,7 @@ fn (mut r BinReader) read_schema_reference(schema_hint string) !SchemaModel {
 			embedded := r.take(32)!
 			n := r.read_uvarint()!
 			if n > u64(r.buf.len - r.pos) {
-				return error('cxdb: name-hint length ${n} exceeds remaining input')
+				return error('cxcol: name-hint length ${n} exceeds remaining input')
 			}
 			_ := r.take(int(n))!  // name hint (informational; ignored at v0)
 			if schema_hint == '' {
@@ -1272,7 +1504,7 @@ fn (mut r BinReader) read_schema_reference(schema_hint string) !SchemaModel {
 fn (mut r BinReader) read_dataval_with_schema(st SchemaType, sm SchemaModel) !DataVal {
 	r.depth++
 	if r.depth > r.max_depth {
-		return error('cxdb: recursion depth exceeds limit (${r.max_depth})')
+		return error('cxcol: recursion depth exceeds limit (${r.max_depth})')
 	}
 	defer { r.depth-- }
 	body_decl := if !is_container_kind(st.body.kind) && st.body.kind != ''
@@ -1300,7 +1532,7 @@ fn (mut r BinReader) read_dataval_with_schema(st SchemaType, sm SchemaModel) !Da
 	for _ in 0 .. int(count) {
 		key_tag := r.take_u8()!
 		if key_tag != tag_string {
-			return error('cxdb: map key must be string (tag 0x30); got 0x${key_tag:02x}')
+			return error('cxcol: map key must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		k := r.read_string_payload()!
 		mut v := DataVal(DataNull{})
@@ -1326,7 +1558,7 @@ fn (mut r BinReader) read_typed_payload(declared_type string) !DataVal {
 		'string', 's' {
 			n := r.read_uvarint()!
 			if n > u64(r.buf.len - r.pos) {
-				return error('cxdb: string length ${n} exceeds remaining input')
+				return error('cxcol: string length ${n} exceeds remaining input')
 			}
 			bs := r.take(int(n))!
 			DataVal(bs.bytestr())

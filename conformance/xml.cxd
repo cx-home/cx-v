@@ -1,0 +1,640 @@
+[test-suite name=xml
+  [doc [#
+# CX Conformance — XML Input Tests
+# Version: 1.0 — 2026-04-19
+# Covers: XML → AST → CX/XML round-trip for all core node types.
+#]]
+
+ [case id=001-element-empty level=core
+  [tags xml element]
+  [in-xml [#
+<root/>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [{"type": "Element", "name": "root"}]
+}
+#]]
+  [out-xml [#
+<root/>
+#]]
+  [out-cx [#
+[root]
+#]]
+ ]
+
+ [case id=002-element-text level=core
+  [tags xml element text]
+  [in-xml [#
+<greeting>Hello</greeting>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "greeting",
+      "items": [{"type": "Text", "value": "Hello"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<greeting>Hello</greeting>
+#]]
+  [out-cx [#
+[greeting Hello]
+#]]
+ ]
+
+ [case id=003-element-attrs level=core
+  [tags xml element attrs]
+  [in-xml [#
+<a href="https://example.com" class="link">Click</a>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "a",
+      "attrs": [
+        {"name": "href",  "value": "https://example.com"},
+        {"name": "class", "value": "link"}
+      ],
+      "items": [{"type": "Text", "value": "Click"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<a href="https://example.com" class="link">Click</a>
+#]]
+  [out-cx [#
+[a href=https://example.com class=link Click]
+#]]
+ ]
+
+ [case id=004-nested-elements level=core
+  [tags xml nested]
+  [in-xml [#
+<html>
+  <body>
+    <p>Hello</p>
+  </body>
+</html>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "html",
+      "items": [
+        {
+          "type": "Element",
+          "name": "body",
+          "items": [
+            {
+              "type": "Element",
+              "name": "p",
+              "items": [{"type": "Text", "value": "Hello"}]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<html>
+  <body>
+    <p>Hello</p>
+  </body>
+</html>
+#]]
+  [out-cx [#
+[html
+  [body
+    [p Hello]
+  ]
+]
+#]]
+ ]
+
+ [case id=005-comment level=core
+  [tags xml comment]
+  [in-xml [#
+<!--a comment-->
+<root/>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "prolog": [{"type": "Comment", "value": "a comment"}],
+  "elements": [{"type": "Element", "name": "root"}]
+}
+#]]
+  [out-xml [#
+<!--a comment-->
+<root/>
+#]]
+  [out-cx [#
+[-a comment]
+[root]
+#]]
+ ]
+
+ [case id=006-xmldecl level=core
+  [tags xml xmldecl]
+  [in-xml [#
+<?xml version="1.0" encoding="UTF-8"?>
+<root/>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "prolog": [{"type": "XMLDecl", "version": "1.0", "encoding": "UTF-8"}],
+  "elements": [{"type": "Element", "name": "root"}]
+}
+#]]
+  [out-xml [#
+<?xml version="1.0" encoding="UTF-8"?>
+<root/>
+#]]
+  [out-cx [#
+[?xml version=1.0 encoding=UTF-8]
+[root]
+#]]
+ ]
+
+ [case id=007-pi level=core
+  [tags xml pi]
+  [in-xml [#
+<?php return 42?>
+<root/>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "prolog": [{"type": "PI", "target": "php", "data": "return 42"}],
+  "elements": [{"type": "Element", "name": "root"}]
+}
+#]]
+  [out-xml [#
+<?php return 42?>
+<root/>
+#]]
+  [out-cx [#
+[?php return 42]
+[root]
+#]]
+ ]
+
+ [case id=008-cdata level=core
+  [tags xml cdata rawtext]
+  [in-xml [#
+<script><![CDATA[ if (x < y) { return [1,2]; } ]]></script>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "script",
+      "items": [{"type": "RawText", "value": " if (x < y) { return [1,2]; } "}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<script><![CDATA[ if (x < y) { return [1,2]; } ]]></script>
+#]]
+  [out-cx [#
+[script [# if (x < y) { return [1,2]; } ##][#]]
+#]]
+ ]
+
+ [case id=009-entity-ref level=core
+  [tags xml entity entityref]
+  [in-xml [#
+<p>&amp; &lt; &gt;</p>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [
+        {"type": "EntityRef", "name": "amp"},
+        {"type": "Text", "value": " "},
+        {"type": "EntityRef", "name": "lt"},
+        {"type": "Text", "value": " "},
+        {"type": "EntityRef", "name": "gt"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<p>&amp; &lt; &gt;</p>
+#]]
+  [out-cx [#
+[p &amp; &lt; &gt;]
+#]]
+ ]
+
+ [case id=010-mixed-content level=core
+  [tags xml mixed]
+  [in-xml [#
+<p>text <b>bold</b> more</p>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [
+        {"type": "Text", "value": "text "},
+        {
+          "type": "Element",
+          "name": "b",
+          "items": [{"type": "Text", "value": "bold"}]
+        },
+        {"type": "Text", "value": " more"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<p>text <b>bold</b> more</p>
+#]]
+  [out-cx [#
+[p 'text ' [b bold] ' more']
+#]]
+ ]
+
+ [case id=011-namespace-attrs level=core
+  [tags xml namespaces]
+  [in-xml [#
+<doc xmlns="urn:doc" xmlns:xl="http://www.w3.org/1999/xlink">
+  <xl:a href="https://example.com">Link</xl:a>
+</doc>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "doc",
+      "attrs": [
+        {"name": "xmlns", "value": "urn:doc"},
+        {"name": "xmlns:xl", "value": "http://www.w3.org/1999/xlink"}
+      ],
+      "items": [
+        {
+          "type": "Element",
+          "name": "xl:a",
+          "attrs": [{"name": "href", "value": "https://example.com"}],
+          "items": [{"type": "Text", "value": "Link"}]
+        }
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<doc xmlns="urn:doc" xmlns:xl="http://www.w3.org/1999/xlink">
+  <xl:a href="https://example.com">Link</xl:a>
+</doc>
+#]]
+  [out-cx [#
+[doc xmlns=urn:doc xmlns:xl=http://www.w3.org/1999/xlink
+  [xl:a href=https://example.com Link]
+]
+#]]
+ ]
+
+ [case id=012-cx-type-int level=extended
+  [tags xml scalar cx:type]
+  [in-xml [#
+<age cx:type="int">30</age>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "age",
+      "dataType": "int",
+      "items": [{"type": "Scalar", "dataType": "int", "value": 30}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<age cx:type="int">30</age>
+#]]
+  [out-cx [#
+[age::int 30]
+#]]
+ ]
+
+ [case id=013-cx-type-array level=extended
+  [tags xml scalar cx:type array]
+  [in-xml [#
+<tags cx:type="string[]"><item>admin</item><item>user</item></tags>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "tags",
+      "dataType": "string[]",
+      "items": [
+        {"type": "Scalar", "dataType": "string", "value": "admin"},
+        {"type": "Scalar", "dataType": "string", "value": "user"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<tags cx:type="string[]"><item>admin</item><item>user</item></tags>
+#]]
+  [out-cx [#
+[tags admin, user]
+#]]
+ ]
+
+ [case id=014-cx-anchor-merge level=extended
+  [tags xml anchor merge cx:anchor cx:merge]
+  [in-xml [#
+<defaults cx:anchor="def" timeout="30"/>
+<production cx:merge="def" host="prod.example.com"/>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "defaults",
+      "anchor": "def",
+      "attrs": [{"name": "timeout", "value": 30, "dataType": "int"}]
+    },
+    {
+      "type": "Element",
+      "name": "production",
+      "merge": "def",
+      "attrs": [{"name": "host", "value": "prod.example.com"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<defaults cx:anchor="def" timeout="30"/>
+<production cx:merge="def" host="prod.example.com"/>
+#]]
+  [out-cx [#
+[defaults &def timeout=30]
+[production *def host=prod.example.com]
+#]]
+ ]
+
+ [case id=015-cx-alias level=extended
+  [tags xml alias]
+  [in-xml [#
+<defaults cx:anchor="def" timeout="30"/>
+<cx:alias name="def"/>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "defaults",
+      "anchor": "def",
+      "attrs": [{"name": "timeout", "value": 30, "dataType": "int"}]
+    },
+    {"type": "Alias", "name": "def"}
+  ]
+}
+#]]
+  [out-xml [#
+<defaults cx:anchor="def" timeout="30"/>
+<cx:alias name="def"/>
+#]]
+  [out-cx [#
+[defaults &def timeout=30]
+[*def]
+#]]
+ ]
+
+ [case id=016-entity-decl level=core
+  [tags xml entity decl]
+  [in-xml [#
+<!DOCTYPE doc [
+  <!ENTITY greeting "Hello World">
+]>
+<doc>&greeting;</doc>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "doctype": {
+    "type": "DoctypeDecl",
+    "name": "doc",
+    "intSubset": [
+      {"type": "EntityDecl", "kind": "GE", "name": "greeting", "def": "Hello World"}
+    ]
+  },
+  "elements": [
+    {
+      "type": "Element",
+      "name": "doc",
+      "items": [{"type": "EntityRef", "name": "greeting"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<!DOCTYPE doc [
+  <!ENTITY greeting "Hello World">
+]>
+<doc>&greeting;</doc>
+#]]
+  [out-cx [#
+[!DOCTYPE doc [
+  [!ENTITY greeting 'Hello World']
+]]
+[doc &greeting;]
+#]]
+ ]
+
+ [case id=017-multidoc level=extended
+  [tags xml multidoc]
+  [in-xml [#
+<doc1>
+  <item>a</item>
+</doc1>
+---
+<doc2>
+  <item>b</item>
+</doc2>
+#]]
+  [out-ast [#
+[
+  {
+    "type": "Document",
+    "elements": [
+      {
+        "type": "Element",
+        "name": "doc1",
+        "items": [
+          {"type": "Element", "name": "item", "items": [{"type": "Text", "value": "a"}]}
+        ]
+      }
+    ]
+  },
+  {
+    "type": "Document",
+    "elements": [
+      {
+        "type": "Element",
+        "name": "doc2",
+        "items": [
+          {"type": "Element", "name": "item", "items": [{"type": "Text", "value": "b"}]}
+        ]
+      }
+    ]
+  }
+]
+#]]
+  [out-xml [#
+<doc1>
+  <item>a</item>
+</doc1>
+---
+<doc2>
+  <item>b</item>
+</doc2>
+#]]
+  [out-cx [#
+[doc1
+  [item a]
+]
+---
+[doc2
+  [item b]
+]
+#]]
+ ]
+
+ [case id=018-entity-ref-preserved level=core
+  [tags xml entity-ref regression]
+  [in-xml [#
+<p>a &amp; b</p>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [
+        {"type": "Text", "value": "a "},
+        {"type": "EntityRef", "name": "amp"},
+        {"type": "Text", "value": " b"}
+      ]
+    }
+  ]
+}
+#]]
+  [out-cx [#
+[p 'a ' &amp; ' b']
+#]]
+  [out-xml [#
+<p>a &amp; b</p>
+#]]
+ ]
+
+ [case id=019-whitespace-stripped level=core
+  [tags xml whitespace ignorable regression]
+  [in-xml [#
+<ul>
+  <li>a</li>
+  <li>b</li>
+</ul>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "ul",
+      "items": [
+        {"type": "Element", "name": "li", "items": [{"type": "Text", "value": "a"}]},
+        {"type": "Element", "name": "li", "items": [{"type": "Text", "value": "b"}]}
+      ]
+    }
+  ]
+}
+#]]
+  [out-cx [#
+[ul
+  [li a]
+  [li b]
+]
+#]]
+  [out-xml [#
+<ul>
+  <li>a</li>
+  <li>b</li>
+</ul>
+#]]
+ ]
+
+ [case id=020-cx-alias-document-level level=extended
+  [tags xml cx-alias document-level regression]
+  [in-xml [#
+<cx:alias name="foo"/>
+<p>bar</p>
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {"type": "Alias", "name": "foo"},
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "bar"}]
+    }
+  ]
+}
+#]]
+  [out-cx [#
+[*foo]
+[p bar]
+#]]
+ ]
+]

@@ -1,0 +1,1072 @@
+[test-suite name=http
+  [doc [#
+conformance fixtures for cx-stdlib/http (spec/02-inprogress/stdlib_http.md §10).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/http']
+   (resolver MUST be quoted) then calls [$http:fn args]. The LAST
+   expression is the rendered result.
+
+   LAYERING: cx-stdlib/http is an L7 HTTP/1.1 client+server built ON TOP of
+   the L4 cx-stdlib/net transport. It is a Tier-B, necessarily-impure module
+   for its network verbs and introduces NO new capability — every effect
+   point is gated on `net` (§5). It owns CXER4525-4543 (E_HTTP_*), the next
+   free block above net's CXER4500-4524 (governance §9.6).
+
+   DETERMINISM / TWO LANES (mirrors net.cxd's authoring model):
+
+   (1) GATED network verbs (get/post/put/del/patch/head/options/request/
+   send; serve/listen/accept-iter/exchange-request/respond/stop) reach the
+   network through net and are guarded fail-closed on the `net` capability.
+   The stdlib runner is the host: a case whose expected output carries
+   CXER0271 runs under the EMPTY capability set (deny-by-default per
+   security.md §2), so the effect point denies and the verb short-circuits
+   to the E_CAP_DENIED = cx-err:CXER0271 err VALUE (§4.1/§5). Real socket I/O
+   (connect/bind/accept) is neither reproducible nor safe inside the harness,
+   so AUTHORING.md ("Capability lanes") directs the capability-denied
+   assertion for the happy-path call shape of every gated verb.
+
+   (2) The capability-GRANTED behavior runs under a full grant (the runner
+   grants all caps for any non-CXER0271 case). Behind the grant the verbs
+   return the deterministic synthetic shapes the impl emits in the
+   conformance/granted harness ([response status=200], an [http-server]
+   handle, the parsed [request], null). These exercise the GRANTED call
+   shape + arity without real sockets; live round-trips (real status/headers/
+   body, TLS, redirects, decompression) belong in a network-granted harness.
+
+   PURE introspection (status/ok/header/headers/headers-named/has-body/
+   body-bytes/body-bytes-wire/body-text) and pool bookkeeping (client/close)
+   are capability-free (§3.4/§3.1): they operate on a materialized,
+   homoiconic [request]/[response] literal and produce real output under the
+   empty set. A [request]/[response]/[header] is built by the caller as a
+   literal (§2.2); introspection reads its attrs + child elements.
+
+   RENDER NOTES (verified against the real binary): a header value renders
+   QUOTED when numeric-looking (value='1') but BAREWORD for alphabetic
+   (value=c); `headers` yields a node SEQUENCE rendered ([header …], [header
+   …]); an absent header is the absence channel rendered () (empty
+   node-set, §2.5); a present empty-valued header renders value='';
+   body-bytes renders as a quoted string scalar ('hi'); an empty body is ''.
+   The /@value path step that distinguishes a present-empty header ('') from
+   an absent one (()) is applied to a BOUND result ([?let [= $h …] $h/@value])
+   — a bare top-level `…/@value` is a parse error.
+
+   SPEC CONTRADICTION (logged, fixtured to the binary): §3.1 says a bad/
+   relative `base-url` at `client` → CXER4525. The impl reads opts only off
+   element attrs, not the materialized {base-url: …} map, so `client` never
+   inspects base-url and returns a valid [http-client] regardless. The
+   binary is the oracle, so no CXER4525-at-client fixture is asserted; the
+   real validation surfaces at `send` instead (a relative url= with no
+   base-url → CXER4525, http-021). Recorded in SPEC-FINDINGS.
+#]]
+
+ [- §3.4 introspection — status / ok (PURE, response-only) -]
+
+ [case id=http-001-status-200 level=core
+  [tags http status pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:status [response status=200]]
+#]]
+  [out-text [#
+200
+#]]
+ ]
+
+ [case id=http-002-status-404-is-a-value level=core
+  [tags http status non-2xx value pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:status [response status=404]]
+#]]
+  [out-text [#
+404
+#]]
+ ]
+
+ [case id=http-003-ok-200-true level=core
+  [tags http ok pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:ok [response status=200]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=http-004-ok-404-false level=core
+  [tags http ok pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:ok [response status=404]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=http-005-status-on-request-arg-invalid level=core
+  [tags http status CXER4539 error pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:status [request method="GET" url="http://h/"]]
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [- §3.4 header / headers / headers-named (PURE, case-insensitive) -]
+
+ [case id=http-006-header-case-insensitive level=core
+  [tags http header case-insensitive pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:header [response status=200 [headers [header name="Content-Type" value="application/json"]]] 'content-type']
+#]]
+  [out-text [#
+[header name=Content-Type value='application/json']
+#]]
+ ]
+
+ [case id=http-007-header-on-request level=core
+  [tags http header request pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:header [request method="GET" url="http://h/" [headers [header name="Accept" value="application/json"]]] 'accept']
+#]]
+  [out-text [#
+[header name=Accept value='application/json']
+#]]
+ ]
+
+ [case id=http-008-header-first-of-duplicates level=core
+  [tags http header duplicate pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:header [response status=200 [headers [header name="X-H" value="first"] [header name="X-H" value="second"]]] 'x-h']
+#]]
+  [out-text [#
+[header name=X-H value=first]
+#]]
+ ]
+
+ [case id=http-009-header-absent-is-empty-nodeset level=core
+  [tags http header absence empty-nodeset pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:header [response status=200 [headers [header name="X" value="y"]]] 'ETag']
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=http-010-header-present-empty-value level=core
+  [tags http header present-empty pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:header [response status=200 [headers [header name="ETag" value=""]]] 'etag']
+#]]
+  [out-text [#
+[header name=ETag value='']
+#]]
+ ]
+
+ [case id=http-011-path-value-present-empty level=core
+  [tags http header path present-empty pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[?let [= $h [$http:header [response status=200 [headers [header name="ETag" value=""]]] 'etag']] $h/@value]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ [case id=http-012-path-value-absent-is-empty level=core
+  [tags http header path absence pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[?let [= $h [$http:header [response status=200 [headers [header name="X" value="y"]]] 'etag']] $h/@value]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=http-013-headers-sequence-receive-order level=core
+  [tags http headers sequence pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:headers [response status=200 [headers [header name="A" value="1"] [header name="B" value="c"]]]]
+#]]
+  [out-text [#
+([header name=A value='1'], [header name=B value=c])
+#]]
+ ]
+
+ [case id=http-014-headers-empty-no-block level=core
+  [tags http headers empty pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:headers [response status=204]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=http-015-headers-named-all-duplicates level=core
+  [tags http headers-named duplicate pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:headers-named [response status=200 [headers [header name="Set-Cookie" value="a"] [header name="Set-Cookie" value="b"]]] 'set-cookie']
+#]]
+  [out-text [#
+([header name=Set-Cookie value=a], [header name=Set-Cookie value=b])
+#]]
+ ]
+
+ [case id=http-016-headers-named-absent-empty level=core
+  [tags http headers-named absence pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:headers-named [response status=200 [headers [header name="A" value="b"]]] 'missing']
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [- §3.4 / §2.5 body presence + accessors (PURE, total) -]
+
+ [case id=http-017-has-body-true level=core
+  [tags http has-body pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:has-body [response status=200 [body 'hi']]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=http-018-has-body-false-bodyless level=core
+  [tags http has-body bodyless pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:has-body [response status=204]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=http-019-has-body-on-request level=core
+  [tags http has-body request pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:has-body [request method="POST" url="http://h/" [body 'data']]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=http-020-body-bytes-content level=core
+  [tags http body-bytes pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:body-bytes [response status=200 [body 'hi']]]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=http-021-body-bytes-empty-no-body level=core
+  [tags http body-bytes empty pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:body-bytes [response status=204]]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+
+ [case id=http-022-body-bytes-wire-equals-body-bytes level=core
+  [tags http body-bytes-wire pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:body-bytes-wire [response status=200 [body 'gz']]]
+#]]
+  [out-text [#
+'gz'
+#]]
+ ]
+
+ [case id=http-023-body-text-utf8-default level=core
+  [tags http body-text utf8 pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:body-text [response status=200 [body 'hello']]]
+#]]
+  [out-text [#
+'hello'
+#]]
+ ]
+
+ [case id=http-024-body-text-latin1 level=core
+  [tags http body-text latin-1 charset pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:body-text [response status=200 [headers [header name="Content-Type" value="text/plain; charset=iso-8859-1"]] [body 'hello']]]
+#]]
+  [out-text [#
+'hello'
+#]]
+ ]
+
+ [case id=http-025-body-text-unsupported-charset level=core
+  [tags http body-text CXER4532 charset error pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:body-text [response status=200 [headers [header name="Content-Type" value="text/plain; charset=utf-16"]] [body 'x']]]
+#]]
+  [out-err [#
+cx-err:CXER4532
+#]]
+ ]
+
+ [- §3.1 client construction (PURE bookkeeping — no net at construction) -]
+
+ [case id=http-026-client-default level=core
+  [tags http client pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:client]
+#]]
+  [out-text [#
+[http-client state=open on-close='http/close']
+#]]
+ ]
+
+ [case id=http-027-client-defaulted-opts level=core
+  [tags http client opts-default pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:client {}]
+#]]
+  [out-text [#
+[http-client state=open on-close='http/close']
+#]]
+ ]
+
+ [case id=http-028-close-idempotent-null level=core
+  [tags http close idempotent pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:close [$http:client]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [- §3.2 one-shot verbs — GATED on net → CXER0271 under the empty set -]
+
+ [case id=http-029-get-cap-denied level=core
+  [tags http get capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:get 'http://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-030-post-cap-denied level=core
+  [tags http post capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:post 'http://example.com/' 'payload']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-031-put-cap-denied level=core
+  [tags http put capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:put 'http://example.com/' 'payload']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-032-del-cap-denied level=core
+  [tags http del capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:del 'http://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-033-patch-cap-denied level=core
+  [tags http patch capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:patch 'http://example.com/' 'payload']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-034-head-cap-denied level=core
+  [tags http head capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:head 'http://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-035-options-cap-denied level=core
+  [tags http options capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:options 'http://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-036-request-generic-cap-denied level=core
+  [tags http request capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:request 'PURGE' 'http://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §2.6 / §7 ❌ — scheme dispatch: only http(s); other → CXER4525 (PURE) -]
+
+ [case id=http-037-ftp-scheme-url-invalid level=core
+  [tags http get CXER4525 scheme error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:get 'ftp://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER4525
+#]]
+ ]
+
+ [case id=http-038-ws-scheme-url-invalid level=core
+  [tags http get CXER4525 scheme error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:get 'ws://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER4525
+#]]
+ ]
+
+ [- §3.2 generic-verb arg validation (PURE, ahead of cap) -]
+
+ [case id=http-039-request-connect-arg-invalid level=core
+  [tags http request CONNECT CXER4539 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:request 'CONNECT' 'http://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [case id=http-040-request-bad-method-arg-invalid level=core
+  [tags http request method CXER4539 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:request 'BAD METHOD' 'http://example.com/']
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [- §3.3 send — client-form [request] (url=) through a pooled client -]
+
+ [case id=http-041-send-cap-denied level=core
+  [tags http send capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send [$http:client] [request method="GET" url="http://h/"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-042-send-relative-no-base-url level=core
+  [tags http send CXER4525 url error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send [$http:client] [request method="GET" url="/rel"]]
+#]]
+  [out-err [#
+cx-err:CXER4525
+#]]
+ ]
+
+ [case id=http-043-send-path-on-client-request level=core
+  [tags http send CXER4539 url-path error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send [$http:client] [request method="GET" path="/p"]]
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [case id=http-044-send-missing-url level=core
+  [tags http send CXER4539 url error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send [$http:client] [request method="GET"]]
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [- §3.5 server — bind URLs are net transport URLs (tcp/tls), GATED on net -]
+
+ [case id=http-045-serve-cap-denied level=core
+  [tags http serve capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[?def h ($req::element) [response status=200]]
+[$http:serve 'tcp://0.0.0.0:8080' $h]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-046-serve-bad-bind-url level=core
+  [tags http serve CXER4525 bind error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[?def h ($req::element) [response status=200]]
+[$http:serve 'http://0.0.0.0:8080' $h]
+#]]
+  [out-err [#
+cx-err:CXER4525
+#]]
+ ]
+
+ [case id=http-047-listen-cap-denied level=core
+  [tags http listen capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:listen 'tcp://0.0.0.0:8080']
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-048-listen-bad-bind-url level=core
+  [tags http listen CXER4525 bind error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:listen 'http://0.0.0.0:8080']
+#]]
+  [out-err [#
+cx-err:CXER4525
+#]]
+ ]
+
+ [case id=http-049-accept-iter-cap-denied level=core
+  [tags http accept-iter capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:accept-iter [http-server url='tcp://0.0.0.0:8080' state=listening]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-050-exchange-request-cap-denied level=core
+  [tags http exchange-request capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:exchange-request [exchange state=open url='tcp://0.0.0.0:8080']]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-051-respond-cap-denied level=core
+  [tags http respond capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:respond [exchange state=open url='tcp://0.0.0.0:8080'] [response status=200]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-052-respond-status-out-of-range level=core
+  [tags http respond CXER4541 status error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:respond [exchange state=open] [response status=999]]
+#]]
+  [out-err [#
+cx-err:CXER4541
+#]]
+ ]
+
+ [case id=http-053-respond-not-a-response level=core
+  [tags http respond CXER4539 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:respond [exchange state=open] [foo]]
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [case id=http-054-stop-cap-denied level=core
+  [tags http stop capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:stop [http-server url='tcp://0.0.0.0:8080' state=listening]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- capability-GRANTED SERVER lane — these prims (listen / serve / accept-iter
+    / exchange-request / respond) are now REAL: listen/serve bind a real net
+    listener, accept-iter pulls real connections, exchange-request parses a real
+    request off the wire, respond serializes + writes a real response. None of
+    that is a deterministic pure-eval result (nondeterministic handle ids, a
+    bound socket that lingers across cases, a live peer connection + a [?for]
+    consumer), so the granted-lane round-trips live in the BEHAVIORAL gate over
+    real loopback sockets — vcx/tests/v08_http_server_real_test.v (low-level
+    listen/accept-iter/exchange-request/respond echo) and
+    vcx/tests/v08_net_real_socket_test.v (the net layer underneath). The stub-
+    era granted fixtures (http-059/060/061/062/064, which asserted synthetic
+    shapes) were retired when the impl became real. Only the deterministic
+    call-shape check that does NOT touch a socket remains here: stop on an
+    unregistered handle is idempotent → null (http-063). -]
+
+ [case id=http-063-stop-granted-null level=core
+  [tags http stop granted null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:stop [http-server url='tcp://0.0.0.0:8080' state=listening]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+ [case id=http-065-sse-stream-open-true level=core gate=enforced
+  [tags http sse stream-open pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:stream-open [sse-stream open=true]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=http-066-sse-source-open-false level=core gate=enforced
+  [tags http sse source-open pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:source-open [sse-source open=false]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=http-067-last-event-id-present level=core gate=enforced
+  [tags http sse last-event-id pure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:last-event-id [sse-source last-event-id="42"]]
+#]]
+  [out-text [#
+'42'
+#]]
+ ]
+
+ [case id=http-068-last-event-id-absent level=core gate=enforced
+  [tags http sse last-event-id absence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[?else [$http:last-event-id [sse-source open=true]] "NONE"]
+#]]
+  [out-text [#
+'NONE'
+#]]
+ ]
+
+ [case id=http-069-send-event-empty level=core gate=enforced
+  [tags http sse send-event CXER4539 empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send-event [sse-stream open=true] [event]]
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [case id=http-070-send-event-crlf-id level=core gate=enforced
+  [tags http sse send-event CXER4531 crlf]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send-event [sse-stream open=true] [event id="a\nb" data="x"]]
+#]]
+  [out-err [#
+cx-err:CXER4531
+#]]
+ ]
+
+ [case id=http-071-sse-denied level=core gate=enforced
+  [tags http sse CXER0271 net-denial]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:sse [exchange state=open] {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-072-sse-connect-denied level=core gate=enforced
+  [tags http sse-connect CXER0271 net-denial]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:sse-connect "http://idp.test/stream" {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [- §3.6 SSE GRANTED-LANE TRANSPORT is now REAL (held-open sockets), not the
+    synthetic `wire=`/fd-less shapes the stub-era fixtures asserted: `sse` writes
+    the event-stream prelude and holds the connection; `send-event`/`heartbeat`
+    flush real frames; `sse-connect` opens a real streaming GET; `sse-events` is
+    a live single-use iterator (frame read + auto-reconnect). None of that is a
+    deterministic pure-eval result, so the granted-lane round-trips live in the
+    BEHAVIORAL gate over real loopback sockets — vcx/tests/v08_http_sse_real_test.v
+    (server push + client read). The shared pure framing/parsing codec's symmetry
+    invariant is covered by vcx/tests/http_sse_test.v. The stub-era synthetic
+    fixtures (http-073/074/075/076/078/081/082) were retired when the transport
+    became real; the deterministic PURE validation/accessor checks (4539/4531/
+    4544 + stream-open/source-open/last-event-id) remain below, and one denial
+    case keeps the sse-events name covered. -]
+
+ [case id=http-073-sse-events-denied level=core gate=enforced
+  [tags http sse-events CXER0271 net-denial]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:sse-events [sse-source open=true]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=http-077-send-event-closed level=core gate=enforced
+  [tags http send-event CXER4544 closed-stream granted]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send-event [sse-stream open=false] [event data="x"]]
+#]]
+  [out-err [#
+cx-err:CXER4544
+#]]
+ ]
+
+ [- http-078 (send-event-granted-null) retired: a real send-event flushes the
+    framed bytes on the stream's connection, so a synthetic fd-less [sse-stream]
+    can no longer return a deterministic null — the live flush is covered by
+    vcx/tests/v08_http_sse_real_test.v. The pure pre-flush validation faults
+    (empty/CR-LF/closed) remain below + above (http-069/070/077/079/080). -]
+
+ [case id=http-079-send-event-empty-unknown-attr level=core gate=enforced
+  [tags http send-event CXER4539 empty-frame hostile]
+  [doc [#
+HOSTILE (major): an [event] carrying only an UNKNOWN attr has no SSE field
+to frame. The prior empty-check `&& attrs.len == 0` let it through and framed
+an empty wire ("sent" nothing). It must fault CXER4539.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send-event [sse-stream open=true] [event foo="bar"]]
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [case id=http-080-send-event-cr-in-data level=core gate=enforced
+  [tags http send-event CXER4531 sse-symmetry hostile]
+  [doc [#
+HOSTILE (blocker): a CR in `data` was framed verbatim then silently stripped
+on parse (trim_right), breaking the frame↔parse symmetry invariant. CR in
+data is now rejected CXER4531, like id/event. (LF multi-line data is fine.)
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:send-event [sse-stream open=true] [event data="a\rb"]]
+#]]
+  [out-err [#
+cx-err:CXER4531
+#]]
+ ]
+
+ [- http-081 (sse-events-frame-too-large, CXER4550) + http-082 (clean-roundtrip)
+    retired: sse-events is now a live single-use iterator that reads frames off a
+    held-open socket, not a parse of a synthetic `wire=` buffer. The max-event-
+    bytes cap (CXER4550), malformed-frame fault (CXER4551), and event round-trip
+    are enforced on the live read path (http_sse_read_frame) and covered
+    behaviorally in vcx/tests/v08_http_sse_real_test.v; the pure framing/parsing
+    symmetry invariant is covered by vcx/tests/http_sse_test.v. -]
+
+]

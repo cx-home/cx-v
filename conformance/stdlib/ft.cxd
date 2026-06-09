@@ -1,0 +1,469 @@
+[test-suite name=ft
+  [doc [#
+conformance fixtures for cx-stdlib/ft (spec/std-lib/ft.md §6/§8).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/ft']
+   (resolver MUST be quoted) then calls [$ft:fn args]. The LAST expression
+   is the rendered result. String scalars render quoted; bool/int bare;
+   sequences in paren form (a, b, c). Error fixtures use out-err with the
+   bare CXER code.
+
+   DETERMINISM (critical): the spec defines NO golden score values for
+   TF-IDF / BM25 and no golden snippet text — scores are "comparable
+   within an Index, not across Indexes" (§5.2) and are otherwise
+   implementation-internal. Therefore NO fixture asserts a literal
+   `score=` value or exact snippet body. Search/index assertions pin only
+   spec-grounded STRUCTURAL properties:
+     - empty-corpus / empty-query behavior (§8: index [] empty; search ""
+       empty sequence, NOT an error),
+     - round-trip rank-1 doc membership via the ft/doc-ids helper
+       (§8 round-trip),
+     - result-count / doc-count via $count and ft/index-stats,
+     - field restriction returns only matching docs (§4.3 worked example),
+     - snippet contains query terms wrapped in <mark> (§8 snippets),
+     - case-folding and stemming collapse (§8 stemming / case folding) via
+       ft/tokenize and via search result counts,
+     - every documented error code (§7).
+
+   The strings helper [?lib 'cx-stdlib/strings'] is co-imported in cases
+   that assert substring presence (strings/contains) or emptiness
+   (strings/is-empty).
+#]]
+
+ [case id=ft-001-index-empty-corpus level=core
+  [tags ft index empty-corpus edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[$ft:index-stats [$ft:index ()]]
+#]]
+  [out-text [#
+{doc-count: 0, term-count: 0, size-bytes: 0, languages: ()}
+#]]
+ ]
+
+ [case id=ft-002-index-doc-count level=core
+  [tags ft index index-stats doc-count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc "database design"], [doc "schema migrations"], [doc "query planner"])]]
+  [$map-get [$ft:index-stats $idx] "doc-count"]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=ft-003-search-empty-query-returns-empty-seq level=core
+  [tags ft search empty-query edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc "database design"], [doc "schema migrations"])]]
+  [$ft:search $idx "" 10]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=ft-004-search-roundtrip-rank1 level=core
+  [tags ft search roundtrip doc-ids]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database design and analytics"], [doc id="d2" "kitchen recipes for soup"])]]
+  [$ft:doc-ids [$ft:search $idx "database" 10]]]
+#]]
+  [out-text [#
+('d1')
+#]]
+ ]
+
+ [case id=ft-005-search-no-match-empty level=core
+  [tags ft search no-match edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
+  [$ft:search $idx "nonexistentterm" 10]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=ft-006-search-malformed-query level=core
+  [tags ft search query-parse CXER1200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
+  [$ft:search $idx "\"unterminated phrase" 10]]
+#]]
+  [out-err [#
+cx-err:CXER1200
+#]]
+ ]
+
+ [case id=ft-007-search-field-not-indexed level=core
+  [tags ft search field-restrict CXER1202]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index-with-opts ([doc [title "Database design"] [body "schemas and indexes"]]) {"fields" ("title")}]]
+  [$ft:search $idx "body:schemas" 10]]
+#]]
+  [out-err [#
+cx-err:CXER1202
+#]]
+ ]
+
+ [case id=ft-008-index-with-opts-field-restriction level=core
+  [tags ft index-with-opts search field-restrict]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" [title "Database design"] [body "Schemas and indexes for analytics"]], [doc id="d2" [title "Schema migrations"] [body "Database schema evolution"]])]]
+  [$ft:doc-ids [$ft:search $idx "title:database" 10]]]
+#]]
+  [out-text [#
+('d1')
+#]]
+ ]
+
+ [case id=ft-009-index-with-opts-unknown-language level=core
+  [tags ft index-with-opts unknown-language CXER1201]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[$ft:index-with-opts ([doc "database design"]) {"language" "zz-not-a-language"}]
+#]]
+  [out-err [#
+cx-err:CXER1201
+#]]
+ ]
+
+ [case id=ft-010-index-with-opts-tokenizer-invalid level=core
+  [tags ft index-with-opts tokenizer CXER1204]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[$ft:index-with-opts ([doc "database design"]) {"tokenizer" [?fn ($text) 42]}]
+#]]
+  [out-err [#
+cx-err:CXER1204
+#]]
+ ]
+
+ [case id=ft-011-search-with-opts-limit level=core
+  [tags ft search-with-opts limit]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database one"], [doc id="d2" "database two"], [doc id="d3" "database three"])]]
+  [$count [$ft:search-with-opts $idx "database" {limit: 2}]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=ft-012-search-with-opts-bm25-nonempty level=core
+  [tags ft search-with-opts bm25 scoring]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database design and tuning"], [doc id="d2" "kitchen recipes"])]]
+  [$ft:doc-ids [$ft:search-with-opts $idx "database" {scoring: "bm25"}]]]
+#]]
+  [out-text [#
+('d1')
+#]]
+ ]
+
+ [case id=ft-013-search-with-opts-malformed-query level=core
+  [tags ft search-with-opts query-parse CXER1200]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
+  [$ft:search-with-opts $idx "\"unterminated" {"limit" 10}]]
+#]]
+  [out-err [#
+cx-err:CXER1200
+#]]
+ ]
+
+ [case id=ft-014-tokenize-stopword-removal level=core
+  [tags ft tokenize stopwords pipeline]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/strings']
+[$contains [$ft:tokenize "the cat in the hat" "en"] "the"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=ft-015-tokenize-stem-running level=core
+  [tags ft tokenize stem porter2]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/strings']
+[$contains [$ft:tokenize "running" "en"] "run"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-016-tokenize-stem-family-collapse level=core
+  [tags ft tokenize stem family-collapse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/strings']
+[$equal [$ft:tokenize "running" "en"] [$ft:tokenize "runs" "en"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-017-tokenize-unknown-language level=core
+  [tags ft tokenize unknown-language CXER1201]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[$ft:tokenize "database design" "zz-not-a-language"]
+#]]
+  [out-err [#
+cx-err:CXER1201
+#]]
+ ]
+
+ [case id=ft-018-tokenize-non-bundled-keeps-stopwords level=core
+  [tags ft tokenize non-bundled stopwords]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/strings']
+[$contains [$ft:tokenize "the cat" "ja"] "the"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-019-doc-ids-empty level=core
+  [tags ft doc-ids empty edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
+  [$ft:doc-ids [$ft:search $idx "" 10]]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=ft-020-doc-ids-roundtrip-count level=core
+  [tags ft doc-ids count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database design"], [doc id="d2" "database tuning"])]]
+  [$count [$ft:doc-ids [$ft:search $idx "database" 10]]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=ft-021-score-of-nonnegative level=core
+  [tags ft score-of invariant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
+  [?let [= $results [$ft:search $idx "database" 10]]
+    [$gte [$ft:score-of [$first $results]] 0.0]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-022-snippet-contains-mark level=core
+  [tags ft snippet mark highlight]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/strings']
+[$strings:contains [$ft:snippet [doc "the database design covers schemas and indexes"] "database" 80] "<mark>"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-023-snippet-contains-query-term level=core
+  [tags ft snippet query-term]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/strings']
+[$strings:contains [$ft:snippet [doc "the database design covers schemas and indexes"] "database" 80] "database"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-024-snippet-with-opts-custom-mark level=core
+  [tags ft snippet-with-opts mark-prefix mark-suffix]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/strings']
+[$strings:contains [$ft:snippet-with-opts [doc "the database design covers schemas"] "database" {mark-prefix: "[[", mark-suffix: "]]"}] "[[database]]"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-025-snippet-with-opts-default-mark level=core
+  [tags ft snippet-with-opts default mark]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/strings']
+[$strings:contains [$ft:snippet-with-opts [doc "the database design covers schemas"] "database" {context-chars: 40}] "<mark>"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-026-search-store-integration level=core
+  [tags ft search-store store impure integration]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?lib 'cx-stdlib/store']
+[?let [= $store [$store:open "mem:///ft-conformance"]]
+  [?let [= $_ [$store:put-doc $store [doc id="d1" "database design and analytics"]]]
+    [$ft:doc-ids [$ft:search-store $store "database" 10]]]]
+#]]
+  [out-text [#
+('d1')
+#]]
+ ]
+
+ # CXER1203 (E_FT_INDEX_INCOMPATIBLE) per ft.md §3.2: search-with-opts whose
+ # case-sensitive (or language) differs from the Index's build options raises,
+ # because the query tokens cannot match the Index's tokens. Here the Index is
+ # built case-sensitive=true and searched with case-sensitive=false.
+ [case id=ft-027-search-index-incompatible level=core
+  [tags ft search index-incompatible CXER1203]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index-with-opts ([doc id="d1" "Database Design"]) {case-sensitive: true}]]
+  [$ft:search-with-opts $idx "database" {case-sensitive: false}]]
+#]]
+  [out-err [#
+cx-err:CXER1203
+#]]
+ ]
+
+ [case id=ft-028-case-folding-collapse level=core
+  [tags ft tokenize case-fold collapse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[$equal [$ft:tokenize "Database" "en"] [$ft:tokenize "DATABASE" "en"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-029-index-with-opts-custom-tokenizer level=core
+  [tags ft index-with-opts tokenizer custom search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index-with-opts ([doc id="d1" "alpha-beta-gamma"],) {tokenizer: [?fn ($text) ("alpha", "beta", "gamma")], stopwords: :none, stemmer: "none"}]]
+  [$ft:doc-ids [$ft:search $idx "beta" 10]]]
+#]]
+  [out-text [#
+('d1')
+#]]
+ ]
+]

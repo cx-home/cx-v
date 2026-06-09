@@ -4,15 +4,15 @@ import os
 import cx
 import arrow
 
-// CXDB ↔ Apache Arrow C-Data ABI conformance runner.
+// CXCol ↔ Apache Arrow C-Data ABI conformance runner.
 //
 // Reads a fixture suite (default: ../conformance/data_bin_arrow.txt)
 // and exercises round-trip identity through libcx_arrow's export +
-// import paths, per ADR 0015 D9 + spec/abi.md §2.11.
+// import paths, + spec/abi.md §2.11.
 //
 // Round-trip rather than byte-equality is the verification model:
 // Arrow's binary form isn't stable across versions, so we compare
-// CXDB-decoded structural content (every value listed in
+// CXCol-decoded structural content (every value listed in
 // `expect_values` must appear in both the input and the
 // round-tripped output, after re-parse + emit_cx).
 //
@@ -22,7 +22,7 @@ import arrow
 //   --- arrow_chunk_lengths      per-chunk row counts emitted by
 //                                the export stream, one per line
 //   --- expected_export_error    substring of the error returned by
-//                                arrow.round_trip_cxdb (negative case)
+//                                arrow.round_trip_cxcol (negative case)
 //
 // The runner separates from conformance_run.v because it imports
 // the `arrow` module, which requires `-enable-globals` at build
@@ -39,74 +39,38 @@ mut:
 	sections map[string]string
 }
 
-fn parse_suite(path string) []Test {
-	src := os.read_file(path) or {
-		eprintln('could not read suite file: ${path}')
-		return []
-	}
-	mut tests := []Test{}
-	mut cur := ?Test(none)
-	mut section := ?string(none)
-	mut lines_buf := []string{}
+// strip_blank_edges reproduces the former flush() normalization: drop
+// leading/trailing BLANK lines from a section body, applied to the loader's
+// byte-exact body so the runner sees byte-identical sections vs the old .txt.
+fn strip_blank_edges(s string) string {
+	mut lines := s.split('\n')
+	for lines.len > 0 && lines[0].trim_space() == '' { lines.delete(0) }
+	for lines.len > 0 && lines[lines.len - 1].trim_space() == '' { lines.delete(lines.len - 1) }
+	return lines.join('\n')
+}
 
-	for raw in src.split_into_lines() {
-		if raw.starts_with('=== test:') {
-			if sec := section {
-				for lines_buf.len > 0 && lines_buf[0].trim_space() == '' { lines_buf.delete(0) }
-				for lines_buf.len > 0 && lines_buf[lines_buf.len-1].trim_space() == '' { lines_buf.delete(lines_buf.len-1) }
-				val := lines_buf.join('\n')
-				if mut t := cur {
-					t.sections[sec] = val
-					cur = t
-				}
-			}
-			lines_buf = []string{}
-			if t := cur { tests << t }
-			cur = Test{
-				name: raw[9..].trim_space()
-				sections: map[string]string{}
-			}
-			section = none
-		} else if raw.starts_with('level:') {
-			if mut t := cur { t.level = raw[6..].trim_space(); cur = t }
-		} else if raw.starts_with('tags:') {
-			if mut t := cur { t.tags = raw[5..].trim_space().split_any(' \t'); cur = t }
-		} else if raw.starts_with('pending:') {
-			if mut t := cur { t.pending = raw[8..].trim_space(); cur = t }
-		} else if raw.starts_with('chunk_at:') {
-			if mut t := cur {
-				t.chunk_at = raw[9..].trim_space().int()
-				if t.chunk_at <= 0 { t.chunk_at = 1 << 20 }
-				cur = t
-			}
-		} else if raw.starts_with('--- ') {
-			if sec := section {
-				for lines_buf.len > 0 && lines_buf[0].trim_space() == '' { lines_buf.delete(0) }
-				for lines_buf.len > 0 && lines_buf[lines_buf.len-1].trim_space() == '' { lines_buf.delete(lines_buf.len-1) }
-				val := lines_buf.join('\n')
-				if mut t := cur {
-					t.sections[sec] = val
-					cur = t
-				}
-			}
-			lines_buf = []string{}
-			if cur != none { section = raw[4..].trim_space() }
-		} else {
-			if section != none && cur != none {
-				lines_buf << raw
-			}
+// parse_suite loads a .cxd conformance suite via cx.load_fixtures, replacing
+// the bespoke `=== test:` / `--- key` scanner. pending + chunk_at come from
+// the [meta] block; level/tags from the case attr / [tags] element.
+fn parse_suite(path string) []Test {
+	mut tests := []Test{}
+	for c in cx.load_fixtures(path) {
+		mut t := Test{
+			name:     c.name
+			level:    c.level
+			tags:     c.tags
+			pending:  c.meta['pending'] or { '' }
+			sections: map[string]string{}
 		}
-	}
-	if sec := section {
-		for lines_buf.len > 0 && lines_buf[0].trim_space() == '' { lines_buf.delete(0) }
-		for lines_buf.len > 0 && lines_buf[lines_buf.len-1].trim_space() == '' { lines_buf.delete(lines_buf.len-1) }
-		val := lines_buf.join('\n')
-		if mut t := cur {
-			t.sections[sec] = val
-			cur = t
+		if 'chunk_at' in c.meta {
+			t.chunk_at = (c.meta['chunk_at'] or { '' }).int()
+			if t.chunk_at <= 0 { t.chunk_at = 1 << 20 }
 		}
+		for k, v in c.sections {
+			t.sections[k] = strip_blank_edges(v)
+		}
+		tests << t
 	}
-	if t := cur { tests << t }
 	return tests
 }
 
@@ -137,7 +101,7 @@ fn run_test(t Test) []string {
 		return failures
 	}
 
-	// Parse + emit chunked CXDB.
+	// Parse + emit chunked CXCol.
 	parse_res := cx.parse_cx(in_cx) or {
 		failures << 'parse error: ${err}'
 		return failures
@@ -154,11 +118,11 @@ fn run_test(t Test) []string {
 		return failures
 	}
 
-	// Negative-test path: round_trip_cxdb (or its export side) must
+	// Negative-test path: round_trip_cxcol (or its export side) must
 	// surface an error containing the expected substring.
 	if 'expected_export_error' in t.sections {
 		expected := (t.sections['expected_export_error'] or { '' }).trim_space()
-		_ := arrow.round_trip_cxdb(bytes_in) or {
+		_ := arrow.round_trip_cxcol(bytes_in) or {
 			if expected != '' && err.msg().contains(expected) {
 				return failures
 			}
@@ -211,8 +175,8 @@ fn run_test(t Test) []string {
 	}
 
 	// Round-trip identity assertion.
-	bytes_out := arrow.round_trip_cxdb(bytes_in) or {
-		failures << 'round_trip_cxdb error: ${err}'
+	bytes_out := arrow.round_trip_cxcol(bytes_in) or {
+		failures << 'round_trip_cxcol error: ${err}'
 		return failures
 	}
 
@@ -278,7 +242,7 @@ fn main() {
 	suites := if args.len > 0 {
 		args
 	} else {
-		['../conformance/data_bin_arrow.txt']
+		['../conformance/data_bin_arrow.cxd']
 	}
 	mut all_pass := true
 	for suite in suites {

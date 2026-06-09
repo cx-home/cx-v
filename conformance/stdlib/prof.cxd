@@ -1,0 +1,502 @@
+[test-suite name=prof
+  [doc [#
+conformance fixtures for cx-stdlib/prof (spec/std-lib/prof.md §6).
+
+   Each program imports the bundled module via [?lib 'cx-stdlib/prof']
+   (resolver MUST be quoted) then calls [$prof:fn args]. The LAST
+   expression is the rendered result. String results render double-quoted
+   by the runner; null as `null`; int bare; bool bare; elements as
+   `[head attr=… …]`; maps in their canonical render.
+
+   CAPABILITY MODEL (spec §7). The stdlib eval runner evaluates each case
+   under code.new_env(), which grants NO capabilities (deny-by-default
+   per spec/core/security.md §2). prof splits cleanly:
+
+     - clock-gated (§7): now-ns, now-cpu-ns, time-fn, time-and-trace,
+       trace. The effect point checks the active set FIRST; with the
+       `clock` grant absent these raise E_CAP_DENIED = cx-err:CXER0271
+       (security.md §4). That capability-denied error is therefore the
+       deterministic, spec-faithful happy-path assertion for every
+       clock-gated function — real clock reads are non-reproducible and
+       AUTHORING.md ("Capability-gated / effectful") directs us to
+       fixture the capability-denied error rather than real effects.
+
+     - no-capability (§7): counter-*, histogram-*, mem-snapshot,
+       gc-trigger, flamegraph-emit, trace-flush, prof-configure. These
+       run in-process and produce real values under the empty grant set,
+       so their behavior is asserted directly.
+
+   CXER2102 (time-fn non-callable thunk) is NOT asserted here. time-fn is
+   clock-gated; under the empty grant set the capability check
+   short-circuits FIRST, so a correct impl raises CXER0271 — not
+   CXER2102 — for a no-cap call regardless of thunk callability.
+   Asserting CXER2102 would FAIL a correct impl (AUTHORING.md
+   "Grounding": a wrong fixture is worse than a missing one). Its
+   scenario belongs in a capability-granted harness (conformance/stdlib/prof.cxd)
+   once the host-grant fixture surface exists. See the report's
+   `ambiguous` list.
+
+   DETERMINISM: counter / histogram / trace state is process-global
+   (§3.3/§3.4); each case composes its own setup via [?let] and reads
+   back a stable derived value (a counter total, a count, a null return)
+   rather than a volatile measurement. mem-snapshot's field values
+   (rss-bytes, timestamp, …) are inherently volatile (§2.2), so its happy
+   path asserts only the stable invariant the spec guarantees — the
+   required `rss-bytes` field is present and positive — via a comparison
+   that renders the deterministic `true`.
+
+   NOTE: no inter-fixture comment blocks appear between cases — a comment
+   between sections risks capture into the preceding section payload; all
+   explanatory prose lives in this doc header or in tags.
+#]]
+
+ [case id=prof-001-now-ns-cap-denied level=core
+  [tags prof now-ns clock capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:now-ns]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=prof-002-now-cpu-ns-cap-denied level=core
+  [tags prof now-cpu-ns clock capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:now-cpu-ns]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=prof-003-time-fn-cap-denied level=core
+  [tags prof time-fn clock capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:time-fn "work" [?fn () 42]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=prof-004-time-fn-opts-cpu-cap-denied level=core
+  [tags prof time-fn clock cpu opts capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:time-fn "work" [?fn () 42] {clock="cpu"}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=prof-005-time-and-trace-cap-denied level=core
+  [tags prof time-and-trace clock capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:time-and-trace "work" [?fn () 42]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=prof-006-trace-cap-denied level=core
+  [tags prof trace clock capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:trace "request" {request-id="abc"}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=prof-007-counter-inc-returns-null level=core
+  [tags prof counter-inc null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:counter-inc "prof-007-hits"]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=prof-008-counter-inc-then-get level=core
+  [tags prof counter-inc counter-get]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:counter-inc "prof-008-hits"]]
+  [$prof:counter-get "prof-008-hits"]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=prof-009-counter-add-then-get level=core
+  [tags prof counter-add counter-get delta]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:counter-add "prof-009-bytes" 5]]
+  [$prof:counter-get "prof-009-bytes"]]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=prof-010-counter-get-unset-zero level=core
+  [tags prof counter-get unset zero]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:counter-get "prof-010-never-touched"]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=prof-011-counter-reset-then-get level=core
+  [tags prof counter-reset counter-get]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:counter-add "prof-011-x" 9]] [= $__ [$prof:counter-reset "prof-011-x"]]
+  [$prof:counter-get "prof-011-x"]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=prof-012-counter-all-single-key level=core
+  [tags prof counter-all map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:counter-add "prof-012-only" 3]]
+  [$prof:counter-all]]
+#]]
+  [out-text [#
+{prof-012-only: 3}
+#]]
+ ]
+
+ [case id=prof-013-histogram-observe-returns-null level=core
+  [tags prof histogram-observe null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:histogram-observe "prof-013-lat" 8.1]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=prof-014-histogram-stats-count level=core
+  [tags prof histogram-observe histogram-stats count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $a [$prof:histogram-observe "prof-014-lat" 1.0]] [= $b [$prof:histogram-observe "prof-014-lat" 2.0]] [= $c [$prof:histogram-observe "prof-014-lat" 3.0]] [= $s [$prof:histogram-stats "prof-014-lat"]]
+  $s@count]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=prof-015-histogram-stats-unobserved-zero level=core
+  [tags prof histogram-stats unobserved zero]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:histogram-stats "prof-015-never-observed"]
+#]]
+  [out-text [#
+[histogram-stats name=prof-015-never-observed count=0 p50=0.0 p95=0.0 p99=0.0 min=0.0 max=0.0 mean=0.0]
+#]]
+ ]
+
+ [case id=prof-016-histogram-reset-returns-null level=core
+  [tags prof histogram-reset null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:histogram-observe "prof-016-lat" 5.0]]
+  [$prof:histogram-reset "prof-016-lat"]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=prof-017-histogram-reset-clears-count level=core
+  [tags prof histogram-reset histogram-stats count]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $a [$prof:histogram-observe "prof-017-lat" 5.0]] [= $b [$prof:histogram-observe "prof-017-lat" 6.0]] [= $c [$prof:histogram-reset "prof-017-lat"]] [= $s [$prof:histogram-stats "prof-017-lat"]]
+  $s@count]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+# non-finite unconstructible from pure CX (finite-only, code.md §6.5);
+# CXER2103/CXER3104 are FFI-boundary guards — real coverage is a
+# binding-level NaN-injection test (TODO). [/ 1.0 0.0] raises CXER0101
+# (division by zero), never yields +Inf, so this case cannot exercise
+# CXER2103 from pure CX.
+ [case id=prof-018-histogram-observe-non-finite level=core gate=skip
+  [tags prof histogram-observe non-finite CXER2103]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:histogram-observe "prof-018-lat" [/ 1.0 0.0]]
+#]]
+  [out-err [#
+cx-err:CXER2103
+#]]
+ ]
+
+ [case id=prof-019-mem-snapshot-rss-positive level=core
+  [tags prof mem-snapshot rss-bytes required]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $s [$prof:mem-snapshot]]
+  [> $s@rss-bytes 0]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=prof-020-gc-trigger-returns-null level=core
+  [tags prof gc-trigger null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:gc-trigger]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=prof-021-prof-configure-returns-null level=core
+  [tags prof prof-configure null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:prof-configure {trace-sink: "none"}]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=prof-022-prof-configure-counters-disabled-noop level=core
+  [tags prof prof-configure counters-enabled noop counter-get]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:prof-configure {counters-enabled: false}]] [= $__ [$prof:counter-inc "prof-022-x"]]
+  [$prof:counter-get "prof-022-x"]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=prof-023-prof-configure-bad-sink level=core
+  [tags prof prof-configure trace-sink CXER2100]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:prof-configure {trace-sink="carrier-pigeon"}]
+#]]
+  [out-err [#
+cx-err:CXER2100
+#]]
+ ]
+
+ [case id=prof-024-trace-flush-returns-null level=core
+  [tags prof trace-flush null]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:prof-configure {trace-sink: "none"}]]
+  [$prof:trace-flush]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=prof-025-trace-flush-file-unwritable level=core
+  [tags prof trace-flush file CXER2101]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $_ [$prof:prof-configure {trace-sink="file" trace-file-path="/nonexistent-dir-xyz/trace.jsonl"}]]
+  [$prof:trace-flush]]
+#]]
+  [out-err [#
+cx-err:CXER2101
+#]]
+ ]
+
+ [case id=prof-026-flamegraph-emit-empty-buffer level=core
+  [tags prof flamegraph-emit folded-stack empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:flamegraph-emit]
+#]]
+  [out-text [#
+''
+#]]
+ ]
+ [case id=prof-027-now-ns-positive-granted level=core gate=enforced grant='clock'
+  [tags prof now-ns granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[> [$prof:now-ns] 0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=prof-028-now-cpu-ns-positive-granted level=core gate=enforced grant='clock'
+  [tags prof now-cpu-ns granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[> [$prof:now-cpu-ns] 0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=prof-029-time-fn-result-granted level=core gate=enforced grant='clock'
+  [tags prof time-fn result granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $t [$prof:time-fn "work" [?fn () 42]]] $t/result]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=prof-030-time-and-trace-result-granted level=core gate=enforced grant='clock'
+  [tags prof time-and-trace result granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[?let [= $t [$prof:time-and-trace "work" [?fn () 42]]] $t/result]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=prof-031-trace-returns-null-granted level=core gate=enforced grant='clock'
+  [tags prof trace null granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/prof']
+[$prof:trace "request" {request-id: "abc"}]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+]

@@ -1,0 +1,1150 @@
+[test-suite name=strings
+
+ [case id=strings-001-upper level=core
+  [tags strings upper case]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:upper "hello"]
+#]]
+  [out-text [#
+'HELLO'
+#]]
+ ]
+
+ [case id=strings-002-lower level=core
+  [tags strings lower case]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:lower "HeLLo"]
+#]]
+  [out-text [#
+'hello'
+#]]
+ ]
+
+ [case id=strings-003-upper-sharp-s level=core
+  [tags strings upper unicode sharp-s]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:upper "straße"]
+#]]
+  [out-text [#
+'STRASSE'
+#]]
+ ]
+
+ [case id=strings-004-length-char level=core
+  [tags strings length codepoint]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:length "héllo"]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=strings-005-length-bytes level=core
+  [tags strings length-bytes utf8]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:length-bytes "héllo"]
+#]]
+  [out-text [#
+6
+#]]
+ ]
+
+ [case id=strings-006-is-empty-true level=core
+  [tags strings is-empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-empty ""]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-007-is-empty-false level=core
+  [tags strings is-empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-empty "x"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=strings-008-at level=core
+  [tags strings at index]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:at "héllo" 1]
+#]]
+  [out-text [#
+'é'
+#]]
+ ]
+
+ [case id=strings-009-at-out-of-range level=core
+  [tags strings at index error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:at "abc" 9]
+#]]
+  [out-err [#
+cx-err:CXER2900
+#]]
+ ]
+
+ [case id=strings-010-slice level=core
+  [tags strings slice codepoint]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:slice "héllo" 1 4]
+#]]
+  [out-text [#
+'éll'
+#]]
+ ]
+
+ [case id=strings-011-slice-clamp level=core
+  [tags strings slice clamp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:slice "abc" 1 99]
+#]]
+  [out-text [#
+'bc'
+#]]
+ ]
+
+ [case id=strings-012-reverse level=core
+  [tags strings reverse codepoint]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:reverse "héllo"]
+#]]
+  [out-text [#
+'olléh'
+#]]
+ ]
+
+ [case id=strings-013-contains-true level=core
+  [tags strings contains search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:contains "foobar" "oba"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-014-contains-false level=core
+  [tags strings contains search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:contains "foobar" "xyz"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=strings-015-find level=core
+  [tags strings find search codepoint]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:find "héllo" "llo"]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=strings-016-find-absent level=core
+  [tags strings find search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:find "abc" "z"]
+#]]
+  [out-text [#
+-1
+#]]
+ ]
+
+ [case id=strings-017-find-from level=core
+  [tags strings find-from search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:find-from "abcabc" "bc" 2]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ [case id=strings-018-rfind level=core
+  [tags strings rfind search]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:rfind "abcabc" "bc"]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ [case id=strings-019-starts-with level=core
+  [tags strings starts-with]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:starts-with "foobar" "foo"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-020-ends-with level=core
+  [tags strings ends-with]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:ends-with "foobar" "bar"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-021-count-non-overlapping level=core
+  [tags strings count overlap]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:count "aaaa" "aa"]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=strings-022-find-all level=core
+  [tags strings find-all sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:find-all "abcabc" "bc"]
+#]]
+  [out-text [#
+(1, 4)
+#]]
+ ]
+
+ [case id=strings-023-title-uax29-hyphen level=core
+  [tags strings title uax29]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:title "jean-paul sartre"]
+#]]
+  [out-text [#
+'Jean-Paul Sartre'
+#]]
+ ]
+
+ [case id=strings-024-case-fold level=core
+  [tags strings case-fold unicode]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:case-fold "STRAßE"]
+#]]
+  [out-text [#
+'strasse'
+#]]
+ ]
+
+ [case id=strings-025-swap-case level=core
+  [tags strings swap-case]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:swap-case "Hello World"]
+#]]
+  [out-text [#
+'hELLO wORLD'
+#]]
+ ]
+
+ [case id=strings-026-upper-locale-fallback level=core
+  [tags strings upper-locale]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:upper-locale "abc" "en"]
+#]]
+  [out-text [#
+'ABC'
+#]]
+ ]
+
+ [case id=strings-027-lower-locale-fallback level=core
+  [tags strings lower-locale]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:lower-locale "ABC" "en"]
+#]]
+  [out-text [#
+'abc'
+#]]
+ ]
+
+ [case id=strings-028-trim-unicode-ws level=core
+  [tags strings trim unicode-whitespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:trim "　 hi 　"]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=strings-029-trim-start level=core
+  [tags strings trim-start]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:trim-start "   hi   "]
+#]]
+  [out-text [#
+'hi   '
+#]]
+ ]
+
+ [case id=strings-030-trim-end level=core
+  [tags strings trim-end]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:trim-end "   hi   "]
+#]]
+  [out-text [#
+'   hi'
+#]]
+ ]
+
+ [case id=strings-031-trim-chars level=core
+  [tags strings trim-chars]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:trim-chars "<<hi>>" "<>"]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=strings-032-trim-start-chars level=core
+  [tags strings trim-start-chars]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:trim-start-chars "xxhi" "x"]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=strings-033-trim-end-chars level=core
+  [tags strings trim-end-chars]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:trim-end-chars "hixx" "x"]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=strings-034-split level=core
+  [tags strings split sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:split "a,b,c" ","]
+#]]
+  [out-text [#
+('a', 'b', 'c')
+#]]
+ ]
+
+ [case id=strings-035-split-empty-sep level=core
+  [tags strings split empty-sep]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:split "abc" ""]
+#]]
+  [out-text [#
+('a', 'b', 'c')
+#]]
+ ]
+
+ [case id=strings-036-split-empty-input level=core
+  [tags strings split empty-input]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:split "" ","]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=strings-037-split-limit level=core
+  [tags strings split-limit]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:split-limit "a,b,c,d" "," 2]
+#]]
+  [out-text [#
+('a', 'b', 'c,d')
+#]]
+ ]
+
+ [case id=strings-038-split-lines-mixed level=core
+  [tags strings split-lines line-endings]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:split-lines "a\nb\r\nc\rd"]
+#]]
+  [out-text [#
+('a', 'b', 'c', 'd')
+#]]
+ ]
+
+ [case id=strings-039-split-lines-trailing-dropped level=core
+  [tags strings split-lines trailing]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:split-lines "a\nb\n"]
+#]]
+  [out-text [#
+('a', 'b')
+#]]
+ ]
+
+ [case id=strings-040-split-whitespace-collapse level=core
+  [tags strings split-whitespace collapse]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:split-whitespace "  a   b \t c  "]
+#]]
+  [out-text [#
+('a', 'b', 'c')
+#]]
+ ]
+
+ [case id=strings-041-join level=core
+  [tags strings join]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:join ("a", "b", "c") "-"]
+#]]
+  [out-text [#
+'a-b-c'
+#]]
+ ]
+
+ [case id=strings-042-split-join-roundtrip level=core
+  [tags strings split join roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:join [$strings:split "x.y.z" "."] "/"]
+#]]
+  [out-text [#
+'x/y/z'
+#]]
+ ]
+
+ [case id=strings-043-replace-all level=core
+  [tags strings replace exhaustive]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:replace "a.b.c" "." "-"]
+#]]
+  [out-text [#
+'a-b-c'
+#]]
+ ]
+
+ [case id=strings-044-replace-first level=core
+  [tags strings replace-first]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:replace-first "a.b.c" "." "-"]
+#]]
+  [out-text [#
+'a-b.c'
+#]]
+ ]
+
+ [case id=strings-045-replace-n level=core
+  [tags strings replace-n]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:replace-n "a.b.c.d" "." "-" 2]
+#]]
+  [out-text [#
+'a-b-c.d'
+#]]
+ ]
+
+ [case id=strings-046-pad-start level=core
+  [tags strings pad-start]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:pad-start "abc" 10 "0"]
+#]]
+  [out-text [#
+'0000000abc'
+#]]
+ ]
+
+ [case id=strings-047-pad-end level=core
+  [tags strings pad-end]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:pad-end "abc" 6 "."]
+#]]
+  [out-text [#
+'abc...'
+#]]
+ ]
+
+ [case id=strings-048-pad-multichar-truncates level=core
+  [tags strings pad multichar truncate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:pad-start "x" 5 "ab"]
+#]]
+  [out-text [#
+'ababx'
+#]]
+ ]
+
+ [case id=strings-049-center level=core
+  [tags strings center]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:center "hi" 6 "*"]
+#]]
+  [out-text [#
+'**hi**'
+#]]
+ ]
+
+ [case id=strings-050-repeat level=core
+  [tags strings repeat]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:repeat "ab" 3]
+#]]
+  [out-text [#
+'ababab'
+#]]
+ ]
+
+ [case id=strings-051-is-ascii-true level=core
+  [tags strings is-ascii predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-ascii "hello"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-052-is-ascii-false level=core
+  [tags strings is-ascii predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-ascii "héllo"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=strings-053-is-digit-ascii level=core
+  [tags strings is-digit predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-digit "12345"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-054-is-digit-unicode level=core
+  [tags strings is-digit unicode predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-digit "٠١٢٣"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-055-is-digit-false level=core
+  [tags strings is-digit predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-digit "12a"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=strings-056-is-alpha level=core
+  [tags strings is-alpha predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-alpha "abcDEF"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-057-is-alphanumeric level=core
+  [tags strings is-alphanumeric predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-alphanumeric "abc123"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-058-is-whitespace level=core
+  [tags strings is-whitespace predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-whitespace "  \t\n"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-059-is-upper level=core
+  [tags strings is-upper predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-upper "ABC"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-060-is-lower level=core
+  [tags strings is-lower predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-lower "abc"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-061-is-blank level=core
+  [tags strings is-blank predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-blank "   "]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-062-predicate-empty-vacuous-digit level=core
+  [tags strings predicate empty vacuous]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-digit ""]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-063-predicate-empty-vacuous-alpha level=core
+  [tags strings predicate empty vacuous]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:is-alpha ""]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=strings-064-format-positional level=core
+  [tags strings format positional]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "Hello, {}! You have {} messages." ("Alice", 5)]
+#]]
+  [out-text [#
+'Hello, Alice! You have 5 messages.'
+#]]
+ ]
+
+ [case id=strings-065-format-indexed level=core
+  [tags strings format indexed]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "{1} {0}" ("world", "hello")]
+#]]
+  [out-text [#
+'hello world'
+#]]
+ ]
+
+ [case id=strings-066-format-type-d level=core
+  [tags strings format type-char d]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "n={0:d}" (42)]
+#]]
+  [out-text [#
+'n=42'
+#]]
+ ]
+
+ [case id=strings-067-format-type-s level=core
+  [tags strings format type-char s]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "v={0:s}" ("hi")]
+#]]
+  [out-text [#
+'v=hi'
+#]]
+ ]
+
+ [case id=strings-068-format-type-x level=core
+  [tags strings format type-char x hex]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "hex={0:x}" (255)]
+#]]
+  [out-text [#
+'hex=ff'
+#]]
+ ]
+
+ [case id=strings-069-format-type-X level=core
+  [tags strings format type-char X hex]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "HEX={0:X}" (255)]
+#]]
+  [out-text [#
+'HEX=FF'
+#]]
+ ]
+
+ [case id=strings-070-format-named level=core
+  [tags strings format named map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "Hex: {value:x}" {value: 255}]
+#]]
+  [out-text [#
+'Hex: ff'
+#]]
+ ]
+
+ [case id=strings-071-format-escaped-braces level=core
+  [tags strings format escaped-braces]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "{{literal}} {0}" ("x")]
+#]]
+  [out-text [#
+'{literal} x'
+#]]
+ ]
+
+ [case id=strings-072-format-reject-width-precision level=core
+  [tags strings format reject precision error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "{x:.2f}" {x: 3}]
+#]]
+  [out-err [#
+cx-err:CXER2901
+#]]
+ ]
+
+ [case id=strings-073-format-missing-arg level=core
+  [tags strings format missing-arg error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:format "Hi {missing}" {name: "Alice"}]
+#]]
+  [out-err [#
+cx-err:CXER2902
+#]]
+ ]
+
+ [case id=strings-074-escape-html level=core
+  [tags strings escape-html encoding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:escape-html "<a href=\"x\">&'"]
+#]]
+  [out-text [#
+'&lt;a href=&quot;x&quot;&gt;&amp;&#39;'
+#]]
+ ]
+
+ [case id=strings-075-unescape-html-named level=core
+  [tags strings unescape-html named-entity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:unescape-html "a&hellip;b&mdash;c&copy;"]
+#]]
+  [out-text [#
+'a…b—c©'
+#]]
+ ]
+
+ [case id=strings-076-unescape-html-numeric level=core
+  [tags strings unescape-html numeric-entity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:unescape-html "&#65;&#x42;C"]
+#]]
+  [out-text [#
+'ABC'
+#]]
+ ]
+
+ [case id=strings-077-escape-shell level=core
+  [tags strings escape-shell encoding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:escape-shell "a b"]
+#]]
+  [out-text [#
+"'a b'"
+#]]
+ ]
+
+ [case id=strings-078-escape-json level=core
+  [tags strings escape-json encoding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:escape-json "a\"b"]
+#]]
+  [out-text [#
+'a\\"b'
+#]]
+ ]
+
+ [case id=strings-079-escape-regex level=core
+  [tags strings escape-regex encoding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:escape-regex "a.b*c"]
+#]]
+  [out-text [#
+'a\.b\*c'
+#]]
+ ]
+
+ [case id=strings-080-html-roundtrip level=core
+  [tags strings escape-html unescape-html roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:unescape-html [$strings:escape-html "<x>&"]]
+#]]
+  [out-text [#
+'<x>&'
+#]]
+ ]
+ [case id=strings-081-count-many-matches-linear level=core gate=enforced
+  [tags strings count find-all linear regression perf]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:count [$strings:repeat "a" 100000] "a"]
+#]]
+  [out-text [#
+100000
+#]]
+ ]
+
+ [case id=strings-082-find-all-positions level=core gate=enforced
+  [tags strings find-all positions regression]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:find-all "abcabc" "bc"]
+#]]
+  [out-text [#
+(1, 4)
+#]]
+ ]
+
+]

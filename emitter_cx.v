@@ -38,6 +38,18 @@ fn cx_ind(depth int, compact bool) string {
 	return s
 }
 
+// cx_emit_node_str renders a SINGLE node to canonical CX text. Used by the
+// program-result renderer (code/render.v) so an embedded data-node value
+// (raw text `[#…#]`, entity ref `&…;`, a DTD declaration, or `[!DOCTYPE …]`)
+// produced by a `node_lit` literal renders identically to the data reading —
+// the DATA↔PROGRAM seam. Any trailing newline the node emitter appends is
+// trimmed so the caller controls layout.
+pub fn cx_emit_node_str(n Node, compact bool) string {
+	mut out := []string{}
+	cx_emit_node(n, 0, compact, mut out)
+	return out.join('').trim_right('\n')
+}
+
 fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 	nl  := if compact { '' } else { '\n' }
 	ind := cx_ind(depth, compact)
@@ -62,6 +74,8 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 		ElementDeclNode  { out << '${ind}[!ELEMENT ${n.name} ${n.contentspec}]${nl}' }
 		AttlistDeclNode  { cx_emit_attlist_decl(n, depth, compact, mut out) }
 		NotationDeclNode { cx_emit_notation_decl(n, depth, compact, mut out) }
+		PEReferenceNode  { out << '${ind}%${n.name};${nl}' }
+		DoctypeDecl      { emit_cx_doctype(n, mut out) }
 		ConditionalSectNode { cx_emit_conditional_sect(n, depth, compact, mut out) }
 		BlockContentNode { cx_emit_block_content(n, depth, compact, mut out) }
 		InterpolationNode { cx_emit_interpolation(n, depth, compact, mut out) }
@@ -69,19 +83,51 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 		SequenceNode      { out << '${ind}${cx_emit_sequence_inline(n, compact)}${nl}' }
 		ArrayNode         { out << '${ind}${cx_emit_array_inline(n, compact)}${nl}' }
 		MapNode           { out << '${ind}${cx_emit_map_inline(n, compact)}${nl}' }
+		IteratorNode      {
+			// lazy iterators materialize to eager
+			// Sequences at the host boundary. The eval pipeline is
+			// responsible for pulling the source before render; this
+			// arm renders whatever has accumulated in `memo` (paren-
+			// comma form, matching SequenceNode).
+			seq := iterator_to_sequence(n)
+			out << '${ind}${cx_emit_sequence_inline(seq, compact)}${nl}'
+		}
+		MatchNode         {
+			// v0.8.0 — first-class `[?match]` AST. The
+			// terse-CX emit here uses the MatchNode `source` snippet
+			// when available (the parser populates it with the full
+			// verbatim `[?match …]` form); a structural pretty-printer
+			// is a follow-up alongside the ProgramExpr graft.
+			src := n.source or { '' }
+			out << '${ind}${src}${nl}'
+		}
+		ModifyNode        {
+			// v0.8.0 — first-class `[?modify]` AST. Same
+			// verbatim-source convention as MatchNode at this graft.
+			src := n.source or { '' }
+			out << '${ind}${src}${nl}'
+		}
+		DocumentNode      {
+			// D7 — transparent document carrier: emit prolog, doctype,
+			// then elements as bare top-level nodes, exactly as `cx_emit`
+			// does for a `Document`. Round-trips multi-root by construction.
+			for c in n.prolog { cx_emit_node(c, depth, compact, mut out) }
+			if dt := n.doctype { emit_cx_doctype(dt, mut out) }
+			for c in n.elements { cx_emit_node(c, depth, compact, mut out) }
+		}
 	}
 }
 
 // cx_emit_sequence_inline renders a `(a, b, c)` literal using canonical
-// form per ADR 0017 §D14: parens, single space after comma, trailing comma
+// form: parens, single space after comma, trailing comma
 // omitted. Empty sequence: `()`.
-fn cx_emit_sequence_inline(n SequenceNode, compact bool) string {
+pub fn cx_emit_sequence_inline(n SequenceNode, compact bool) string {
 	if n.items.len == 0 { return '()' }
 	parts := n.items.map(cx_emit_collection_item(it, compact))
 	return '(${parts.join(', ')})'
 }
 
-// cx_emit_array_inline renders a `[a, b, c]` literal per ADR 0017 §D14.
+// cx_emit_array_inline renders a `[a, b, c]` literal.
 // Empty array: `[]`. Trailing commas are omitted per §D14 canonical.
 // Single-element arrays emit as `[a]` and rely on context-aware parse
 // (EvalDirective ArgArray per resolution 2.i; :table cell per
@@ -90,17 +136,59 @@ fn cx_emit_sequence_inline(n SequenceNode, compact bool) string {
 // position), `[a]` parses as Element per §D1's comma-marker rule —
 // this is consistent with the cell-parser's force-array policy
 // keeping the canonical-form invariant clean.
-fn cx_emit_array_inline(n ArrayNode, compact bool) string {
+pub fn cx_emit_array_inline(n ArrayNode, compact bool) string {
 	if n.items.len == 0 { return '[]' }
-	parts := n.items.map(cx_emit_collection_item(it, compact))
+	parts := n.items.map(cx_emit_array_item_literal(it, compact))
 	return '[${parts.join(', ')}]'
 }
 
-// cx_emit_map_inline renders a `{k: v, k: v}` literal per ADR 0017 §D14:
+// cx_emit_array_item_literal renders one item of a BARE ArrayLiteral `[…]`.
+// It differs from cx_emit_collection_item in ONE way: a bare-name string item
+// (`web`, `admin`) is QUOTED. In ArrayLiteral position an unquoted leading
+// bareword re-opens the element-head disambiguation (`[web, prod]` → CXER0100,
+// 3a / lexicon §collections [L83]) and a lone `[web]` re-parses as the element
+// `web`, so a bare string item would not round-trip. Quoting every bareword
+// item keeps the canonical form uniform (`['admin', 'user']`) and bijective.
+// Sequence `( … )` and map values are unambiguous, so they keep the bare form
+// via cx_emit_collection_item.
+fn cx_emit_array_item_literal(n Node, compact bool) string {
+	match n {
+		TextNode {
+			// In an array literal a comma / whitespace splits items, so a text
+			// item is quoted when it is a bare NAME (3a — else it re-parses as a
+			// bareword head) OR carries any item-boundary char (comma, whitespace,
+			// bracket, quote) OR would auto-type. A safe single bare token — e.g.
+			// a program path `//variant` — stays bare. (Data comma string items
+			// arrive as string ScalarNodes, handled below.)
+			if cx_is_bare_name(n.value) || cx_array_item_needs_quote(n.value) {
+				return cx_choose_quote(n.value)
+			}
+			return n.value
+		}
+		ScalarNode {
+			if n.data_type == .string_type {
+				sv := match n.value {
+					string { n.value as string }
+					else   { scalar_value_str(n.value) }
+				}
+				// 3a: always quote string items (a bare `80` / `a, b` would re-type
+				// or split). Non-string scalars (int/float/bool/date/atom) keep
+				// their bare typed form via cx_scalar below.
+				return cx_choose_quote(sv)
+			}
+			return cx_scalar(n)
+		}
+		else {
+			return cx_emit_collection_item(n, compact)
+		}
+	}
+}
+
+// cx_emit_map_inline renders a `{k: v, k: v}` literal:
 // single space after `:` and after `,`. Entries emit in insertion order
 // (runtime preservation); canonical mode handled by the caller / hash path
 // when lexicographic ordering is required. Empty map: `{}`.
-fn cx_emit_map_inline(n MapNode, compact bool) string {
+pub fn cx_emit_map_inline(n MapNode, compact bool) string {
 	if n.entries.len == 0 { return '{}' }
 	mut parts := []string{cap: n.entries.len}
 	for entry in n.entries {
@@ -123,6 +211,7 @@ fn cx_emit_collection_item(n Node, compact bool) string {
 		SequenceNode  { cx_emit_sequence_inline(n, compact) }
 		ArrayNode     { cx_emit_array_inline(n, compact) }
 		MapNode       { cx_emit_map_inline(n, compact) }
+		IteratorNode  { cx_emit_sequence_inline(iterator_to_sequence(n), compact) }
 		InterpolationNode { '[?=${n.expr}]' }
 		Element {
 			mut tmp := []string{}
@@ -150,6 +239,29 @@ fn cx_emit_map_key(kt ScalarType, kv ScalarValue) string {
 	return cx_scalar(ScalarNode{ data_type: kt, value: kv })
 }
 
+// cx_array_item_needs_quote reports whether a bare text item inside an array
+// literal `[…, …]` must be quoted to round-trip as the same string: any
+// item-boundary char (whitespace, comma, bracket, quote, `&`), a value that
+// would auto-type (number/date/…), or a leading `@`/`:`/`#` sigil forces a
+// quote. (Mirrors the program renderer's needs_quote_string_item; the cx module
+// cannot import code, so the rule is defined once on each side.)
+fn cx_array_item_needs_quote(s string) bool {
+	if s.len == 0 {
+		return true
+	}
+	for c in s {
+		if c == ` ` || c == `\t` || c == `\n` || c == `\r` || c == `,`
+			|| c == `[` || c == `]` || c == `(` || c == `)` || c == `{`
+			|| c == `}` || c == `'` || c == `"` || c == `&` {
+			return true
+		}
+	}
+	if cx_would_autotype(s) {
+		return true
+	}
+	return s[0] == `@` || s[0] == `:` || s[0] == `#`
+}
+
 fn cx_is_bare_name(s string) bool {
 	if s.len == 0 { return false }
 	if !is_name_start(s[0]) { return false }
@@ -159,22 +271,95 @@ fn cx_is_bare_name(s string) bool {
 	return true
 }
 
+// array_render_plan decides the decision-(a) canonical surface for a typed-
+// array element body of element-type `base` with `n` scalar items
+// (lexicon.ebnf §9 — D1). It is the SINGLE home for the
+// rule — both this canonical-CX emitter and the programs renderer
+// (code.render_canonical) call it, so the two renderers cannot drift.
+//   returns (drop_annotation, use_comma_separator, force_trailing_comma)
+//   - int/float/bool/date/datetime, n>=2 → drop `::T[]`, whitespace signal;
+//   - string, n>=1                       → drop `::T[]`, comma signal
+//                                          (n==1 needs a trailing comma);
+//   - single non-string scalar           → keep `::T[]` (no whitespace signal);
+//   - non-recoverable type / empty array  → keep `::T[]` (type not inferrable).
+pub fn array_render_plan(base string, n int) (bool, bool, bool) {
+	if n == 0 { return false, false, false }
+	if base == 'string' { return true, true, n == 1 }
+	if base in ['int', 'float', 'bool', 'date', 'datetime'] {
+		if n == 1 { return false, false, false }
+		return true, false, false
+	}
+	return false, false, false
+}
+
+// cx_emit_array_item renders one item of a typed-array body. Dates emit
+// unquoted (cx_scalar already does); a dropped-annotation string item quotes
+// only when a bare token would split or re-type (cx_quote_text_if_needed).
+fn cx_emit_array_item(s ScalarNode, string_item bool) string {
+	if string_item && s.value is string {
+		return cx_quote_text_if_needed(s.value as string)
+	}
+	return cx_scalar(s)
+}
+
+// try_cx_emit_array_element emits a typed-array element body per decision (a),
+// or returns none if `e` is not an all-scalar typed array (caller falls
+// through to the generic element emit).
+fn try_cx_emit_array_element(e Element) ?string {
+	dt := e.data_type() or { return none }
+	if !dt.ends_with('[]') { return none }
+	if e.attrs.len > 0 { return none }
+	base := dt#[..-2]
+	mut scalars := []ScalarNode{}
+	for it in e.items {
+		if it is ScalarNode {
+			scalars << it
+		} else {
+			return none
+		}
+	}
+	cnt := scalars.len
+	drop_ann, use_comma, trailing := array_render_plan(base, cnt)
+	mut s := '[${e.name}'
+	if a := e.anchor() { s += ' &${a}' }
+	if m := e.merge()  { s += ' *${m}' }
+	if id := e.id()    { s += ' #${id}' }
+	if !drop_ann { s += '::${dt}' }
+	if cnt > 0 {
+		sep := if use_comma { ', ' } else { ' ' }
+		mut parts := []string{cap: cnt}
+		for sc in scalars {
+			parts << cx_emit_array_item(sc, base == 'string')
+		}
+		s += ' ' + parts.join(sep)
+		if trailing { s += ',' }
+	}
+	s += ']'
+	return s
+}
+
 fn cx_emit_element(e Element, depth int, compact bool, mut out []string) {
 	ind := cx_ind(depth, compact)
 	nl  := if compact { '' } else { '\n' }
 
-	// v3.4 (ADR 0003 D1 second bullet): body-position [ref @id] form.
+	// v3.4 (second bullet): body-position [ref @id] form.
 	// Emitted as `[ref @<body_ref>]`, no anchors / merge / id meta /
 	// attrs / items per the parser's rule that body_ref is set only
 	// when the source had exactly that shape.
-	if br := e.body_ref {
+	if br := e.body_ref() {
 		out << '${ind}[ref @${br}]${nl}'
 		return
 	}
 
 	// v3.4: emit :table form when this Element carries TableData.
-	if td := e.table {
+	if td := e.table_opt() {
 		cx_emit_table_element(e.name, td, depth, compact, mut out)
+		return
+	}
+
+	// §9 / decision (a): typed-array body canonical render.
+	if rendered := try_cx_emit_array_element(e) {
+		out << '${ind}${rendered}${nl}'
 		return
 	}
 
@@ -187,7 +372,7 @@ fn cx_emit_element(e Element, depth int, compact bool, mut out []string) {
 		out << '${ind}[${e.name}${meta}${nl}'
 		for item in e.items { cx_emit_node(item, depth + 1, compact, mut out) }
 		out << '${ind}]${nl}'
-	} else if e.items.len == 0 && e.attrs.len == 0 && e.anchor == none && e.merge == none && e.data_type == none {
+	} else if e.items.len == 0 && e.attrs.len == 0 && e.anchor() == none && e.merge() == none && e.data_type() == none {
 		out << '${ind}[${e.name}]${nl}'
 	} else {
 		meta := cx_build_meta(e)
@@ -212,7 +397,7 @@ fn cx_emit_table_element(name string, td TableData, depth int, compact bool, mut
 		if col.type_name == '' {
 			header_parts << col.name
 		} else {
-			header_parts << '${col.name}:${col.type_name}'
+			header_parts << '${col.name}::${col.type_name}'
 		}
 	}
 	header := header_parts.join(' ')
@@ -227,11 +412,11 @@ fn cx_emit_table_element(name string, td TableData, depth int, compact bool, mut
 		}
 		body := all.join(' ')
 		body_sep := if body.len > 0 { ' ' } else { '' }
-		out << '${ind}[${name} :table[${header}]${body_sep}${body}]${nl}'
+		out << '${ind}[${name} [table[${header}]]${body_sep}${body}]${nl}'
 		return
 	}
 
-	out << '${ind}[${name} :table[${header}]${nl}'
+	out << '${ind}[${name} [table[${header}]]${nl}'
 	for row in td.rows {
 		mut cells := []string{}
 		for i, cell in row {
@@ -263,7 +448,7 @@ fn cx_format_table_cell(v TableCellValue, _col_type string) string {
 				v
 			}
 		}
-		// ADR 0018 §D4 + ADR 0017 §D14: collection-typed cells emit
+		// collection-typed cells emit
 		// in canonical CX literal form. Reuses the existing inline
 		// emitters for ArrayNode / MapNode / SequenceNode so the
 		// canonical-form rules (lex-sorted map keys, single-space
@@ -276,18 +461,18 @@ fn cx_format_table_cell(v TableCellValue, _col_type string) string {
 
 fn cx_build_meta(e Element) string {
 	mut s := ''
-	if a := e.anchor  { s += ' &${a}' }
-	if m := e.merge   { s += ' *${m}' }
-	if id := e.id     { s += ' #${id}' }
-	if dt := e.data_type { s += ' :${dt}' }
+	if a := e.anchor()    { s += ' &${a}' }
+	if m := e.merge()     { s += ' *${m}' }
+	if id := e.id()       { s += ' #${id}' }
+	if dt := e.data_type() { s += '::${dt}' }
 	for a in e.attrs {
-		// v3.5 (ADR 0016): BracketBody attribute values round-trip as
+		// v3.5: BracketBody attribute values round-trip as
 		// `name=[body]`. The body is emitted inline as a body sequence.
-		// v0.7.0 (multi-line-text symmetry): single-item body whose
+		// Multi-line-text symmetry: single-item body whose
 		// node is RawTextNode or BlockContentNode emits as the direct
 		// form `name=[# ... #]` / `name=[| ... |]` — dropping the
 		// redundant outer BracketBody wrap. Parses back to the same AST.
-		if body_items := a.body {
+		if body_items := a.body() {
 			if body_items.len == 1 {
 				it := body_items[0]
 				if it is RawTextNode {
@@ -310,17 +495,7 @@ fn cx_build_meta(e Element) string {
 			s += ' ${a.name}=[${body_str}]'
 			continue
 		}
-		val_str := a.str_value()
-		emitted := if a.is_ref {
-			// ADR 0003 D1: bare `@id` round-trips verbatim. The
-			// stored value is the bare ID string (no '@' prefix).
-			'@${val_str}'
-		} else if a.data_type == none && cx_would_autotype(val_str) {
-			"'${val_str}'"
-		} else {
-			cx_quote_attr_if_needed(val_str)
-		}
-		s += ' ${a.name}=${emitted}'
+		s += ' ${cx_attr_scalar(a)}'
 	}
 	return s
 }
@@ -368,6 +543,7 @@ fn cx_build_inline_body(items []Node, compact bool) string {
 			SequenceNode { parts << cx_emit_sequence_inline(item, compact) }
 			ArrayNode    { parts << cx_emit_array_inline(item, compact) }
 			MapNode      { parts << cx_emit_map_inline(item, compact) }
+			IteratorNode { parts << cx_emit_sequence_inline(iterator_to_sequence(item), compact) }
 			else {}
 		}
 	}
@@ -378,22 +554,129 @@ fn cx_quote_text_if_needed(s string) string {
 	needs_quote := s.starts_with(' ') || s.ends_with(' ')
 		|| s.contains('  ') || s.contains('\n') || s.contains('\t')
 		|| s.contains('[') || s.contains(']') || s.contains('&')
-		|| s.starts_with(':') || s.starts_with("'") || s.starts_with('"')
+		|| s.contains('\\')
+		|| s.starts_with(':')
+		|| cx_text_has_boundary_quote(s)
 		|| cx_would_autotype(s)
 	if !needs_quote { return s }
 	return cx_choose_quote(s)
 }
 
-fn cx_choose_quote(s string) string {
-	has_single := s.contains("'")
-	has_double := s.contains('"')
-	if !has_single { return "'${s}'" }
-	if !has_double { return '"${s}"' }
-	if !s.contains("'''") { return "'''${s}'''" }
-	return '"${s}"'
+// cx_text_has_boundary_quote reports whether a bare-emitted body text
+// would re-open a quoted string on re-parse. A `'` or `"` at the start of
+// a body item — position 0 or immediately after whitespace — is parsed as
+// a quoted-string opener (parse_body boundary rule), so the value must be
+// wrapped to survive a round-trip. A mid-token quote (a contraction such
+// as `it's`, or `Bob's`) is literal bare prose and stays unquoted — see
+// conformance core 035-apostrophe-in-bare-prose.
+fn cx_text_has_boundary_quote(s string) bool {
+	for i := 0; i < s.len; i++ {
+		c := s[i]
+		if c == `'` || c == `"` {
+			if i == 0 { return true }
+			pc := s[i - 1]
+			if pc == ` ` || pc == `\t` || pc == `\n` || pc == `\r` {
+				return true
+			}
+		}
+	}
+	return false
 }
 
-fn cx_would_autotype(s string) bool {
+pub fn cx_choose_quote(s string) string {
+	has_single := s.contains("'")
+	has_double := s.contains('"')
+	if !has_single { return "'" + cx_escape_quoted(s, `'`) + "'" }
+	if !has_double { return '"' + cx_escape_quoted(s, `"`) + '"' }
+	// Both quote styles present. Triple-quoted is VERBATIM (lexicon §5 [L31],
+	// canonical.md §2.10.1) — no escape pass — so it is the cheapest lossless
+	// container when the content has no '''-terminator run. Otherwise fall to a
+	// double-quoted form with the minimal escape pass.
+	if !s.contains("'''") { return "'''${s}'''" }
+	return '"' + cx_escape_quoted(s, `"`) + '"'
+}
+
+// cx_escape_quoted escapes the content of a single/double-quoted CX string
+// scalar so it round-trips through the parser's escape decode (lexicon.ebnf §5
+// [L32], canonical.md §2.4). The decode is LENIENT: a backslash followed by a
+// byte that is NOT a recognized escape initial is kept verbatim (both bytes),
+// so regex patterns such as `\d` / `\.` / `\w` survive without doubling.
+// Therefore a literal backslash is doubled ONLY when it would otherwise be
+// consumed as the start of a recognized escape (`\ ' " n r t u U`) or it is the
+// final byte (where it would pair with the closing delimiter). The active
+// delimiter byte, if present in the content, is backslash-escaped. This is the
+// minimal re-escape that makes parse(emit(x)) ≡ x (conversions.md §1) without
+// churning the verbatim regex surface. Triple-quoted emission does NOT use this
+// pass — its content is verbatim.
+pub fn cx_escape_quoted(s string, delim u8) string {
+	mut out := []u8{cap: s.len + 4}
+	for i := 0; i < s.len; i++ {
+		c := s[i]
+		if c == `\\` {
+			if i + 1 >= s.len || cx_is_escape_initial(s[i + 1]) {
+				out << `\\`
+				out << `\\`
+			} else {
+				out << c
+			}
+		} else if c == delim {
+			out << `\\`
+			out << c
+		} else {
+			out << c
+		}
+	}
+	return out.bytestr()
+}
+
+// cx_is_escape_initial reports whether `c` is the byte that, when it follows a
+// backslash, forms one of the recognized escape sequences in lexicon §5 [L32]
+// (`\\ \' \" \n \r \t \uXXXX \UXXXXXXXX`).
+fn cx_is_escape_initial(c u8) bool {
+	return c == `\\` || c == `'` || c == `"` || c == `n` || c == `r` || c == `t`
+		|| c == `u` || c == `U`
+}
+
+// cx_attr_scalar renders a scalar-valued attribute to its canonical CX
+// surface token `name…=value` (no leading space). It is the single source
+// of truth for typed-attribute emission (D3), shared by the element-attr
+// and eval-directive emit paths. Forms, in priority order:
+//   • bare `@id` reference                          → `name=@id`
+//   • atom                                          → `name=:click`  (sigil)
+//   • auto-recoverable type (int/float/bool/date/datetime) → `name=value` (bare;
+//     the lexical form re-types it on XML→CX import, no sidecar needed)
+//   • a type the lexical form can't recover (u16/i32/f32/decimal/bigint/bytes)
+//                                                    → `name::T=value`  (glued)
+//   • explicit / default string                     → `name=value`, quoting when
+//     the value would otherwise auto-type (`code='007'`)
+pub fn cx_attr_scalar(a Attribute) string {
+	val_str := a.str_value()
+	if a.is_ref {
+		return '${a.name}=@${val_str}'
+	}
+	if dt := a.data_type() {
+		if dt == 'atom' {
+			// The atom name is stored bare; the `:` sigil is the canonical
+			// surface and round-trips losslessly, so atoms keep it rather
+			// than the glued `::atom=` form.
+			return '${a.name}=:${val_str}'
+		}
+		if dt == 'string' {
+			v := if cx_would_autotype(val_str) { "'${val_str}'" } else { cx_quote_attr_if_needed(val_str) }
+			return '${a.name}=${v}'
+		}
+		if type_name_is_auto_recoverable(dt) {
+			return '${a.name}=${cx_quote_attr_if_needed(val_str)}'
+		}
+		// Sized numerics / decimal / bigint / bytes — no self-evident
+		// lexical form, so carry the glued annotation.
+		return '${a.name}::${dt}=${cx_quote_attr_if_needed(val_str)}'
+	}
+	v := if cx_would_autotype(val_str) { "'${val_str}'" } else { cx_quote_attr_if_needed(val_str) }
+	return '${a.name}=${v}'
+}
+
+pub fn cx_would_autotype(s string) bool {
 	if s.contains(' ') { return false }
 	if s.starts_with('0x') || s.starts_with('0X') { return true }
 	if s == 'true' || s == 'false' || s == 'null' { return true }
@@ -407,7 +690,7 @@ fn cx_would_autotype(s string) bool {
 }
 
 fn cx_quote_attr_if_needed(s string) string {
-	// v0.7.0 (multi-line-text symmetry): newline-bearing string values
+	// Multi-line-text symmetry: newline-bearing string values
 	// cannot be emitted as bare / single-quote / double-quote (all
 	// single-line) without invalidating the round-trip. Triquote is
 	// now valid in AttValue position per [55a] amendment, so use it.
@@ -417,7 +700,7 @@ fn cx_quote_attr_if_needed(s string) string {
 	if s.contains(' ') || s.contains("'") || s.contains('"') || s.len == 0 {
 		return "'${s}'"
 	}
-	// ADR 0003: bare `@id` at attribute-value position is a syntactic
+	// bare `@id` at attribute-value position is a syntactic
 	// reference. A literal string starting with '@' must be quoted to
 	// preserve the round-trip distinction between is_ref=true (emit as
 	// `@id` via cx_build_meta's is_ref branch) and is_ref=false (emit
@@ -425,12 +708,21 @@ fn cx_quote_attr_if_needed(s string) string {
 	if s.len > 0 && s[0] == `@` {
 		return "'${s}'"
 	}
+	// a string value of the form `:NAME` would re-parse as an
+	// atom literal on round-trip; quote it to preserve the string kind.
+	// (Applies symmetrically with the @id case above.) Reserved-name
+	// strings (`:true` / `:false` / `:null`) follow the same rule — the
+	// auto-typer rejects them as atoms, but the surface text still
+	// looks atom-shaped and must be quoted.
+	if s.len > 1 && s[0] == `:` && is_atom_name(s[1..]) {
+		return "'${s}'"
+	}
 	return s
 }
 
 // cx_quote_body_if_needed wraps a substituted scalar that is about to
 // be emitted into element-body position with the cheapest quote form
-// that survives a re-parse. CXL's `[?=]` and filter directives emit
+// that survives a re-parse. CX code's `[?=]` and filter directives emit
 // their result text into the surrounding element body, and downstream
 // tools (e.g. `cx --md`, `cx --xml`) re-parse the emit; bytes like
 // `[` `]` `'` `"` or a leading sigil would re-tokenize as structure
@@ -489,7 +781,17 @@ fn is_ident_cont_byte(c u8) bool {
 	return c == `_` || c == `-` || c == `.`
 }
 
-fn cx_scalar(s ScalarNode) string {
+pub fn cx_scalar(s ScalarNode) string {
+	// Atom scalar — renders with leading `:`. The payload
+	// `value` is the atom's name (UTF-8) stored as a string; the
+	// canonical surface is `:NAME`, never bare or quoted.
+	if s.data_type == .atom_type {
+		name := match s.value {
+			string { s.value as string }
+			else   { scalar_value_str(s.value) }
+		}
+		return ':${name}'
+	}
 	return match s.value {
 		i64       { s.value.str() }
 		f64       { format_float(s.value as f64) }
@@ -515,17 +817,17 @@ fn emit_cx_xml_decl(x XMLDeclNode, mut out []string) {
 	out << '${s}\n'
 }
 
-// v3.5 (ADR 0016): emit `[?=EXPR]` interpolation. The captured
+// v3.5: emit `[?=EXPR]` interpolation. The captured
 // expression text round-trips verbatim; no quoting is added because
-// the body is opaque to the CX layer (parsed as CXPath by the CXL
-// evaluator at v0.7.0+).
+// the body is opaque to the CX layer (parsed as CXPath by the CX code
+// evaluator).
 fn cx_emit_interpolation(n InterpolationNode, depth int, compact bool, mut out []string) {
 	nl  := if compact { '' } else { '\n' }
 	ind := cx_ind(depth, compact)
 	out << '${ind}[?=${n.expr}]${nl}'
 }
 
-// v3.5 (ADR 0016): emit `[?Name ... ]` evaluation directive. Attrs
+// v3.5: emit `[?Name ... ]` evaluation directive. Attrs
 // and body items are emitted in source-like form. BracketBody attrs
 // (`:then=[…]`) round-trip via cx_build_meta's body-aware branch is
 // not reused here because EvalDirective attrs always emit inline.
@@ -534,7 +836,7 @@ fn cx_emit_eval_directive(n EvalDirectiveNode, depth int, compact bool, mut out 
 	ind := cx_ind(depth, compact)
 	mut s := '${ind}[?${n.name}'
 	for a in n.attrs {
-		if body_items := a.body {
+		if body_items := a.body() {
 			body_str := cx_build_inline_body(body_items, true)
 			s += ' ${a.name}=[${body_str}]'
 			continue
@@ -543,12 +845,7 @@ fn cx_emit_eval_directive(n EvalDirectiveNode, depth int, compact bool, mut out 
 		if val_str.len == 0 {
 			s += ' ${a.name}'
 		} else {
-			emitted := if a.data_type == none && cx_would_autotype(val_str) {
-				"'${val_str}'"
-			} else {
-				cx_quote_attr_if_needed(val_str)
-			}
-			s += ' ${a.name}=${emitted}'
+			s += ' ${cx_attr_scalar(a)}'
 		}
 	}
 	if n.items.len > 0 {
@@ -563,7 +860,11 @@ fn emit_cx_directive(cx2 CXDirectiveNode, mut out []string) {
 	mut parts := []string{cap: cx2.attrs.len}
 	for a in cx2.attrs {
 		v := a.str_value()
-		if v == '' {
+		if a.name == '' {
+			// Quoted positional argument (e.g. the `schema-name` title) —
+			// re-quote so it round-trips as a single token.
+			parts << ' ${cx_quote_attr_if_needed(v)}'
+		} else if v == '' {
 			parts << ' ${a.name}'
 		} else {
 			parts << ' ${a.name}=${cx_quote_attr_if_needed(v)}'

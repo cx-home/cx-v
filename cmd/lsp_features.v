@@ -1,6 +1,6 @@
-// Q5 v0.7.0: `cx lsp` — extended LSP features for full editor support.
+// Q5: `cx lsp` — extended LSP features for full editor support.
 //
-// Round-out capabilities beyond the v0.7.0 minimum (didOpen / didChange
+// Round-out capabilities beyond the minimum (didOpen / didChange
 // / hover / completion / semanticTokens / formatting / definition):
 //
 //   - documentSymbol     → outline view + Go-to-symbol
@@ -13,7 +13,7 @@
 //   - codeAction         → quick fixes for diagnostics (placeholder
 //                          — populated as canonical fixes land)
 //   - inlayHint          → type / value hints (placeholder — wired
-//                          to cx-eval inference at v0.7.x)
+//                          to cx-eval inference later)
 //   - signatureHelp      → param list inside `[?fn ...]` bodies
 //
 // All handlers parse the document source with libcx where possible.
@@ -22,6 +22,7 @@
 // don't blink off mid-edit.
 
 module main
+import cx
 
 import x.json2
 
@@ -347,7 +348,7 @@ fn find_matching_close(source string, open_pos int) int {
 
 // ── references ───────────────────────────────────────────────────────
 //
-// Find all positions where an identifier is referenced. v0.7.0 scope:
+// Find all positions where an identifier is referenced. Current scope:
 // `#id` declarations + `@id` references in the open document.
 
 fn handle_references(msg LspMessage, mut state LspState) {
@@ -491,17 +492,104 @@ fn handle_rename(msg LspMessage, mut state LspState) {
 
 // ── codeAction ───────────────────────────────────────────────────────
 //
-// v0.7.0: return an empty list (well-formed) so editors don't break.
-// Quick-fix synthesis is wired in v0.7.x once canonical fix recipes
+// Return an empty list (well-formed) so editors don't break.
+// Quick-fix synthesis is wired later once canonical fix recipes
 // land for the common parse / lint diagnostics.
 
 fn handle_code_action(msg LspMessage, mut state LspState) {
 	write_lsp_response(msg.id, json2.Any([]json2.Any{}))
 }
 
+// ── codeLens ─────────────────────────────────────────────────────────
+//
+// Phase 4.5: each top-level program directive (`[?for …]`,
+// `[?match …]`, `[?modify …]`, `[?def …]`, `[?service …]`, `[?retry …]`,
+// etc.) in the document
+// gets a "View diagram" CodeLens above it. Activating the lens
+// invokes the `cx.diagram` workspace command — the editor extension
+// is expected to handle the command by spawning `cx diagram <file>
+// --format=mermaid` and rendering the result in a side panel.
+//
+// The lens is computed via a simple lexical scan over the document
+// text: any line beginning (after whitespace) with `[?<name>` where
+// <name> is one of the 39 spec/code.md §4.1 directives produces
+// a lens at column 0 of that line.
+
+fn handle_code_lens(msg LspMessage, mut state LspState) {
+	params := msg.params as map[string]json2.Any
+	td := params['textDocument'] or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	} as map[string]json2.Any
+	uri := td['uri'] or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	}.str()
+	doc_text := state.docs[uri] or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	}
+	lines := doc_text.split_into_lines()
+	mut lenses := []json2.Any{}
+	for line_idx, line in lines {
+		// Find the first non-whitespace column.
+		mut col := 0
+		for col < line.len && (line[col] == ` ` || line[col] == `\t`) { col++ }
+		if col + 2 >= line.len { continue }
+		if line[col] != `[` || line[col + 1] != `?` { continue }
+		// Read the directive name.
+		mut name_end := col + 2
+		for name_end < line.len {
+			c := line[name_end]
+			if !((c >= `a` && c <= `z`) || (c >= `A` && c <= `Z`)
+			     || (c >= `0` && c <= `9`) || c == `-`) { break }
+			name_end++
+		}
+		name := line[col + 2 .. name_end]
+		if !is_cx_code_directive(name) { continue }
+		// Build the lens (one per top-level directive line).
+		mut range_obj := map[string]json2.Any{}
+		mut start := map[string]json2.Any{}
+		start['line'] = json2.Any(i64(line_idx))
+		start['character'] = json2.Any(i64(col))
+		mut end := map[string]json2.Any{}
+		end['line'] = json2.Any(i64(line_idx))
+		end['character'] = json2.Any(i64(name_end))
+		range_obj['start'] = json2.Any(start)
+		range_obj['end'] = json2.Any(end)
+		mut cmd := map[string]json2.Any{}
+		cmd['title'] = json2.Any('▸ View diagram')
+		cmd['command'] = json2.Any('cx.diagram')
+		cmd['arguments'] = json2.Any([json2.Any(uri), json2.Any('mermaid')])
+		mut lens := map[string]json2.Any{}
+		lens['range'] = json2.Any(range_obj)
+		lens['command'] = json2.Any(cmd)
+		lenses << json2.Any(lens)
+	}
+	write_lsp_response(msg.id, json2.Any(lenses))
+}
+
+fn is_cx_code_directive(name string) bool {
+	// Closed registry per spec/code.md §4.1 (39 directives).
+	directives := [
+		'match', 'for', 'let', 'fn', 'def', 'if',
+		'pipe', 'map', 'reduce',
+		'retry', 'timeout', 'circuit-breaker', 'fallback', 'rate-limit',
+		'bulkhead', 'sleep',
+		'http-service', 'service-handle', 'http-client', 'stop', 'wait-for',
+		'channel', 'send', 'receive', 'try-send', 'try-receive', 'close',
+		'select', 'worker', 'worker-handle', 'cancel', 'check-cancel',
+		'async', 'await', 'await-all', 'await-any', 'await-race',
+	]
+	for d in directives {
+		if d == name { return true }
+	}
+	return false
+}
+
 // ── inlayHint ────────────────────────────────────────────────────────
 //
-// v0.7.0: return an empty list. Inferred-type hints arrive in v0.7.x
+// Return an empty list. Inferred-type hints arrive later
 // once cx-eval's type inference exposes a hint-ready API.
 
 fn handle_inlay_hint(msg LspMessage, mut state LspState) {
@@ -560,7 +648,6 @@ fn signature_for_directive(name string) ?DirectiveSignature {
 		'let'     { DirectiveSignature{label: '[?let :name value :in body]', doc: 'Lexical binding', params: [':name value', ':in body']} }
 		'fn'      { DirectiveSignature{label: '[?fn :params [x y] :body expr]', doc: 'First-class function', params: [':params', ':body']} }
 		'match'   { DirectiveSignature{label: '[?match value :case pat result :else default]', doc: 'Pattern matching', params: ['value', ':case', ':else']} }
-		'try'     { DirectiveSignature{label: '[?try body :catch err-name handler]', doc: 'Error handling', params: ['body', ':catch']} }
 		'def'     { DirectiveSignature{label: '[?def name value]', doc: 'Top-level definition', params: ['name', 'value']} }
 		'include' { DirectiveSignature{label: '[?include "path"]', doc: 'Sandboxed file inclusion (spec/include.md)', params: ['path']} }
 		'eval'    { DirectiveSignature{label: '[?eval cx-source :caps ?]', doc: 'Sandboxed nested evaluation', params: ['source', ':caps']} }

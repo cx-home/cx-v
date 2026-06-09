@@ -1,4 +1,4 @@
-// Q5 v0.7.0: `cx lsp` — Language Server Protocol implementation for CX.
+// Q5: `cx lsp` — Language Server Protocol implementation for CX.
 //
 // Architecture: thin LSP wrapper over libcx. The CX parser, lint, fmt,
 // and validation engines are the canonical implementation; the LSP
@@ -14,7 +14,7 @@
 // Wire format: JSON-RPC 2.0 over stdio with LSP's `Content-Length`
 // header framing. See https://microsoft.github.io/language-server-protocol/.
 //
-// Capabilities at v0.7.0:
+// Capabilities:
 //   - textDocument/{didOpen,didChange,didClose}
 //   - textDocument/publishDiagnostics (push from parse errors)
 //   - textDocument/hover (directive + filter docstrings)
@@ -194,9 +194,10 @@ fn dispatch_lsp_message(msg LspMessage, mut state LspState) {
 		'textDocument/rename'          { handle_rename(msg, mut state) }
 		'textDocument/prepareRename'   { handle_prepare_rename(msg, mut state) }
 		'textDocument/codeAction'      { handle_code_action(msg, mut state) }
+		'textDocument/codeLens'        { handle_code_lens(msg, mut state) }
 		'textDocument/inlayHint'       { handle_inlay_hint(msg, mut state) }
 		'textDocument/signatureHelp'   { handle_signature_help(msg, mut state) }
-		'$/cancelRequest'              { /* no-op at v0.7.0 */ }
+		'$/cancelRequest'              { /* no-op */ }
 		else {
 			if is_request {
 				write_lsp_error(msg.id, -32601, 'method not found: ${msg.method}')
@@ -209,13 +210,13 @@ fn dispatch_lsp_message(msg LspMessage, mut state LspState) {
 
 fn handle_initialize(msg LspMessage, mut state LspState) {
 	// Advertise capabilities. Numeric constants per LSP spec §6 (text
-	// document sync kinds — Full=1, Incremental=2). v0.7.0 uses Full
-	// sync; Incremental is a v0.7.x optimisation.
+	// document sync kinds — Full=1, Incremental=2). The server uses Full
+	// sync; Incremental is a future optimisation.
 	mut caps := map[string]json2.Any{}
 	caps['textDocumentSync'] = json2.Any(i64(1))  // Full
 	caps['hoverProvider'] = json2.Any(true)
 	mut completion := map[string]json2.Any{}
-	completion['triggerCharacters'] = json2.Any([json2.Any('['), json2.Any('?'), json2.Any('@'), json2.Any(':')])
+	completion['triggerCharacters'] = json2.Any([json2.Any('['), json2.Any('?'), json2.Any('@'), json2.Any(':'), json2.Any('/')])
 	caps['completionProvider'] = json2.Any(completion)
 	caps['definitionProvider'] = json2.Any(true)
 	caps['documentFormattingProvider'] = json2.Any(true)
@@ -231,6 +232,13 @@ fn handle_initialize(msg LspMessage, mut state LspState) {
 	rename_provider['prepareProvider'] = json2.Any(true)
 	caps['renameProvider'] = json2.Any(rename_provider)
 	caps['codeActionProvider'] = json2.Any(true)
+	// CodeLens: each top-level program directive in the
+	// source gets a "View diagram" lens that opens the rendered
+	// diagram via the `cx.diagram` workspace command. Phase 4.5
+	// reference impl.
+	mut code_lens := map[string]json2.Any{}
+	code_lens['resolveProvider'] = json2.Any(false)
+	caps['codeLensProvider'] = json2.Any(code_lens)
 	caps['inlayHintProvider'] = json2.Any(true)
 	mut sig_help := map[string]json2.Any{}
 	sig_help['triggerCharacters'] = json2.Any([json2.Any(' '), json2.Any('(')])
@@ -238,7 +246,7 @@ fn handle_initialize(msg LspMessage, mut state LspState) {
 
 	mut server_info := map[string]json2.Any{}
 	server_info['name'] = json2.Any('cx lsp')
-	server_info['version'] = json2.Any('0.7.0')
+	server_info['version'] = json2.Any('0.8.0')
 
 	mut result := map[string]json2.Any{}
 	result['capabilities'] = json2.Any(caps)
@@ -268,7 +276,7 @@ fn handle_did_change(msg LspMessage, mut state LspState) {
 	uri := td['uri'] or { return }.str()
 	changes := params['contentChanges'] or { return } as []json2.Any
 	if changes.len == 0 { return }
-	// Full sync at v0.7.0: take the last full-doc text.
+	// Full sync: take the last full-doc text.
 	last := changes[changes.len - 1] as map[string]json2.Any
 	if text := last['text'] {
 		state.update_doc(uri, text.str())
@@ -291,22 +299,72 @@ fn publish_diagnostics(uri string, mut state LspState) {
 	cx.parse(source) or {
 		// libcx parse errors carry "line:col: message" prefixes.
 		msg_text := err.msg()
-		line, col := parse_error_position(msg_text)
-		mut diag := map[string]json2.Any{}
-		mut range_obj := map[string]json2.Any{}
-		mut start := map[string]json2.Any{}
-		start['line'] = json2.Any(i64(line))
-		start['character'] = json2.Any(i64(col))
-		mut end_pos := map[string]json2.Any{}
-		end_pos['line'] = json2.Any(i64(line))
-		end_pos['character'] = json2.Any(i64(col + 1))
-		range_obj['start'] = json2.Any(start)
-		range_obj['end'] = json2.Any(end_pos)
-		diag['range'] = json2.Any(range_obj)
-		diag['severity'] = json2.Any(i64(1))  // Error
-		diag['source'] = json2.Any('cx-parse')
-		diag['message'] = json2.Any(msg_text)
-		diagnostics << json2.Any(diag)
+		// A .cx resource's DEFAULT reading is the PROGRAM reading (`cx <file>`
+		// ≡ `cx eval`; a pure-data document evaluates to itself). Constructs
+		// that are valid as a program but rejected by the data parser —
+		// computed attributes (`total=[$count …]`), directives, operator-head
+		// elements — would otherwise surface as spurious data-mode diagnostics
+		// (e.g. E211 "node-valued attribute … scalar-only"). Suppress the
+		// data-parse error when the source parses as a valid program; only a
+		// source that fails BOTH readings is a genuine syntax error to flag.
+		mut is_program := false
+		if _ := cx.parse_program(source) {
+			is_program = true
+		}
+		if !is_program {
+			line, col := parse_error_position(msg_text)
+			mut diag := map[string]json2.Any{}
+			mut range_obj := map[string]json2.Any{}
+			mut start := map[string]json2.Any{}
+			start['line'] = json2.Any(i64(line))
+			start['character'] = json2.Any(i64(col))
+			mut end_pos := map[string]json2.Any{}
+			end_pos['line'] = json2.Any(i64(line))
+			end_pos['character'] = json2.Any(i64(col + 1))
+			range_obj['start'] = json2.Any(start)
+			range_obj['end'] = json2.Any(end_pos)
+			diag['range'] = json2.Any(range_obj)
+			diag['severity'] = json2.Any(i64(1))  // Error
+			diag['source'] = json2.Any('cx-parse')
+			diag['message'] = json2.Any(msg_text)
+			diagnostics << json2.Any(diag)
+		}
+	}
+	// v0.8.0 Phase 5.5 — CXLS001 / CXLS002 / CXLS003 from [?match] arm
+	// analysis. match_diagnostics returns an empty slice on parse
+	// failure (mid-edit / unrelated syntax error), so we always emit
+	// any parse-error diag first and then layer match-arm diags on
+	// top — no duplicate / no race.
+	for d in match_diagnostics(source) {
+		diagnostics << d
+	}
+	// v0.8.0 Phase 5.5 finish — CXLS004 from [?modify] :set-attr /
+	// delete-attr on attribute-step focus paths. The
+	// analyser recognises both the static parse-error signal (the
+	// code parser raises CXER0100 before producing the AST) and the
+	// post-parse defensive walk; see vcx/cmd/lsp_modify_diagnostics.v.
+	for d in modify_diagnostics(source) {
+		diagnostics << d
+	}
+	// CXLS005 advisory when [?map :par] / [?reduce :par]
+	// has no [?bulkhead] wrap in its :using body. Hint severity; no
+	// directive-level opt-out (standard editor suppress comments apply).
+	for d in par_diagnostics(source) {
+		diagnostics << d
+	}
+	// CXLS006 advisory when a [?for] / [?for-array]
+	// [?for-map] generator source is an open-end range (`1 to *`) with no
+	// `:take` / `:takewhile` terminator. Forcing the iterator at eval
+	// time raises CXER0100; the advisory surfaces this statically so the
+	// editor flags it before run. See vcx/cmd/lsp_infinite_diagnostics.v.
+	for d in infinite_diagnostics(source) {
+		diagnostics << d
+	}
+	// CXLS007 advisory: an ambiguous whitespace-separated quoted-string body
+	// (`[x "a" "b"]`) that does not round-trip in idiomatic XML/CX. Warning
+	// severity; see vcx/cmd/lsp_string_list_diagnostics.v.
+	for d in string_list_diagnostics(source) {
+		diagnostics << d
 	}
 	mut params := map[string]json2.Any{}
 	params['uri'] = json2.Any(uri)
@@ -345,6 +403,18 @@ fn handle_hover(msg LspMessage, mut state LspState) {
 		write_lsp_response(msg.id, json2.Any(json2.Null{}))
 		return
 	}
+	// v0.8.0 Phase 5.5 — CXPath focus hover. When the
+	// cursor sits inside a ProgramPathExpr's source range, return
+	// the structural breakdown ahead of the per-word docs path.
+	if path_md := cxpath_hover_md(source, line, col) {
+		mut contents := map[string]json2.Any{}
+		contents['kind'] = json2.Any('markdown')
+		contents['value'] = json2.Any(path_md)
+		mut result := map[string]json2.Any{}
+		result['contents'] = json2.Any(contents)
+		write_lsp_response(msg.id, json2.Any(result))
+		return
+	}
 	word := word_at_position(source, line, col)
 	if word == '' {
 		write_lsp_response(msg.id, json2.Any(json2.Null{}))
@@ -367,7 +437,22 @@ fn handle_hover(msg LspMessage, mut state LspState) {
 
 fn handle_completion(msg LspMessage, mut state LspState) {
 	mut items := []json2.Any{}
-	// Directive names — sourced from the v0.7.0 canonical allowlist.
+
+	// v0.8.0 Phase 5.5 finish — path-context completion.
+	// When the cursor sits inside a CXPath fragment, prepend axis /
+	// element / attribute completions sourced from
+	// vcx/cmd/lsp_modify_diagnostics.v. The path-context check is
+	// best-effort: if the request omits position/textDocument (some
+	// clients send a bare params), or if the cursor is NOT inside a
+	// CXPath, the provider returns an empty slice and the directive /
+	// module-function completions below remain unchanged.
+	mut path_items := []json2.Any{}
+	path_items = completion_path_items_from_params(msg, mut state)
+	for pi in path_items {
+		items << pi
+	}
+
+	// Directive names — sourced from the canonical allowlist.
 	// Items are snippet-flavoured so editors expand `?if` → full
 	// `[?if cond :then x :else y]` template with tab-stops.
 	directives := completion_directive_names()
@@ -383,7 +468,8 @@ fn handle_completion(msg LspMessage, mut state LspState) {
 		}
 		items << json2.Any(item)
 	}
-	// Module-prefixed names (cx:, log:, fn:, map:, array:, math:)
+	// Core module-prefixed names (cx:, log:, fn:, map:, array:) — curated
+	// builtins that are NOT bundled stdlib modules.
 	for name, desc in completion_module_fns() {
 		mut item := map[string]json2.Any{}
 		item['label'] = json2.Any(name)
@@ -392,10 +478,45 @@ fn handle_completion(msg LspMessage, mut state LspState) {
 		item['documentation'] = json2.Any(desc)
 		items << json2.Any(item)
 	}
+	// Full bundled stdlib surface (json:, crypto:, time:, http:, csv:, re:,
+	// store:, … — ~800 functions across ~30 modules), enumerated from the
+	// compiled-in bundle and cached. `detail` carries the signature.
+	for name, sig in state.get_stdlib_completion() {
+		mut item := map[string]json2.Any{}
+		item['label'] = json2.Any(name)
+		item['kind'] = json2.Any(i64(3))   // Function
+		item['detail'] = json2.Any(sig)
+		item['documentation'] = json2.Any('cx stdlib function')
+		items << json2.Any(item)
+	}
 	mut result := map[string]json2.Any{}
 	result['isIncomplete'] = json2.Any(false)
 	result['items'] = json2.Any(items)
 	write_lsp_response(msg.id, json2.Any(result))
+}
+
+// completion_path_items_from_params unpacks the request's
+// textDocument.uri + position and asks `path_completion_items` for
+// path-context completions. Returns an empty slice on any unpack
+// failure or when the cursor is NOT inside a CXPath fragment.
+fn completion_path_items_from_params(msg LspMessage, mut state LspState) []json2.Any {
+	empty := []json2.Any{}
+	if msg.params !is map[string]json2.Any { return empty }
+	params := msg.params as map[string]json2.Any
+	td_any := params['textDocument'] or { return empty }
+	if td_any !is map[string]json2.Any { return empty }
+	td := td_any as map[string]json2.Any
+	uri_any := td['uri'] or { return empty }
+	uri := uri_any.str()
+	source := state.doc_source(uri) or { return empty }
+	pos_any := params['position'] or { return empty }
+	if pos_any !is map[string]json2.Any { return empty }
+	pos := pos_any as map[string]json2.Any
+	line_any := pos['line'] or { return empty }
+	col_any  := pos['character'] or { return empty }
+	line := json_int(line_any)
+	col  := json_int(col_any)
+	return path_completion_items(source, line, col)
 }
 
 // ── Semantic tokens ──────────────────────────────────────────────────
@@ -415,6 +536,7 @@ fn semantic_tokens_legend() json2.Any {
 		json2.Any('comment'),      // 7  — # line comments + [-...] blocks
 		json2.Any('operator'),     // 8  — |>, =>, ||, ->, !, to
 		json2.Any('decorator'),    // 9  — #id, &anchor, *merge
+		json2.Any('enumMember'),   // 10 — atom literal :NAME (tt_atom)
 	]
 	legend['tokenTypes'] = json2.Any(token_types)
 	legend['tokenModifiers'] = json2.Any([]json2.Any{})
@@ -470,8 +592,8 @@ fn handle_formatting(msg LspMessage, mut state LspState) {
 
 // ── Goto definition ──────────────────────────────────────────────────
 //
-// v0.7.0 minimum: resolve #id references to their declaration site.
-// Anchor / merge / ?def-name resolution adds in v0.7.x once the
+// Minimum: resolve #id references to their declaration site.
+// Anchor / merge / ?def-name resolution adds later once the
 // CXLEnv binding-position tracking is exposed.
 
 fn handle_definition(msg LspMessage, mut state LspState) {

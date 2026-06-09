@@ -2,15 +2,15 @@ module main
 
 import cx
 
-// ── Public Table API tests (ADR 0018 D1) ─────────────────────────────────────
+// ── Public Table API tests ─────────────────────────────────────
 //
 // Validates the 17-member surface against the V core's reference
-// implementation. Per ADR 0018 §3.6 equality is canonical-form-based
+// implementation. Per equality is canonical-form-based
 // (to_cx() byte-equality); these tests use that path for most assertions
 // plus explicit per-method checks for properties/access/conversion.
 
 fn test_from_cx_simple_table() {
-	t := cx.table_from_cx('[users :table[name age:int]
+	t := cx.table_from_cx('[users [table[name age::int]]
   alice 30
   bob 25
 ]') or { panic('parse failed: ${err}') }
@@ -21,7 +21,7 @@ fn test_from_cx_simple_table() {
 }
 
 fn test_from_cx_collection_cells() {
-	t := cx.table_from_cx('[t :table[name tags]
+	t := cx.table_from_cx('[t [table[name tags]]
   alice [admin, user,]
   bob [user,]
 ]') or { panic('parse failed: ${err}') }
@@ -47,8 +47,8 @@ fn test_no_table_in_source_errors() {
 fn test_tables_from_cx_finds_nested() {
 	// Tables can appear nested inside an outer element.
 	tables := cx.tables_from_cx('[doc
-  [t1 :table[a] x]
-  [t2 :table[b] y]
+  [t1 [table[a]] x]
+  [t2 [table[b]] y]
 ]') or { panic('parse failed: ${err}') }
 	assert tables.len == 2
 	assert tables[0].cols() == ['a']
@@ -56,7 +56,7 @@ fn test_tables_from_cx_finds_nested() {
 }
 
 fn test_row_returns_ordered_map() {
-	t := cx.table_from_cx('[u :table[name age:int]
+	t := cx.table_from_cx('[u [table[name age::int]]
   alice 30
 ]') or { panic('parse failed: ${err}') }
 	row := t.row(0) or { panic('row failed: ${err}') }
@@ -76,7 +76,7 @@ fn test_row_returns_ordered_map() {
 }
 
 fn test_row_out_of_bounds_errors() {
-	t := cx.table_from_cx('[u :table[a]
+	t := cx.table_from_cx('[u [table[a]]
   x
 ]') or { panic('parse failed: ${err}') }
 	t.row(5) or {
@@ -87,7 +87,7 @@ fn test_row_out_of_bounds_errors() {
 }
 
 fn test_column_by_name() {
-	t := cx.table_from_cx('[u :table[name age:int]
+	t := cx.table_from_cx('[u [table[name age::int]]
   alice 30
   bob 25
 ]') or { panic('parse failed: ${err}') }
@@ -100,7 +100,7 @@ fn test_column_by_name() {
 }
 
 fn test_column_unknown_errors() {
-	t := cx.table_from_cx('[u :table[a] x]') or { panic('parse failed: ${err}') }
+	t := cx.table_from_cx('[u [table[a]] x]') or { panic('parse failed: ${err}') }
 	t.column('missing') or {
 		assert err.msg().contains('unknown column')
 		return
@@ -109,7 +109,7 @@ fn test_column_unknown_errors() {
 }
 
 fn test_slice_head_tail() {
-	t := cx.table_from_cx('[u :table[v:int]
+	t := cx.table_from_cx('[u [table[v::int]]
   1
   2
   3
@@ -123,7 +123,7 @@ fn test_slice_head_tail() {
 }
 
 fn test_select_cols_reorders() {
-	t := cx.table_from_cx('[u :table[a b c]
+	t := cx.table_from_cx('[u [table[a b c]]
   1 2 3
 ]') or { panic('parse failed: ${err}') }
 	sel := t.select_cols(['c', 'a']) or { panic('select failed: ${err}') }
@@ -132,7 +132,7 @@ fn test_select_cols_reorders() {
 }
 
 fn test_to_cx_roundtrip() {
-	src := '[u :table[name age:int]
+	src := '[u [table[name age::int]]
   alice 30
   bob 25
 ]'
@@ -140,11 +140,11 @@ fn test_to_cx_roundtrip() {
 	out := t.to_cx()
 	assert out.contains('alice 30')
 	assert out.contains('bob 25')
-	assert out.contains(':table[name age:int]')
+	assert out.contains('[table[name age::int]]')
 }
 
 fn test_to_csv_scalar_table() {
-	t := cx.table_from_cx('[u :table[name age:int]
+	t := cx.table_from_cx('[u [table[name age::int]]
   alice 30
   bob 25
 ]') or { panic('parse failed: ${err}') }
@@ -155,7 +155,7 @@ fn test_to_csv_scalar_table() {
 }
 
 fn test_to_json_scalar_table() {
-	t := cx.table_from_cx('[u :table[name age:int]
+	t := cx.table_from_cx('[u [table[name age::int]]
   alice 30
   bob 25
 ]') or { panic('parse failed: ${err}') }
@@ -169,7 +169,7 @@ fn test_to_json_scalar_table() {
 }
 
 fn test_to_json_array_cells() {
-	t := cx.table_from_cx('[u :table[name tags]
+	t := cx.table_from_cx('[u [table[name tags]]
   alice [admin, user,]
 ]') or { panic('parse failed: ${err}') }
 	js := t.to_json()
@@ -180,7 +180,7 @@ fn test_to_json_array_cells() {
 }
 
 fn test_to_json_map_cells() {
-	t := cx.table_from_cx('[u :table[name attrs]
+	t := cx.table_from_cx('[u [table[name attrs]]
   alice {role: admin, age: 30}
 ]') or { panic('parse failed: ${err}') }
 	js := t.to_json()
@@ -190,7 +190,7 @@ fn test_to_json_map_cells() {
 }
 
 fn test_to_data_bin_roundtrips_scalar() {
-	src := '[u :table[name age:int]
+	src := '[u [table[name age::int]]
   alice 30
   bob 25
 ]'
@@ -200,7 +200,7 @@ fn test_to_data_bin_roundtrips_scalar() {
 }
 
 fn test_to_dict_list_materializes() {
-	t := cx.table_from_cx('[u :table[a b]
+	t := cx.table_from_cx('[u [table[a b]]
   1 x
   2 y
 ]') or { panic('parse failed: ${err}') }
@@ -209,7 +209,7 @@ fn test_to_dict_list_materializes() {
 }
 
 fn test_iter_cols_returns_column_views() {
-	t := cx.table_from_cx('[u :table[a:int b]
+	t := cx.table_from_cx('[u [table[a::int b]]
   1 x
   2 y
 ]') or { panic('parse failed: ${err}') }
@@ -222,7 +222,7 @@ fn test_iter_cols_returns_column_views() {
 }
 
 fn test_new_table_validates() {
-	// 4 invariants per ADR 0018 §D7
+	// 4 invariants
 	// (1) len(cols) == len(types)
 	cx.new_table(['a', 'b'], ['int'], [][]cx.TableCellValue{}) or {
 		assert err.msg().contains('len(cols)')
@@ -241,7 +241,7 @@ fn test_new_table_validates() {
 }
 
 fn test_eq() {
-	src := '[u :table[a]
+	src := '[u [table[a]]
   1
 ]'
 	t1 := cx.table_from_cx(src) or { panic('parse failed: ${err}') }

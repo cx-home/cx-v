@@ -2,44 +2,52 @@ module main
 
 import os
 import cx
+import code
 
-const version = '0.6.1'
+const version = '0.8.0'
 
 fn main() {
 	args := os.args[1..]
-	if args.len == 0 {
+	// No args: print usage when stdin is a TTY (interactive), but fall
+	// through to the default program reading when stdin is piped — `echo
+	// '[+ 1 2]' | cx` evaluates stdin (spec/code.md §1.3: stdin EVALUATES).
+	if args.len == 0 && os.is_atty(0) != 0 {
 		print_usage_and_exit(1)
 	}
 
-	if args[0] == '-v' || args[0] == '--version' {
-		println('cx ${version}')
-		exit(0)
-	}
-	if args[0] == '-h' || args[0] == '--help' {
-		print_usage_and_exit(0)
-	}
+	if args.len > 0 {
+		if args[0] == '-v' || args[0] == '--version' {
+			println('cx ${version}')
+			exit(0)
+		}
+		if args[0] == '-h' || args[0] == '--help' {
+			print_usage_and_exit(0)
+		}
 
-	// ── Subcommand dispatch (Phase 6 / spec/canonical.md) ─────────────────────
-	// `cx fmt FILE` — lossless canonical text
-	// `cx canonical FILE` — strict canonical text
-	// `cx hash FILE` — SHA-256 hex of strict canonical bytes
-	// `cx eq A.cx B.cx` — exit 0 iff canonical(A) == canonical(B)
-	match args[0] {
-		'fmt' { run_fmt(args[1..]); return }
-		'canonical' { run_canonical(args[1..]); return }
-		'hash' { run_hash(args[1..]); return }
-		'eq' { run_eq(args[1..]); return }
-		'diff' { run_diff(args[1..]); return }
-		'lint' { run_lint(args[1..]); return }
-		'validate' { run_validate(args[1..]); return }
-		'table' { run_table(args[1..]); return }
-		'demo' { run_demo(args[1..]); return }
-		'scaffold' { run_scaffold(args[1..]); return }
-		'eval' { run_eval(args[1..]); return }
-		'select' { run_select(args[1..]); return }
-		'upgrade-config' { run_upgrade_config(args[1..]); return }
-		'lsp' { run_lsp(args[1..]); return }
-		else {} // fall through to legacy --flag form
+		// ── Subcommand dispatch (Phase 6 / spec/canonical.md) ─────────────────
+		// `cx fmt FILE` — lossless canonical text
+		// `cx canonical FILE` — strict canonical text
+		// `cx hash FILE` — SHA-256 hex of strict canonical bytes
+		// `cx eq A.cx B.cx` — exit 0 iff canonical(A) == canonical(B)
+		match args[0] {
+			'fmt' { run_fmt(args[1..]); return }
+			'canonical' { run_canonical(args[1..]); return }
+			'hash' { run_hash(args[1..]); return }
+			'eq' { run_eq(args[1..]); return }
+			'diff' { run_diff(args[1..]); return }
+			'lint' { run_lint(args[1..]); return }
+			'validate' { run_validate(args[1..]); return }
+			'table' { run_table(args[1..]); return }
+			'demo' { run_demo(args[1..]); return }
+			'scaffold' { run_scaffold(args[1..]); return }
+			'eval' { run_eval(args[1..]); return }
+			'diagram' { run_diagram(args[1..]); return }
+			'code-diagram' { run_code_diagram(args[1..]); return }
+			'code-tree' { run_code_tree(args[1..]); return }
+			'lock' { run_cx_lock(args[1..]); return }
+			'lsp' { run_lsp(args[1..]); return }
+			else {} // fall through to legacy --flag form
+		}
 	}
 
 	// Determine input
@@ -62,10 +70,17 @@ fn main() {
 	// Parse flags
 	mut mode := ''
 	mut compact := false
+	mut lossless := false
 	mut explicit_from := false
 	mut from_fmt := 'cx'
 	mut to_fmt := 'cx'
 	mut include_root := ''
+	// Capability grants for the default program reading (deny-by-default,
+	// matching `cx eval` — spec/security.md §3). `--allow-all` opts out;
+	// `--allow-<cap>` grants one capability.
+	mut allow_all := false
+	mut allow_caps := []string{}
+	mut net_specs := []string{}
 	for arg in args {
 		if arg == '--ast' { mode = 'ast' }
 		else if arg == '--cx' { mode = 'cx' }
@@ -77,8 +92,18 @@ fn main() {
 		else if arg == '--csv' { mode = 'csv' }
 		else if arg == '--tsv' { mode = 'tsv' }
 		else if arg == '--psv' { mode = 'psv' }
-		else if arg == '--cxdb' { mode = 'cxdb' }
+		else if arg == '--cxcol' { mode = 'cxcol' }
 		else if arg == '--compact' { compact = true }
+		else if arg == '--lossless' { lossless = true }
+		else if arg == '--allow-all' { allow_all = true }
+		else if arg.starts_with('--allow-') {
+			rest_cap := arg['--allow-'.len..]
+			cap_name := rest_cap.all_before('=')
+			if cap_name != '' {
+				allow_caps << cap_name
+				if cap_name == 'net' && rest_cap.contains('=') { net_specs << rest_cap.all_after('=') }
+			}
+		}
 		else if arg.starts_with('--from=') { from_fmt = arg[7..]; explicit_from = true }
 		else if arg.starts_with('--to=') { to_fmt = arg[5..] }
 		else if arg.starts_with('--include-root=') { include_root = arg[15..] }
@@ -99,22 +124,43 @@ fn main() {
 
 	// Auto-detect input format from file extension if not explicit
 	if !explicit_from && input_file.len > 0 {
-		if input_file.ends_with('.md') { from_fmt = 'md' }
-		else if input_file.ends_with('.xml') { from_fmt = 'xml' }
+		if input_file.ends_with('.xml') { from_fmt = 'xml' }
 		else if input_file.ends_with('.json') { from_fmt = 'json' }
 		else if input_file.ends_with('.yaml') || input_file.ends_with('.yml') { from_fmt = 'yaml' }
 		else if input_file.ends_with('.toml') { from_fmt = 'toml' }
+		else if input_file.ends_with('.md') { from_fmt = 'md' }
 	}
 
 	if mode.len == 0 { mode = to_fmt }
 
-	from := match from_fmt {
-		'xml' { cx.Format.xml }
-		'json' { cx.Format.json }
-		'yaml' { cx.Format.yaml }
-		'toml' { cx.Format.toml }
-		'md' { cx.Format.md }
-		else { cx.Format.cx }
+	// ── CLI DEFAULT = the program reading (spec/code.md §1.3, D-A1) ──────────
+	// A bare CX resource EVALUATES: `cx <file|->` ≡ `cx eval <file|->`. The
+	// result is rendered per the requested target; the default is canonical
+	// CX, and --xml/--json/--yaml/--csv/--tsv/--to render the RESULT. A pure
+	// data document evaluates to itself, so this is a no-op there.
+	//
+	// An EXPLICIT --from=… selects the CONVERT pipeline (the data reading),
+	// per the ruling's "--from=/convert" surface — the escape hatch for the
+	// lossless CX⇄XML/JSON bijection and for ingesting foreign formats
+	// (`cx --from=cx --to=xml d.cx` converts; `cx d.cx --xml` evaluates).
+	// Auto-detected non-CX inputs (.xml/.json/…) also stay on convert.
+	// Structural/inspection modes the result-renderer doesn't cover
+	// (ast/cxcol/toml/psv, and --compact) also stay on the data path.
+	eval_targets := ['cx', 'xml', 'json', 'yaml', 'csv', 'tsv']
+	if from_fmt == 'cx' && !explicit_from && !compact && !lossless && mode in eval_targets {
+		// Install the capability set before eval (deny-by-default).
+		if allow_all {
+			code.caps_set_all()
+		} else {
+			code.caps_set_list(allow_caps)
+			if net_specs.len > 0 {
+				code.caps_set_net_hosts(net_specs)
+			}
+		}
+		// The resource IS the program; there is no separate data input.
+		out := code.eval_code('', input, mode) or { eprintln('error: ${err}'); exit(1) }
+		print(out)
+		return
 	}
 
 	out := if mode == 'ast' {
@@ -127,22 +173,21 @@ fn main() {
 		cx.to_tsv(input) or { eprintln('error: ${err}'); exit(1) }
 	} else if mode == 'psv' {
 		cx.to_psv(input) or { eprintln('error: ${err}'); exit(1) }
-	} else if mode == 'cxdb' {
+	} else if mode == 'cxcol' {
 		doc := cx.parse(input) or { eprintln('error: ${err}'); exit(1) }
 		bytes := cx.emit_data_bin(doc)
 		C.write(1, bytes.data, bytes.len)
 		return
 	} else {
-		to_fmt_enum := match mode {
-			'cx' { cx.Format.cx }
-			'xml' { cx.Format.xml }
-			'json' { cx.Format.json }
-			'yaml' { cx.Format.yaml }
-			'toml' { cx.Format.toml }
-			'md' { cx.Format.md }
-			else { cx.Format.cx }
+		// --from/--to convert pipeline: a registry lookup + compose
+		// (codec.md §6). Names pass through verbatim to the one registry —
+		// any registered codec is reachable, and an unknown name errors
+		// ("unknown source/target format: …") rather than silently folding
+		// to cx (G6).
+		cx.convert_by_name(input, from_fmt, mode, lossless) or {
+			eprintln('error: ${err}')
+			exit(1)
 		}
-		cx.convert(input, from, to_fmt_enum) or { eprintln('error: ${err}'); exit(1) }
 	}
 	println(out)
 }
@@ -333,7 +378,7 @@ fn run_lint(args []string) {
 // 1 — diagnostics at or above threshold
 // 2 — usage / I/O / schema-load failure
 // Default --fail-on=error matches `cx lint`. The validator is
-// currently the v0.6.0 bootstrap (4 of 14 rules end-to-end; the rest
+// currently the bootstrap validator (4 of 14 rules end-to-end; the rest
 // are TODO(phase-7.74d) inside vcx/cx/schema_validate.v).
 fn run_validate(args []string) {
 	mut schema_path := ''
@@ -470,10 +515,11 @@ fn read_one_input(args []string, cmd string) string {
 	return os.get_raw_lines_joined()
 }
 
-fn print_usage_and_exit(code int) {
+fn print_usage_and_exit(exit_code int) {
 	eprintln('Usage: cx <subcommand> [args...]')
 	eprintln(' cx --ast|--cx|--xml|--json|--yaml|--toml|--md|--csv|--tsv|--psv [--compact] [input_file]')
-	eprintln(' cx --from=cx|xml|md --to=cx|xml|json|yaml|toml|md|csv|tsv|psv [--compact] [input_file]')
+	eprintln(' cx --from=cx|xml|md --to=cx|xml|json|yaml|toml|md|csv|tsv|psv [--compact] [--lossless] [input_file]')
+	eprintln('   --lossless: XML carries per-value types (`<cx:T>`) for an exact CX round-trip')
 	eprintln(' cx -v|--version')
 	eprintln('')
 	eprintln('Subcommands:')
@@ -505,9 +551,9 @@ fn print_usage_and_exit(code int) {
 	eprintln(' load FILE --to=cx — symmetric inverse.')
 	eprintln(' --to=parquet|arrow defers to libcx_arrow Phase C (post-v0.6.0).')
 	eprintln(' demo Self-contained showcase: typed round-trip,')
-	eprintln(' :table → CSV, CXL template, comparison.')
+	eprintln(' :table → CSV, CX program, comparison.')
 	eprintln(' No file I/O, no network. < 1s wall-clock.')
 	eprintln(' scaffold <kind> Drop a typed, commented skeleton on stdout.')
 	eprintln(' kind ∈ {config, data, doc, log, table}.')
-	exit(code)
+	exit(exit_code)
 }

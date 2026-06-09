@@ -1,0 +1,8 @@
+[?def exported-fn
+  :scope public
+  (x)
+  x]
+
+[?def private-helper
+  (x)
+  [* x 99]]

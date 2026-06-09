@@ -1,0 +1,234 @@
+[test-suite name=fp
+  [doc [#
+conformance fixtures for cx-stdlib/fp (spec/std-lib/fp.md).
+
+   Functor/monad protocol over tagged containers; head-tag dispatch over the
+   four channels. The module is IMPLEMENTED (Stage C, Phase C4) and ENFORCED
+   in conformance/gates.cxd. Each program imports the bundled module via
+   [?lib 'cx-stdlib/fp'] then calls [$fp:fn args].
+
+   CONVENTIONS: a combinator's callable argument is a FIRST-CLASS function
+   reference — bare `$fn` (or an inline [?fn …]), never a bracketed `[$fn]`
+   (which is a zero-arg CALL). An [err …] value literal quotes a colon-bearing
+   code attr (`code='cx-err:CXER9999'`) so it parses; render_canonical emits
+   the attribute value bareword (`code=cx-err:CXER9999 message=boom`).
+
+   Instances: sequence = Maybe (≤1) + List (≥0): None=(), Some(x)=(x),
+   Some(null)=(null); result = [ok]/[err]; user-tagged. NO option/[some]/[none].
+   E_NO_INSTANCE = cx-err:CXER4400 (governance.md §9.6; the SAP draft's CXER0244
+   was in the core Futures-reserved range — see MIGRATION_DECISIONS D001).
+#]]
+
+ # ── §1 sequence instance = Maybe + List ──
+ [case id=fp-001-map-absence level=core
+  [tags fp maybe sequence map absence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?lib 'cx-stdlib/strings']
+[?def up ($s) [$strings:upper $s]]
+[$fp:map () $up]
+#]]
+  [out-text [# () #]]
+ ]
+ [case id=fp-002-map-some level=core
+  [tags fp maybe sequence map some]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?lib 'cx-stdlib/strings']
+[?def up ($s) [$strings:upper $s]]
+[$fp:map ('hi') $up]
+#]]
+  [out-text [# ('HI') #]]
+ ]
+ [case id=fp-003-map-list level=core
+  [tags fp list sequence map]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?def inc ($x) [+ $x 1]]
+[$fp:map (1, 2, 3) $inc]
+#]]
+  [out-text [# (2, 3, 4) #]]
+ ]
+ [case id=fp-004-pure-default-sequence level=core
+  [tags fp pure sequence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:pure 5]
+#]]
+  [out-text [# (5) #]]
+ ]
+ [case id=fp-005-some-null-distinct-from-none level=core
+  [tags fp maybe some-null cardinality]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:pure null]
+#]]
+  [out-text [# (null) #]]
+ ]
+ [case id=fp-006-flat-map-sequence level=core
+  [tags fp flat-map sequence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?def dup ($x) ($x, $x)]
+[$fp:flat-map (1, 2) $dup]
+#]]
+  [out-text [# (1, 1, 2, 2) #]]
+ ]
+
+ # ── §1 result instance = [ok]/[err]; flat-map = railway short-circuit ──
+ [case id=fp-010-result-flatmap-ok level=core
+  [tags fp result flat-map ok]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?def step ($x) [ok [+ $x 1]]]
+[$fp:flat-map [ok 5] $step]
+#]]
+  [out-text [# [ok 6] #]]
+ ]
+ [case id=fp-011-result-flatmap-err-shortcircuit level=core
+  [tags fp result flat-map err railway]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?def step ($x) [ok [+ $x 1]]]
+[$fp:flat-map [err code='cx-err:CXER9999' message='boom'] $step]
+#]]
+  [out-text [# [err code=cx-err:CXER9999 message=boom] #]]
+ ]
+
+ # ── §1.2 dispatch precedence — un-instanced element → E_NO_INSTANCE (CXER4400) ──
+ [case id=fp-020-no-instance level=core
+  [tags fp no-instance dispatch CXER4400]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?def id1 ($x) $x]
+[$fp:map [user name=alice] $id1]
+#]]
+  [out-err [#
+cx-err:CXER4400
+#]]
+ ]
+
+ # ── §1.3 fold (err-boundary): may fold over a container holding errs ──
+ [case id=fp-030-fold-sum level=core
+  [tags fp fold sequence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?def add ($acc $x) [+ $acc $x]]
+[$fp:fold (1, 2, 3, 4) 0 $add]
+#]]
+  [out-text [# 10 #]]
+ ]
+
+ # ── §3 laws (sequence instance) ──
+ [case id=fp-040-functor-identity level=core
+  [tags fp law functor identity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?def id1 ($x) $x]
+[$fp:map (1, 2, 3) $id1]
+#]]
+  [out-text [# (1, 2, 3) #]]
+ ]
+ [case id=fp-041-monad-left-identity level=core
+  [tags fp law monad left-identity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[?def f ($x) ($x, $x)]
+[$fp:flat-map [$fp:pure 7] $f]
+#]]
+  [out-text [# (7, 7) #]]
+ ]
+ [case id=fp-042-monad-right-identity level=core
+  [tags fp law monad right-identity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:flat-map (1, 2, 3) $fp:pure]
+#]]
+  [out-text [# (1, 2, 3) #]]
+ ]
+
+ # ── §1 traverse / sequence (err-boundary) ──
+ [case id=fp-050-sequence-of-results level=core
+  [tags fp sequence traverse]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:sequence ([ok 1], [ok 2], [ok 3])]
+#]]
+  [out-text [# [ok (1, 2, 3)] #]]
+ ]
+ [case id=fp-051-sequence-short-circuits-on-err level=core
+  [tags fp sequence err railway]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:sequence ([ok 1], [err code='cx-err:CXER9999' message='x'], [ok 3])]
+#]]
+  [out-text [# [err code=cx-err:CXER9999 message=x] #]]
+ ]
+ # ── §1.3 traverse: dispatch the inner applicative G from fn's result ──
+ # traverse F fn = sequence (map F fn); the swapped layer G (F b) is the
+ # applicative RETURNED by fn (§1.3 signature `(a) → G b → G (F b)`), NOT
+ # assumed to be `result`. Covers result, the list/sequence applicative,
+ # and Maybe-as-≤1-sequence (spec §1.1) including its short-circuit.
+ [case id=fp-052-traverse-result level=core
+  [tags fp traverse result]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:traverse (1, 2, 3) [?fn ($x) [ok $x]]]
+#]]
+  [out-text [# [ok (1, 2, 3)] #]]
+ ]
+ [case id=fp-053-traverse-list-applicative level=core
+  [tags fp traverse sequence list]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:traverse (1, 2, 3) [?fn ($x) ([+ $x 1])]]
+#]]
+  [out-text [# ((2, 3, 4)) #]]
+ ]
+ [case id=fp-054-traverse-maybe-all-some level=core
+  [tags fp traverse maybe sequence some]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:traverse (1, 2, 3) [?fn ($x) ($x)]]
+#]]
+  [out-text [# ((1, 2, 3)) #]]
+ ]
+ [case id=fp-055-traverse-maybe-none-shortcircuit level=core
+  [tags fp traverse maybe none absence shortcircuit]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:traverse (1, 2, 3) [?fn ($x) [?if [= $x 2] () ($x)]]]
+#]]
+  [out-text [# () #]]
+ ]
+ [case id=fp-056-traverse-no-instance level=core
+  [tags fp traverse no-instance dispatch CXER4400]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/fp']
+[$fp:traverse (1, 2, 3) [?fn ($x) [just $x]]]
+#]]
+  [out-err [#
+cx-err:CXER4400
+#]]
+ ]
+]

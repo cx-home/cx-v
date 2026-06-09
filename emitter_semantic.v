@@ -8,6 +8,72 @@ pub fn emit_semantic_json(doc Document) string {
 	return json_value_pretty(val, 0)
 }
 
+// emit_semantic_json_opts is the single semantic element→JSON mapping
+// (sem_document) with caller-chosen formatting: `indent` 0 = compact, >0 =
+// pretty; `sort_keys` orders object keys. The cx-stdlib/json module routes
+// element emit here so module and CLI share ONE element→JSON mapping (codec.md
+// §6) — the module supplies compact+sorted for canonical emit, indent=2 for
+// pretty.
+pub fn emit_semantic_json_opts(doc Document, indent int, sort_keys bool) string {
+	val := sem_document(doc)
+	return json_value_fmt(val, 0, indent, sort_keys)
+}
+
+fn json_value_fmt(v JsonVal, depth int, indent int, sort_keys bool) string {
+	return match v {
+		JsonNull           { 'null' }
+		JsonAtom           { json_str(':' + (v as JsonAtom).name) }
+		bool               { if v as bool { 'true' } else { 'false' } }
+		i64                { (v as i64).str() }
+		f64                { format_float(v as f64) }
+		string             { json_str(v as string) }
+		[]JsonVal          { json_array_fmt(v as []JsonVal, depth, indent, sort_keys) }
+		map[string]JsonVal { json_object_fmt(v as map[string]JsonVal, depth, indent, sort_keys) }
+	}
+}
+
+fn json_array_fmt(arr []JsonVal, depth int, indent int, sort_keys bool) string {
+	if arr.len == 0 {
+		return '[]'
+	}
+	if indent == 0 {
+		items := arr.map(json_value_fmt(it, depth + 1, indent, sort_keys))
+		return '[${items.join(',')}]'
+	}
+	pad := ' '.repeat(indent)
+	ind := pad.repeat(depth + 1)
+	close_ind := pad.repeat(depth)
+	items := arr.map('${ind}${json_value_fmt(it, depth + 1, indent, sort_keys)}')
+	return '[\n${items.join(',\n')}\n${close_ind}]'
+}
+
+fn json_object_fmt(obj map[string]JsonVal, depth int, indent int, sort_keys bool) string {
+	if obj.len == 0 {
+		return '{}'
+	}
+	mut keys := obj.keys()
+	if sort_keys {
+		keys.sort()
+	}
+	if indent == 0 {
+		mut pairs := []string{cap: keys.len}
+		for k in keys {
+			val := obj[k] or { continue }
+			pairs << '${json_str(k)}:${json_value_fmt(val, depth + 1, indent, sort_keys)}'
+		}
+		return '{${pairs.join(',')}}'
+	}
+	pad := ' '.repeat(indent)
+	ind := pad.repeat(depth + 1)
+	close_ind := pad.repeat(depth)
+	mut pairs := []string{cap: keys.len}
+	for k in keys {
+		val := obj[k] or { continue }
+		pairs << '${ind}${json_str(k)}: ${json_value_fmt(val, depth + 1, indent, sort_keys)}'
+	}
+	return '{\n${pairs.join(',\n')}\n${close_ind}}'
+}
+
 pub fn emit_semantic_json_docs(docs []Document) string {
 	parts := docs.map(json_value_pretty(sem_document(it), 0))
 	return '[${parts.join(',')}]'
@@ -15,11 +81,34 @@ pub fn emit_semantic_json_docs(docs []Document) string {
 
 // ── Internal JSON value type ──────────────────────────────────────────────────
 
-type JsonVal = JsonNull | bool | i64 | f64 | string | []JsonVal | map[string]JsonVal
+type JsonVal = JsonAtom | JsonNull | bool | i64 | f64 | string | []JsonVal | map[string]JsonVal
 
 struct JsonNull {}
 
+// JsonAtom carries a CX atom scalar through the semantic
+// intermediate so each format emitter can render the atom row of
+// spec/core/conversions.md distinctly from a plain string:
+//   - JSON  → string `":NAME"` (colon-prefixed surface form)
+//   - YAML  → `!!cx:atom "NAME"` native tag
+//   - TOML  → string `":NAME"` (no tag protocol; lossy surface form)
+// `name` is the atom's name WITHOUT the leading `:` (matching the
+// ScalarNode payload and AST JSON `value` shape).
+struct JsonAtom {
+	name string
+}
+
 fn sem_document(doc Document) JsonVal {
+	// Value-model document: a single CXDM value at top level (a Map / Array /
+	// Sequence / Scalar, not a named Element). JSON → CX and the other value
+	// codecs produce this shape — the lossless read — so the semantic emit
+	// (and YAML / TOML, which route through here) project the value directly
+	// instead of dropping it as a non-Element root.
+	if doc.elements.len == 1 {
+		only := doc.elements[0]
+		if only !is Element {
+			return node_value_to_json(only)
+		}
+	}
 	roots := doc.elements.filter(it is Element)
 	if roots.len == 0 { return JsonVal(JsonNull{}) }
 	mut obj := map[string]JsonVal{}
@@ -33,12 +122,12 @@ fn sem_document(doc Document) JsonVal {
 }
 
 fn sem_element(e Element) JsonVal {
-	// v0.7.0 (ADR 0003 D1 second bullet / GG8): body-position [ref @id]
+	// GG8: body-position [ref @id]
 	// projects to the semantic-emit `$ref` shape, matching the JSON
 	// Pointer / JSON Schema convention. YAML / TOML / MD round-trip
 	// through this shape (lossy direction — JSON Pointer-style refs
 	// are the cross-format consensus). Documented in spec/conversions.md.
-	if br := e.body_ref {
+	if br := e.body_ref() {
 		mut ref_obj := map[string]JsonVal{}
 		ref_obj['\$ref'] = JsonVal(br)
 		return JsonVal(ref_obj)
@@ -65,7 +154,7 @@ fn sem_element(e Element) JsonVal {
 		return JsonVal(content.map(scalar_native(it as ScalarNode)))
 	}
 
-	// Pure collection-literal body, no attrs (ADR 0017 §D12 — element body
+	// Pure collection-literal body, no attrs (element body
 	// is exactly the collection's JSON shape; sequence/array → JSON array,
 	// map → JSON object).
 	if !has_attrs && !has_elements && !has_text && all_collections {
@@ -86,7 +175,7 @@ fn sem_element(e Element) JsonVal {
 	// Object
 	mut obj := map[string]JsonVal{}
 	for attr in e.attrs {
-		obj[attr.name] = scalar_val_to_json(attr.value)
+		obj[attr.name] = attr_scalar_to_json(attr)
 	}
 
 	if has_elements || has_collections {
@@ -103,12 +192,18 @@ fn sem_element(e Element) JsonVal {
 				RawTextNode  { push_text(mut obj, n.value) }
 				EntityRefNode { push_text(mut obj, entity_ref_str(n.name)) }
 				ScalarNode    { push_keyed(mut obj, '_', scalar_native(n)) }
-				// ADR 0017 §D12 mixed-content fallback: collection literals
+				// mixed-content fallback: collection literals
 				// alongside elements / attrs route through synthetic keys
 				// (_seq / _arr / _map). Lossy at the JSON boundary by design.
 				SequenceNode  { push_keyed(mut obj, '_seq', collection_to_json(n)) }
 				ArrayNode     { push_keyed(mut obj, '_arr', collection_to_json(n)) }
 				MapNode       { push_keyed(mut obj, '_map', collection_to_json(n)) }
+				IteratorNode  {
+					// materialize to Sequence form for the
+					// semantic JSON projection. Same `_seq` key as the
+					// SequenceNode arm; eval pulls before render.
+					push_keyed(mut obj, '_seq', collection_to_json(Node(iterator_to_sequence(n))))
+				}
 				BlockContentNode {
 					for item in n.items {
 						if item is TextNode {
@@ -135,7 +230,7 @@ fn sem_element(e Element) JsonVal {
 }
 
 // collection_to_json converts a SequenceNode / ArrayNode / MapNode to its
-// data-shape JsonVal per ADR 0017 §D12.
+// data-shape JsonVal.
 //   - SequenceNode → JSON array (parser already flattened per CXDM §1.2)
 //   - ArrayNode    → JSON array (nesting preserved)
 //   - MapNode      → JSON object (key stringified via canonical form)
@@ -143,6 +238,7 @@ fn collection_to_json(n Node) JsonVal {
 	return match n {
 		SequenceNode { JsonVal(n.items.map(node_value_to_json(it))) }
 		ArrayNode    { JsonVal(n.items.map(node_value_to_json(it))) }
+		IteratorNode { JsonVal(iterator_to_sequence(n).items.map(node_value_to_json(it))) }
 		MapNode {
 			mut obj := map[string]JsonVal{}
 			for entry in n.entries {
@@ -164,6 +260,7 @@ fn node_value_to_json(n Node) JsonVal {
 		SequenceNode  { collection_to_json(n) }
 		ArrayNode     { collection_to_json(n) }
 		MapNode       { collection_to_json(n) }
+		IteratorNode  { collection_to_json(n) }
 		Element       { sem_element(n) }
 		TextNode      { JsonVal(n.value) }
 		RawTextNode   { JsonVal(n.value) }
@@ -226,6 +323,20 @@ fn scalar_val_to_json(v ScalarValue) JsonVal {
 	}
 }
 
+// attr_scalar_to_json projects an attribute's scalar value, honouring its
+// data_type so atom-typed attrs (`kind=:click`) carry the atom
+// marker through the intermediate rather than collapsing to a plain string.
+fn attr_scalar_to_json(a Attribute) JsonVal {
+	if dt := a.data_type() {
+		if dt == 'atom' {
+			if a.value is string {
+				return JsonVal(JsonAtom{ name: a.value as string })
+			}
+		}
+	}
+	return scalar_val_to_json(a.value)
+}
+
 fn entity_ref_str(name string) string {
 	return match name {
 		'amp'  { '&' }
@@ -238,6 +349,14 @@ fn entity_ref_str(name string) string {
 }
 
 fn scalar_native(s ScalarNode) JsonVal {
+	// Atom: the ScalarValue payload is the name string, but the
+	// atom row of conversions.md requires a distinct projection per format
+	// — route it through JsonAtom rather than the plain-string arm.
+	if s.data_type == .atom_type {
+		if s.value is string {
+			return JsonVal(JsonAtom{ name: s.value as string })
+		}
+	}
 	return match s.value {
 		i64       { JsonVal(s.value as i64) }
 		f64       { JsonVal(s.value as f64) }
@@ -252,6 +371,7 @@ fn scalar_native(s ScalarNode) JsonVal {
 fn json_value_pretty(v JsonVal, depth int) string {
 	return match v {
 		JsonNull    { 'null' }
+		JsonAtom    { json_str(':' + (v as JsonAtom).name) }
 		bool        { if v as bool { 'true' } else { 'false' } }
 		i64         { (v as i64).str() }
 		f64         { format_float(v as f64) }

@@ -1,0 +1,176 @@
+[test-suite name=data-bin-chunked
+  [doc [#
+# CX Conformance — data_bin chunked-table round-trips
+# Version: 0.2 — 2026-05-09 (V core impl landed in Phase 7.72)
+# Covers: spec/core/data-bin.md §3.11, D1.
+#
+# Verification:
+#   1. parse(in_cx) → emit_data_bin_chunked(chunk_size=chunk_at) →
+#      hex(bytes) == out_data_bin_hex
+#   2. cx_from_data_bin(bytes) → emit_cx round-trips the data
+#      (logical equivalence; presentation-form may differ — fixtures
+#      verify byte form here, not text round-trip).
+#
+# Hex notation: bytes are space-separated, two hex digits each.
+# Comments (text after `# `) are non-normative; the byte sequence is
+# the test value. The runner strips the framing prefix
+# `[u32 LE size]` before comparing — fixtures record the CXCol header
+# onward.
+#
+# Embedding: a `[name [table[...]]]` document encodes as
+# `<header> 0x50 0x01 <key=name> <chunked-table>`. The chunked-table
+# value (tag `0x63`) carries no element name itself; the wrapping
+# single-pair map preserves the name. See spec/core/data-bin.md §3.11.1.
+#
+# `chunk_at: N` metadata sets emit_data_bin_chunked's chunk_size for
+# this fixture; default is 2^20 (the strict-canonical value) when absent.
+#]]
+
+ [case id=ch-001-chunked-empty level=extended
+  [tags data_bin chunked empty]
+  [in-cx [#
+[points [table[name::string score::i32]]]
+#]]
+  [out-data-bin-hex [#
+43 58 43 6F 6C 01 01 40 00 00 00 00   # CXCol v1 header
+50 01                                  # map, 1 pair
+30 06 70 6F 69 6E 74 73                # key "points"
+63 02                                  # tag 0x63 = chunked, col_count = 2
+30 04 6E 61 6D 65 30                   # col 0: "name" / type 0x30 string
+30 05 73 63 6F 72 65 12                # col 1: "score" / type 0x12 i32
+00                                     # end-of-table marker (no row groups)
+#]]
+ ]
+
+ [case id=ch-002-chunked-single-row-group level=extended
+  [tags data_bin chunked single]
+  [in-cx [#
+[points [table[name::string score::i32]]
+  alice 91
+  bob 88
+]
+#]]
+  [out-data-bin-hex [#
+43 58 43 6F 6C 01 01 40 00 00 00 00   # CXCol v1 header
+50 01 30 06 70 6F 69 6E 74 73          # map / key "points"
+63 02                                  # chunked / col_count = 2
+30 04 6E 61 6D 65 30                   # col 0
+30 05 73 63 6F 72 65 12                # col 1
+14                                     # body_byte_len = 20 (= body-tag + plain body)
+01                                     # body-tag = 0x01 (plain)
+02                                     # row_count = 2
+05 61 6C 69 63 65                      # col 0 row 0: "alice"
+03 62 6F 62                            # col 0 row 1: "bob"
+5B 00 00 00                            # col 1 row 0: 91 (i32 LE)
+58 00 00 00                            # col 1 row 1: 88
+00                                     # end-of-table
+#]]
+ ]
+
+ [case id=ch-003-chunked-multi-row-group level=extended
+  [tags data_bin chunked multi]
+  [meta [#
+chunk_at: 4
+#]]
+  [in-cx [#
+[points [table[name::string score::i32]]
+  alice 91
+  bob 88
+  carol 73
+  dave 95
+  eve 84
+  frank 60
+]
+#]]
+  [out-data-bin-hex [#
+43 58 43 6F 6C 01 01 40 00 00 00 00   # header
+50 01 30 06 70 6F 69 6E 74 73          # map / key "points"
+63 02                                  # chunked / col_count=2
+30 04 6E 61 6D 65 30                   # col 0
+30 05 73 63 6F 72 65 12                # col 1
+27 01 04                               # row-group 0: body_len=39, plain, row_count=4
+05 61 6C 69 63 65 03 62 6F 62 05 63 61 72 6F 6C 04 64 61 76 65   # col 0: 21 bytes
+5B 00 00 00 58 00 00 00 49 00 00 00 5F 00 00 00                  # col 1: 16 bytes
+14 01 02                               # row-group 1: body_len=20, plain, row_count=2
+03 65 76 65 05 66 72 61 6E 6B          # col 0: 10 bytes
+54 00 00 00 3C 00 00 00                # col 1: 8 bytes
+00                                     # end-of-table
+#]]
+ ]
+
+ [case id=ch-004-chunked-vs-non-chunked-equivalent-data-distinct-bytes level=extended
+  [tags data_bin chunked canonical]
+  [in-cx [#
+[points [table[name::string score::i32]]
+  alice 91
+  bob 88
+]
+#]]
+  [assert-chunked-distinct-from-plain [#
+1
+#]]
+ ]
+
+ [case id=ch-005-chunked-canonical-2-pow-20 level=extended
+  [tags data_bin chunked canonical_chunk_size synth]
+  [meta [#
+chunk_at: 1048576
+#]]
+  [synth-table-schema [#
+[t [table[id::int v::string]]]
+#]]
+  [synth-table-rows [#
+1048577
+#]]
+  [assert-group-count [#
+2
+#]]
+  [assert-group-row-counts [#
+1048576 1
+#]]
+ ]
+
+ [case id=ch-006-chunked-datetime-column-zulu level=extended
+  [tags data_bin chunked datetime]
+  [in-cx [#
+[evts [table[name::string when::datetime]]
+  alice 2024-01-15T12:34:56Z
+]
+#]]
+  [out-data-bin-hex [#
+43 58 43 6F 6C 01 01 40 00 00 00 00   # header
+50 01 30 04 65 76 74 73                # map / key "evts"
+63 02                                  # chunked / col_count = 2
+30 04 6E 61 6D 65 30                   # col 0 "name" / type 0x30 string
+30 04 77 68 65 6E 32                   # col 1 "when" / type 0x32 datetime
+14                                     # body_byte_len = 20
+01                                     # body-tag = 0x01 (plain)
+01                                     # row_count = 1
+05 61 6C 69 63 65                      # col 0 row 0: "alice"
+00 60 B4 3F 69 85 AA 17 00 00 00 00    # col 1 row 0: 1705322096000000000 ns, off=0, rsvd=0
+00                                     # end-of-table
+#]]
+ ]
+
+ [case id=ch-007-chunked-datetime-offset-normalizes-to-utc level=extended
+  [tags data_bin chunked datetime canonical_offset]
+  [in-cx [#
+[evts [table[name::string when::datetime]]
+  beta 2025-06-30T23:00:00+02:00
+]
+#]]
+  [out-data-bin-hex [#
+43 58 43 6F 6C 01 01 40 00 00 00 00   # header
+50 01 30 04 65 76 74 73                # map / key "evts"
+63 02                                  # chunked / col_count = 2
+30 04 6E 61 6D 65 30                   # col 0
+30 04 77 68 65 6E 32                   # col 1 datetime
+13                                     # body_byte_len = 19
+01                                     # body-tag plain
+01                                     # row_count = 1
+04 62 65 74 61                         # col 0 row 0: "beta"
+00 20 08 EB B6 ED 4D 18 00 00 00 00    # col 1 row 0: 1751317200000000000 ns (UTC-normalized), off=0
+00                                     # end-of-table
+#]]
+ ]
+]

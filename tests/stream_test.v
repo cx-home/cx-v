@@ -28,7 +28,7 @@ fn event_type_name(e cx.StreamEvent) string {
 		cx.StreamEntityRef    { 'EntityRef' }
 		cx.StreamRawText      { 'RawText' }
 		cx.StreamAlias        { 'Alias' }
-		// Chunked-table events (ADR 0015 / Phase 7.74c).
+		// Chunked-table events (Phase 7.74c).
 		cx.StreamStartTable   { 'StartTable' }
 		cx.StreamRowGroup     { 'RowGroup' }
 		cx.StreamEndTable     { 'EndTable' }
@@ -85,8 +85,12 @@ fn test_text_node() {
 }
 
 fn test_nested_elements() {
-	// [root[child]] — nested element syntax
-	mut s := cx.new_stream('[root[child]]') or { panic('parse failed: ${err}') }
+	// `[root [child]]` — nested element syntax. The space between
+	// `root` and `[child]` is REQUIRED per spec/grammar.ebnf — the
+	// first whitespace inside an element bracket marks the boundary
+	// between the element name and the body (without the space the
+	// parser treats `root[child]` as an array fallback).
+	mut s := cx.new_stream('[root [child]]') or { panic('parse failed: ${err}') }
 	events := s.collect()
 	// StartDoc, StartElement(root), StartElement(child), EndElement(child), EndElement(root), EndDoc
 	assert events.len == 6, 'expected 6 events, got ${events.len}: ${events.map(event_type_name(it))}'

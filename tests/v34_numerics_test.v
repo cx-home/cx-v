@@ -123,7 +123,7 @@ fn test_hex_zero_still_int() {
 fn test_explicit_int_annotation_accepts_leading_zero() {
 	// :int annotation overrides the auto-typing rule. The user has
 	// declared this is an integer; respect the value.
-	doc := cx.parse('[v :int 02134]') or { panic(err) }
+	doc := cx.parse('[v::int 02134]') or { panic(err) }
 	root := doc.root() or { panic('no root') }
 	s := root.scalar() or { panic('not scalar') }
 	if s is i64 { assert s == 2134 } else { assert false, 'expected i64' }

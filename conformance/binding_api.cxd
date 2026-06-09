@@ -1,0 +1,713 @@
+[test-suite name=binding-api
+  [doc [#
+# Binding API Parity Fixtures — Layer-1 conformance contract
+#
+# Normative reference: spec/bindings.md §4.1.
+# Gate: 28.6 (Layer-1 byte-identical parity across V/Python/Go/Rust).
+#
+# Each fixture asserts that an identical Layer-1 method invocation
+# produces byte-identical output across every supported binding. The
+# Layer-1 contract is "same call → same bytes." Drift on any fixture
+# blocks the release.
+#
+# Fixture format (per spec/bindings.md §4.1):
+#   --- in_cx       input document, canonical CX
+#   --- call        binding-agnostic Layer-1 invocation
+#   --- out_text    expected result, canonical CX (for non-error cases)
+#   --- out_err     expected error code (for error cases)
+#   --- options     fixture-level options (optional)
+#
+# Call mini-syntax:
+#   doc.<method>(<args>)             — method on root Doc
+#   doc.<method>(<args>).<chain>()   — chained call; intermediate is Layer-1 typed
+#   cx.<Constructor>(<args>)         — Action constructor for doc.modify
+#
+# Bindings provide a small harness that translates the call line into
+# their host syntax (case-adjusts method names, constructs Action
+# values). Translation is mechanical — no language-specific behavior
+# escapes into the fixture.
+
+# ═════════════════════════════════════════════════════════════════
+# §1. parse / bytes / hash / equals — core round-trip
+# ═════════════════════════════════════════════════════════════════
+#]]
+
+ [case id=binding-api-001-parse-empty-root
+  [in-cx [#
+[root]
+#]]
+  [call [#
+doc.bytes()
+#]]
+  [out-text [#
+[root]
+#]]
+ ]
+
+ [case id=binding-api-002-parse-attribute
+  [in-cx [#
+[user id=1 name="Alice"]
+#]]
+  [call [#
+doc.bytes()
+#]]
+  [out-text [#
+[user id=1 name=Alice]
+#]]
+ ]
+
+ [case id=binding-api-003-hash-determinism
+  [in-cx [#
+[user id=1 name="Alice"]
+#]]
+  [call [#
+doc.hash()
+#]]
+  [out-text [#
+"sha256:<deterministic-32-bytes-hex>"
+#]]
+ ]
+
+ [case id=binding-api-004-equals-canonical-form
+  [in-cx [#
+[user id=1 name="Alice"]
+#]]
+  [call [#
+doc.equals(doc.parse(doc.bytes()))
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=binding-api-005-equals-attribute-order-irrelevant
+  [in-cx [#
+[user id=1 name="Alice"]
+#]]
+  [call [#
+doc.equals(doc.parse('[user name="Alice" id=1]'))
+#]]
+  [out-text [#
+true
+
+# ═════════════════════════════════════════════════════════════════
+# §2. eval — wraps cx_code_eval
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-010-eval-simple-literal
+  [in-cx [#
+[root]
+#]]
+  [call [#
+doc.eval("42")
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=binding-api-011-eval-against-doc-binding
+  [in-cx [#
+[users [user id=1 name="Alice"] [user id=2 name="Bob"]]
+#]]
+  [call [#
+doc.eval("count(//user)")
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=binding-api-012-eval-error-code-propagates
+  [in-cx [#
+[root]
+#]]
+  [call [#
+doc.eval("[?unknown-directive]")
+#]]
+  [out-err [#
+cx-err:CXER0100
+
+# ═════════════════════════════════════════════════════════════════
+# §3. select_all — CXPath path-value
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-020-select-all-basic
+  [in-cx [#
+[users [user id=1] [user id=2] [user id=3]]
+#]]
+  [call [#
+doc.select_all("//user")
+#]]
+  [out-text [#
+[user id=1]
+[user id=2]
+[user id=3]
+#]]
+ ]
+
+ [case id=binding-api-021-select-all-with-predicate
+  [in-cx [#
+[users [user id=1 active=true] [user id=2 active=false] [user id=3 active=true]]
+#]]
+  [call [#
+doc.select_all("//user[@active=true]")
+#]]
+  [out-text [#
+[user id=1 active=true]
+[user id=3 active=true]
+#]]
+ ]
+
+ [case id=binding-api-022-select-all-attribute
+  [in-cx [#
+[users [user email="a@x.com"] [user email="b@x.com"]]
+#]]
+  [call [#
+doc.select_all("//user/@email")
+#]]
+  [out-text [#
+"a@x.com"
+"b@x.com"
+#]]
+ ]
+
+ [case id=binding-api-023-select-all-empty-result
+  [in-cx [#
+[users]
+#]]
+  [call [#
+doc.select_all("//user")
+#]]
+  [out-text [##]]
+ ]
+
+ [case id=binding-api-024-select-all-axis-following-sibling
+  [in-cx [#
+[doc [item n=1] [item n=2] [item n=3]]
+#]]
+  [call [#
+doc.select_all("//item[1]/following-sibling::item")
+#]]
+  [out-text [#
+[item n=2]
+[item n=3]
+#]]
+ ]
+
+ [case id=binding-api-025-select-all-positional-predicate
+  [in-cx [#
+[doc [item n=1] [item n=2] [item n=3]]
+#]]
+  [call [#
+doc.select_all("//item[2]")
+#]]
+  [out-text [#
+[item n=2]
+#]]
+ ]
+
+ [case id=binding-api-026-select-all-malformed-cxpath
+  [in-cx [#
+[root]
+#]]
+  [call [#
+doc.select_all("//user[")
+#]]
+  [out-err [#
+cx-err:CXER0100
+
+# ═════════════════════════════════════════════════════════════════
+# §4. select — first match
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-030-select-first-match
+  [in-cx [#
+[users [user id=1 name="Alice"] [user id=2 name="Bob"]]
+#]]
+  [call [#
+doc.select("//user")
+#]]
+  [out-text [#
+[user id=1 name=Alice]
+#]]
+ ]
+
+ [case id=binding-api-031-select-no-match-returns-null
+  [in-cx [#
+[users]
+#]]
+  [call [#
+doc.select("//user")
+#]]
+  [out-text [#
+()
+
+# ═════════════════════════════════════════════════════════════════
+# §5. modify — pure-functional updates
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-040-modify-set
+  [in-cx [#
+[users [user id=1 name="Alice"]]
+#]]
+  [call [#
+doc.modify("//user[@id=1]/@name", cx.Set("Alpha")).bytes()
+#]]
+  [out-text [#
+[users
+  [user id=1 name=Alpha]
+]
+#]]
+ ]
+
+ [case id=binding-api-041-modify-delete
+  [in-cx [#
+[users [user id=1] [user id=2 banned=true] [user id=3]]
+#]]
+  [call [#
+doc.modify("//user[@banned=true]", cx.Delete()).bytes()
+#]]
+  [out-text [#
+[users
+  [user id=1]
+  [user id=3]
+]
+#]]
+ ]
+
+ [case id=binding-api-042-modify-rename
+  [in-cx [#
+[doc [widget a=1] [widget b=2]]
+#]]
+  [call [#
+doc.modify("//widget", cx.Rename("component")).bytes()
+#]]
+  [out-text [#
+[doc
+  [component a=1]
+  [component b=2]
+]
+#]]
+ ]
+
+ [case id=binding-api-043-modify-set-attr
+  [in-cx [#
+[doc [user id=1]]
+#]]
+  [call [#
+doc.modify("//user", cx.SetAttr("status", "verified")).bytes()
+#]]
+  [out-text [#
+[doc
+  [user id=1 status=verified]
+]
+#]]
+ ]
+
+ [case id=binding-api-044-modify-delete-attr
+  [in-cx [#
+[doc [user id=1 temp="x"]]
+#]]
+  [call [#
+doc.modify("//user", cx.DeleteAttr("temp")).bytes()
+#]]
+  [out-text [#
+[doc
+  [user id=1]
+]
+#]]
+ ]
+
+ [case id=binding-api-045-modify-append
+  [in-cx [#
+[doc [section id="intro" [para "First."]]]
+#]]
+  [call [#
+doc.modify("//section", cx.Append('[para "Second."]')).bytes()
+#]]
+  [out-text [#
+[doc
+  [section id=intro
+    [para First.]
+    [para Second.]
+  ]
+]
+#]]
+ ]
+
+ [case id=binding-api-046-modify-prepend
+  [in-cx [#
+[doc [section id="intro" [para "Body."]]]
+#]]
+  [call [#
+doc.modify("//section", cx.Prepend('[para "Lead."]')).bytes()
+#]]
+  [out-text [#
+[doc
+  [section id=intro
+    [para Lead.]
+    [para Body.]
+  ]
+]
+#]]
+ ]
+
+ [case id=binding-api-047-modify-insert-before
+  [in-cx [#
+[doc [item n=1] [item n=2]]
+#]]
+  [call [#
+doc.modify("//item[@n=2]", cx.InsertBefore('[item n="1.5"]')).bytes()
+#]]
+  [out-text [#
+[doc
+  [item n=1]
+  [item n='1.5']
+  [item n=2]
+]
+#]]
+ ]
+
+ [case id=binding-api-048-modify-insert-after
+  [in-cx [#
+[doc [item n=1] [item n=2]]
+#]]
+  [call [#
+doc.modify("//item[@n=1]", cx.InsertAfter('[item n="1.5"]')).bytes()
+#]]
+  [out-text [#
+[doc
+  [item n=1]
+  [item n='1.5']
+  [item n=2]
+]
+#]]
+ ]
+
+ [case id=binding-api-049-modify-replace
+  [in-cx [#
+[doc [user id=1 name="old"]]
+#]]
+  [call [#
+doc.modify("//user", cx.Replace('[user id=1 name="new" email="n@x.org"]')).bytes()
+#]]
+  [out-text [#
+[doc
+  [user id=1 name=new email=n@x.org]
+]
+#]]
+ ]
+
+ [case id=binding-api-050-modify-zero-match-no-op
+  [in-cx [#
+[users [user id=1]]
+#]]
+  [call [#
+doc.equals(doc.modify("//nonexistent", cx.Set("x")))
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=binding-api-051-modify-multi-match
+  [in-cx [#
+[users [user id=1] [user id=2] [user id=3]]
+#]]
+  [call [#
+doc.modify("//user", cx.SetAttr("seen", true)).bytes()
+#]]
+  [out-text [#
+[users
+  [user id=1 seen=true]
+  [user id=2 seen=true]
+  [user id=3 seen=true]
+]
+#]]
+ ]
+
+ [case id=binding-api-052-modify-set-attr-on-attribute-focus-error
+  [in-cx [#
+[doc [user id=1 name="A"]]
+#]]
+  [call [#
+doc.modify("//user/@name", cx.SetAttr("status", "v"))
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=binding-api-053-modify-original-doc-unchanged
+  [in-cx [#
+[users [user id=1 name="Alice"]]
+#]]
+  [call [#
+{ before: doc.bytes(); modified: doc.modify("//user/@name", cx.Set("Bob")); same: doc.bytes() == before; }
+#]]
+  [out-text [#
+true
+
+# ═════════════════════════════════════════════════════════════════
+# §6. find_all — name-only convenience
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-060-find-all-by-name
+  [in-cx [#
+[users [user id=1] [group id=2] [user id=3]]
+#]]
+  [call [#
+doc.find_all("user")
+#]]
+  [out-text [#
+[user id=1]
+[user id=3]
+#]]
+ ]
+
+ [case id=binding-api-061-find-all-no-match
+  [in-cx [#
+[users [user id=1]]
+#]]
+  [call [#
+doc.find_all("nonexistent")
+#]]
+  [out-text [#
+# ═════════════════════════════════════════════════════════════════
+# §7. root / name / attr / attrs / children / body / kind
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-070-root-name
+  [in-cx [#
+[users [user id=1]]
+#]]
+  [call [#
+doc.root().name()
+#]]
+  [out-text [#
+"users"
+#]]
+ ]
+
+ [case id=binding-api-071-attr-by-name
+  [in-cx [#
+[user id=1 name="Alice"]
+#]]
+  [call [#
+doc.root().attr("name")
+#]]
+  [out-text [#
+"Alice"
+#]]
+ ]
+
+ [case id=binding-api-072-attr-not-present
+  [in-cx [#
+[user id=1]
+#]]
+  [call [#
+doc.root().attr("name")
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=binding-api-073-attrs-map
+  [in-cx [#
+[user id=1 name="Alice"]
+#]]
+  [call [#
+doc.root().attrs()
+#]]
+  [out-text [#
+{id: 1, name: "Alice"}
+#]]
+ ]
+
+ [case id=binding-api-074-children
+  [in-cx [#
+[users [user id=1] [user id=2]]
+#]]
+  [call [#
+doc.root().children()
+#]]
+  [out-text [#
+[user id=1]
+[user id=2]
+#]]
+ ]
+
+ [case id=binding-api-075-body-scalar
+  [in-cx [#
+[greeting "Hello, world."]
+#]]
+  [call [#
+doc.root().body()
+#]]
+  [out-text [#
+"Hello, world."
+#]]
+ ]
+
+ [case id=binding-api-076-kind-element
+  [in-cx [#
+[user id=1]
+#]]
+  [call [#
+doc.root().kind()
+#]]
+  [out-text [#
+"element"
+#]]
+ ]
+
+ [case id=binding-api-077-kind-on-selected-attribute
+  [in-cx [#
+[user id=1]
+#]]
+  [call [#
+doc.select("//user/@id").kind()
+#]]
+  [out-text [#
+"scalar"
+
+# ═════════════════════════════════════════════════════════════════
+# §8. Chaining + composition
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-080-select-then-attr
+  [in-cx [#
+[users [user id=1 name="Alice"] [user id=2 name="Bob"]]
+#]]
+  [call [#
+doc.select("//user[@id=2]").attr("name")
+#]]
+  [out-text [#
+"Bob"
+#]]
+ ]
+
+ [case id=binding-api-081-modify-chain
+  [in-cx [#
+[doc [user id=1 name="old" banned=true]]
+#]]
+  [call [#
+doc.modify("//user/@name", cx.Set("new")).modify("//user", cx.DeleteAttr("banned")).bytes()
+#]]
+  [out-text [#
+[doc
+  [user id=1 name=new]
+]
+#]]
+ ]
+
+ [case id=binding-api-082-select-all-count
+  [in-cx [#
+[doc [item n=1] [item n=2] [item n=3]]
+#]]
+  [call [#
+doc.select_all("//item").count()
+#]]
+  [out-text [#
+3
+
+# ═════════════════════════════════════════════════════════════════
+# §9. Error matrix — every Layer-1 error code surfaces with identical code
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-090-parse-error-malformed-cx
+  [in-cx [#
+[users [user id=1
+#]]
+  [call [#
+# Note: this fixture's in_cx itself is malformed; the binding-side
+# parse() must raise CXER0100 with no segfault, no panic.
+doc
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=binding-api-091-modify-using-type-mismatch
+  [in-cx [#
+[users [user id=1 name="Alice"]]
+#]]
+  [call [#
+doc.modify("//user", cx.Using(lambda n: n + 1))
+#]]
+  [out-err [#
+cx-err:CXER0104
+
+# ═════════════════════════════════════════════════════════════════
+# §10. Stability — identical input → identical hash across bindings
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-100-hash-canonical-stability
+  [in-cx [#
+[users [user id=1 name="Alice"]]
+#]]
+  [call [#
+doc.hash()
+#]]
+  [out-text [#
+"sha256:<v0.8.0-stable-hex>"
+#]]
+ ]
+
+ [case id=binding-api-101-hash-attribute-order-irrelevant
+  [in-cx [#
+[user id=1 name="Alice"]
+#]]
+  [call [#
+doc.hash() == doc.parse('[user name="Alice" id=1]').hash()
+#]]
+  [out-text [#
+true
+
+# ═════════════════════════════════════════════════════════════════
+# §11. Init / thread registration sanity (negative tests)
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=binding-api-110-thread-register-required
+  [in-cx [#
+[users [user id=1]]
+#]]
+  [call [#
+spawn { doc.select_all("//user") }
+#]]
+  [out-text [#
+[user id=1]
+
+# ═════════════════════════════════════════════════════════════════
+# End of binding API parity suite. 48 fixtures.
+#
+# Status at -dev fixture-authoring milestone: 0/48 verified
+# against any binding (Phase 4.2 deliverable; needs Phase 2 V impl +
+# Phase 3 binding retargets).
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+]

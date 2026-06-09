@@ -2,8 +2,8 @@ module cx
 
 import compress.zstd
 
-// CXDB v0.6.0 — chunked-table (`0x63`) + page-compression wrapper
-// (`0x90`, zstd v1) per spec/data_bin.md §§3.11-3.12 and ADR 0015 D1/D2.
+// CXCol — chunked-table (`0x63`) + page-compression wrapper
+// (`0x90`, zstd v1) per spec/core/data-bin.md §§3.11-3.12.
 //
 // The non-chunked `0x60` emitter in data_bin.v is unchanged. This module
 // adds an alternative emit path for table-bodied documents that:
@@ -25,7 +25,7 @@ const codec_id_zstd     = u8(0x01)
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
 
-// Strict-canonical chunk size (ADR 0015 D1).
+// Strict-canonical chunk size.
 pub const chunked_canonical_chunk_size = 1 << 20
 
 // zstd level used by writers when no override is given. zstd's own
@@ -63,14 +63,14 @@ pub:
 // table-bodied Element as the chunked-table form. The element name is
 // preserved by wrapping the chunked table in a single-pair map (the
 // spec-correct embedding for value-position chunked tables — see
-// spec/data_bin.md §3.11.1 col-spec layout, which carries no element
+// spec/core/data-bin.md §3.11.1 col-spec layout, which carries no element
 // name field). Output uses the existing 4-byte framing prefix.
 pub fn emit_data_bin_chunked(doc Document, opts ChunkedEmitOptions) ![]u8 {
 	name, t := single_table_root_with_name(doc) or {
-		return error('cxdb chunked: ${err.msg()}')
+		return error('cxcol chunked: ${err.msg()}')
 	}
 	if opts.chunk_size <= 0 {
-		return error('cxdb chunked: chunk_size must be > 0')
+		return error('cxcol chunked: chunk_size must be > 0')
 	}
 	mut payload := []u8{cap: 256}
 	encode_header(mut payload)
@@ -90,7 +90,7 @@ pub fn emit_data_bin_chunked(doc Document, opts ChunkedEmitOptions) ![]u8 {
 // emit_data_bin_auto returns chunked form (`0x63`) for table-bodied
 // roots, otherwise falls back to the existing in-memory emitter
 // (`0x60` / `0x61` / map-of-tables). Strict-canonical writers prefer
-// `0x60` for in-memory tables (ADR 0015 D1); this entry point exists
+// `0x60` for in-memory tables; this entry point exists
 // so adopters who explicitly want the chunked form can opt in without
 // reaching for a separate function name.
 pub fn emit_data_bin_auto(doc Document, opts ChunkedEmitOptions) ![]u8 {
@@ -109,13 +109,13 @@ fn single_table_root_with_name(doc Document) !(string, DataTable) {
 		return error('chunked emit requires exactly one top-level element (got ${roots.len})')
 	}
 	e := roots[0] as Element
-	td := e.table or {
+	td := e.table_opt() or {
 		return error('top-level element `${e.name}` is not a :table')
 	}
 	name := if e.name == '_' { '' } else { e.name }
-	// Chunked-table format (`0x63`) is strict columnar per ADR 0015 D1
+	// Chunked-table format (`0x63`) is strict columnar
 	// — every cell is a scalar of the column's declared type. Collection-
-	// literal cells (ADR 0018 §D4 / Phase 2.2) cannot encode through
+	// literal cells (Phase 2.2) cannot encode through
 	// this path; callers that have collection cells must route through
 	// the plain `0x60` non-chunked form via emit_data_bin (auto-selects).
 	// Project TableCellValue rows to DataVal rows, then to ScalarValue
@@ -133,7 +133,7 @@ fn single_table_root_with_name(doc Document) !(string, DataTable) {
 
 fn encode_chunked_table(t DataTable, opts ChunkedEmitOptions, mut buf []u8) ! {
 	if t.cols.len == 0 {
-		return error('cxdb chunked: empty col-spec')
+		return error('cxcol chunked: empty col-spec')
 	}
 	buf << tag_table_chunked
 	encode_uvarint(mut buf, u64(t.cols.len))
@@ -180,7 +180,7 @@ fn encode_row_group(cols []TableColumn, rows [][]ScalarValue, opts ChunkedEmitOp
 	}
 	level := if opts.compress_level == 0 { chunked_default_compress_level } else { opts.compress_level }
 	frame := zstd.compress(plain, compression_level: level) or {
-		return error('cxdb chunked: zstd compress failed: ${err}')
+		return error('cxcol chunked: zstd compress failed: ${err}')
 	}
 	// Build the 0x90 wrapper body: <0x01 codec> <uvarint uncomp> <uvarint comp> <frame>.
 	mut wrapper := []u8{cap: frame.len + 16}
@@ -280,7 +280,7 @@ fn encode_strict_cell(v ScalarValue, code u8, mut buf []u8) ! {
 			buf << u8(if b { 1 } else { 0 })
 		}
 		else {
-			return error('cxdb chunked: unsupported column type code 0x${code:02x}')
+			return error('cxcol chunked: unsupported column type code 0x${code:02x}')
 		}
 	}
 }
@@ -360,13 +360,13 @@ fn f64_to_bits(v f64) u64 {
 fn (mut r BinReader) read_chunked_table_payload() !DataVal {
 	col_count := r.read_uvarint()!
 	if col_count == 0 {
-		return error('cxdb chunked: tag 0x63 with col_count=0; use 0x61 for empty tables')
+		return error('cxcol chunked: tag 0x63 with col_count=0; use 0x61 for empty tables')
 	}
 	mut cols := []TableColumn{cap: int(col_count)}
 	for _ in 0 .. int(col_count) {
 		key_tag := r.take_u8()!
 		if key_tag != tag_string {
-			return error('cxdb chunked: column name must be string (tag 0x30); got 0x${key_tag:02x}')
+			return error('cxcol chunked: column name must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		name := r.read_string_payload()!
 		col_type_byte := r.take_u8()!
@@ -379,7 +379,7 @@ fn (mut r BinReader) read_chunked_table_payload() !DataVal {
 			break // end-of-table marker
 		}
 		if body_byte_len > u64(r.buf.len - r.pos) {
-			return error('cxdb chunked: row-group body_byte_len ${body_byte_len} exceeds remaining input')
+			return error('cxcol chunked: row-group body_byte_len ${body_byte_len} exceeds remaining input')
 		}
 		body_tag := r.take_u8()!
 		body_bytes_remaining := int(body_byte_len) - 1
@@ -394,11 +394,11 @@ fn (mut r BinReader) read_chunked_table_payload() !DataVal {
 				decode_row_group_body(body, cols, mut rows)!
 			}
 			else {
-				return error('cxdb chunked: reserved body-tag 0x${body_tag:02x} (expected 0x01 or 0x90)')
+				return error('cxcol chunked: reserved body-tag 0x${body_tag:02x} (expected 0x01 or 0x90)')
 			}
 		}
 		if u64(rows.len) > u64(chunked_reader_max_inline_rows) {
-			return error('cxdb chunked: row count exceeds in-memory cap (${chunked_reader_max_inline_rows}); use streaming Table API')
+			return error('cxcol chunked: row count exceeds in-memory cap (${chunked_reader_max_inline_rows}); use streaming Table API')
 		}
 	}
 	// Chunked decode produces [][]ScalarValue (strict columnar);
@@ -407,7 +407,7 @@ fn (mut r BinReader) read_chunked_table_payload() !DataVal {
 }
 
 fn decode_row_group_body(body []u8, cols []TableColumn, mut rows [][]ScalarValue) ! {
-	mut rg := BinReader{ buf: body, pos: 0, depth: 0, max_depth: int(cxdb_default_depth) }
+	mut rg := BinReader{ buf: body, pos: 0, depth: 0, max_depth: int(cxcol_default_depth) }
 	row_count := rg.read_uvarint()!
 	mut group := [][]ScalarValue{cap: int(row_count)}
 	for _ in 0 .. int(row_count) {
@@ -422,7 +422,7 @@ fn decode_row_group_body(body []u8, cols []TableColumn, mut rows [][]ScalarValue
 		}
 	}
 	if rg.pos != rg.buf.len {
-		return error('cxdb chunked: trailing bytes in row-group body (${rg.buf.len - rg.pos} bytes)')
+		return error('cxcol chunked: trailing bytes in row-group body (${rg.buf.len - rg.pos} bytes)')
 	}
 	for row in group {
 		rows << row
@@ -434,7 +434,7 @@ fn (mut r BinReader) read_strict_cell(code u8) !ScalarValue {
 		tag_string {
 			n := r.read_uvarint()!
 			if n > u64(r.buf.len - r.pos) {
-				return error('cxdb chunked: string length ${n} exceeds remaining input')
+				return error('cxcol chunked: string length ${n} exceeds remaining input')
 			}
 			bs := r.take(int(n))!
 			ScalarValue(bs.bytestr())
@@ -464,10 +464,10 @@ fn (mut r BinReader) read_strict_cell(code u8) !ScalarValue {
 			offset_min := r.read_i16_le()!
 			reserved   := r.read_i16_le()!
 			if reserved != 0 {
-				return error('cxdb chunked: datetime reserved bytes must be zero (got 0x${u16(reserved):04x})')
+				return error('cxcol chunked: datetime reserved bytes must be zero (got 0x${u16(reserved):04x})')
 			}
 			if offset_min < -1080 || offset_min > 1080 {
-				return error('cxdb chunked: datetime offset_minutes ${offset_min} exceeds ±1080')
+				return error('cxcol chunked: datetime offset_minutes ${offset_min} exceeds ±1080')
 			}
 			ScalarValue(format_iso_datetime_utc(unix_nanos, offset_min))
 		}
@@ -480,14 +480,14 @@ fn (mut r BinReader) read_strict_cell(code u8) !ScalarValue {
 			ScalarValue(b != 0)
 		}
 		else {
-			return error('cxdb chunked: unsupported column type code 0x${code:02x}')
+			return error('cxcol chunked: unsupported column type code 0x${code:02x}')
 		}
 	}
 }
 
 // build_synthesized_plain_row_group constructs a deterministic
 // plain-body row-group payload (§3.11.2 strict columnar) for HH4
-// (v0.7.0) RSS-bounded-write tests. Column values are synthesized
+// RSS-bounded-write tests. Column values are synthesized
 // from the row index via the same rule synth_table_document uses
 // (int/i64/i32 → row index; f32/f64 → row index as float; bool →
 // i % 2 == 0; everything else → "r_<i>"). Returns the plain-body
@@ -523,7 +523,7 @@ pub fn build_synthesized_plain_row_group(cols []TableColumn, n_rows int) ![]u8 {
 
 // chunked_group_row_counts walks the row-group structure of a
 // chunked-table (`0x63`) byte stream and returns the row counts of
-// each group in source order. Used by HH3 (v0.7.0) per-group
+// each group in source order. Used by HH3 per-group
 // inspection assertions; lets million-row corpus tests verify group
 // boundaries without materialising cell contents (and without
 // tripping the chunked_reader_max_inline_rows cap on the regular
@@ -532,60 +532,60 @@ pub fn build_synthesized_plain_row_group(cols []TableColumn, n_rows int) ![]u8 {
 // Decompresses 0x90 wrappers to read the row_count uvarint at the
 // start of each group body. Skips cell payloads.
 //
-// Input is framed bytes (4-byte length prefix + CXDB header + payload).
+// Input is framed bytes (4-byte length prefix + CXCol header + payload).
 // For single-root chunked-table emissions where the root is wrapped
 // in a 1-entry map (`single_table_root_with_name` puts a name on the
 // chunked table), the map wrapper is skipped before the 0x63 tag is
 // found.
 pub fn chunked_group_row_counts(framed []u8) ![]int {
 	if framed.len < 4 {
-		return error('cxdb chunked: input too short for size header')
+		return error('cxcol chunked: input too short for size header')
 	}
 	payload_size := u32(framed[0]) | (u32(framed[1]) << 8)
 		| (u32(framed[2]) << 16) | (u32(framed[3]) << 24)
 	if 4 + int(payload_size) > framed.len {
-		return error('cxdb chunked: declared payload (${payload_size}) exceeds input')
+		return error('cxcol chunked: declared payload (${payload_size}) exceeds input')
 	}
 	mut r := BinReader{
 		buf:       unsafe { framed[4 .. 4 + int(payload_size)] }
 		pos:       0
 		depth:     0
-		max_depth: int(cxdb_default_depth)
+		max_depth: int(cxcol_default_depth)
 	}
-	// CXDB header is 12 bytes (4 magic + 1 version + 1 flags + 4
-	// max_depth_u32 + 2 reserved). Validate magic but skip the
-	// per-field check — chunked_group_row_counts is an inspection
-	// helper, not a strict-decode entry point.
+	// CXCol header is 12 bytes (5 magic + 1 version + 1 flags + 4
+	// max_depth_u32 + 1 reserved — magic grew 4→5 in v0.8.0). Validate
+	// magic but skip the per-field check — chunked_group_row_counts is
+	// an inspection helper, not a strict-decode entry point.
 	r.read_header()!
 	tag := r.take_u8()!
 	// Optional single-entry map wrapper from single_table_root_with_name.
 	if tag == tag_map {
 		entries := r.read_uvarint()!
 		if entries != 1 {
-			return error('cxdb chunked: expected single-entry map wrapper, got entries=${entries}')
+			return error('cxcol chunked: expected single-entry map wrapper, got entries=${entries}')
 		}
 		key_tag := r.take_u8()!
 		if key_tag != tag_string {
-			return error('cxdb chunked: map-key tag must be 0x30, got 0x${key_tag:02x}')
+			return error('cxcol chunked: map-key tag must be 0x30, got 0x${key_tag:02x}')
 		}
 		_ := r.read_string_payload()!
 		// Now expect the chunked-table tag.
 		inner_tag := r.take_u8()!
 		if inner_tag != tag_table_chunked {
-			return error('cxdb chunked: map wrapper does not contain a chunked table (got tag 0x${inner_tag:02x})')
+			return error('cxcol chunked: map wrapper does not contain a chunked table (got tag 0x${inner_tag:02x})')
 		}
 	} else if tag != tag_table_chunked {
-		return error('cxdb chunked: root is not a chunked table (got tag 0x${tag:02x})')
+		return error('cxcol chunked: root is not a chunked table (got tag 0x${tag:02x})')
 	}
 	// col-spec
 	col_count := r.read_uvarint()!
 	if col_count == 0 {
-		return error('cxdb chunked: chunked table with col_count=0')
+		return error('cxcol chunked: chunked table with col_count=0')
 	}
 	for _ in 0 .. int(col_count) {
 		key_tag := r.take_u8()!
 		if key_tag != tag_string {
-			return error('cxdb chunked: column name must be string (tag 0x30); got 0x${key_tag:02x}')
+			return error('cxcol chunked: column name must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		_ := r.read_string_payload()!
 		_ := r.take_u8()!  // col_type_byte
@@ -598,7 +598,7 @@ pub fn chunked_group_row_counts(framed []u8) ![]int {
 			break // end-of-table marker
 		}
 		if body_byte_len > u64(r.buf.len - r.pos) {
-			return error('cxdb chunked: row-group body_byte_len ${body_byte_len} exceeds remaining input')
+			return error('cxcol chunked: row-group body_byte_len ${body_byte_len} exceeds remaining input')
 		}
 		body_tag := r.take_u8()!
 		body_bytes_remaining := int(body_byte_len) - 1
@@ -612,11 +612,11 @@ pub fn chunked_group_row_counts(framed []u8) ![]int {
 				decompress_row_group(wrapper)!
 			}
 			else {
-				return error('cxdb chunked: reserved body-tag 0x${body_tag:02x}')
+				return error('cxcol chunked: reserved body-tag 0x${body_tag:02x}')
 			}
 		}
 		// First uvarint of the group body is the row count.
-		mut br := BinReader{ buf: body_bytes, pos: 0, depth: 0, max_depth: int(cxdb_default_depth) }
+		mut br := BinReader{ buf: body_bytes, pos: 0, depth: 0, max_depth: int(cxcol_default_depth) }
 		rc := br.read_uvarint()!
 		row_counts << int(rc)
 	}
@@ -626,27 +626,29 @@ pub fn chunked_group_row_counts(framed []u8) ![]int {
 fn decompress_row_group(wrapper []u8) ![]u8 {
 	// Layout per §3.12.1: <codec_id(1)> <uvarint uncomp_len> <uvarint comp_len> <frame>.
 	if wrapper.len == 0 {
-		return error('cxdb chunked: empty 0x90 wrapper')
+		return error('cxcol chunked: empty 0x90 wrapper')
 	}
 	codec := wrapper[0]
 	if codec == 0x00 {
-		return error('cxdb chunked: D006: codec id 0x00 reserved; use plain body-tag 0x01 for uncompressed row groups')
+		// data-bin.md:1213 — any codec id != 0x01 is D005 (no D006 in spec);
+		// 0x00 is the reserved "no compression" id (use plain body-tag 0x01).
+		return error('cxcol chunked: D005: codec id 0x00 reserved; use plain body-tag 0x01 for uncompressed row groups')
 	}
 	if codec != codec_id_zstd {
-		return error('cxdb chunked: D005: unknown compression codec id 0x${codec:02x} (zstd v1 = 0x01 expected)')
+		return error('cxcol chunked: D005: unknown compression codec id 0x${codec:02x} (zstd v1 = 0x01 expected)')
 	}
-	mut r := BinReader{ buf: wrapper, pos: 1, depth: 0, max_depth: int(cxdb_default_depth) }
+	mut r := BinReader{ buf: wrapper, pos: 1, depth: 0, max_depth: int(cxcol_default_depth) }
 	uncomp_len := r.read_uvarint()!
 	comp_len := r.read_uvarint()!
 	if u64(r.buf.len - r.pos) < comp_len {
-		return error('cxdb chunked: compressed_byte_len ${comp_len} exceeds wrapper bytes')
+		return error('cxcol chunked: compressed_byte_len ${comp_len} exceeds wrapper bytes')
 	}
 	frame := r.take(int(comp_len))!
 	out := zstd.decompress(frame) or {
-		return error('cxdb chunked: zstd decompress failed: ${err}')
+		return error('cxcol chunked: zstd decompress failed: ${err}')
 	}
 	if u64(out.len) != uncomp_len {
-		return error('cxdb chunked: zstd frame decompressed to ${out.len} bytes; header declared ${uncomp_len}')
+		return error('cxcol chunked: zstd frame decompressed to ${out.len} bytes; header declared ${uncomp_len}')
 	}
 	return out
 }

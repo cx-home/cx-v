@@ -1,0 +1,397 @@
+[test-suite name=xpath-31-parity
+  [doc [#
+# CX vs. Saxon-HE XPath 3.1 parity fixtures (gate 28.5)
+#
+# Each fixture asserts cx-evaluator behavior against Saxon-HE 12 on
+# the same XPath 3.1 expression.
+#
+# Tags:
+#   xpath31-parity      — engines MUST agree on byte-canonical output
+#   xpath31-divergence  — engines MUST disagree per documented divergence
+#
+# Normative reference: spec/cxpath_alignment.md.
+# Runner: scripts/test_xpath_parity.sh.
+
+# ═════════════════════════════════════════════════════════════════
+# §1. Selection — basic axes (parity)
+# ═════════════════════════════════════════════════════════════════
+#]]
+
+ [case id=xpath31-001-descendant-or-self-name
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<users><user id="1"/><user id="2"/><user id="3"/></users>
+#]]
+  [path [#
+//user
+#]]
+  [out-text [#
+<user id="1"/>
+<user id="2"/>
+<user id="3"/>
+#]]
+ ]
+
+ [case id=xpath31-002-attribute-predicate-equality
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<users><user id="1" active="true"/><user id="2" active="false"/></users>
+#]]
+  [path [#
+//user[@active='true']
+#]]
+  [out-text [#
+<user id="1" active="true"/>
+#]]
+ ]
+
+ [case id=xpath31-003-attribute-step
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<users><user email="a@x.org"/><user email="b@x.org"/></users>
+#]]
+  [path [#
+//user/@email
+#]]
+  [out-text [#
+a@x.org
+b@x.org
+#]]
+ ]
+
+ [case id=xpath31-004-positional-predicate
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><item n="1"/><item n="2"/><item n="3"/></doc>
+#]]
+  [path [#
+//item[2]
+#]]
+  [out-text [#
+<item n="2"/>
+#]]
+ ]
+
+ [case id=xpath31-005-following-sibling-axis
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><item n="1"/><item n="2"/><item n="3"/></doc>
+#]]
+  [path [#
+//item[1]/following-sibling::item
+#]]
+  [out-text [#
+<item n="2"/>
+<item n="3"/>
+#]]
+ ]
+
+ [case id=xpath31-006-ancestor-axis
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><section><para>text</para></section></doc>
+#]]
+  [path [#
+//para/ancestor::section
+#]]
+  [out-text [#
+<section><para>text</para></section>
+#]]
+ ]
+
+ [case id=xpath31-007-self-axis-name-test
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><a/><b/><c/></doc>
+#]]
+  [path [#
+//*[self::a or self::c]
+#]]
+  [out-text [#
+<a/>
+<c/>
+#]]
+ ]
+
+ [case id=xpath31-008-descendant-axis-explicit
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><x><y><z/></y></x></doc>
+#]]
+  [path [#
+//descendant::z
+#]]
+  [out-text [#
+<z/>
+
+# ═════════════════════════════════════════════════════════════════
+# §2. Predicates — comparisons (parity on value-comparison semantics)
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=xpath31-020-predicate-ge
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<users><user age="20"/><user age="25"/><user age="30"/></users>
+#]]
+  [path [#
+//user[@age>=25]
+#]]
+  [out-text [#
+<user age="25"/>
+<user age="30"/>
+#]]
+ ]
+
+ [case id=xpath31-021-predicate-not-equal
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<users><user role="admin"/><user role="member"/></users>
+#]]
+  [path [#
+//user[@role!='admin']
+#]]
+  [out-text [#
+<user role="member"/>
+#]]
+ ]
+
+ [case id=xpath31-022-predicate-lt
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<items><item price="5"/><item price="10"/><item price="15"/></items>
+#]]
+  [path [#
+//item[@price<10]
+#]]
+  [out-text [#
+<item price="5"/>
+
+# ═════════════════════════════════════════════════════════════════
+# §3. Functions (parity)
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=xpath31-030-count
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<users><user/><user/><user/></users>
+#]]
+  [path [#
+count(//user)
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=xpath31-031-name-function
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><foo/></doc>
+#]]
+  [path [#
+name(//foo)
+#]]
+  [out-text [#
+foo
+#]]
+ ]
+
+ [case id=xpath31-032-string-length
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><greeting>hello</greeting></doc>
+#]]
+  [path [#
+string-length(//greeting)
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=xpath31-033-contains
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><user email="alice@example.org"/></doc>
+#]]
+  [path [#
+contains(//user/@email, 'example')
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=xpath31-034-position
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><item n="1"/><item n="2"/><item n="3"/></doc>
+#]]
+  [path [#
+//item[position()=2]
+#]]
+  [out-text [#
+<item n="2"/>
+#]]
+ ]
+
+ [case id=xpath31-035-last
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><item n="1"/><item n="2"/><item n="3"/></doc>
+#]]
+  [path [#
+//item[position()=last()]
+#]]
+  [out-text [#
+<item n="3"/>
+
+# ═════════════════════════════════════════════════════════════════
+# §4. Sequence operators (parity)
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [# xpath31-040-range REMOVED — the XPath 3.1 `to` range operator is retired
+    from CX (the no-infix / homoiconic invariant; ranges are the prefix builtin
+    [$range lo hi step?], generator_family_reshape.md). CX deliberately does not
+    claim Saxon parity on infix `to`; the operator is a parse error everywhere. #]
+
+ [case id=xpath31-041-union
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc><a id="1"/><b id="2"/><a id="3"/></doc>
+#]]
+  [path [#
+//a | //b
+#]]
+  [out-text [#
+<a id="1"/>
+<b id="2"/>
+<a id="3"/>
+#]]
+ ]
+
+ [case id=xpath31-042-string-concat
+  [tag [#
+xpath31-parity
+#]]
+  [input-xml [#
+<doc/>
+#]]
+  [path [#
+'foo' || '-' || 'bar'
+#]]
+  [out-text [#
+foo-bar
+
+# ═════════════════════════════════════════════════════════════════
+# §5. Documented divergences (engines MUST disagree)
+# ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+ [case id=xpath31-100-general-comparison-divergence
+  [tag [#
+xpath31-divergence
+#]]
+  [input-xml [#
+<users><user age="20"/><user age="25"/><user age="30"/></users>
+#]]
+  [path [#
+//users/@age=25
+#]]
+  [expect-diff [#
+Saxon returns 'true' (general comparison existentially over sequence).
+CX raises CXER0103 (multi-value comparison) — the path returns 3 ages.
+#]]
+ ]
+
+ [case id=xpath31-101-xpath-for-construct-divergence
+  [tag [#
+xpath31-divergence
+#]]
+  [input-xml [#
+<users><user email="a@x"/></users>
+#]]
+  [path [#
+for $x in //user return $x/@email
+#]]
+  [expect-diff [#
+Saxon returns 'a@x'.
+CX raises CXER0100 (unrecognised path expression — use [?for] directive).
+#]]
+ ]
+
+ [case id=xpath31-102-xs-type-divergence
+  [tag [#
+xpath31-divergence
+#]]
+  [input-xml [#
+<doc/>
+#]]
+  [path [#
+42 instance of xs:integer
+#]]
+  [expect-diff [#
+Saxon returns 'true'.
+CX raises CXER0100 (unknown type 'xs:integer'; use :int).
+#]]
+ ]
+
+ [case id=xpath31-103-namespace-decl-in-expression-divergence
+  [tag [#
+xpath31-divergence
+#]]
+  [input-xml [#
+<doc xmlns:ns="http://example.org"><ns:foo/></doc>
+#]]
+  [path [#
+declare namespace ns = 'http://example.org'; //ns:foo
+#]]
+  [expect-diff [#
+Saxon evaluates successfully.
+CX raises CXER0100 (namespace declarations not permitted in CXPath expressions).
+#]]
+ ]
+]
