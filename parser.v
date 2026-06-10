@@ -273,6 +273,32 @@ fn (mut p Parser) skip_ws_and_line_comments() {
 	}
 }
 
+// skip_ws_collecting_comments behaves exactly like skip_ws_and_line_comments
+// (skip whitespace + `#`-to-EOL line comments at a comment-eligible position)
+// but PRESERVES each comment as a CommentNode appended to `sink` instead of
+// discarding it. Used at the positions where a comment has a stable, round-
+// trippable home in canonical layout — the document top level (prolog,
+// between/after root nodes) and the line-broken body of a self-delimiting /
+// typed-list element. This is what makes `cx fmt` lossless for comments
+// (canonical.md §2.1) while strict `cx canonical` still strips them in
+// canonicalize_doc. Positions whose canonical form is a single inline line
+// (element head/attrs, inline `[a, b]` / `(…)` / `{…}` collections) keep using
+// the discarding skip_ws_and_line_comments — a comment there has no canonical
+// home and cannot round-trip.
+fn (mut p Parser) skip_ws_collecting_comments(mut sink []Node) {
+	for !p.at_end() {
+		b := p.peek()
+		if b == ` ` || b == `\t` || b == `\r` || b == `\n` {
+			p.advance()
+		} else if b == `#` {
+			val := p.read_line_comment_value()
+			sink << CommentNode{ value: val, is_line: true }
+		} else {
+			break
+		}
+	}
+}
+
 // skip_line_comment consumes a line comment from '#' through the next
 // '\n' (or end of input). The leading '#' must be the current position.
 fn (mut p Parser) skip_line_comment() {
@@ -393,10 +419,12 @@ fn (mut p Parser) parse_document() !Document {
 	// below would reject the trailing prose).
 	mut allow_top_text := false
 
-	p.skip_ws_and_line_comments()
+	// Leading top-level comments precede the first node — collect them into the
+	// prolog so they round-trip through `cx fmt` (emit_cx renders prolog first).
+	p.skip_ws_collecting_comments(mut prolog)
 
 	for {
-		p.skip_ws_and_line_comments()
+		p.skip_ws_collecting_comments(mut prolog)
 		if p.at_end() { break }
 		// Prolog nodes are bracketed (`[?…]` directives, `[!DOCTYPE]`); a
 		// non-bracket introducer ends the prolog. tok_peek_kind().is_bracket_open()
@@ -543,8 +571,10 @@ fn (mut p Parser) parse_document() !Document {
 		}
 		// Strict mode: ws/comments between bracketed nodes; non-bracket
 		// trailing content is a parse error (preserves data-CX invariant
-		// from v3.x).
-		p.skip_ws_and_line_comments()
+		// from v3.x). Comments between/after root nodes are preserved as
+		// CommentNode siblings (in document order) so `cx fmt` round-trips
+		// them — a trailing `[a 1] # note` keeps its `# note`.
+		p.skip_ws_collecting_comments(mut elements)
 		if p.at_end() { break }
 		if p.pos + 3 <= p.src.len && p.src[p.pos] == `-` && p.src[p.pos+1] == `-` && p.src[p.pos+2] == `-` {
 			break
@@ -2522,7 +2552,10 @@ fn (p &Parser) body_is_flat_comma_array() bool {
 		// Any structural introducer disqualifies the flat-array fast path —
 		// child elements, collection literals, and entities are mixed content.
 		if c == `[` || c == `(` || c == `{` || c == `&` { return false }
-		if c == `'` || c == `"` {
+		// A quote opens a string ONLY at a token start; a mid-token `'` is a
+		// bare-prose apostrophe (`it's`) and must not swallow the following
+		// comma — else this scan misses the array signal.
+		if (c == `'` || c == `"`) && at_tok_start {
 			i = skip_quoted_region(p.src, i)
 			at_tok_start = false
 			continue
@@ -2617,20 +2650,42 @@ fn (p &Parser) body_is_typed_list() bool {
 fn skip_bracket_region(src []u8, start int) int {
 	mut i := start
 	mut depth := 0
+	// A `'`/`"` opens a quoted region ONLY at a token start (after the opening
+	// bracket, whitespace, or a `,`/`=` separator). A MID-token quote is a
+	// literal apostrophe in bare prose (`it's`, `Bob's`) and must NOT be treated
+	// as a string opener — otherwise this scan runs the "string" past the
+	// element's own `]`, miscounting depth and corrupting every later body
+	// (symptom: a spurious "unterminated quoted text" at EOF). Mirrors the
+	// at_tok_start rule the body_is_typed_list scanner already uses.
+	mut at_tok_start := true
 	for i < src.len {
 		c := src[i]
-		if c == `'` || c == `"` {
+		if (c == `'` || c == `"`) && at_tok_start {
 			i = skip_quoted_region(src, i)
+			at_tok_start = false
 			continue
 		}
 		if c == `[` || c == `(` || c == `{` {
 			depth++
-		} else if c == `]` || c == `)` || c == `}` {
+			at_tok_start = true
+			i++
+			continue
+		}
+		if c == `]` || c == `)` || c == `}` {
 			depth--
 			if depth == 0 {
 				return i + 1
 			}
+			at_tok_start = false
+			i++
+			continue
 		}
+		if c == ` ` || c == `\t` || c == `\r` || c == `\n` || c == `,` || c == `=` {
+			at_tok_start = true
+			i++
+			continue
+		}
+		at_tok_start = false
 		i++
 	}
 	return src.len
@@ -2647,7 +2702,11 @@ fn skip_bracket_region(src []u8, start int) int {
 fn (mut p Parser) parse_self_delim_body() ![]Node {
 	mut items := []Node{}
 	for {
-		p.skip_ws_and_line_comments()
+		// Preserve line comments between/after typed-list items as CommentNode
+		// siblings — this body renders one item per line (multi-line element),
+		// so a comment HAS a canonical home here and must round-trip through
+		// `cx fmt` (matching parse_body's mixed-content path).
+		p.skip_ws_collecting_comments(mut items)
 		if p.at_end() { return error(p.make_error('unterminated element body')) }
 		b := p.peek()
 		if b == `]` { break }

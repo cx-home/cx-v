@@ -618,14 +618,15 @@ fn needs_quote_string_item(s string) bool {
 	return false
 }
 
-// render_array_scalar_item renders one item of a typed-array body. When the
-// annotation is KEPT the item renders exactly as before (`render_scalar`,
-// quoted strings/dates); when dropped, the item must re-auto-type, so dates
-// emit unquoted and string items emit bare-when-safe.
+// render_array_scalar_item renders one item of a typed-array body. The
+// explicit `::T[]` head pins the element type, so a bare-eligible string item
+// stays BARE (`[tags::string[] admin user]`) — it is quoted only when the bare
+// form would split or re-type. Dates/datetimes emit unquoted. This mirrors the
+// cx-module data emitter (cx_emit_array_item) so `cx fmt` / `cx canonical` and
+// the program renderer produce identical canonical text for a typed array.
+// (`drop_ann` is retained in the signature for the shared array_render_plan
+// contract; the plan now always keeps the annotation.)
 fn render_array_scalar_item(s cx.ScalarNode, string_item bool, drop_ann bool) string {
-	if !drop_ann {
-		return render_scalar(s)
-	}
 	if s.data_type == .date_type || s.data_type == .datetime_type {
 		if s.value is string {
 			return s.value as string

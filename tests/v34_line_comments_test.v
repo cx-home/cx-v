@@ -39,7 +39,18 @@ fn test_line_comment_between_top_level_elements() {
 # comment between
 [b]'
 	doc := cx.parse(src) or { panic(err) }
-	assert doc.elements.len == 2
+	// A line comment between root nodes is now PRESERVED as a CommentNode
+	// sibling (lossless `cx fmt` — canonical.md §2.1), so elements holds
+	// [Element a, CommentNode, Element b]. The two real elements are still
+	// present; the comment rides between them in document order.
+	mut element_count := 0
+	for n in doc.elements {
+		if n is cx.Element {
+			element_count++
+		}
+	}
+	assert element_count == 2
+	assert cx.emit_cx(doc).contains('# comment between')
 }
 
 // ── Line comments inside element body ────────────────────────────────────────

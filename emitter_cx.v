@@ -171,10 +171,20 @@ fn cx_emit_array_item_literal(n Node, compact bool) string {
 					string { n.value as string }
 					else   { scalar_value_str(n.value) }
 				}
-				// 3a: always quote string items (a bare `80` / `a, b` would re-type
-				// or split). Non-string scalars (int/float/bool/date/atom) keep
-				// their bare typed form via cx_scalar below.
-				return cx_choose_quote(sv)
+				// A string array item quotes under the SAME rule as the TextNode
+				// branch above — bare-eligible (canonical.md §2.3) values emit bare,
+				// quoting only when the value is a bare NAME (`web` → re-parses as an
+				// element head, 3a) or carries an item-boundary / auto-typing char
+				// (`a, b`, `80`). This is the idempotency fixpoint: a comma-body
+				// string item (which finalize_comma_array materialises as a string
+				// ScalarNode) and the SAME item re-parsed from `[ … ]` literal form
+				// (a TextNode) must canonicalise identically, or `cx fmt` oscillates
+				// quoted⇄bare on every save. A safe token (`https://a.com`,
+				// `//variant`) stays bare in both representations.
+				if cx_is_bare_name(sv) || cx_array_item_needs_quote(sv) {
+					return cx_choose_quote(sv)
+				}
+				return sv
 			}
 			return cx_scalar(n)
 		}
@@ -271,24 +281,31 @@ fn cx_is_bare_name(s string) bool {
 	return true
 }
 
-// array_render_plan decides the decision-(a) canonical surface for a typed-
-// array element body of element-type `base` with `n` scalar items
-// (lexicon.ebnf §9 — D1). It is the SINGLE home for the
-// rule — both this canonical-CX emitter and the programs renderer
-// (code.render_canonical) call it, so the two renderers cannot drift.
+// array_render_plan decides the canonical surface for a typed-array element
+// body of element-type `base` with `n` scalar items (lexicon.ebnf §9 — D1).
+// It is the SINGLE home for the rule — both this canonical-CX emitter and the
+// programs renderer (code.render_canonical) call it, so the two renderers
+// cannot drift.
 //   returns (drop_annotation, use_comma_separator, force_trailing_comma)
-//   - int/float/bool/date/datetime, n>=2 → drop `::T[]`, whitespace signal;
-//   - string, n>=1                       → drop `::T[]`, comma signal
-//                                          (n==1 needs a trailing comma);
-//   - single non-string scalar           → keep `::T[]` (no whitespace signal);
-//   - non-recoverable type / empty array  → keep `::T[]` (type not inferrable).
+//
+// A TYPED array ALWAYS keeps its `::T[]` head and emits its items
+// whitespace-separated — `[tags::string[] admin user]`, `[scores::int[] 80
+// 443]`. This is both LOSSLESS and IDEMPOTENT, which the old drop-annotation
+// scheme was not:
+//   - dropping `::T[]` and re-signalling the type via the body never recovered
+//     the array — a bare comma body `[tags admin, user]` re-parses to an
+//     UNTYPED ArrayNode (so `fmt` oscillated typed→comma→bracketed every save),
+//     and a whitespace body `[scores 80 443]` re-parses to DISCRETE children,
+//     not an array at all (§9: whitespace never auto-arrays);
+//   - dropping `::T[]` is also a silent TYPE LOSS whenever the items don't
+//     self-identify the declared type — `[xs::float[] 1 2 3]` would re-infer
+//     `int`. The explicit `::T[]` head is what makes the whitespace body an
+//     array (§9: a `::[]`/`::T[]` head makes an array), so keeping it is the
+//     only form that round-trips for every element-type and arity.
+// UNTYPED comma arrays (`[tags web, prod]`) are a different AST (a sole
+// ArrayNode child) and canonicalise to the bracketed literal `[tags ['web',
+// 'prod']]` via the generic element path — unaffected by this plan.
 pub fn array_render_plan(base string, n int) (bool, bool, bool) {
-	if n == 0 { return false, false, false }
-	if base == 'string' { return true, true, n == 1 }
-	if base in ['int', 'float', 'bool', 'date', 'datetime'] {
-		if n == 1 { return false, false, false }
-		return true, false, false
-	}
 	return false, false, false
 }
 
@@ -376,7 +393,8 @@ fn cx_emit_element(e Element, depth int, compact bool, mut out []string) {
 		out << '${ind}[${e.name}]${nl}'
 	} else {
 		meta := cx_build_meta(e)
-		body := cx_build_inline_body(e.items, compact)
+		parent_scalar_typed := if dt := e.data_type() { !dt.ends_with('[]') } else { false }
+		body := cx_build_inline_body(e.items, compact, parent_scalar_typed)
 		body_sep := if body.len > 0 { ' ' } else { '' }
 		out << '${ind}[${e.name}${meta}${body_sep}${body}]${nl}'
 	}
@@ -491,7 +509,7 @@ fn cx_build_meta(e Element) string {
 					continue
 				}
 			}
-			body_str := cx_build_inline_body(body_items, true)
+			body_str := cx_build_inline_body(body_items, true, false)
 			s += ' ${a.name}=[${body_str}]'
 			continue
 		}
@@ -500,7 +518,7 @@ fn cx_build_meta(e Element) string {
 	return s
 }
 
-fn cx_build_inline_body(items []Node, compact bool) string {
+fn cx_build_inline_body(items []Node, compact bool, parent_scalar_typed bool) string {
 	mut parts := []string{}
 	for item in items {
 		match item {
@@ -508,7 +526,21 @@ fn cx_build_inline_body(items []Node, compact bool) string {
 				if item.value.trim_space().len == 0 { continue }
 				parts << cx_quote_text_if_needed(item.value)
 			}
-			ScalarNode    { parts << cx_scalar(item) }
+			ScalarNode {
+				// A plain (non-atom) string scalar in mixed / untyped body
+				// position quotes under the SAME bijective rule as a TextNode
+				// — otherwise `cx fmt` re-parses `'CX is a '` (a string
+				// ScalarNode here) and re-emits it BARE, dropping the boundary
+				// spaces and oscillating quoted⇄bare. When the parent element
+				// carries a disambiguating scalar `::T` head (`[zip::string
+				// 90210]`), the annotation already pins the type, so the value
+				// stays bare via cx_scalar.
+				if !parent_scalar_typed && item.data_type == .string_type && item.value is string {
+					parts << cx_quote_text_if_needed(item.value as string)
+				} else {
+					parts << cx_scalar(item)
+				}
+			}
 			EntityRefNode { parts << '&${item.name};' }
 			RawTextNode   { parts << '[#${item.value}#]' }
 			Element {
@@ -555,11 +587,34 @@ fn cx_quote_text_if_needed(s string) string {
 		|| s.contains('  ') || s.contains('\n') || s.contains('\t')
 		|| s.contains('[') || s.contains(']') || s.contains('&')
 		|| s.contains('\\')
+		|| s.contains(',')               // a bare comma is the array signal (§9)
 		|| s.starts_with(':')
+		|| cx_body_leading_sigil(s)       // `+tls` / `-debug` / `*a` / `@r` …
 		|| cx_text_has_boundary_quote(s)
 		|| cx_would_autotype(s)
 	if !needs_quote { return s }
 	return cx_choose_quote(s)
+}
+
+// cx_body_leading_sigil reports whether a bare-emitted body text would be
+// re-lexed as a NON-text token because of its first character. At a body /
+// head item boundary these sigils introduce structure rather than prose:
+// `+`/`-` (retired boolean-flag sigils — grammar [55b]), `*` (alias), `@`
+// (body @id ref), `#` (line comment), `%` (PE reference), `$` (binding ref),
+// and the collection / grouping openers+closers `( ) { } =`. A string whose
+// value starts with one of these MUST be quoted or `cx fmt` would emit syntax
+// the parser then rejects or re-reads as a different node (e.g. `[code '+tls']`
+// → bare `[code +tls]` → "retired flag sigil"). `[`/`]`/`&`/`:`/quotes are
+// already covered by the caller's checks. NOTE: `$`/`%`/`=`/parens are NOT in
+// the set — `$v`/`%x` are program binding/PE references and grouping is opened
+// by `(`/`{` which begin a structured value, not prose; a data text run that
+// genuinely starts with `(`/`{` is rare and the collection openers are handled
+// by the parser's structural dispatch, so quoting only the unambiguous prose-
+// breaking sigils avoids mangling embedded program expressions (e.g. the
+// `[in $v //variant]` body of a `[?for]`).
+fn cx_body_leading_sigil(s string) bool {
+	if s.len == 0 { return false }
+	return s[0] in [`+`, `-`, `*`, `@`, `#`]
 }
 
 // cx_text_has_boundary_quote reports whether a bare-emitted body text
@@ -837,7 +892,7 @@ fn cx_emit_eval_directive(n EvalDirectiveNode, depth int, compact bool, mut out 
 	mut s := '${ind}[?${n.name}'
 	for a in n.attrs {
 		if body_items := a.body() {
-			body_str := cx_build_inline_body(body_items, true)
+			body_str := cx_build_inline_body(body_items, true, false)
 			s += ' ${a.name}=[${body_str}]'
 			continue
 		}
@@ -849,7 +904,7 @@ fn cx_emit_eval_directive(n EvalDirectiveNode, depth int, compact bool, mut out 
 		}
 	}
 	if n.items.len > 0 {
-		body := cx_build_inline_body(n.items, true)
+		body := cx_build_inline_body(n.items, true, false)
 		if body.len > 0 { s += ' ${body}' }
 	}
 	s += ']${nl}'

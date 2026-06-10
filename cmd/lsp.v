@@ -39,6 +39,7 @@ struct LspMessage {
 mut:
 	jsonrpc string
 	id      json2.Any  // int OR string OR none (for notifications)
+	has_id  bool       // true iff the `id` key was present on the wire
 	method  string
 	params  json2.Any
 	result  json2.Any
@@ -121,7 +122,7 @@ fn lsp_message_from_any(v json2.Any) !LspMessage {
 	obj := v as map[string]json2.Any
 	mut m := LspMessage{}
 	if jr := obj['jsonrpc'] { m.jsonrpc = jr.str() }
-	if id := obj['id']      { m.id = id }
+	if id := obj['id']      { m.id = id  m.has_id = true }
 	if method := obj['method'] { m.method = method.str() }
 	if params := obj['params'] { m.params = params }
 	if result := obj['result'] { m.result = result }
@@ -174,13 +175,22 @@ fn dispatch_lsp_message(msg LspMessage, mut state LspState) {
 	}
 	// id present → request; expects a response.
 	// id absent  → notification; no response.
-	is_request := !(msg.id is json2.Null)
+	//
+	// We test has_id (set only when the `id` key was on the wire), NOT
+	// `msg.id is json2.Null`: an absent id leaves the struct-default
+	// json2.Any, whose zero value is an empty array — not json2.Null —
+	// so the old check classified every notification as a request and
+	// replied with an error carrying a bogus `id:[]`. Editors then choke
+	// (Neovim: `assert(tonumber(decoded.id), 'response id must be a
+	// number')`), e.g. on the textDocument/didSave fired by `:w`.
+	is_request := msg.has_id
 	match msg.method {
 		'initialize'                   { handle_initialize(msg, mut state) }
 		'initialized'                  { /* notification — no-op */ }
 		'shutdown'                     { handle_shutdown(msg, mut state) }
 		'textDocument/didOpen'         { handle_did_open(msg, mut state) }
 		'textDocument/didChange'       { handle_did_change(msg, mut state) }
+		'textDocument/didSave'         { /* notification — no-op */ }
 		'textDocument/didClose'        { handle_did_close(msg, mut state) }
 		'textDocument/hover'           { handle_hover(msg, mut state) }
 		'textDocument/completion'      { handle_completion(msg, mut state) }
@@ -219,6 +229,9 @@ fn handle_initialize(msg LspMessage, mut state LspState) {
 	completion['triggerCharacters'] = json2.Any([json2.Any('['), json2.Any('?'), json2.Any('@'), json2.Any(':'), json2.Any('/')])
 	caps['completionProvider'] = json2.Any(completion)
 	caps['definitionProvider'] = json2.Any(true)
+	// `cx fmt` (cx_text_fmt) is the lossless canonical formatter: it
+	// round-trips comments and is idempotent (`fmt(fmt(x)) == fmt(x)`), so a
+	// whole-document format edit is safe under any client or trigger.
 	caps['documentFormattingProvider'] = json2.Any(true)
 	mut sem_tokens := map[string]json2.Any{}
 	sem_tokens['legend'] = semantic_tokens_legend()
@@ -296,23 +309,26 @@ fn handle_did_close(msg LspMessage, mut state LspState) {
 fn publish_diagnostics(uri string, mut state LspState) {
 	source := state.doc_source(uri) or { return }
 	mut diagnostics := []json2.Any{}
+	// A `.cx` resource has TWO legitimate readings, both served by the ONE
+	// cxparse engine: the DATA reading (cx.parse — scannerless; handles prose,
+	// `[- … ]` comments, mixed-content markup like a tour/doc) and the PROGRAM
+	// reading (cx.parse_program — tokenised; handles `[$call]`, directives,
+	// operator heads). These are reading MODES of one engine, not two parsers.
+	// A file is well-formed if it parses under EITHER mode, so we only raise a
+	// syntax diagnostic when BOTH fail. (Raising on a single mode is wrong: it
+	// flags valid programs as data errors — e.g. `[> a b]`, program maps — and
+	// valid data documents as program errors — e.g. a `;`/em-dash in prose or a
+	// comment. The earlier false errors were a STALE editor binary running an
+	// old program parser, fixed by pointing the editor at the trunk build.)
 	cx.parse(source) or {
-		// libcx parse errors carry "line:col: message" prefixes.
-		msg_text := err.msg()
-		// A .cx resource's DEFAULT reading is the PROGRAM reading (`cx <file>`
-		// ≡ `cx eval`; a pure-data document evaluates to itself). Constructs
-		// that are valid as a program but rejected by the data parser —
-		// computed attributes (`total=[$count …]`), directives, operator-head
-		// elements — would otherwise surface as spurious data-mode diagnostics
-		// (e.g. E211 "node-valued attribute … scalar-only"). Suppress the
-		// data-parse error when the source parses as a valid program; only a
-		// source that fails BOTH readings is a genuine syntax error to flag.
-		mut is_program := false
+		data_err := err.msg()
 		if _ := cx.parse_program(source) {
-			is_program = true
-		}
-		if !is_program {
-			line, col := parse_error_position(msg_text)
+			// valid under the program reading → not a syntax error
+		} else {
+			// Both readings failed → a genuine syntax error. Report the data
+			// reading's position (its scannerless cursor pinpoints prose/markup
+			// faults; parse_error_position handles either error format).
+			line, col := parse_error_position(data_err)
 			mut diag := map[string]json2.Any{}
 			mut range_obj := map[string]json2.Any{}
 			mut start := map[string]json2.Any{}
@@ -326,7 +342,7 @@ fn publish_diagnostics(uri string, mut state LspState) {
 			diag['range'] = json2.Any(range_obj)
 			diag['severity'] = json2.Any(i64(1))  // Error
 			diag['source'] = json2.Any('cx-parse')
-			diag['message'] = json2.Any(msg_text)
+			diag['message'] = json2.Any(data_err)
 			diagnostics << json2.Any(diag)
 		}
 	}
@@ -376,15 +392,26 @@ fn publish_diagnostics(uri string, mut state LspState) {
 // message. Returns (0, 0) when the format doesn't match — diagnostics
 // are still emitted at the start of the document.
 fn parse_error_position(msg string) (int, int) {
-	// V parser produces "L:C: message" or contains it after a path.
-	parts := msg.split(':')
-	if parts.len < 3 { return 0, 0 }
-	for i in 0 .. parts.len - 1 {
-		l := parts[i].trim_space().int()
-		c := parts[i + 1].trim_space().int()
-		if l > 0 && c >= 0 {
-			// LSP positions are 0-based; libcx is 1-based.
-			return l - 1, c - 1
+	// Extract a 1-based `L:C` location from a parse-error message, wherever it
+	// sits. The data reading historically prefixes "L:C: message"; the program
+	// reading (cx.parse_program) embeds it as "… at line L:C". Scan for the
+	// first `<digits>:<digits>` run (digits immediately on both sides of a `:`)
+	// so BOTH formats resolve to the real position rather than 0:0.
+	for i := 0; i < msg.len; i++ {
+		if msg[i] != `:` { continue }
+		mut j := i - 1
+		for j >= 0 && msg[j] >= `0` && msg[j] <= `9` { j-- }
+		mut k := i + 1
+		for k < msg.len && msg[k] >= `0` && msg[k] <= `9` { k++ }
+		before := msg[j + 1..i]
+		after := msg[i + 1..k]
+		if before.len > 0 && after.len > 0 {
+			l := before.int()
+			c := after.int()
+			if l > 0 && c >= 0 {
+				// LSP positions are 0-based; libcx is 1-based.
+				return l - 1, c - 1
+			}
 		}
 	}
 	return 0, 0
@@ -562,6 +589,11 @@ fn handle_semantic_tokens(msg LspMessage, mut state LspState) {
 // ── Formatting ───────────────────────────────────────────────────────
 
 fn handle_formatting(msg LspMessage, mut state LspState) {
+	// Whole-document format via `cx fmt` (cx_text_fmt) — the lossless
+	// canonical formatter: it round-trips comments and is idempotent
+	// (`fmt(fmt(x)) == fmt(x)`), so a single full-range TextEdit normalises
+	// layout without losing data or oscillating. A parse error yields zero
+	// edits (leave the buffer untouched rather than emit a partial result).
 	params := msg.params as map[string]json2.Any
 	td := params['textDocument'] or { return } as map[string]json2.Any
 	uri := td['uri'] or { return }.str()
@@ -570,6 +602,25 @@ fn handle_formatting(msg LspMessage, mut state LspState) {
 		return
 	}
 	formatted := cx.cx_text_fmt(source) or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	}
+	// Safety guard — NEVER emit a destructive edit. `cx fmt` is lossless and
+	// idempotent, but format-on-save runs unattended on every `:w`, so we make
+	// a hypothetical future regression fail SAFE (zero edits) rather than
+	// clobber the buffer. Apply the edit only when the result is both
+	// data-equivalent to the source (strict-canonical equality) AND a fixpoint
+	// (re-formatting is stable, so the buffer can't oscillate save-to-save).
+	equivalent := cx.cx_text_eq(source, formatted) or { false }
+	if !equivalent {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	}
+	refmt := cx.cx_text_fmt(formatted) or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	}
+	if refmt != formatted {
 		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
 		return
 	}

@@ -378,7 +378,7 @@
 <tags cx:type="string[]"><item>admin</item><item>user</item></tags>
 #]]
   [out-cx [#
-[tags admin, user]
+[tags::string[] admin user]
 #]]
  ]
 

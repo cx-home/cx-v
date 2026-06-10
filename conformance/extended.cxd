@@ -366,7 +366,7 @@
 <tags cx:type="string[]"><item>admin</item><item>user</item><item>guest</item></tags>
 #]]
   [out-cx [#
-[tags admin, user, guest]
+[tags::string[] admin user guest]
 #]]
  ]
 
@@ -396,7 +396,7 @@
 <scores cx:type="int[]"><item>10</item><item>20</item><item>30</item></scores>
 #]]
   [out-cx [#
-[scores 10 20 30]
+[scores::int[] 10 20 30]
 #]]
  ]
 
@@ -861,7 +861,7 @@
 <tags cx:type="string[]"><item>solo</item></tags>
 #]]
   [out-cx [#
-[tags solo,]
+[tags::string[] solo]
 #]]
  ]
 
@@ -891,7 +891,7 @@
 <scores cx:type="float[]"><item>1.1</item><item>2.2</item><item>3.3</item></scores>
 #]]
   [out-cx [#
-[scores 1.1 2.2 3.3]
+[scores::float[] 1.1 2.2 3.3]
 #]]
  ]
 
@@ -921,7 +921,7 @@
 <flags cx:type="bool[]"><item>true</item><item>false</item><item>true</item></flags>
 #]]
   [out-cx [#
-[flags true false true]
+[flags::bool[] true false true]
 #]]
  ]
 

@@ -33,14 +33,17 @@ fn test_scalar_int() {
 }
 
 fn test_typed_int_array() {
-	// decision-(a) drops the redundant ::int[] annotation.
-	assert cc('[xs::int[] 1 2 3]') == '[xs 1 2 3]'
+	// A typed array KEEPS its `::T[]` head and whitespace-separated items —
+	// lossless + idempotent. (The old "drop annotation" form was neither: a
+	// whitespace body `[xs 1 2 3]` re-parses to discrete children, not an array.)
+	assert cc('[xs::int[] 1 2 3]') == '[xs::int[] 1 2 3]'
 	assert cc('[xs::int[] 1 2 3]') == xc('[xs::int[] 1 2 3]')
 }
 
 fn test_typed_string_array() {
-	// string array renders comma-separated, annotation dropped.
-	assert cc('[tags::string[] admin user]') == '[tags admin, user]'
+	// Typed string array keeps `::string[]`; bare-eligible items stay bare (the
+	// annotation pins the type) and match the cx-module data emitter.
+	assert cc('[tags::string[] admin user]') == '[tags::string[] admin user]'
 	assert cc('[tags::string[] admin user]') == xc('[tags::string[] admin user]')
 }
 
