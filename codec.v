@@ -67,7 +67,6 @@ const codec_overlay = &CodecOverlay{}
 // is exactly how `code` backs the `json` codec's parse without touching its
 // emit.
 pub fn register_codec(c Codec) {
-	mut o := codec_overlay
 	mut merged := codec_table[c.name] or { Codec{
 		name: c.name
 	} }
@@ -83,7 +82,14 @@ pub fn register_codec(c Codec) {
 	if ebf := c.emit_bytes {
 		merged.emit_bytes = ebf
 	}
-	o.codecs[c.name] = merged
+	// codec_overlay is a process-global singleton registry. The newer V checker
+	// (Jun-11 upstream) disallows aliasing the immutable const pointer as `mut` to
+	// mutate its map, so the intentional in-place registration is done under
+	// `unsafe` (the established escape hatch for a deliberate global mutation).
+	unsafe {
+		mut o := codec_overlay
+		o.codecs[c.name] = merged
+	}
 }
 
 fn build_codec_table() map[string]Codec {

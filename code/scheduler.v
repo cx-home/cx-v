@@ -80,6 +80,7 @@ pub fn run_task_thread(t_ptr &TaskRecord, state_ptr &ProgramState,
 		closures:     closures_snapshot.clone()
 		state:        unsafe { state_ptr }
 		anon_counter: 0
+		frame_pool:   &FramePool{} // fresh per-task frame pool (#36); thread-local
 	}
 	result := eval_node(t.body, mut env) or {
 		t.err_message = err.msg()

@@ -725,7 +725,11 @@ fn eval_cx_element(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 	// straight. Non-operator names build a plain CX element via the DC body
 	// evaluator (which routes [?attr]/[?splice]/[?unquote] holes).
 	if l.slots.len == 0 && l.attrs.len == 0 && l.name in operator_element_heads {
-		mut op_items := []cx.Node{}
+		// Pre-size to the operand count: an operator head's items are all
+		// operands, so the final length is known. Avoids the grow-from-zero
+		// realloc chain (cap 0→1→2…) on every operator eval — the dominant
+		// per-step heap churn in a tight arithmetic fold (lever 2, -gc e).
+		mut op_items := []cx.Node{cap: l.items.len}
 		for it in l.items {
 			op_items << eval_node(it, mut env)!
 		}
@@ -3242,6 +3246,7 @@ fn resolve_fn_value(name string, mut env MatchEnv) ?cx.Node {
 		return mk_closure_sentinel(name)
 	}
 	if builtin_fn_name(name) {
+		env.cow_closures()
 		env.closures[name] = Closure{ builtin_name: name }
 		return mk_closure_sentinel(name)
 	}
@@ -3305,6 +3310,7 @@ fn build_partial_value(c cx.ProgramCall, mut env MatchEnv) !cx.Node {
 	}
 	env.anon_counter++
 	id := '__partial_${env.anon_counter}__'
+	env.cow_closures()
 	env.closures[id] = Closure{
 		partial_target:   [target]
 		partial_template: template
@@ -3331,17 +3337,15 @@ fn bind_specs_and_eval(c Closure, args []cx.Node, labels []string, mut enclosing
 		}
 	}
 	mut call_env := MatchEnv{
-		bindings:     map[string]cx.Node{}
-		closures:     map[string]Closure{}
-		state:        enclosing.state
-		anon_counter: enclosing.anon_counter
-		dyn_context:  enclosing.dyn_context.clone()
+		bindings:        map[string]cx.Node{}
+		closures:        enclosing.closures // aliased; cow_closures() before any write (B17)
+		closures_shared: true
+		state:           enclosing.state
+		anon_counter:    enclosing.anon_counter
+		dyn_context:     if enclosing.dyn_context.len > 0 { enclosing.dyn_context.clone() } else { enclosing.dyn_context }
 	}
 	for k, v in c.captured_bindings {
 		call_env.bindings[k] = v
-	}
-	for k, v in enclosing.closures {
-		call_env.closures[k] = v
 	}
 	mut pi := 0
 	for spec in c.param_specs {
@@ -6973,6 +6977,7 @@ fn register_module_members(mod &Module, prefix string, only ?[]string, mut env M
 			body:              [body_prog.body]
 			captured_bindings: snapshot_bindings(env)
 		}
+		env.cow_closures()
 		env.closures['${prefix}:${name}'] = member_closure
 	}
 	for cname in mod.const_order {
@@ -8219,6 +8224,59 @@ fn eval_map_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	return mk_eager_iterator(.iter_map, [source_val, using_val], results)
 }
 
+// StreamRangeBounds carries the resolved (start,end,step) of a bounded
+// integer range, for the streaming reduce fast-path below.
+struct StreamRangeBounds {
+	start i64
+	end   i64
+	step  i64
+}
+
+// stream_int_range_bounds returns the (start,end,step) of a bounded
+// integer `[$range lo hi step?]` *source expression*, or none for any
+// other source shape (non-range call, open-end, datetime, float,
+// step-0). It is used by `[?reduce]` to fold a range by generating each
+// integer inline (generate→fold→drop) instead of materialising the whole
+// sequence — a 4M-int range otherwise costs ~4.3GB RSS and is memory-
+// bandwidth bound (lever 1, -gc e). The int-domain guards mirror
+// invoke_builtin's 'range' arm exactly so the folded value is identical
+// to the eager path; any case it rejects falls through to that path
+// (preserving its errors, e.g. step-0 → CXER0100).
+fn stream_int_range_bounds(node cx.ProgramNode, mut env MatchEnv) ?StreamRangeBounds {
+	if node is cx.ProgramCall {
+		if node.name != 'range' || !node.explicit_call {
+			return none
+		}
+		if node.args.len != 2 && node.args.len != 3 {
+			return none
+		}
+		lo_node := eval_node(node.args[0], mut env) or { return none }
+		hi_node := eval_node(node.args[1], mut env) or { return none }
+		if is_open_end_marker(hi_node) {
+			return none
+		}
+		if scalar_is_datetime(lo_node) || scalar_is_datetime(hi_node) {
+			return none
+		}
+		start := scalar_int(lo_node) or { return none }
+		end := scalar_int(hi_node) or { return none }
+		mut step := i64(1)
+		if node.args.len == 3 {
+			step_node := eval_node(node.args[2], mut env) or { return none }
+			step = scalar_int(step_node) or { return none }
+			if step == 0 {
+				return none
+			}
+		}
+		return StreamRangeBounds{
+			start: start
+			end:   end
+			step:  step
+		}
+	}
+	return none
+}
+
 fn eval_reduce_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	if d.slots.len == 0 {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?reduce] requires positional source slot' }
@@ -8295,6 +8353,60 @@ fn eval_reduce_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	if !have_init {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?reduce] requires :init slot' }
 	}
+	// Streaming integer-range fold fast-path (lever 1, -gc e). When the
+	// source is a bounded integer `[$range lo hi step?]`, fold by generating
+	// each integer inline (generate→fold→drop) so the live set is O(1) —
+	// never materialising the range. Detection runs in source position (only
+	// the bound args are evaluated) so `:using`/`:init` still evaluate after
+	// the source, matching the eager path's order. Covers both the serial
+	// path and the `:par` path: the parallel form chunks the integer domain
+	// and streams each sub-range (par_reduce_range), so a parallel reduce
+	// over a large range never materialises it either.
+	if bounds := stream_int_range_bounds(source_node, mut env) {
+		using_val := eval_node(using_slot, mut env)!
+		closure_id := closure_id_of(using_val) or {
+			return EvalError{ code: 'cx-err:CXER0001', message: '[?reduce] :using must evaluate to a closure' }
+		}
+		closure := env.closures[closure_id] or {
+			return EvalError{ code: 'cx-err:CXER0001', message: '[?reduce] :using closure not found' }
+		}
+		init_val := eval_node(init_slot, mut env)!
+		if par_flag {
+			// Chunked streaming parallel fold (§8.10.6 associativity, same
+			// contract as par_reduce): :init is the per-chunk seed and the
+			// combine identity.
+			return par_reduce_range(closure, bounds.start, bounds.end, bounds.step,
+				init_val, mut env)!
+		}
+		mut acc := init_val
+		// Single reusable 2-element args buffer (same invariant as the
+		// eager fold below); the int scalar is rebuilt per step but the
+		// previous one is dropped immediately, keeping the live set O(1).
+		mut argbuf := [init_val, init_val]
+		mut i := bounds.start
+		if bounds.step > 0 {
+			for i <= bounds.end {
+				argbuf[0] = acc
+				argbuf[1] = cx.Node(cx.ScalarNode{
+					value:     cx.ScalarValue(i)
+					data_type: cx.ScalarType.int_type
+				})
+				acc = invoke_closure(closure, argbuf, mut env)!
+				i += bounds.step
+			}
+		} else {
+			for i >= bounds.end {
+				argbuf[0] = acc
+				argbuf[1] = cx.Node(cx.ScalarNode{
+					value:     cx.ScalarValue(i)
+					data_type: cx.ScalarType.int_type
+				})
+				acc = invoke_closure(closure, argbuf, mut env)!
+				i += bounds.step
+			}
+		}
+		return acc
+	}
 	source_val := eval_node(source_node, mut env)!
 	using_val := eval_node(using_slot, mut env)!
 	closure_id := closure_id_of(using_val) or {
@@ -8314,8 +8426,16 @@ fn eval_reduce_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		return par_reduce(closure, items, init_val, mut env)!
 	}
 	mut acc := init_val
+	// Reuse a single 2-element args buffer across the fold instead of allocating a
+	// fresh [acc, item] per step (#36/B19 follow-up). Safe: invoke_closure_l copies the
+	// arg *values* into the call frame's bindings and no path retains the args slice
+	// (verified — only pipeline stages clone args), and the call completes before the
+	// next iteration overwrites the buffer.
+	mut argbuf := [init_val, init_val] // 2-element buffer, allocated once; contents overwritten per step
 	for item in items {
-		acc = invoke_closure(closure, [acc, item], mut env)!
+		argbuf[0] = acc
+		argbuf[1] = item
+		acc = invoke_closure(closure, argbuf, mut env)!
 	}
 	return acc
 }
@@ -12901,6 +13021,7 @@ fn eval_fn(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	params, body := extract_params_and_body(d)!
 	env.anon_counter++
 	id := '__anon_${env.anon_counter}__'
+	env.cow_closures()
 	env.closures[id] = Closure{
 		params:            params
 		body:              [body]
@@ -12974,6 +13095,7 @@ fn eval_def(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	body_prog := cx.parse_program(def.body) or {
 		return EvalError{ code: 'cx-err:CXER0100', message: '[?def] body parse: ${err.msg()}' }
 	}
+	env.cow_closures()
 	env.closures[def.name] = Closure{
 		params:            def_param_names(def)
 		is_variadic:       def_is_variadic(def)
@@ -13095,6 +13217,43 @@ fn invoke_closure(c Closure, args []cx.Node, mut enclosing MatchEnv) !cx.Node {
 // param_specs (named / default / rest). Closures without
 // param_specs ([?fn] lambdas) use the simple positional / variadic path
 // and reject any named args.
+const frame_pool_cap = 256
+
+// borrow_frame_map returns a cleared binding map for a closure call frame — reused from
+// the per-thread pool when available, else freshly allocated (#36). See FramePool.
+@[inline]
+fn borrow_frame_map(p &FramePool) map[string]cx.Node {
+	if p != unsafe { nil } {
+		mut mp := unsafe { p }
+		if mp.free.len > 0 {
+			return mp.free.pop()
+		}
+	}
+	return map[string]cx.Node{}
+}
+
+// return_frame_map hands a finished call frame's binding map back to the per-thread pool
+// for reuse (#36). Sound because no live alias of the frame outlives the call (captures
+// snapshot/clone). Under -d cx_frame_poison it instead CLEARS without pooling, turning
+// any escaped live alias into an empty frame whose missing bindings break the test suite
+// — the escape-safety detector.
+@[inline]
+fn return_frame_map(p &FramePool, mut m map[string]cx.Node) {
+	$if cx_frame_poison ? {
+		m.clear() // escape detector: an aliased frame now reads empty; do not reuse
+		return
+	}
+	if p == unsafe { nil } {
+		return
+	}
+	mut mp := unsafe { p }
+	if mp.free.len >= frame_pool_cap {
+		return
+	}
+	m.clear()
+	mp.free << m
+}
+
 fn invoke_closure_l(c Closure, args []cx.Node, labels []string, mut enclosing MatchEnv) !cx.Node {
 	if c.partial_target.len > 0 {
 		// apply a partial: fill the template's holes
@@ -13163,23 +13322,34 @@ fn invoke_closure_l(c Closure, args []cx.Node, labels []string, mut enclosing Ma
 	// directive dereferenced a nil state pointer and SIGSEGV'd
 	// (prerequisite — historical par-map / par-reduce
 	// + sleep crash).
+	// Borrow the call-frame binding map from the per-thread pool (#36); returned on exit
+	// via defer below. `borrowed` is tracked separately from call_env.bindings so that
+	// if the body reassigns call_env.bindings to a foreign map, we still pool only the
+	// map we took (never a map aliased elsewhere).
+	mut borrowed := borrow_frame_map(enclosing.frame_pool)
+	defer {
+		return_frame_map(enclosing.frame_pool, mut borrowed)
+	}
 	mut call_env := MatchEnv{
-		bindings:    map[string]cx.Node{}
-		closures:    map[string]Closure{}
-		state:       enclosing.state
-		anon_counter: enclosing.anon_counter
+		bindings:    borrowed
+		// Alias (don't copy) the program-global closures table; cow_closures()
+		// clones it before any local registration. Skip the dyn_context clone
+		// when empty (the common case). Together these remove the per-call
+		// environment rebuild that dominated GC pressure (B17).
+		closures:        enclosing.closures
+		closures_shared: true
+		state:           enclosing.state
+		anon_counter:    enclosing.anon_counter
 		// The active [?with-scope] dynamic context (§8.10.8) reaches
 		// transitively into called functions; propagate it so a callee
 		// (e.g. [$log:current-scope]) reads the caller's scope. Mirrors
 		// bind_specs_and_eval's propagation for the param-spec path.
-		dyn_context:      enclosing.dyn_context.clone()
+		dyn_context:      if enclosing.dyn_context.len > 0 { enclosing.dyn_context.clone() } else { enclosing.dyn_context }
 		in_function_body: true
+		frame_pool:       enclosing.frame_pool // propagate within this thread's call chain
 	}
 	for k, v in c.captured_bindings {
 		call_env.bindings[k] = v
-	}
-	for k, v in enclosing.closures {
-		call_env.closures[k] = v
 	}
 	if c.is_variadic {
 		fixed := c.params.len - 1

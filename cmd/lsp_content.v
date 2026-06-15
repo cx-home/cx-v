@@ -274,6 +274,25 @@ const tt_decorator = 9
 // (slot label `:label`) — the two lex identically but parse differently.
 // Position index 10 in the semanticTokens legend (`enumMember`).
 const tt_atom = 10
+// tt_function — an element / call HEAD name (the `name` in `[name …]` or an
+// explicit `name(args)` call). Position index 11 in the legend (`function`).
+const tt_function = 11
+
+// program_clause_keywords are bareword HEADS that read as control/clause
+// keywords rather than element constructors in the program surface: the
+// bracket-clause arms of `[?if]`/`[?match]`/for-comprehensions. The program
+// parser sees them as ordinary `cx_element` heads (positional clause children),
+// so this name set is what distinguishes `[then …]` (keyword) from `[article …]`
+// (element → function). Kept SMALL to avoid mis-coloring a data element that
+// happens to share the name.
+const program_clause_keywords = {
+	'then':  true
+	'else':  true
+	'case':  true
+	'when':  true
+	'where': true
+	'yield': true
+}
 
 struct SemToken {
 	line     int
@@ -283,107 +302,106 @@ struct SemToken {
 	tm       int
 }
 
-// atom_positions_from_parse walks a parsed program AST and returns a
-// map of packed (line << 20 | col) → tt_atom for every atom literal
-// found. Line and col are 0-based (LSP convention).
+// program_token_overlay walks a parsed program AST and returns a map keyed by
+// 0-based byte OFFSET (the same coordinate as compute_semantic_tokens' cursor
+// `i`, and as cx.Position.offset) → token type, for the ONE thing the flat
+// lexer cannot decide from position alone: an atom literal `:NAME` → tt_atom
+// vs a `:label` slot prefix (they lex identically; only the parser tells them
+// apart). Element / call HEADS are typed structurally by the lexer's head-
+// position rule instead (see compute_semantic_tokens), which needs no successful
+// parse and avoids the head-offset mismatch the AST positions caused.
 //
-// This is the parser-context layer that distinguishes atom literals
-// (`:NAME` in value position → tt_atom) from labeled-slot prefixes
-// (`:label value` in directive/element slot-head position → tt_parameter).
-// The two forms lex identically; only the parser can tell them apart
-fn atom_positions_from_parse(source string) map[int]int {
+// On a buffer that does not parse (normal mid-edit), parse_program errors and
+// the overlay is empty — `:ident` tokens then fall back to tt_parameter.
+fn program_token_overlay(source string) map[int]int {
 	prog := cx.parse_program(source) or { return {} }
 	mut out := map[int]int{}
-	collect_atom_positions(prog.body, mut out)
+	collect_token_roles(prog.body, source, mut out)
 	return out
 }
 
-// collect_atom_positions recursively walks a ProgramNode subtree and
-// records the 0-based LSP position of every atom literal into `out`.
-fn collect_atom_positions(node cx.ProgramNode, mut out map[int]int) {
+// collect_token_roles recursively walks a ProgramNode subtree and records the
+// byte offset → tt_atom of every atom literal.
+fn collect_token_roles(node cx.ProgramNode, source string, mut out map[int]int) {
 	match node {
 		cx.ProgramLiteral {
 			if node.kind == .atom_lit {
-				// pos is 1-based (lexer); convert to 0-based for LSP.
-				lsp_line := node.pos.line - 1
-				lsp_col  := node.pos.col  - 1
-				key := lsp_line << 20 | lsp_col
-				out[key] = tt_atom
+				out[node.pos.offset] = tt_atom
 			}
-			// Recurse into child nodes (sequence / array / map / cx_element / block).
+			// Element / call HEADS are NOT recorded here. cx_element pos points
+			// at the `[` (not the name) and the program parser models the `[= …]`
+			// bind form and `[$call …]` dispatch as elements whose "name" is `=`
+			// / a `$`-glued head — so head offsets land on `=`/`[`/`$`, which the
+			// flat lexer's bareword lookup never hits (verified: 1/40 emitted).
+			// Heads are instead typed STRUCTURALLY by the lexer's head-position
+			// rule (a token immediately after `[`), which is parse-error-robust
+			// and correctly colors `$`-call heads as functions. This overlay now
+			// carries ONLY the one thing position alone cannot decide: an atom
+			// literal `:NAME` vs a `:label` slot prefix.
 			for child in node.items {
-				collect_atom_positions(child, mut out)
+				collect_token_roles(child, source, mut out)
 			}
-			// Recurse into cx_element slots.
 			for slot in node.slots {
-				collect_atom_positions(slot.value, mut out)
+				collect_token_roles(slot.value, source, mut out)
 			}
-			// Recurse into cx_element attrs.
 			for attr in node.attrs {
-				collect_atom_positions(attr.value, mut out)
+				collect_token_roles(attr.value, source, mut out)
 			}
 		}
 		cx.Program {
-			collect_atom_positions(node.body, mut out)
+			collect_token_roles(node.body, source, mut out)
 		}
 		cx.ProgramBinding {
-			// ProgramBinding carries name + path — no child ProgramNode.
+			// name + path — no child ProgramNode; the `$name` span is typed by
+			// the lexer's `$` arm.
 		}
 		cx.ProgramCall {
-			// ProgramCall has name (string) + args ([]ProgramNode).
 			for arg in node.args {
-				collect_atom_positions(arg, mut out)
+				collect_token_roles(arg, source, mut out)
 			}
 		}
 		cx.ProgramDirective {
-			// ProgramDirective: name + slots []ProgramSlot (no body field).
 			for slot in node.slots {
-				collect_atom_positions(slot.value, mut out)
+				collect_token_roles(slot.value, source, mut out)
 			}
 		}
 		cx.ProgramForComp {
-			// ProgramForComp: clauses []ProgramForClause + yield ProgramNode.
 			for clause in node.clauses {
 				if src := clause.source {
-					collect_atom_positions(src, mut out)
+					collect_token_roles(src, source, mut out)
 				}
 				if expr := clause.expr {
-					collect_atom_positions(expr, mut out)
+					collect_token_roles(expr, source, mut out)
 				}
 			}
-			collect_atom_positions(node.yield, mut out)
+			collect_token_roles(node.yield, source, mut out)
 		}
 		cx.ProgramPattern {
-			// ProgramPattern: head + attrs []ProgramPatternAttr + body []ProgramNode.
 			for attr in node.attrs {
 				if val := attr.value {
-					collect_atom_positions(val, mut out)
+					collect_token_roles(val, source, mut out)
 				}
 			}
 			for child in node.body {
-				collect_atom_positions(child, mut out)
+				collect_token_roles(child, source, mut out)
 			}
 		}
 		cx.ProgramPathExpr {
 			// No literal children in path expressions.
 		}
 		cx.ProgramSliceAccess {
-			// slice-postfix: recurse into the underlying
-			// binding and each axis expression.
-			collect_atom_positions(node.binding, mut out)
+			collect_token_roles(node.binding, source, mut out)
 			for ax in node.axes {
-				if v := ax.start { collect_atom_positions(v, mut out) }
-				if v := ax.stop  { collect_atom_positions(v, mut out) }
-				if v := ax.step  { collect_atom_positions(v, mut out) }
+				if v := ax.start { collect_token_roles(v, source, mut out) }
+				if v := ax.stop  { collect_token_roles(v, source, mut out) }
+				if v := ax.step  { collect_token_roles(v, source, mut out) }
 			}
 		}
 		cx.ProgramSliceLiteral {
-			// first-class Slice literal: recurse into
-			// each axis expression.
 			for ax in node.axes {
-				if v := ax.start { collect_atom_positions(v, mut out) }
-				if v := ax.stop  { collect_atom_positions(v, mut out) }
-				if v := ax.step  { collect_atom_positions(v, mut out) }
+				if v := ax.start { collect_token_roles(v, source, mut out) }
+				if v := ax.stop  { collect_token_roles(v, source, mut out) }
+				if v := ax.step  { collect_token_roles(v, source, mut out) }
 			}
 		}
 		cx.ProgramWildcard {
@@ -393,17 +411,26 @@ fn collect_atom_positions(node cx.ProgramNode, mut out map[int]int) {
 }
 
 fn compute_semantic_tokens(source string) []int {
-	// Attempt a parser-driven pass to identify atom literals so they
-	// receive tt_atom instead of tt_parameter. The parser returns an
-	// error on syntactically incomplete buffers (normal while the user
-	// is typing); in that case atom_overrides is empty and every `:ident`
-	// token falls back to tt_parameter — the pre-atom-kind behaviour.
-	atom_overrides := atom_positions_from_parse(source)
+	// Parser-driven overlay: byte offset → token type for the spans only the
+	// parser can classify — atom literals (`:NAME` vs `:label`) and element /
+	// call HEADS (`[name …]`, `name(args)`). The lexer below tokenizes spans
+	// (strings, numbers, `$bindings`, `?directives`, operators — all context-
+	// free) and consults the overlay to type heads / atoms correctly without
+	// re-introducing the old blanket-`variable` masking. On a buffer that does
+	// not parse (mid-edit), the overlay is empty and heads degrade to no token.
+	overlay := program_token_overlay(source)
 
 	mut tokens := []SemToken{}
 	mut line := 0
 	mut col := 0
 	mut i := 0
+	// expect_head tracks HEAD position: the first token after a `[` (modulo
+	// whitespace) is an element / call / clause head. This structural rule —
+	// not a parse — is what colors `[name …]` element heads and `[$call …]`
+	// call heads as functions (distinct from `$binding` references, which sit
+	// elsewhere and stay variables). It is robust to parse errors and to the
+	// program parser's `[= …]` / `[$…]` head-offset conventions.
+	mut expect_head := false
 	for i < source.len {
 		c := source[i]
 		// Newline.
@@ -419,6 +446,48 @@ fn compute_semantic_tokens(source string) []int {
 			i++
 			continue
 		}
+		// Raw text `[# … #]` and block content `[| … |]` are OPAQUE regions:
+		// skip them entirely (emit no tokens). Their interior is CDATA / an
+		// embedded language — tree-sitter colors raw text and injects the inner
+		// language; tokenizing the interior as cx produced garbage (`(`, JS
+		// fragments → spurious function/keyword tokens). Scan to the matching
+		// `#]` / `|]`, tracking line/col so later tokens stay aligned.
+		if c == `[` && i + 1 < source.len && (source[i + 1] == `#` || source[i + 1] == `|`) {
+			cf := source[i + 1]
+			col += 2
+			mut j := i + 2
+			for j < source.len {
+				if source[j] == cf && j + 1 < source.len && source[j + 1] == `]` {
+					col += 2
+					j += 2
+					break
+				}
+				if source[j] == `\n` {
+					line++
+					col = 0
+				} else {
+					col++
+				}
+				j++
+			}
+			i = j
+			expect_head = false
+			continue
+		}
+		// `[` opens a form — the next non-whitespace token is its HEAD.
+		// (Whitespace/newlines above preserve expect_head; every other token
+		// branch below consumes the head slot via the `is_head` capture.)
+		if c == `[` {
+			expect_head = true
+			col++
+			i++
+			continue
+		}
+		// Capture-and-consume the head slot for this token. Any non-`[`,
+		// non-whitespace byte (`]`, `{`, `(`, `,`, a scalar, a sigil, …) ends
+		// the head expectation; only the `$` and bareword arms act on is_head.
+		is_head := expect_head
+		expect_head = false
 		// Line comment `#` — but only when not part of `#id` decorator
 		// (which we treat below). A bare `#` followed by a space is a
 		// comment; `#` followed by an identifier char is a decorator.
@@ -434,19 +503,43 @@ fn compute_semantic_tokens(source string) []int {
 			i = j
 			continue
 		}
-		// String literal — `"…"` with escapes.
+		// String literal — `"…"` with `\\` escapes. May span MULTIPLE lines
+		// (cx admits multi-line double-quoted strings; real code embeds whole
+		// JS/CSS bodies as `[?const APPJS "…"]`). Two things this must get right:
+		// (1) scan across newlines to the closing `"` — the old code broke at the
+		// first `\n`, so a multi-line string's body was then tokenized as cx code
+		// → mass garbage; (2) LSP semantic tokens cannot span lines, so emit ONE
+		// string token PER LINE the string covers.
 		if c == `"` {
-			start := col
-			start_line := line
 			mut j := i + 1
+			mut seg_col := col          // start col of the current line's segment
+			mut cur_line := line
+			mut cur_col := col + 1      // col just past the opening `"`
 			for j < source.len && source[j] != `"` {
-				if source[j] == `\\` && j + 1 < source.len { j += 2 } else { j++ }
-				if source[j - 1] == `\n` { /* span breaks anyway */ break }
+				if source[j] == `\n` {
+					tokens << SemToken{line: cur_line, col: seg_col, length: cur_col - seg_col, tt: tt_string, tm: 0}
+					cur_line++
+					cur_col = 0
+					seg_col = 0
+					j++
+					continue
+				}
+				if source[j] == `\\` && j + 1 < source.len && source[j + 1] != `\n` {
+					cur_col += 2
+					j += 2
+					continue
+				}
+				cur_col++
+				j++
 			}
-			if j < source.len { j++ }
-			length := j - i
-			tokens << SemToken{line: start_line, col: start, length: length, tt: tt_string, tm: 0}
-			col += length
+			if j < source.len {
+				// closing quote
+				cur_col++
+				j++
+			}
+			tokens << SemToken{line: cur_line, col: seg_col, length: cur_col - seg_col, tt: tt_string, tm: 0}
+			line = cur_line
+			col = cur_col
 			i = j
 			continue
 		}
@@ -476,20 +569,19 @@ fn compute_semantic_tokens(source string) []int {
 			i = j
 			continue
 		}
-		// `:slot` or `:atom` — classified via parser overlay.
+		// `:slot` or `:atom` — classified via the parser overlay.
 		//
 		// Both atom literals and labeled-slot prefixes start with `:ident`
-		// at the lexer level. The atom_overrides map (built by
-		// atom_positions_from_parse above) records every position where
-		// the parser confirms an atom literal; those get tt_atom. All
-		// other `:ident` tokens remain tt_parameter (slot label).
+		// at the lexer level. The overlay map (built by program_token_overlay
+		// above, keyed by byte offset) records every position where the parser
+		// confirms an atom literal; those get tt_atom. All other `:ident`
+		// tokens remain tt_parameter (slot label).
 		if c == `:` && i + 1 < source.len && is_lsp_word_char(source[i + 1]) {
 			start := col
 			mut j := i + 1
 			for j < source.len && is_lsp_word_char(source[j]) { j++ }
 			length := j - i
-			key := line << 20 | start
-			tt := if key in atom_overrides { tt_atom } else { tt_parameter }
+			tt := if i in overlay { overlay[i] } else { tt_parameter }
 			tokens << SemToken{line: line, col: start, length: length, tt: tt, tm: 0}
 			col += length
 			i = j
@@ -508,33 +600,63 @@ fn compute_semantic_tokens(source string) []int {
 				continue
 			}
 		}
-		// `module:name` — namespace + word. Detect the `:` boundary.
-		if is_ident_start(c) {
+		// `$binding` / `$module:name`. In HEAD position (`[$call …]`) the `$`
+		// head is a CALL — the name is tt_function so calls stand out from the
+		// `$binding` REFERENCES that fill argument position (tt_variable). The
+		// leading `$` is PART of the token (so the sigil and name render as one,
+		// not a two-tone split).
+		if c == `$` && i + 1 < source.len && is_lsp_word_char(source[i + 1]) {
 			start := col
-			mut j := i
+			name_tt := if is_head { tt_function } else { tt_variable }
+			mut j := i + 1
 			for j < source.len && is_lsp_word_char(source[j]) && source[j] != `:` { j++ }
-			// `module:name` form?
+			// `$module:name` → namespace (incl. `$`) + name (function head / variable).
 			if j < source.len && source[j] == `:` && j + 1 < source.len && is_lsp_word_char(source[j + 1]) {
-				ns_len := j - i
+				ns_len := j - i // includes the leading `$`
 				tokens << SemToken{line: line, col: start, length: ns_len, tt: tt_namespace, tm: 0}
 				j++
 				name_start := j
 				for j < source.len && is_lsp_word_char(source[j]) && source[j] != `:` { j++ }
-				tokens << SemToken{line: line, col: start + ns_len + 1, length: j - name_start, tt: tt_variable, tm: 0}
-				length := j - i
-				col += length
+				tokens << SemToken{line: line, col: start + ns_len + 1, length: j - name_start, tt: name_tt, tm: 0}
+				col += j - i
 				i = j
 				continue
 			}
+			length := j - i // includes the leading `$`
+			tokens << SemToken{line: line, col: start, length: length, tt: name_tt, tm: 0}
+			col += length
+			i = j
+			continue
+		}
+		// Bareword (optionally namespaced `module:name`): in HEAD position it is
+		// an element / call head → tt_function, or a clause keyword (`then` /
+		// `else` / `case` / …) → tt_keyword. ANYWHERE ELSE it is prose / a value
+		// reference / an attribute name — emit NOTHING and defer to the grammar
+		// layer (emitting a blanket `variable` here is what masked the grammar
+		// before). The whole word, INCLUDING any `module:name` continuation, is
+		// consumed so the trailing `:name` is not re-lexed as a `:slot`/`:atom`.
+		if is_ident_start(c) {
+			mut j := i
+			for j < source.len && is_lsp_word_char(source[j]) && source[j] != `:` { j++ }
+			word := source[i..j]
+			// Consume a `:name` namespace continuation as part of the word.
+			if j < source.len && source[j] == `:` && j + 1 < source.len && is_lsp_word_char(source[j + 1]) {
+				j++
+				for j < source.len && is_lsp_word_char(source[j]) && source[j] != `:` { j++ }
+			}
 			length := j - i
 			if length > 0 {
-				tokens << SemToken{line: line, col: start, length: length, tt: tt_variable, tm: 0}
+				if is_head {
+					tt := if word in program_clause_keywords { tt_keyword } else { tt_function }
+					tokens << SemToken{line: line, col: col, length: length, tt: tt, tm: 0}
+				}
 				col += length
 				i = j
 				continue
 			}
 		}
-		// Operators `|>`, `=>`, `||`, `->`, `!`, `to`.
+		// Operators `|>`, `=>`, `||`, `->`, `!`, and the bare `=` head (the
+		// `[= …]` bind form and `name=value` attribute separator).
 		if c == `|` || c == `=` || c == `-` || c == `!` {
 			if (c == `|` && i + 1 < source.len && (source[i + 1] == `>` || source[i + 1] == `|`))
 				|| (c == `=` && i + 1 < source.len && source[i + 1] == `>`)
@@ -544,7 +666,7 @@ fn compute_semantic_tokens(source string) []int {
 				i += 2
 				continue
 			}
-			if c == `!` {
+			if c == `!` || c == `=` {
 				tokens << SemToken{line: line, col: col, length: 1, tt: tt_operator, tm: 0}
 				col++
 				i++

@@ -4,7 +4,31 @@ import os
 import cx
 import code
 
-const version = '0.8.0'
+// Build-stamped version info. The values are injected at build time via V
+// compile-time string defines (`-d cx_version=… -d cx_commit=…`), wired in
+// vcx/Makefile from `git describe` + the date + the active GC + the V-fork hash.
+// Defaults apply when built outside the Makefile (e.g. a bare `v run cmd/`).
+const version = $d('cx_version', '0.9.0-dev')
+const cx_commit = $d('cx_commit', 'unknown')
+const cx_build_date = $d('cx_build_date', 'unknown')
+const cx_gc = $d('cx_gc', 'unknown')
+const cx_vfork = $d('cx_vfork', 'unknown')
+
+// print_version emits expanded build/version info (commit, build time, GC model,
+// V-fork gitlink) — `cx --version` / `cx -v`.
+fn print_version() {
+	gc_desc := match cx_gc {
+		'e' { 'e — Perceus RC front line + precise STW vgc backstop' }
+		'vgc' { 'vgc — precise STW tracing collector' }
+		'boehm' { 'boehm — conservative tracing collector' }
+		else { cx_gc }
+	}
+	println('cx ${version}')
+	println('  commit   ${cx_commit}')
+	println('  built    ${cx_build_date}')
+	println('  gc       ${gc_desc}')
+	println('  V fork   ${cx_vfork}')
+}
 
 fn main() {
 	args := os.args[1..]
@@ -17,7 +41,7 @@ fn main() {
 
 	if args.len > 0 {
 		if args[0] == '-v' || args[0] == '--version' {
-			println('cx ${version}')
+			print_version()
 			exit(0)
 		}
 		if args[0] == '-h' || args[0] == '--help' {

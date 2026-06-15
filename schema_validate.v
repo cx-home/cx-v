@@ -815,20 +815,27 @@ fn validate_container_body(e Element, body BodyRule, mut diags []Diagnostic) {
 // non-collection body. Comment / PI / directive nodes are skipped so
 // `[ports [- comment -] [80, 443]]` still resolves to the ArrayNode.
 fn single_collection_node(e Element) ?Node {
-	mut found := ?Node(none)
-	for n in e.items {
+	// Index-based, NOT a `mut found ?Node` accumulator: under the newer V a
+	// sum-type-option local mis-codegens both `found != none` (reads `.state` off
+	// the payload) and `found = n` (Node→?Node assignment doesn't auto-wrap). We
+	// track the index and auto-wrap only at the `return` (which is unaffected).
+	mut found_idx := -1
+	for idx, n in e.items {
 		if n is CommentNode || n is PINode || n is XMLDeclNode
 			|| n is CXDirectiveNode || n is RawTextNode { continue }
 		if n is ArrayNode || n is SequenceNode || n is MapNode {
-			if found != none { return none }
-			found = n
+			if found_idx >= 0 { return none }
+			found_idx = idx
 			continue
 		}
 		// Any other node (Element, TextNode, ScalarNode, …) means the
 		// body isn't a single collection literal.
 		return none
 	}
-	return found
+	if found_idx >= 0 {
+		return e.items[found_idx]
+	}
+	return none
 }
 
 fn collection_kind_name(n Node) string {

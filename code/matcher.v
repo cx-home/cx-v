@@ -38,6 +38,13 @@ pub struct MatchEnv {
 pub mut:
 	bindings    map[string]cx.Node
 	closures    map[string]Closure
+	// closures_shared: when true, `closures` is ALIASED from the enclosing call
+	// frame (not a private copy) — set on closure-call envs to avoid copying the
+	// whole program-global closures table per invocation (the dominant GC-pressure
+	// source on fold/map hot paths; see bench/parallel-alloc/B17-FINDINGS.md). The
+	// alias is read-only; any registration site MUST call cow_closures() first to
+	// clone-on-write, preserving frame-local closure scoping.
+	closures_shared bool
 	state       &ProgramState = unsafe { nil }
 	anon_counter int
 	// dyn_context is the active dynamic-scoped context established by
@@ -58,6 +65,24 @@ pub mut:
 	// (definitions are top/module-level only, §12.2). Top-level program
 	// eval leaves it false.
 	in_function_body bool
+	// frame_pool is a per-thread free-list of closure call-frame binding maps (#36).
+	// Allocating a fresh map[string]cx.Node per closure invocation dominated post-B18
+	// alloc pressure (~32M maps on the #14 reduce). Pooling is sound because every path
+	// that retains a frame's bindings beyond the call COPIES it (snapshot_bindings /
+	// .clone() — audited), so no live alias of a returned map exists. The pool is set
+	// FRESH per thread (new_env + each spawned worker) and propagated only within a
+	// single thread's call chain (invoke_closure_l), so the free-list is never shared
+	// across threads — no lock needed. nil = pooling disabled (safe fallback to fresh
+	// alloc). Build with -d cx_frame_poison to turn pooling into an escape detector.
+	frame_pool &FramePool = unsafe { nil }
+}
+
+// FramePool: per-thread free-list of reusable closure call-frame binding maps. See the
+// frame_pool field on MatchEnv. Never shared across threads (set fresh per worker), so
+// the free-list needs no synchronization.
+struct FramePool {
+mut:
+	free []map[string]cx.Node
 }
 
 // ProgramState carries the mutable, program-global state that the
@@ -508,6 +533,7 @@ pub fn new_env() MatchEnv {
 		closures:    map[string]Closure{}
 		state:       state
 		anon_counter: 0
+		frame_pool:  &FramePool{} // fresh per-thread frame pool (#36); main-thread root
 	}
 }
 
@@ -516,6 +542,17 @@ pub fn new_env() MatchEnv {
 // clock, and test-helper counters thus remain consistent across
 // speculative-match snapshots, closure-call frames, and generator
 // iterations.
+// cow_closures realizes a private copy of an aliased closures table before a
+// write. No-op when the table is already owned (closures_shared == false), so
+// the common case (frames that never register a closure) pays nothing. Must be
+// called by every site that mutates env.closures.
+fn (mut e MatchEnv) cow_closures() {
+	if e.closures_shared {
+		e.closures = e.closures.clone()
+		e.closures_shared = false
+	}
+}
+
 fn (e MatchEnv) clone() MatchEnv {
 	mut copy := MatchEnv{
 		bindings: map[string]cx.Node{}

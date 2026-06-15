@@ -564,6 +564,7 @@ fn semantic_tokens_legend() json2.Any {
 		json2.Any('operator'),     // 8  — |>, =>, ||, ->, !, to
 		json2.Any('decorator'),    // 9  — #id, &anchor, *merge
 		json2.Any('enumMember'),   // 10 — atom literal :NAME (tt_atom)
+		json2.Any('function'),     // 11 — element / call head name (tt_function)
 	]
 	legend['tokenTypes'] = json2.Any(token_types)
 	legend['tokenModifiers'] = json2.Any([]json2.Any{})

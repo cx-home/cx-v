@@ -127,11 +127,14 @@ pub fn value_seq(vs []Value) Value {
 // derived by copying the outer map and overwriting `$_` / `$_position`
 // / `$_last`. At Phase 2.21 only the outermost frame is built.
 pub struct BindingScope {
+pub:
+	context_item ?&Item // value of `$_` at this scope level (set once at construction,
+	// read-only after — immutable so it can hold an immutable `&Item` borrow; the
+	// newer V checker rejects storing an immutable ref into a `mut` ref field)
 pub mut:
-	context_item     ?&Item             // value of `$_` at this scope level
-	position         int                // value of `$_position` (1-based)
-	last             int                // value of `$_last` (sequence length)
-	bindings         map[string]Value   // every named binding visible in the body
+	position int                       // value of `$_position` (1-based)
+	last     int                       // value of `$_last` (sequence length)
+	bindings map[string]Value          // every named binding visible in the body
 }
 
 // ── PredicateEvalContext ──────────────────────────────────────────────────────────────

@@ -62,6 +62,7 @@ fn par_map_worker(closure Closure, item cx.Node, idx int, state_ptr &ProgramStat
 		closures:     enclosing_closures.clone()
 		state:        unsafe { state_ptr }
 		anon_counter: 0
+		frame_pool:   &FramePool{} // fresh per-worker frame pool (#36); thread-local, no sharing
 	}
 	val := invoke_closure(closure, [item], mut env) or {
 		if err is EvalError {
@@ -218,6 +219,141 @@ fn par_reduce(closure Closure, items []cx.Node, init cx.Node, mut env MatchEnv) 
 	return acc
 }
 
+// par_reduce_range folds a bounded integer range in parallel WITHOUT
+// materialising it. The index domain [0,count) is split into K contiguous
+// chunks; each worker streams its sub-range (generate→fold→drop, O(1) live
+// set) seeded with `init`, and the K partials combine sequentially on the
+// caller. Same §8.10.6 associativity contract as par_reduce (`init` =
+// identity, `closure` associative — not validated at runtime). This is the
+// `:par` arm of the streaming reduce-over-range fast-path (lever 1): a
+// parallel reduce over a multi-million range never materialises the range,
+// unlike the items-array path par_reduce takes.
+fn par_reduce_range(closure Closure, start i64, end i64, step i64, init cx.Node, mut env MatchEnv) !cx.Node {
+	mut count := i64(0)
+	if step > 0 {
+		if end >= start {
+			count = (end - start) / step + 1
+		}
+	} else {
+		if end <= start {
+			count = (start - end) / (-step) + 1
+		}
+	}
+	if count <= 0 {
+		return init
+	}
+	// Wasm-async fallback (no pthreads — see par_map): sequential streaming
+	// left-fold. Correct for associative `:using` per §8.10.6.
+	$if wasm32_emcc ? {
+		mut acc := init
+		mut argbuf := [init, init]
+		mut i := start
+		for _ in 0 .. count {
+			argbuf[0] = acc
+			argbuf[1] = cx.Node(cx.ScalarNode{
+				value:     cx.ScalarValue(i)
+				data_type: cx.ScalarType.int_type
+			})
+			acc = invoke_closure(closure, argbuf, mut env)!
+			i += step
+		}
+		return acc
+	}
+	max_workers := 32
+	mut k := if count < i64(max_workers) { int(count) } else { max_workers }
+	if k < 1 {
+		k = 1
+	}
+	chunk := (count + i64(k) - 1) / i64(k) // indices per chunk
+	ch := chan ParResult{cap: k}
+	mut spawned := 0
+	for ci := 0; i64(ci) * chunk < count; ci++ {
+		idx_start := i64(ci) * chunk
+		mut idx_end := idx_start + chunk
+		if idx_end > count {
+			idx_end = count
+		}
+		c_start := start + idx_start * step
+		c_n := idx_end - idx_start
+		spawn par_reduce_range_worker(closure, c_start, step, c_n, init, ci, env.state,
+			env.bindings, env.closures, ch)
+		spawned++
+	}
+	mut received := []ParResult{cap: spawned}
+	for _ in 0 .. spawned {
+		received << <-ch
+	}
+	mut first_err_idx := -1
+	for r in received {
+		if r.err_message != '' && (first_err_idx < 0 || r.idx < first_err_idx) {
+			first_err_idx = r.idx
+		}
+	}
+	if first_err_idx >= 0 {
+		for r in received {
+			if r.idx == first_err_idx {
+				return EvalError{ code: r.err_code, message: r.err_message }
+			}
+		}
+	}
+	mut partials := []cx.Node{len: spawned, init: cx.Node(cx.Element{ name: '' })}
+	for r in received {
+		partials[r.idx] = r.value
+	}
+	mut acc := init
+	for p in partials {
+		acc = invoke_closure(closure, [acc, p], mut env)!
+	}
+	return acc
+}
+
+// par_reduce_range_worker streams a contiguous integer sub-range
+// [c_start, c_start + (c_n-1)*step] (c_n elements) into a left-fold seeded
+// with `init`, posting the partial to `ch`. Mirrors par_reduce_chunk_worker
+// but generates its inputs instead of receiving a materialised chunk.
+fn par_reduce_range_worker(closure Closure, c_start i64, step i64, c_n i64, init cx.Node, idx int,
+	state_ptr &ProgramState, enclosing_bindings map[string]cx.Node,
+	enclosing_closures map[string]Closure, ch chan ParResult) {
+	mut env := MatchEnv{
+		bindings:     enclosing_bindings.clone()
+		closures:     enclosing_closures.clone()
+		state:        unsafe { state_ptr }
+		anon_counter: 0
+		frame_pool:   &FramePool{} // fresh per-worker frame pool (#36); thread-local, no sharing
+	}
+	mut acc := init
+	mut argbuf := [init, init]
+	mut i := c_start
+	for _ in 0 .. c_n {
+		argbuf[0] = acc
+		argbuf[1] = cx.Node(cx.ScalarNode{
+			value:     cx.ScalarValue(i)
+			data_type: cx.ScalarType.int_type
+		})
+		acc = invoke_closure(closure, argbuf, mut env) or {
+			if err is EvalError {
+				ch <- ParResult{
+					idx:         idx
+					err_code:    err.code
+					err_message: err.message
+				}
+			} else {
+				ch <- ParResult{
+					idx:         idx
+					err_code:    'cx-err:CXER0001'
+					err_message: err.msg()
+				}
+			}
+			return
+		}
+		i += step
+	}
+	ch <- ParResult{
+		idx:   idx
+		value: acc
+	}
+}
+
 // eval_map_directive_streamed mirrors `eval_map_directive` but emits
 // each result into the streaming context as it materializes. Used by
 // `eval_code_streaming_opts` when the top-level program is a `[?map]`
@@ -365,6 +501,7 @@ fn par_reduce_chunk_worker(closure Closure, chunk []cx.Node, init cx.Node, idx i
 		closures:     enclosing_closures.clone()
 		state:        unsafe { state_ptr }
 		anon_counter: 0
+		frame_pool:   &FramePool{} // fresh per-worker frame pool (#36); thread-local, no sharing
 	}
 	mut acc := init
 	for item in chunk {

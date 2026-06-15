@@ -357,7 +357,7 @@ fn bytes_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		'bytes-gzip-compress' {
 			if args.len != 1 { return none }
 			b := arg_bytes(args[0]) or { return none }
-			out := gzip.compress(b, compression_level: 6) or {
+			out := gzip.compress(b) or {
 				return mk_err(bytes_err_decompress,
 					'bytes/gzip-compress: compression failed')
 			}
