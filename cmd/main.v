@@ -6,9 +6,11 @@ import code
 
 // Build-stamped version info. The values are injected at build time via V
 // compile-time string defines (`-d cx_version=… -d cx_commit=…`), wired in
-// vcx/Makefile from `git describe` + the date + the active GC + the V-fork hash.
-// Defaults apply when built outside the Makefile (e.g. a bare `v run cmd/`).
-const version = $d('cx_version', '0.9.0-dev')
+// vcx/Makefile. `cx_version` derives from the repo-root VERSION file (the single
+// source of truth); commit/date/gc/vfork come from git + the build. Defaults
+// apply only outside the Makefile (e.g. a bare `v run cmd/`) — a non-stamped
+// dev build, hence the obviously-unreleased `0.0.0-dev`.
+const version = $d('cx_version', '0.0.0-dev')
 const cx_commit = $d('cx_commit', 'unknown')
 const cx_build_date = $d('cx_build_date', 'unknown')
 const cx_gc = $d('cx_gc', 'unknown')
@@ -23,7 +25,7 @@ fn print_version() {
 		'boehm' { 'boehm — conservative tracing collector' }
 		else { cx_gc }
 	}
-	println('cx ${version}')
+	println('cx v${version}')
 	println('  commit   ${cx_commit}')
 	println('  built    ${cx_build_date}')
 	println('  gc       ${gc_desc}')

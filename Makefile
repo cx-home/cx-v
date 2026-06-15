@@ -40,9 +40,14 @@ MODSETUP = mkdir -p _modules && ln -sfn $$(pwd) _modules/cx && ln -sfn $$(pwd)/c
 # files carry benign unused-import warnings (same class as cx-home/cx-private#13);
 # `-prod` with a stock-V Boehm GC can also segfault on macOS. The CLI is a thin
 # dispatch layer over the (in cx-home/cx, -prod) libcx, so -O2 C opt suffices.
+# CX_VERSION derives from the shipped VERSION file (single source of truth, same
+# as the main repo) so cx-v's `cx --version` / C-ABI report the real release
+# version rather than the dev fallback.
+CX_VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0-dev)
+
 install: re2-shim
 	@mkdir -p $(PREFIX) && $(MODSETUP)
-	@VMODULES=$$(pwd)/_modules $(V) -cflags "-O2" -o $(PREFIX)/cx cmd/; STATUS=$$?; rm -rf _modules; \
+	@VMODULES=$$(pwd)/_modules $(V) -cflags "-O2" -d cx_version=$(CX_VERSION) -o $(PREFIX)/cx cmd/; STATUS=$$?; rm -rf _modules; \
 	  [ $$STATUS -eq 0 ] && echo "installed: $(PREFIX)/cx — make sure $(PREFIX) is on your PATH"; exit $$STATUS
 
 uninstall:
