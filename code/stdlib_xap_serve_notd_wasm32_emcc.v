@@ -22,7 +22,7 @@ module code
 import cx
 import os
 import time
-import picoev
+import transport.picoev
 import sync
 
 // ── §24: SSE subscriber registry (held-open event feeds per runtime) ─────────

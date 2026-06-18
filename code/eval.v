@@ -252,6 +252,10 @@ fn prepare_top_level_consts(items []cx.ProgramNode, mut env MatchEnv) ! {
 			return EvalError{ code: 'cx-err:CXER0215', message: 'cx-err:CXER0215 E_CONST_BODY_FAILED: const `${cname}`: ${err.msg()}' }
 		}
 		env.bindings[cname] = cval
+		// Mirror into the program scope so [?def] bodies resolve the const (#22).
+		if env.scope != unsafe { nil } {
+			env.scope.bindings[cname] = cval
+		}
 	}
 }
 
@@ -2952,11 +2956,9 @@ fn eval_call(c cx.ProgramCall, mut env MatchEnv) !cx.Node {
 		result = invoke_closure_l(closure, args, c.arg_labels, mut env)!
 		dispatched = true
 	} else if bval := env.bindings[c.name] {
-		if id := closure_id_of(bval) {
-			if cl := env.closures[id] {
-				result = invoke_closure_l(cl, args, c.arg_labels, mut env)!
-				dispatched = true
-			}
+		if cl := resolve_closure(bval, env) {
+			result = invoke_closure_l(cl, args, c.arg_labels, mut env)!
+			dispatched = true
 		}
 	}
 	if !dispatched {
@@ -3101,11 +3103,9 @@ fn dispatch_call_l(name string, args []cx.Node, labels []string, mut env MatchEn
 		return val
 	}
 	if val := env.bindings[name] {
-		if id := closure_id_of(val) {
-			if closure := env.closures[id] {
-				ret := invoke_closure_l(closure, args, labels, mut env) or { return none }
-				return ret
-			}
+		if closure := resolve_closure(val, env) {
+			ret := invoke_closure_l(closure, args, labels, mut env) or { return none }
+			return ret
 		}
 		// un-sigiled variable reference. A bare name with no
 		// call arguments that resolves to a bound value (a [?def] / [?fn]
@@ -3237,12 +3237,15 @@ fn is_hole_marker(n cx.Node) bool {
 // is not a function.
 fn resolve_fn_value(name string, mut env MatchEnv) ?cx.Node {
 	if val := env.bindings[name] {
-		if closure_id_of(val) != none {
+		if is_fn_value(val) {
 			return val
 		}
 		return none
 	}
 	if name in env.closures {
+		return mk_closure_sentinel(name)
+	}
+	if env.scope != unsafe { nil } && name in env.scope.closures {
 		return mk_closure_sentinel(name)
 	}
 	if builtin_fn_name(name) {
@@ -3253,15 +3256,31 @@ fn resolve_fn_value(name string, mut env MatchEnv) ?cx.Node {
 	return none
 }
 
+// lookup_closure resolves a closure id to its Closure, checking the current
+// env's closures THEN the program scope (a function VALUE passed across a module
+// boundary lives in the defining/program scope, not the lib member's scope —
+// #19 higher-order). Returns none if neither has it.
+fn lookup_closure(id string, env MatchEnv) ?Closure {
+	if cl := env.closures[id] {
+		return cl
+	}
+	if env.scope != unsafe { nil } {
+		if cl := env.scope.closures[id] {
+			return cl
+		}
+	}
+	return none
+}
+
 // apply_fn_value applies a function VALUE (closure sentinel — including
 // builtin-wrapping and partial closures) to args. The single uniform
 // "call a function value" entry point.
 fn apply_fn_value(fv cx.Node, args []cx.Node, mut env MatchEnv) !cx.Node {
-	id := closure_id_of(fv) or {
+	cl := resolve_closure(fv, env) or {
+		if is_fn_value(fv) {
+			return EvalError{ code: 'cx-err:CXER0001', message: 'function value not found' }
+		}
 		return EvalError{ code: 'cx-err:CXER0001', message: 'value is not a function' }
-	}
-	cl := env.closures[id] or {
-		return EvalError{ code: 'cx-err:CXER0001', message: 'function value not found' }
 	}
 	return invoke_closure(cl, args, mut env)!
 }
@@ -3280,21 +3299,19 @@ fn build_partial_value(c cx.ProgramCall, mut env MatchEnv) !cx.Node {
 	// a `_` hole may only occupy a fixed positional
 	// parameter, not a `:rest` tail. Validate against the target's
 	// param_specs (when known) and raise CXER0261 otherwise.
-	if id := closure_id_of(target) {
-		if cl := env.closures[id] {
-			if cl.param_specs.len > 0 {
-				mut fixed_pos := 0
-				for sp in cl.param_specs {
-					if !sp.is_named && !sp.is_rest {
-						fixed_pos++
-					}
+	if cl := resolve_closure(target, env) {
+		if cl.param_specs.len > 0 {
+			mut fixed_pos := 0
+			for sp in cl.param_specs {
+				if !sp.is_named && !sp.is_rest {
+					fixed_pos++
 				}
-				for i, a in c.args {
-					if a is cx.ProgramCall && a.name == cx.program_hole_name && i >= fixed_pos {
-						return EvalError{
-							code:    'cx-err:CXER0261'
-							message: 'partial-application hole `_` cannot occupy a :rest position'
-						}
+			}
+			for i, a in c.args {
+				if a is cx.ProgramCall && a.name == cx.program_hole_name && i >= fixed_pos {
+					return EvalError{
+						code:    'cx-err:CXER0261'
+						message: 'partial-application hole `_` cannot occupy a :rest position'
 					}
 				}
 			}
@@ -3308,14 +3325,13 @@ fn build_partial_value(c cx.ProgramCall, mut env MatchEnv) !cx.Node {
 			template << eval_node(a, mut env)!
 		}
 	}
-	env.anon_counter++
-	id := '__partial_${env.anon_counter}__'
-	env.cow_closures()
-	env.closures[id] = Closure{
+	// The partial rides ON its sentinel value (#45) — like an escaping `[?fn]`,
+	// it has no stable scope-table home — so it travels with the value and needs
+	// no env.closures registration.
+	return mk_closure_value(Closure{
 		partial_target:   [target]
 		partial_template: template
-	}
-	return mk_closure_sentinel(id)
+	})
 }
 
 // bind_specs_and_eval binds a call's arguments against a closure's
@@ -3338,11 +3354,28 @@ fn bind_specs_and_eval(c Closure, args []cx.Node, labels []string, mut enclosing
 	}
 	mut call_env := MatchEnv{
 		bindings:        map[string]cx.Node{}
-		closures:        enclosing.closures // aliased; cow_closures() before any write (B17)
+		// Uniform lexical scoping (#19/#22): free names resolve in the closure's
+		// DEFINING scope, not the caller's. See invoke_closure_l.
+		closures:        if c.defining_scope != unsafe { nil } {
+			c.defining_scope.closures
+		} else {
+			enclosing.closures // aliased; cow_closures() before any write (B17)
+		}
 		closures_shared: true
 		state:           enclosing.state
 		anon_counter:    enclosing.anon_counter
 		dyn_context:     if enclosing.dyn_context.len > 0 { enclosing.dyn_context.clone() } else { enclosing.dyn_context }
+		scope:           enclosing.scope
+		// An in-body `[?fn]` captures this executing closure's defining_scope as its
+		// own (eval_fn), and `[?def]` nested in a body is rejected (CXER0204) — both
+		// require in_function_body=true here (the param-spec path; #45 Bug-2).
+		in_function_body:   true
+		cur_defining_scope: c.defining_scope
+	}
+	if c.defining_scope != unsafe { nil } {
+		for k, v in c.defining_scope.bindings {
+			call_env.bindings[k] = v
+		}
 	}
 	for k, v in c.captured_bindings {
 		call_env.bindings[k] = v
@@ -3733,7 +3766,7 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 			// (N-GEN-4: non-callable -> CXER0100); the closure applies per
 			// pull in the for-comp walker. Forcing whole -> CXER0100 (§1.5).
 			if args.len != 2 { return none }
-			closure_id_of(args[0]) or {
+			if !is_fn_value(args[0]) {
 				return mk_err('cx-err:CXER0100', 'iterate: f must be callable')
 			}
 			return cx.new_iterator(.iter_iterate, [args[0], args[1]])
@@ -3744,7 +3777,7 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 			// realizable (eval finalize / the for-comp walker run it, budget-
 			// backstopped). Validate f callable up front (N-GEN-4).
 			if args.len != 2 { return none }
-			closure_id_of(args[0]) or {
+			if !is_fn_value(args[0]) {
 				return mk_err('cx-err:CXER0100', 'unfold: f must be callable')
 			}
 			return cx.new_iterator(.iter_unfold, [args[0], args[1]])
@@ -6954,7 +6987,143 @@ fn eval_lib(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 // call surface was cut over 2026-05-31, no dual-accept). `only` applies the
 // importing `[?lib … :only (…)]` selective-import filter at the top level;
 // transitive imports carry their own (`none`) filter.
+// ensure_module_scope builds (once, cached on the module table) a module's
+// lexical Scope: its OWN defs + consts under bare names (a member body resolves
+// a sibling unqualified, #19), plus the PUBLIC members of the modules IT imports
+// under their local alias prefix (a member body resolving `[$alias:member]`,
+// transitive). Every closure in the scope captures `defining_scope = scope`, so a
+// member resolves its free names here regardless of who calls it (not the
+// caller's table — that was the bug). Read-only after build; shared across
+// importers. The import graph is a DAG (cycles rejected by the loader), so the
+// recursion terminates; caching before recursing makes diamonds idempotent.
+// is_self_builtin_forward reports whether a def body is a pure forward to a
+// SAME-NAMED callable — its head is exactly `[$<name> …]`. Such a def is a thin
+// alias for the builtin `<name>` (core or stdlib): a pure self-forward with no
+// underlying builtin would be unconditional infinite recursion, so treating it
+// as a builtin-wrapper is correct either way — and it must NOT be registered as
+// a body closure that shadows the builtin in its own body (lexical self-recursion
+// → stack overflow). The dispatch resolves the builtin at call time
+// (invoke_builtin / stdlib_builtin), covering builtins `builtin_fn_name` doesn't
+// enumerate (e.g. the stdlib `validate-shape`). Purely syntactic on the raw body.
+fn is_self_builtin_forward(name string, raw_body string) bool {
+	b := raw_body.trim_space()
+	// head must be `[$<name>` followed by a space (args) or `]` (0-arg) — so a
+	// forward to a DIFFERENTLY-named builtin (`round`→`[$math-round …]`) and a
+	// recursive `[?if …]` body do NOT match.
+	prefix := '[\$${name}'
+	if !b.starts_with(prefix) {
+		return false
+	}
+	rest := b[prefix.len..]
+	return rest.starts_with(' ') || rest.starts_with(']')
+}
+
+fn ensure_module_scope(mod &Module, mut env MatchEnv) !&Scope {
+	key := mod.source
+	if s := env.state.module_table.module_scopes[key] {
+		return s
+	}
+	mut s := &Scope{
+		closures: map[string]Closure{}
+		bindings: map[string]cx.Node{}
+	}
+	env.state.module_table.module_scopes[key] = s // cache before recursing (diamonds)
+	// 1. the module's own defs (bare names; private siblings are callable within
+	// the module, so register ALL defs, not just public ones).
+	for name, def in mod.defs {
+		// A def that trivially forwards to a SAME-NAMED builtin — `[?def abs ($x)
+		// [$abs $x]]` — is an ALIAS for that builtin, not a recursive call. Under
+		// lexical scoping the sibling-visible def would otherwise shadow the builtin
+		// in its own body and self-recurse. Register it as a builtin-wrapper so
+		// `[$abs]` (here or in a sibling) dispatches to the builtin. (Defs that
+		// forward to a DIFFERENTLY-named builtin — `round`→`[$math-round]` — do not
+		// collide and stay normal body closures.)
+		if is_self_builtin_forward(name, def.body) {
+			s.closures[name] = Closure{
+				builtin_name:   name
+				defining_scope: s
+			}
+			continue
+		}
+		body_prog := cx.parse_program(def.body) or {
+			return EvalError{
+				code:    'cx-err:CXER0210'
+				message: '[?lib] def `${name}` body parse: ${err.msg()}'
+			}
+		}
+		s.closures[name] = Closure{
+			params:         def_param_names(def)
+			is_variadic:    def_is_variadic(def)
+			param_specs:    def_param_specs(def)
+			body:           [body_prog.body]
+			defining_scope: s
+			returns_type:   def.returns_type_source or { '' }
+		}
+	}
+	// 2. the module's own imports — expose their PUBLIC members under the local
+	// alias prefix so a member body's `[$alias:member]` resolves in this scope.
+	for lib in mod.libs {
+		sub := env.state.module_table.modules[lib.resolver_source] or { continue }
+		sub_scope := ensure_module_scope(sub, mut env)!
+		sub_prefix := module_call_prefix(lib)
+		for name, def in sub.defs {
+			if !scope_is_public(def.scope) {
+				continue
+			}
+			if o := lib.only_imports {
+				if name !in o {
+					continue
+				}
+			}
+			if c := sub_scope.closures[name] {
+				s.closures['${sub_prefix}:${name}'] = c
+			}
+		}
+		for cname in sub.const_order {
+			cst := sub.consts[cname] or { continue }
+			if !scope_is_public(cst.scope) {
+				continue
+			}
+			if o := lib.only_imports {
+				if cname !in o {
+					continue
+				}
+			}
+			if v := sub_scope.bindings[cname] {
+				s.bindings['${sub_prefix}:${cname}'] = v
+			}
+		}
+	}
+	// 3. the module's own consts (bare), evaluated in an env scoped to THIS module
+	// (so a const body resolves module defs + imported members + prior consts),
+	// in topological order.
+	mut cenv := MatchEnv{
+		bindings:        map[string]cx.Node{}
+		closures:        s.closures
+		closures_shared: true
+		state:           env.state
+		scope:           env.scope
+	}
+	for k, v in s.bindings {
+		cenv.bindings[k] = v
+	}
+	for cname in mod.const_order {
+		cst := mod.consts[cname] or { continue }
+		cbody := cx.parse_program(cst.value_source) or {
+			return EvalError{
+				code:    'cx-err:CXER0210'
+				message: '[?lib] const `${cname}` body parse: ${err.msg()}'
+			}
+		}
+		cval := eval_node(cbody.body, mut cenv)!
+		s.bindings[cname] = cval
+		cenv.bindings[cname] = cval
+	}
+	return s
+}
+
 fn register_module_members(mod &Module, prefix string, only ?[]string, mut env MatchEnv) ! {
+	s := ensure_module_scope(mod, mut env)!
 	for name, def in mod.defs {
 		if !scope_is_public(def.scope) {
 			continue
@@ -6964,21 +7133,13 @@ fn register_module_members(mod &Module, prefix string, only ?[]string, mut env M
 				continue
 			}
 		}
-		body_prog := cx.parse_program(def.body) or {
-			return EvalError{
-				code:    'cx-err:CXER0210'
-				message: '[?lib] def `${name}` body parse: ${err.msg()}'
+		if c := s.closures[name] {
+			env.cow_closures()
+			env.closures['${prefix}:${name}'] = c
+			if env.scope != unsafe { nil } {
+				env.scope.closures['${prefix}:${name}'] = c
 			}
 		}
-		member_closure := Closure{
-			params:            def_param_names(def)
-			is_variadic:       def_is_variadic(def)
-			param_specs:       def_param_specs(def)
-			body:              [body_prog.body]
-			captured_bindings: snapshot_bindings(env)
-		}
-		env.cow_closures()
-		env.closures['${prefix}:${name}'] = member_closure
 	}
 	for cname in mod.const_order {
 		cst := mod.consts[cname] or { continue }
@@ -6990,22 +7151,17 @@ fn register_module_members(mod &Module, prefix string, only ?[]string, mut env M
 				continue
 			}
 		}
-		cbody := cx.parse_program(cst.value_source) or {
-			return EvalError{
-				code:    'cx-err:CXER0210'
-				message: '[?lib] const `${cname}` body parse: ${err.msg()}'
+		if v := s.bindings[cname] {
+			env.bindings['${prefix}:${cname}'] = v
+			if env.scope != unsafe { nil } {
+				env.scope.bindings['${prefix}:${cname}'] = v
 			}
 		}
-		cval := eval_node(cbody.body, mut env)!
-		env.bindings['${prefix}:${cname}'] = cval
 	}
-	// Transitive imports: register each lib `mod` declares under its local
-	// alias so a member body referencing `[$alias:member]` resolves. The
-	// modules are already loaded into the table by resolve_lib; here we
-	// only wire their public members as callable closures.
-	// The import graph is a DAG (cycles are rejected by the loader as
-	// CXER0210), so this recursion terminates; diamond imports re-register
-	// the shared sub-tree harmlessly (idempotent map writes).
+	// Transitive imports: also expose each lib `mod` declares under its local
+	// alias in the IMPORTER env (back-compat for the QName resolution path /
+	// alias_modules visibility). Member bodies themselves now resolve via the
+	// module scope (above), not this registration.
 	for lib in mod.libs {
 		sub := env.state.module_table.modules[lib.resolver_source] or { continue }
 		sub_prefix := module_call_prefix(lib)
@@ -7029,6 +7185,11 @@ fn eval_const(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	}
 	val := eval_node(cbody.body, mut env)!
 	env.bindings[cnode.name] = val
+	// Mirror into the program scope so a [?def] body (captured defining_scope)
+	// resolves this const by its bare name (#22).
+	if env.scope != unsafe { nil } {
+		env.scope.bindings[cnode.name] = val
+	}
 	return cx.Element{
 		name:  'result'
 		attrs: [
@@ -7879,16 +8040,10 @@ fn apply_element_or_attr_action(el cx.Element, attribute_tail bool,
 		'using' {
 			// :using FN — apply closure to the matched node.
 			fn_val := eval_node(action.value, mut env)!
-			closure_id := closure_id_of(fn_val) or {
+			closure := resolve_closure(fn_val, env) or {
 				return EvalError{
 					code:    'cx-err:CXER0104'
 					message: '[?modify] :using must be a [?fn] lambda'
-				}
-			}
-			closure := env.closures[closure_id] or {
-				return EvalError{
-					code:    'cx-err:CXER0001'
-					message: '[?modify] :using closure not found'
 				}
 			}
 			input := if attribute_tail {
@@ -8197,11 +8352,8 @@ fn eval_map_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	}
 	source_val := eval_node(source_node, mut env)!
 	using_val := eval_node(using_slot, mut env)!
-	closure_id := closure_id_of(using_val) or {
+	closure := resolve_closure(using_val, env) or {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?map] :using must evaluate to a closure' }
-	}
-	closure := env.closures[closure_id] or {
-		return EvalError{ code: 'cx-err:CXER0001', message: '[?map] :using closure not found' }
 	}
 	items := iterate(source_val)
 	if par_flag {
@@ -8364,11 +8516,8 @@ fn eval_reduce_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	// over a large range never materialises it either.
 	if bounds := stream_int_range_bounds(source_node, mut env) {
 		using_val := eval_node(using_slot, mut env)!
-		closure_id := closure_id_of(using_val) or {
+		closure := resolve_closure(using_val, env) or {
 			return EvalError{ code: 'cx-err:CXER0001', message: '[?reduce] :using must evaluate to a closure' }
-		}
-		closure := env.closures[closure_id] or {
-			return EvalError{ code: 'cx-err:CXER0001', message: '[?reduce] :using closure not found' }
 		}
 		init_val := eval_node(init_slot, mut env)!
 		if par_flag {
@@ -8409,11 +8558,8 @@ fn eval_reduce_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	}
 	source_val := eval_node(source_node, mut env)!
 	using_val := eval_node(using_slot, mut env)!
-	closure_id := closure_id_of(using_val) or {
+	closure := resolve_closure(using_val, env) or {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?reduce] :using must evaluate to a closure' }
-	}
-	closure := env.closures[closure_id] or {
-		return EvalError{ code: 'cx-err:CXER0001', message: '[?reduce] :using closure not found' }
 	}
 	init_val := eval_node(init_slot, mut env)!
 	items := iterate(source_val)
@@ -8492,11 +8638,8 @@ fn eval_filter_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		}
 	}
 	using_val := eval_node(using_slot, mut env)!
-	closure_id := closure_id_of(using_val) or {
+	closure := resolve_closure(using_val, env) or {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?filter] :using must evaluate to a closure' }
-	}
-	closure := env.closures[closure_id] or {
-		return EvalError{ code: 'cx-err:CXER0001', message: '[?filter] :using closure not found' }
 	}
 	items := iterate(srcs[0])
 	mut results := []cx.Node{}
@@ -8703,11 +8846,8 @@ fn eval_scan_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		}
 	}
 	using_val := eval_node(using_slot, mut env)!
-	closure_id := closure_id_of(using_val) or {
+	closure := resolve_closure(using_val, env) or {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?scan] :using must evaluate to a closure' }
-	}
-	closure := env.closures[closure_id] or {
-		return EvalError{ code: 'cx-err:CXER0001', message: '[?scan] :using closure not found' }
 	}
 	init_val := eval_node(init_slot, mut env)!
 	items := iterate(srcs[0])
@@ -8763,11 +8903,8 @@ fn eval_partition_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		}
 	}
 	using_val := eval_node(using_slot, mut env)!
-	closure_id := closure_id_of(using_val) or {
+	closure := resolve_closure(using_val, env) or {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?partition] :using must evaluate to a closure' }
-	}
-	closure := env.closures[closure_id] or {
-		return EvalError{ code: 'cx-err:CXER0001', message: '[?partition] :using closure not found' }
 	}
 	items := iterate(srcs[0])
 	mut truthy_items := []cx.Node{}
@@ -8799,11 +8936,8 @@ fn eval_group_by_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		}
 	}
 	using_val := eval_node(using_slot, mut env)!
-	closure_id := closure_id_of(using_val) or {
+	closure := resolve_closure(using_val, env) or {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?group-by] :using must evaluate to a closure' }
-	}
-	closure := env.closures[closure_id] or {
-		return EvalError{ code: 'cx-err:CXER0001', message: '[?group-by] :using closure not found' }
 	}
 	items := iterate(srcs[0])
 	mut keys_in_order := []string{}
@@ -11078,11 +11212,9 @@ fn should_retry(pred_node cx.ProgramNode, err_val cx.Node, mut env MatchEnv) boo
 	if pred_node is cx.ProgramDirective && pred_node.name == 'fn' {
 		// Evaluate the [?fn] to get a sentinel, then invoke with err.
 		sentinel := eval_node(pred_node, mut local) or { return true }
-		if id := closure_id_of(sentinel) {
-			if closure := local.closures[id] {
-				rv := invoke_closure(closure, [err_val], mut local) or { return true }
-				return scalar_bool(rv)
-			}
+		if closure := resolve_closure(sentinel, local) {
+			rv := invoke_closure(closure, [err_val], mut local) or { return true }
+			return scalar_bool(rv)
 		}
 	}
 	// Fallback: evaluate the predicate node with __retry_err__ in scope.
@@ -12416,26 +12548,13 @@ fn eval_send(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	if ch.closed {
 		return mk_err_with_slots('cx-err:CXER0200', [])
 	}
-	// Copy-on-send (escape-safety §5.2/§5.3): a channel queue lives in the
-	// shared, GC-owned ProgramState and outlives any region scope. Two escapes
-	// must be closed: (1) the sent VALUE — deep-copied to GC via region_export;
-	// (2) the queue's own BACKING BUFFER — an empty queue's first `<<` (or any
-	// growth) would otherwise malloc/realloc the `[]cx.Node` storage INTO the
-	// active region, so we suspend the region across the append, forcing that
-	// storage onto the GC heap. Both are no-ops outside an active region.
 	queue_append(mut ch, value)
 	return cx.Element{ name: 'ok' }
 }
 
-// queue_append enqueues `value` on a channel's GC-owned queue with the region
-// escape-safety contract: the value is deep-copied to GC and the append itself
-// runs with the region suspended so the queue's backing storage cannot be
-// region-allocated. Inert (plain append) outside an active region.
+// queue_append enqueues `value` on a channel's GC-owned queue.
 fn queue_append(mut ch ChannelRecord, value cx.Node) {
-	gv := region_export(value)
-	was := cx_region_suspend()
-	ch.queue << gv
-	cx_region_resume(was)
+	ch.queue << value
 }
 
 fn eval_receive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
@@ -12474,7 +12593,6 @@ fn eval_try_send(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	if ch.buffer > 0 && ch.queue.len >= ch.buffer {
 		return mk_err_with_slots('cx-err:CXER0201', [])
 	}
-	// Copy-on-send (escape-safety §5.2/§5.3) — see eval_send / queue_append.
 	queue_append(mut ch, value)
 	return cx.Element{ name: 'ok' }
 }
@@ -12507,123 +12625,9 @@ fn eval_close(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	return cx.Element{ name: 'ok' }
 }
 
-// run_worker_body evaluates a [?worker] body under the scope-aware region
-// (bench/parallel-alloc/INTEGRATION-DESIGN.md §4–§6). When the per-thread
-// region is active (`-d cx_regions` builds), the body runs on a CLONED env so
-// its transient binding writes stay thread-confined and vanish with the block
-// reset (escape-safety §5.4), and the result is deep-copied to the GC heap
-// (region_export) before the scope exits and resets the block. In the default
-// build cx_region_enter/exit/is_active are inert: the body runs on the shared
-// env exactly as before and region_export is a no-op — zero behaviour change.
-//
-// A body error is caught while the region is still valid: its code + message
-// (both GC-owned strings — error messages are noscan → GC even in-scope) are
-// captured, the region is suspended so the re-raised error box lands on GC,
-// and the scope is reset via the deferred exit. The caller therefore never
-// reads an error (or result) that lived in the just-reset region block.
+// run_worker_body evaluates a [?worker] body on the shared env.
 fn run_worker_body(body cx.ProgramNode, mut env MatchEnv) !cx.Node {
-	// Channel-using bodies are NOT yet region-safe: a [?receive] inside a
-	// [?for] comprehension under an active region returns the loop variable
-	// instead of the dequeued value (INTEGRATION-FINDINGS.md Gate 2 — a
-	// for-comp/region aliasing bug, not one of the closed escape channels).
-	// Until that is root-caused, such bodies run WITHOUT the region: suspend
-	// any enclosing scope so allocations land on GC (correct even for a worker
-	// nested inside an active outer scope) and run on the shared env, exactly
-	// matching the default (region-absent) behaviour. region_export at the
-	// outer scope still rescues this worker's result.
-	if body_uses_channels(body) {
-		was := cx_region_suspend()
-		defer {
-			cx_region_resume(was)
-		}
-		return eval_node(body, mut env)!
-	}
-	cx_region_enter()
-	defer {
-		cx_region_exit()
-	}
-	if cx_region_is_active() {
-		mut benv := env.clone()
-		r := eval_node(body, mut benv) or {
-			ecode := if err is EvalError { err.code } else { '' }
-			msg := err.msg()
-			cx_region_suspend() // re-raised error box → GC, not the dying region
-			if ecode != '' {
-				return EvalError{ code: ecode, message: msg }
-			}
-			return error(msg)
-		}
-		return region_export(r)
-	}
-	// Inert path (default build / region inactive): no clone, no copy.
 	return eval_node(body, mut env)!
-}
-
-// channel_op_directives are the value-moving channel directives. A [?worker]
-// body containing any of them is not run under a region (see run_worker_body).
-const channel_op_directives = ['send', 'try-send', 'receive', 'try-receive', 'select']
-
-// body_uses_channels reports whether `n` contains a channel value-transfer
-// directive anywhere in its tree. Conservative gate for region engagement.
-fn body_uses_channels(n cx.ProgramNode) bool {
-	match n {
-		cx.Program {
-			return body_uses_channels(n.body)
-		}
-		cx.ProgramDirective {
-			if n.name in channel_op_directives {
-				return true
-			}
-			for sl in n.slots {
-				if body_uses_channels(sl.value) {
-					return true
-				}
-			}
-		}
-		cx.ProgramCall {
-			for a in n.args {
-				if body_uses_channels(a) {
-					return true
-				}
-			}
-		}
-		cx.ProgramLiteral {
-			for it in n.items {
-				if body_uses_channels(it) {
-					return true
-				}
-			}
-			for sl in n.slots {
-				if body_uses_channels(sl.value) {
-					return true
-				}
-			}
-		}
-		cx.ProgramForComp {
-			for c in n.clauses {
-				if src := c.source {
-					if body_uses_channels(src) {
-						return true
-					}
-				}
-				if e := c.expr {
-					if body_uses_channels(e) {
-						return true
-					}
-				}
-			}
-			if body_uses_channels(n.yield) {
-				return true
-			}
-			if yv := n.yield_value {
-				if body_uses_channels(yv) {
-					return true
-				}
-			}
-		}
-		else {}
-	}
-	return false
 }
 
 // eval_worker runs `:body` synchronously and stores the result so
@@ -12631,11 +12635,6 @@ fn body_uses_channels(n cx.ProgramNode) bool {
 // (V `spawn`) lands with the Phase 3.10 scheduler alongside async
 // futures; the single-threaded substrate satisfies §10.4.6 semantics
 // for body-runs-to-completion + observable terminal state.
-//
-// Under `-d cx_regions` the body is evaluated through run_worker_body, which
-// region-scopes its transient allocations (per-thread bump block) and
-// deep-copies the result to the GC heap before scope reset — the in-process
-// parallelism fix. Inert by default.
 fn eval_worker(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	name_slot := labeled_slot(d, 'name') or {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?worker] requires :name' }
@@ -13014,20 +13013,80 @@ fn closure_id_of(n cx.Node) ?string {
 	return none
 }
 
+// mk_closure_value builds a function-value sentinel that CARRIES its Closure
+// (#45). Used for ESCAPING closures — `[?fn]` lambdas and partials — whose
+// lifetime / defining scope cannot be a stable scope-table id: the Closure rides
+// on the sentinel (cx.OpaqueValue) and travels WITH the value, so it resolves
+// wherever applied with no registry. Named `[?def]`s and builtins keep the
+// id-only sentinel (mk_closure_sentinel) — their id is durable in the scope tables.
+fn mk_closure_value(cl Closure) cx.Node {
+	mut el := cx.Element{ name: closure_sentinel_name }
+	el.set_opaque(cx.OpaqueValue(ClosureBox{ cl: cl }))
+	return el
+}
+
+// closure_of returns the Closure embedded on a function-value sentinel, if any
+// (an escaping `[?fn]` / partial built by mk_closure_value). none for an id-only
+// sentinel (named def / builtin) or a non-sentinel node.
+fn closure_of(n cx.Node) ?Closure {
+	if n is cx.Element && n.name == closure_sentinel_name {
+		if ov := n.opaque() {
+			if ov is ClosureBox {
+				return ov.cl
+			}
+		}
+	}
+	return none
+}
+
+// resolve_closure is the single uniform "function-value sentinel → Closure"
+// resolver: the EMBEDDED payload first (escaping `[?fn]` / partial — #45), else
+// the id → scope-table lookup (named `[?def]` / builtin, durable in env.closures /
+// env.scope.closures). Returns none for a non-callable value.
+fn resolve_closure(n cx.Node, env MatchEnv) ?Closure {
+	if cl := closure_of(n) {
+		return cl
+	}
+	if id := closure_id_of(n) {
+		return lookup_closure(id, env)
+	}
+	return none
+}
+
 // eval_fn collects parameter names + body from the directive's slots,
 // snapshots the env, registers the closure under a synthetic id, and
 // returns the sentinel value.
 fn eval_fn(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	params, body := extract_params_and_body(d)!
-	env.anon_counter++
-	id := '__anon_${env.anon_counter}__'
-	env.cow_closures()
-	env.closures[id] = Closure{
+	// Defining scope of this `[?fn]` (uniform lexical scoping, #19/#22/#45):
+	//   - TOP-LEVEL `[?fn]` (not in a function body): the program scope (env.scope).
+	//     When applied inside a lib member (a predicate/handler/mapper callback to
+	//     `[$bus:matches]` / `[$re:replace-fn]` / `[$http:serve]`), its body's free
+	//     names resolve where it was DEFINED (the program), not the lib's scope.
+	//   - IN-BODY `[?fn]` (created while a `[?def]`/closure body runs): the ENCLOSING
+	//     callable's defining_scope (its module / the program), threaded as
+	//     env.cur_defining_scope. So a lambda RETURNED from a module def resolves
+	//     that module's siblings + consts when later applied (#45 Bug-2). A plain
+	//     `[?fn]`-in-`[?fn]` with no enclosing def has cur_defining_scope=nil and
+	//     keeps the captured_bindings + caller-closures behavior.
+	mut lam_scope := &Scope(unsafe { nil })
+	if env.in_function_body {
+		lam_scope = env.cur_defining_scope
+	} else {
+		lam_scope = env.scope
+	}
+	anon := Closure{
 		params:            params
 		body:              [body]
 		captured_bindings: snapshot_bindings(env)
+		defining_scope:    lam_scope
 	}
-	return mk_closure_sentinel(id)
+	// The Closure rides ON the sentinel value (#45): no env.closures registration,
+	// no program-scope mirror. An escaping lambda thus travels WITH its value and
+	// resolves via its embedded payload wherever applied — fixing the lost-anon
+	// (Bug-1), wrong-defining-scope (Bug-2), and nested-recapture (Bug-3) failures
+	// of the old top-level-mirror scheme, with no registry growth.
+	return mk_closure_value(anon)
 }
 
 fn snapshot_bindings(env MatchEnv) map[string]cx.Node {
@@ -13096,13 +13155,23 @@ fn eval_def(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		return EvalError{ code: 'cx-err:CXER0100', message: '[?def] body parse: ${err.msg()}' }
 	}
 	env.cow_closures()
-	env.closures[def.name] = Closure{
+	new_closure := Closure{
 		params:            def_param_names(def)
 		is_variadic:       def_is_variadic(def)
 		param_specs:       def_param_specs(def)
 		body:              [body_prog.body]
 		captured_bindings: snapshot_bindings(env)
+		// Capture the top-level program scope (#19/#22): the body resolves sibling
+		// defs + consts here. The scope is a live reference, so consts loaded later
+		// in the §12.5 two-pass are visible at call time.
+		defining_scope:    env.scope
 		returns_type:      def.returns_type_source or { '' }
+	}
+	env.closures[def.name] = new_closure
+	// Mirror into the program scope so a sibling def's body (whose defining_scope
+	// is this same scope) can resolve this def by its bare name.
+	if env.scope != unsafe { nil } {
+		env.scope.closures[def.name] = new_closure
 	}
 	env.bindings[def.name] = mk_closure_sentinel(def.name)
 	return cx.Element{
@@ -13208,6 +13277,27 @@ fn extract_name(n cx.ProgramNode) ?string {
 // invoke_closure applies a closure to positional args (no named args).
 // Thin wrapper over invoke_closure_l for the many HOF / positional call
 // sites that never carry labels.
+// try_stdlib_builtin_env runs the env-aware stdlib dispatch chain (the same
+// dispatchers dispatch_call_l consults) so a builtin that must apply a CX
+// callback or read env — validate's custom-validator, bus emit/match, journal
+// fold, sched timers, http/xap handlers — works when reached via a builtin-
+// wrapper closure (a same-named self-forward def, is_self_builtin_forward). The
+// env-LESS stdlib_builtin cannot resolve a callback. Returns none if no env-aware
+// dispatcher claims the name.
+fn try_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?cx.Node {
+	if r := ft_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := log_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := test_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := validate_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := prof_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := http_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := bus_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := journal_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := sched_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := xap_stdlib_builtin_env(name, args, mut env) { return r }
+	return none
+}
+
 fn invoke_closure(c Closure, args []cx.Node, mut enclosing MatchEnv) !cx.Node {
 	return invoke_closure_l(c, args, []string{}, mut enclosing)!
 }
@@ -13283,6 +13373,12 @@ fn invoke_closure_l(c Closure, args []cx.Node, labels []string, mut enclosing Ma
 		if r := invoke_builtin(c.builtin_name, args) {
 			return r
 		}
+		// env-aware stdlib builtins (validate custom-validator, bus/journal/sched
+		// callbacks, …) must be reached WITH env — else a wrapper for a same-named
+		// self-forward def (is_self_builtin_forward) can't apply its callback.
+		if r := try_stdlib_builtin_env(c.builtin_name, args, mut enclosing) {
+			return r
+		}
 		if r := stdlib_builtin(c.builtin_name, args) {
 			return r
 		}
@@ -13332,12 +13428,19 @@ fn invoke_closure_l(c Closure, args []cx.Node, labels []string, mut enclosing Ma
 	}
 	mut call_env := MatchEnv{
 		bindings:    borrowed
-		// Alias (don't copy) the program-global closures table; cow_closures()
-		// clones it before any local registration. Skip the dyn_context clone
-		// when empty (the common case). Together these remove the per-call
-		// environment rebuild that dominated GC pressure (B17).
-		closures:        enclosing.closures
+		// Uniform lexical scoping (#19/#22): a callable resolves its free names in
+		// its DEFINING scope (its module / the top-level program), not the
+		// caller's table. The Scope is built at load and read-only at call time,
+		// so this is a single aliased pointer — no per-call clone (B17 preserved).
+		// Plain [?fn] lambdas (no defining_scope) keep the prior caller-aliased
+		// behavior (they capture local lets via captured_bindings).
+		closures:        if c.defining_scope != unsafe { nil } {
+			c.defining_scope.closures
+		} else {
+			enclosing.closures
+		}
 		closures_shared: true
+		scope:           enclosing.scope
 		state:           enclosing.state
 		anon_counter:    enclosing.anon_counter
 		// The active [?with-scope] dynamic context (§8.10.8) reaches
@@ -13346,7 +13449,18 @@ fn invoke_closure_l(c Closure, args []cx.Node, labels []string, mut enclosing Ma
 		// bind_specs_and_eval's propagation for the param-spec path.
 		dyn_context:      if enclosing.dyn_context.len > 0 { enclosing.dyn_context.clone() } else { enclosing.dyn_context }
 		in_function_body: true
+		// An in-body `[?fn]` captures this executing closure's defining_scope as its
+		// own (eval_fn) — a lambda returned from a module def then resolves that
+		// module's siblings when applied (#45 Bug-2).
+		cur_defining_scope: c.defining_scope
 		frame_pool:       enclosing.frame_pool // propagate within this thread's call chain
+	}
+	// Module consts (the defining scope's value bindings) resolve as free names in
+	// the body; lexical let-captures (captured_bindings) layer over them; params win.
+	if c.defining_scope != unsafe { nil } {
+		for k, v in c.defining_scope.bindings {
+			call_env.bindings[k] = v
+		}
 	}
 	for k, v in c.captured_bindings {
 		call_env.bindings[k] = v

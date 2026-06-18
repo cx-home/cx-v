@@ -4,6 +4,7 @@ import cx
 import encoding.hex
 import encoding.base64
 import encoding.base32
+import encoding.base58
 import compress.gzip
 import compress.zstd
 import math
@@ -350,6 +351,21 @@ fn bytes_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			buf := base32.decode(s.bytes()) or {
 				return mk_err(bytes_err_invalid_b64,
 					'bytes/from-base32: malformed base32 input')
+			}
+			return bytes_node(buf)
+		}
+		// §3.5 base58 (multibase base58btc, Bitcoin alphabet) — backs did:key
+		'bytes-to-base58' {
+			if args.len != 1 { return none }
+			b := arg_bytes(args[0]) or { return none }
+			return bytes_string_node(base58.encode_bytes(b).bytestr())
+		}
+		'bytes-from-base58' {
+			if args.len != 1 { return none }
+			s := arg_string(args[0]) or { return none }
+			buf := base58.decode_bytes(s.bytes()) or {
+				return mk_err(bytes_err_invalid_b64,
+					'bytes/from-base58: malformed base58 input')
 			}
 			return bytes_node(buf)
 		}

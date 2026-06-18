@@ -131,16 +131,10 @@ fn eval_with_error_hook(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 				}
 				fn_node := unwrap_using_clause(v.items[0])
 				sentinel := eval_node(fn_node, mut env)!
-				id := closure_id_of(sentinel) or {
+				closure := resolve_closure(sentinel, env) or {
 					return EvalError{
 						code:    'cx-err:CXER0100'
 						message: '[?with-error-hook] [${v.name}] requires a function value ([?fn] / [?def] reference)'
-					}
-				}
-				closure := env.closures[id] or {
-					return EvalError{
-						code:    'cx-err:CXER0100'
-						message: '[?with-error-hook] [${v.name}] function value not resolvable'
 					}
 				}
 				if v.name == 'observe' {

@@ -2,8 +2,8 @@ module code
 
 import cx
 import net
-import picoev
-import picohttpparser
+import transport.picoev
+import transport.picohttpparser
 import runtime
 import strings
 import time
@@ -80,6 +80,11 @@ mut:
 	enclosing_bindings map[string]cx.Node
 	enclosing_closures map[string]Closure
 	enclosing_dyn      []cx.Node
+	// enclosing_scope is the program's lexical Scope at serve time. Per-request
+	// envs carry it so a caller-supplied handler closure (a top-level [?def]/[?fn]
+	// passed into the lib `[$http:serve …]`) resolves via the program scope —
+	// `serve`'s own call env only sees the http module's scope (#19 higher-order).
+	enclosing_scope    &Scope = unsafe { nil }
 	state              &ProgramState = unsafe { nil }
 	xap_rt             int // .xap mode: the cx-xap runtime id this listener serves
 }
@@ -157,6 +162,7 @@ fn dispatch_request(mut h ListenerHandler, raw_method string, raw_path string, r
 			state:        unsafe { h.state }
 			anon_counter: 0
 			dyn_context:  h.enclosing_dyn.clone()
+			scope:        h.enclosing_scope
 		}
 		return xap_dispatch_http(h.xap_rt, raw_method.to_upper(), raw_path, raw_body, mut xenv)
 	}
@@ -175,6 +181,7 @@ fn dispatch_request(mut h ListenerHandler, raw_method string, raw_path string, r
 			state:        unsafe { h.state }
 			anon_counter: 0
 			dyn_context:  h.enclosing_dyn.clone()
+			scope:        h.enclosing_scope
 		}
 		// Forward the request body as a string scalar so the handler can read
 		// `$request/body` for POST/PUT payloads (form-encoded or raw).
@@ -248,7 +255,7 @@ fn static_serve_file_spec(body cx.ProgramNode, closures map[string]Closure, bind
 		return none
 	}
 	if v := bindings['serve-file'] {
-		if _ := closure_id_of(v) {
+		if is_fn_value(v) {
 			return none
 		}
 	}
@@ -304,6 +311,7 @@ fn invoke_handler(svc &ServiceRecord, res ResourceRecord, path_params []cx.Node,
 		state:        unsafe { h.state }
 		anon_counter: 0
 		dyn_context:  h.enclosing_dyn.clone()
+		scope:        h.enclosing_scope
 	}
 	env.bindings['request'] = build_request_node(method, path, path_params, ?cx.Node(none))
 	if svc.root != '' {
@@ -324,34 +332,11 @@ fn invoke_handler(svc &ServiceRecord, res ResourceRecord, path_params []cx.Node,
 			]
 		})
 	}
-	// Scope-aware region (bench/parallel-alloc/INTEGRATION-DESIGN.md §1 item 3):
-	// an HTTP request is a thread-confined work unit whose result is published
-	// by serialization to wire bytes. Under -d cx_regions the handler's
-	// transient cx.Node allocation is bump-allocated in the calling reactor
-	// thread's region block and the block is reset after the response is
-	// serialized — no per-alloc global lock, so request handling scales across
-	// reactor threads. cx_response_to_wire fully materializes body_result into a
-	// WireResp of plain ints/strings/maps, so NO region value outlives the
-	// reset and no deep-copy is needed (the wire bytes ARE the GC-owned copy).
-	//
-	// Channel-using handlers skip the region (body_uses_channels — same Gate 2
-	// caveat as [?worker]); the enclosing region is suspended for them so their
-	// allocations land on GC. Inert in the default build.
-	use_region := !body_uses_channels(res.body)
-	if use_region {
-		cx_region_enter()
-	}
 	body_result := eval_node(res.body, mut env) or {
-		msg := err.msg() // GC string, read before any reset
-		if use_region {
-			cx_region_exit()
-		}
+		msg := err.msg()
 		return mk_wire(500, svc.default_headers, 'handler error: ${msg}\n')
 	}
 	wire := cx_response_to_wire(body_result, svc.default_headers)
-	if use_region {
-		cx_region_exit() // reset: body_result region nodes are no longer referenced
-	}
 	return wire
 }
 
@@ -595,6 +580,7 @@ fn start_http_listener(mut rec ServiceRecord, mut env MatchEnv) ! {
 		enclosing_bindings: env.bindings.clone()
 		enclosing_closures: env.closures.clone()
 		enclosing_dyn:      env.dyn_context.clone()
+		enclosing_scope:    env.scope
 		state:              unsafe { env.state }
 	}
 	// Stash the handler pointer (no stoppable server handle exists — see
@@ -630,6 +616,7 @@ fn start_handler_listener(handler cx.Node, host string, port int, block bool, mu
 		enclosing_bindings: env.bindings.clone()
 		enclosing_closures: env.closures.clone()
 		enclosing_dyn:      env.dyn_context.clone()
+		enclosing_scope:    env.scope
 		state:              unsafe { env.state }
 	}
 	spawn_shared_reactors(mut h, host, port)!

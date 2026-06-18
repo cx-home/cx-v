@@ -2103,11 +2103,8 @@ fn journal_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?cx
 // closure-sentinel whose body calls any impure builtin → CXER4611. A builtin
 // fn value is pure iff the builtin itself is not impure-classified.
 fn jrn_assert_pure(fv cx.Node, mut env MatchEnv) ?cx.Node {
-	id := closure_id_of(fv) or {
+	cl := resolve_closure(fv, env) or {
 		return mk_err(jrn_err_fold_impure, 'E_JOURNAL_FOLD_IMPURE: fold expects a callable $fn')
-	}
-	cl := env.closures[id] or {
-		return mk_err(jrn_err_fold_impure, 'E_JOURNAL_FOLD_IMPURE: $fn value not found')
 	}
 	if cl.builtin_name != '' {
 		if builtin_is_impure(cl.builtin_name) {

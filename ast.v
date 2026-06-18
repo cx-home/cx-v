@@ -116,6 +116,20 @@ pub mut:
 	table &TableData = unsafe { nil }
 }
 
+// OpaqueValue is a host-language value carried transparently inside a Node —
+// currently a `code.Closure` riding on the `__cx_closure__` function-value
+// sentinel (§8.6). `cx` is the lowest layer and cannot name `code.Closure`, so
+// the payload travels behind this interface and `code` implements it on
+// `Closure`. The value is carried BY REFERENCE (the interface boxes it on the
+// heap), so an ESCAPING closure travels WITH its value — resolved wherever it is
+// applied, against its own defining scope, with no id→table registry
+// (cx-private #45). It never reaches a serialization boundary: the sentinel
+// raises CXER0291 first (`is_fn_value`), and no emitter/codec ever inspects this
+// field — the binary codec enumerates the named meta fields only.
+pub interface OpaqueValue {
+	opaque_kind() string
+}
+
 // ElementMeta pools the eight optional fields that used to live
 // inline on Element. Allocated lazily — every element with at least
 // one metadata bit set carries one `ElementMeta`; metadata-free
@@ -123,6 +137,9 @@ pub mut:
 @[heap]
 pub struct ElementMeta {
 pub mut:
+	// opaque carries a host-language value (a closure) on the function-value
+	// sentinel only — nil on every ordinary element. See OpaqueValue (#45).
+	opaque ?OpaqueValue
 	// v3.4: anchor / merge — declared via `[name &anchor]`
 	// and `[name @anchor]` surface forms.
 	anchor    ?string
@@ -195,6 +212,13 @@ pub fn (e Element) local() string {
 pub fn (e Element) ns_uri() ?string {
 	if isnil(e.meta) { return none }
 	return e.meta.ns_uri
+}
+
+// opaque returns the host-language value carried on a function-value sentinel
+// (a `code.Closure`), or none for an ordinary element. See OpaqueValue (#45).
+pub fn (e Element) opaque() ?OpaqueValue {
+	if isnil(e.meta) { return none }
+	return e.meta.opaque
 }
 
 // table_opt returns the table payload as an option. nil pointer
@@ -274,6 +298,14 @@ pub fn (mut e Element) set_ns_uri(v ?string) {
 	e.meta.ns_uri = v
 }
 
+// set_opaque attaches a host-language value (a closure) to a function-value
+// sentinel — the only caller (mk_closure_value in `code`). See OpaqueValue (#45).
+pub fn (mut e Element) set_opaque(v ?OpaqueValue) {
+	if isnil(e.meta) && v == none { return }
+	e.ensure_meta()
+	e.meta.opaque = v
+}
+
 // new_element constructs an Element with the optional metadata fields
 // expressed as a single ElementMeta literal. The helper auto-allocates
 // `meta` only when at least one metadata slot is set. Use this for
@@ -312,7 +344,7 @@ pub fn (e Element) with_table(td &TableData) Element {
 fn element_meta_is_empty(m ElementMeta) bool {
 	if m.anchor != none || m.merge != none || m.data_type != none
 	   || m.id != none || m.body_ref != none || m.lang_resolved != none
-	   || m.ns_uri != none {
+	   || m.ns_uri != none || m.opaque != none {
 		return false
 	}
 	return m.local == ''

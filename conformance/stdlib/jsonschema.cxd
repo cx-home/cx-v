@@ -1,0 +1,314 @@
+[test-suite name=jsonschema
+  [doc [#
+Conformance fixtures for cx-stdlib/jsonschema (JSON Schema 2020-12, the common
+MCP-tool-schema subset; spec/02-working/agentic_positioning.md D3 — frozen `std`
+substrate; cx-private #6 S7).
+
+MCP tool input schemas ARE JSON Schema, so this module lets CX consume them
+without reinventing. Each program imports the module via
+[?lib 'cx-stdlib/jsonschema'] (resolver MUST be quoted); structural schemas +
+values are built with [?lib 'cx-stdlib/json'] [$json:parse …] (the realistic MCP
+path — a parsed JSON object is a map). validate returns the same [ok] /
+[invalid [violation …]] outcome shape as cx-stdlib/validate (failure is the
+inspectable [invalid …] value, NOT a propagating [err]).
+
+The spec gives no canonical element-serialization literal, so per AUTHORING.md we
+ground results into a string / bool / int / sequence surface:
+  - [$js:is-valid VALUE SCHEMA]          -> bool (renders bare true/false)
+  - RESULT/violation/@keyword            -> CXPath projection to a string
+  - [$js:violation-paths RESULT]         -> [sequence string]  (renders (a, b))
+  - [?count [$js:violations RESULT]]     -> int
+All four public functions are pure. Supported keywords: type, enum, const,
+required, properties, items, minimum, maximum, minLength, maxLength, pattern,
+minItems, maxItems.
+#]]
+
+  # ── type ──────────────────────────────────────────────────────────────────
+  [case id=jsonschema-001-type-string-ok level=core
+   [tags jsonschema type string happy is-valid]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid [$json:parse "\"hello\""] [$json:parse "{\"type\":\"string\"}"]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=jsonschema-002-type-mismatch-keyword level=core
+   [tags jsonschema type mismatch violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $r [$js:validate [$json:parse "42"] [$json:parse "{\"type\":\"string\"}"]]]
+  $r/violation/@keyword]
+#]]
+   [out-text [#
+'type'
+#]]
+  ]
+
+  [case id=jsonschema-003-integer-accepts-integral level=core
+   [tags jsonschema type integer]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid [$json:parse "42"] [$json:parse "{\"type\":\"integer\"}"]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=jsonschema-004-integer-rejects-fraction level=core
+   [tags jsonschema type integer]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid [$json:parse "3.5"] [$json:parse "{\"type\":\"integer\"}"]]
+#]]
+   [out-text [#
+false
+#]]
+  ]
+
+  # ── enum / const ────────────────────────────────────────────────────────────
+  [case id=jsonschema-005-enum-member-ok level=core
+   [tags jsonschema enum happy]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid [$json:parse "\"b\""] [$json:parse "{\"enum\":[\"a\",\"b\",\"c\"]}"]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=jsonschema-006-enum-not-a-member level=core
+   [tags jsonschema enum violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $r [$js:validate [$json:parse "\"z\""] [$json:parse "{\"enum\":[\"a\",\"b\",\"c\"]}"]]]
+  $r/violation/@keyword]
+#]]
+   [out-text [#
+'enum'
+#]]
+  ]
+
+  [case id=jsonschema-007-const-mismatch level=core
+   [tags jsonschema const violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $r [$js:validate [$json:parse "8"] [$json:parse "{\"const\":7}"]]]
+  $r/violation/@keyword]
+#]]
+   [out-text [#
+'const'
+#]]
+  ]
+
+  # ── object: required / properties ────────────────────────────────────────────
+  [case id=jsonschema-008-required-missing-path level=core
+   [tags jsonschema required object violation path]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:violation-paths
+  [$js:validate [$json:parse "{}"] [$json:parse "{\"type\":\"object\",\"required\":[\"name\"]}"]]]
+#]]
+   [out-text [#
+('/name')
+#]]
+  ]
+
+  [case id=jsonschema-009-property-type-path level=core
+   [tags jsonschema properties object violation path]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:violation-paths
+  [$js:validate
+    [$json:parse "{\"age\":\"x\"}"]
+    [$json:parse "{\"type\":\"object\",\"properties\":{\"age\":{\"type\":\"integer\"}}}"]]]
+#]]
+   [out-text [#
+('/age')
+#]]
+  ]
+
+  # ── numbers: minimum / maximum ──────────────────────────────────────────────
+  [case id=jsonschema-010-minimum-keyword level=core
+   [tags jsonschema minimum number violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $r [$js:validate [$json:parse "5"] [$json:parse "{\"type\":\"integer\",\"minimum\":10}"]]]
+  $r/violation/@keyword]
+#]]
+   [out-text [#
+'minimum'
+#]]
+  ]
+
+  [case id=jsonschema-011-maximum-ok level=core
+   [tags jsonschema maximum number happy]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid [$json:parse "3"] [$json:parse "{\"type\":\"integer\",\"minimum\":0,\"maximum\":10}"]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  # ── strings: length / pattern ───────────────────────────────────────────────
+  [case id=jsonschema-012-minlength-keyword level=core
+   [tags jsonschema minLength string violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $r [$js:validate [$json:parse "\"ab\""] [$json:parse "{\"type\":\"string\",\"minLength\":3}"]]]
+  $r/violation/@keyword]
+#]]
+   [out-text [#
+'minLength'
+#]]
+  ]
+
+  [case id=jsonschema-013-pattern-mismatch level=core
+   [tags jsonschema pattern string violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $r [$js:validate [$json:parse "\"abc\""] [$json:parse "{\"type\":\"string\",\"pattern\":\"^[0-9]+$\"}"]]]
+  $r/violation/@keyword]
+#]]
+   [out-text [#
+'pattern'
+#]]
+  ]
+
+  [case id=jsonschema-014-pattern-ok level=core
+   [tags jsonschema pattern string happy]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid [$json:parse "\"123\""] [$json:parse "{\"type\":\"string\",\"pattern\":\"^[0-9]+$\"}"]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  # ── arrays: items / minItems ────────────────────────────────────────────────
+  [case id=jsonschema-015-items-element-path level=core
+   [tags jsonschema items array violation path]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:violation-paths
+  [$js:validate
+    [$json:parse "[1,\"x\"]"]
+    [$json:parse "{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}"]]]
+#]]
+   [out-text [#
+('/1')
+#]]
+  ]
+
+  [case id=jsonschema-016-minitems-keyword level=core
+   [tags jsonschema minItems array violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $r [$js:validate [$json:parse "[1]"] [$json:parse "{\"type\":\"array\",\"minItems\":2}"]]]
+  $r/violation/@keyword]
+#]]
+   [out-text [#
+'minItems'
+#]]
+  ]
+
+  # ── multi-violation count ───────────────────────────────────────────────────
+  [case id=jsonschema-017-multi-violation-count level=core
+   [tags jsonschema required multi-violation count]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$count
+  [$js:violations
+    [$js:validate [$json:parse "{}"] [$json:parse "{\"type\":\"object\",\"required\":[\"a\",\"b\"]}"]]]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  # ── map-literal value (exercises the {…} MapNode shape, not only json:parse) ──
+  [case id=jsonschema-018-map-literal-value-ok level=core
+   [tags jsonschema object map-literal happy]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid {name: "alice"} [$json:parse "{\"type\":\"object\",\"required\":[\"name\"]}"]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  # ── realistic MCP tool input schema ─────────────────────────────────────────
+  [case id=jsonschema-019-mcp-tool-schema-valid level=core
+   [tags jsonschema mcp object enum happy]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid
+  [$json:parse "{\"location\":\"NYC\",\"units\":\"celsius\"}"]
+  [$json:parse "{\"type\":\"object\",\"required\":[\"location\"],\"properties\":{\"location\":{\"type\":\"string\"},\"units\":{\"type\":\"string\",\"enum\":[\"celsius\",\"fahrenheit\"]}}}"]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=jsonschema-020-mcp-tool-schema-bad-enum level=core
+   [tags jsonschema mcp object enum violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:is-valid
+  [$json:parse "{\"location\":\"NYC\",\"units\":\"kelvin\"}"]
+  [$json:parse "{\"type\":\"object\",\"required\":[\"location\"],\"properties\":{\"location\":{\"type\":\"string\"},\"units\":{\"type\":\"string\",\"enum\":[\"celsius\",\"fahrenheit\"]}}}"]]
+#]]
+   [out-text [#
+false
+#]]
+  ]
+]

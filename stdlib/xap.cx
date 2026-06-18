@@ -13,7 +13,11 @@
 [?def emit        scope=public impure [returns element] ($runtime::element $intent::element $opts::map {}) [$xap-emit $runtime $intent $opts]]
 [?def on          scope=public impure [returns null]    ($runtime::element $pattern::element $handler)     [$xap-on $runtime $pattern $handler]]
 [?def state       scope=public impure [returns element] ($runtime::element $cxpath::string) [$xap-state $runtime $cxpath]]
-[?def dial        scope=public impure [returns element] ($runtime::element $scope::element $setting::element) [$xap-dial $runtime $scope $setting]]
+[- #25 Tier-2: transient coordination channel — ephemeral viewport/selection, latest-wins, off the journal/PEP cascade -]
+[?def coord-publish scope=public impure [returns element] ($runtime::element $channel::string $frame::element) [$xap-coord-publish $runtime $channel $frame]]
+[?def coord-read    scope=public impure [returns element] ($runtime::element $channel::string) [$xap-coord-read $runtime $channel]]
+[?def dial        scope=public impure [returns element] ($runtime::element *$parts) [$xap-dial $runtime $parts]]
+[?def revoke      scope=public impure [returns element] ($runtime::element $id::string) [$xap-revoke $runtime $id]]
 [?def why-allowed scope=public impure [returns element] ($runtime::element $intent::element $opts::map {})    [$xap-why-allowed $runtime $intent $opts]]
 
 [- co-located docs (seeded — refine in place). -]
@@ -62,9 +66,21 @@
   [sig """-> element"""]
   [summary """Return the journal-folded state slice selected by a CXPath — the server-authoritative truth now."""]
 ]
+[fn-doc name=coord-publish scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Publish a frame to a transient coordination channel — ephemeral viewport/selection, latest-wins, off the journal and PEP cascade."""]
+]
+[fn-doc name=coord-read scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Read the latest frame from a transient coordination channel — the latest-wins value off the journal and PEP cascade."""]
+]
 [fn-doc name=dial scope=public purity=impure
   [sig """-> element"""]
   [summary """Set the operational-control mode at a scope by issuing a scoped authz delegation."""]
+]
+[fn-doc name=revoke scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Revoke an issued dial delegation by id; the agent's authority lapses and why-allowed flips to false."""]
 ]
 [fn-doc name=why-allowed scope=public purity=impure
   [sig """-> element"""]

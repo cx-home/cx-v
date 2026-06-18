@@ -30,9 +30,19 @@ import crypto.blake3
 // cx_text_fmt parses the input and re-emits it through the lossless
 // CX emitter. Property: cx_text_fmt(cx_text_fmt(x)) == cx_text_fmt(x)
 // for any valid input.
+//
+// A document valid under the DATA reading is re-emitted canonically. Input that
+// is not valid data but IS a valid PROGRAM (operator heads like `[* a b]`,
+// directives, `[$call]`s) is returned UNCHANGED — `cx fmt` no longer rejects
+// valid programs (#42), and thus also serves as a structure/bracket check. A
+// lossless canonical *program* formatter is follow-on work; until then programs
+// pass through. Input invalid under both readings surfaces the program error.
 pub fn cx_text_fmt(input string) !string {
-	doc := parse(input)!
-	return emit_cx(doc)
+	if doc := parse(input) {
+		return emit_cx(doc)
+	}
+	parse_program(input)!
+	return input
 }
 
 // cx_text_canonical parses the input, strips presentation nodes,

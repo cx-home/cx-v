@@ -75,6 +75,20 @@ pub mut:
 	// across threads — no lock needed. nil = pooling disabled (safe fallback to fresh
 	// alloc). Build with -d cx_frame_poison to turn pooling into an escape detector.
 	frame_pool &FramePool = unsafe { nil }
+	// scope is the top-level program's lexical Scope (its [?def]s + [?const]s +
+	// imported members). Allocated by new_env; top-level [?def]s capture it as
+	// their defining_scope so their bodies resolve consts (loaded later in the
+	// §12.5 two-pass) and sibling defs. nil only in degenerate envs.
+	scope &Scope = unsafe { nil }
+	// cur_defining_scope is the DEFINING scope of the callable whose body is
+	// currently executing (set on every closure call env to the invoked
+	// closure's defining_scope). An in-body `[?fn]` captures THIS as its own
+	// defining_scope (eval_fn), so a lambda RETURNED from a module def resolves
+	// that module's siblings + consts when later applied, not the caller's
+	// (#45 Bug-2). nil at top-level program eval and inside a plain [?fn]
+	// lambda (defining_scope=nil) — there an in-body [?fn] keeps the prior
+	// captured_bindings + caller-closures behavior.
+	cur_defining_scope &Scope = unsafe { nil }
 }
 
 // FramePool: per-thread free-list of reusable closure call-frame binding maps. See the
@@ -417,6 +431,20 @@ pub:
 	type_src string
 }
 
+// Scope is a module's (or the top-level program's) lexical name environment —
+// its closures (functions, by unqualified name + the prefixed members of the
+// modules IT imports) and its bindings (consts). Built once during load and
+// READ-ONLY at call time, so a closure can capture a `&Scope` reference with no
+// per-call clone (B17) and share it across threads safely. Uniform lexical
+// scoping (#19/#22, spec/03-approved/core/code.md): a callable
+// resolves its free names in its DEFINING scope, not the caller's.
+@[heap]
+pub struct Scope {
+pub mut:
+	closures map[string]Closure
+	bindings map[string]cx.Node
+}
+
 pub struct Closure {
 pub:
 	params []string
@@ -453,6 +481,12 @@ pub:
 	// storing a pointer to a stack-local corrupts the sum-type tag).
 	body              []cx.ProgramNode
 	captured_bindings map[string]cx.Node
+	// defining_scope is the lexical environment the closure was DEFINED in (its
+	// module / the top-level program). When set, invoke resolves the body's free
+	// names — sibling functions AND module consts — against it (NOT the caller's
+	// table). nil for plain `[?fn]` lambdas (which capture local lets via
+	// captured_bindings and inherit the caller's closures, the prior behavior).
+	defining_scope &Scope = unsafe { nil }
 	// returns_type is the verbatim `[returns T]` annotation ('' when
 	// none). Erased in default mode; the return value is checked against
 	// it under --strict (CXER0207, §12.7).
@@ -462,6 +496,23 @@ pub:
 // body_node returns the closure's body AST node.
 pub fn (c Closure) body_node() cx.ProgramNode {
 	return c.body[0]
+}
+
+// ClosureBox wraps a Closure as a cx.OpaqueValue so an escaping [?fn] / partial
+// can ride ON its function-value sentinel (#45): the Closure (with its
+// defining_scope + captured_bindings) travels WITH the value and resolves
+// wherever applied — no id→scope-table registry, hence no unbounded growth and no
+// shared-Scope mutation. The box (NOT Closure itself) implements the interface so
+// `Closure` keeps its plain value-struct codegen — it is copied by value on every
+// closure call (the fold/map hot path), and making it satisfy an interface
+// regresses that copy under -prod (cx-private #45 perf gate).
+pub struct ClosureBox {
+pub:
+	cl Closure
+}
+
+pub fn (b ClosureBox) opaque_kind() string {
+	return 'closure'
 }
 
 // new_env returns a fresh empty environment with a freshly-allocated
@@ -534,6 +585,10 @@ pub fn new_env() MatchEnv {
 		state:       state
 		anon_counter: 0
 		frame_pool:  &FramePool{} // fresh per-thread frame pool (#36); main-thread root
+		scope:       &Scope{
+			closures: map[string]Closure{}
+			bindings: map[string]cx.Node{}
+		}
 	}
 }
 
@@ -560,6 +615,7 @@ fn (e MatchEnv) clone() MatchEnv {
 		state:    e.state
 		anon_counter: e.anon_counter
 		dyn_context: e.dyn_context.clone()
+		scope:    e.scope // share the program scope (heap, read-only at call time)
 	}
 	for k, v in e.bindings {
 		copy.bindings[k] = v

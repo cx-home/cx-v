@@ -62,8 +62,12 @@ fn stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if r := journal_stdlib_builtin(name, args) { return r }
 	if r := session_stdlib_builtin(name, args) { return r }
 	if r := authz_stdlib_builtin(name, args) { return r }
+	if r := did_stdlib_builtin(name, args) { return r }
+	if r := vc_stdlib_builtin(name, args) { return r }
 	if r := sched_stdlib_builtin(name, args) { return r }
 	if r := xap_stdlib_builtin(name, args) { return r }
+	if r := xsp_stdlib_builtin(name, args) { return r }
+	if r := jsonschema_stdlib_builtin(name, args) { return r }
 	// Registry-driven codec surface (cx/xml/yaml/toml/md + binary). Chained
 	// LAST so a dedicated module (json/csv/url/html) wins any name clash.
 	if r := codec_registry_dispatch(name, args) { return r }

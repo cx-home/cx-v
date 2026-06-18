@@ -413,6 +413,52 @@ note: is the blessed path for both single-char (len=1) and slice access.
 #]]
  ]
 
+ [case id=program-for-013b-escaping-closure-zero-arg level=core
+  [tags fn closure function-value escape]
+  [doc [#
+A closure RETURNED from a zero-argument [?def], bound, then applied resolves
+its captured environment — the escaping anon travels WITH its value (§12.2.2;
+cx-private #45 Bug-1). Before the embedded-closure-value fix the returned anon
+was registered only in the (transient) call frame, so [$f 10] failed with
+"no callable f". The zero-arg def is invoked with the call sigil [$mk] (a bare
+0-arg head `[mk]` is a data element, not a call).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def mk () [?fn ($p) [+ $p 1]]]
+[?let [= $f [$mk]] [$f 10]]
+#]]
+  [out-text [#
+11
+#]]
+ ]
+
+ [case id=program-for-013c-nested-closure-recapture level=core
+  [tags fn closure function-value escape composition]
+  [doc [#
+A closure produced by a combinator and then RE-CAPTURED into another closure
+keeps its own captured environment (§12.2.2; cx-private #45 Bug-3). `pipe`
+returns a Runnable; nesting `pipe` of a `pipe` is a >2-stage pipeline. Before
+the fix the inner anon's environment was lost on re-capture (the program
+crashed); the embedded-closure-value model resolves each anon against its own
+defining scope. p2(10) = twice(inc(twice(10))) = twice(inc(20)) = twice(21) = 42.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def twice ($x) [+ $x $x]]
+[?def inc ($x) [+ $x 1]]
+[?def pipe ($f $g) [?fn ($x) [$g [$f $x]]]]
+[?let [= $p2 [$pipe [$pipe $twice $inc] $twice]] [$p2 10]]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
  [case id=program-for-014-pipe-sugar level=core
   [tags pipe sugar composition]
   [in-cx [#

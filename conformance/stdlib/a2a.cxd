@@ -1,0 +1,82 @@
+[test-suite name=a2a
+  [doc [#
+Conformance fixtures for cx-x/a2a — a minimal A2A (Agent-to-Agent) protocol client
+(#6 Y2). NB cx-x/a2a is an EXPERIMENTAL x/-TIER module (D3): bundled + gated but
+exempt from the frozen-std stability promise. Programs name the tier via
+[?lib 'cx-x/a2a'].
+
+A2A is JSON-RPC 2.0 over HTTP, so this completes the agentic triad (S9 MCP client,
+Y1 MCP server, Y2 A2A) on the shared substrate (jsonrpc + json + http). These cover
+the PURE layer — message/card shaping + response extraction. The effectful client
+(send-message/ask) and the cx↔cx round-trip are proven by
+vcx/tests/v08_a2a_real_test.v.
+
+Each program imports the module + json for grounding; the LAST expression renders
+the result (emitted JSON has keys sorted; strings single-quoted).
+#]]
+
+  [case id=a2a-001-send-request-shape level=core
+   [tags a2a message-send jsonrpc shaping]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a' :as a2a]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$a2a:send-request 1 [$a2a:user-message "hello" "m1"]]]
+#]]
+   [out-text [#
+'{"id":1,"jsonrpc":"2.0","method":"message/send","params":{"message":{"kind":"message","messageId":"m1","parts":[{"kind":"text","text":"hello"}],"role":"user"}}}'
+#]]
+  ]
+
+  [case id=a2a-002-user-message-shape level=core
+   [tags a2a message parts shaping]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a' :as a2a]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$a2a:user-message "hello" "m1"]]
+#]]
+   [out-text [#
+'{"kind":"message","messageId":"m1","parts":[{"kind":"text","text":"hello"}],"role":"user"}'
+#]]
+  ]
+
+  [case id=a2a-003-agent-card level=core
+   [tags a2a agent-card shaping]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a' :as a2a]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$a2a:agent-card "greeter" "says hi" "http://x/" "0.1"]]
+#]]
+   [out-text [#
+'{"capabilities":{"streaming":false},"description":"says hi","name":"greeter","skills":[],"url":"http://x/","version":"0.1"}'
+#]]
+  ]
+
+  [case id=a2a-004-message-text-extracts-first-part level=core
+   [tags a2a message-text response]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a' :as a2a]
+[?lib 'cx-stdlib/json' :as json]
+[$a2a:message-text [$json:parse "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"role\":\"agent\",\"parts\":[{\"kind\":\"text\",\"text\":\"hi back\"}],\"kind\":\"message\"}}"]]
+#]]
+   [out-text [#
+'hi back'
+#]]
+  ]
+
+  [case id=a2a-005-task-state level=core
+   [tags a2a task-state response]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a' :as a2a]
+[?lib 'cx-stdlib/json' :as json]
+[$a2a:task-state [$json:parse "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"id\":\"t1\",\"status\":{\"state\":\"completed\"}}}"]]
+#]]
+   [out-text [#
+'completed'
+#]]
+  ]
+]

@@ -121,14 +121,16 @@ fn codec_registry_dispatch(name string, args []cx.Node) ?cx.Node {
 		return codec_convert(args)
 	}
 	for fmt in cx.codec_names() {
-		if name == '${fmt}-parse' {
+		// Accept BOTH the flat `<fmt>-<op>` dispatch name and the namespaced
+		// `<fmt>:<op>` form documented in codec.md §7 (`[$<from>:parse]`).
+		if name == '${fmt}-parse' || name == '${fmt}:parse' {
 			if args.len < 1 {
 				return none
 			}
 			s := codec_arg_str(args[0]) or { return none }
 			return cx.codec_parse_node(fmt, s) or { return mk_err(codec_parse_err, err.msg()) }
 		}
-		if name == '${fmt}-parse-bytes' {
+		if name == '${fmt}-parse-bytes' || name == '${fmt}:parse-bytes' {
 			if args.len < 1 {
 				return none
 			}
@@ -137,7 +139,7 @@ fn codec_registry_dispatch(name string, args []cx.Node) ?cx.Node {
 				return mk_err(codec_parse_err, err.msg())
 			}
 		}
-		if name == '${fmt}-emit' {
+		if name == '${fmt}-emit' || name == '${fmt}:emit' {
 			if args.len < 1 {
 				return none
 			}
@@ -146,7 +148,7 @@ fn codec_registry_dispatch(name string, args []cx.Node) ?cx.Node {
 			}
 			return codec_str_node(out)
 		}
-		if name == '${fmt}-emit-bytes' {
+		if name == '${fmt}-emit-bytes' || name == '${fmt}:emit-bytes' {
 			if args.len < 1 {
 				return none
 			}

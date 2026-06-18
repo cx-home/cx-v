@@ -1,0 +1,45 @@
+# cx-stdlib/jsonschema — JSON Schema 2020-12 validation (frozen `std` substrate).
+#
+# MCP tool input schemas ARE JSON Schema, so this lets CX consume them without
+# reinventing. A schema and the value under test are ordinary CX values (a JSON
+# object parsed by [$json:parse] is a map); validation is a pure recursive walk
+# returning the same [ok] / [invalid [violation …]] outcome shape as
+# cx-stdlib/validate — failure is the inspectable [invalid …] value, NOT a
+# propagating [err]. The recursive walk + RE2 `pattern` matching are not
+# expressible in pure CX, so the bodies forward to native primitives
+# (vcx/code/stdlib_jsonschema.v). Per ADR spec/03-approved/std-lib/README.md
+# (D3 — substrate in frozen std; the MCP shim that consumes this lives in `x/`).
+# cx-private #6 (S7).
+#
+# Supported keywords (the common MCP subset): type (string/number/integer/
+# boolean/object/array/null), enum, const, required, properties, items, minimum,
+# maximum, minLength, maxLength, pattern, minItems, maxItems. Unsupported keywords
+# are ignored (a permissive superset is still schema-valid).
+
+# ── validation ───────────────────────────────────────────────────────────────
+[?def validate scope=public pure [returns element] ($value::any $schema::any)
+  [$jsonschema-validate $value $schema]]
+
+[?def is-valid scope=public pure [returns bool] ($value::any $schema::any)
+  [$jsonschema-is-valid $value $schema]]
+
+# ── result inspection ──────────────────────────────────────────────────────────
+[?def violations scope=public pure [returns [sequence element]] ($result::element)
+  [$jsonschema-violations $result]]
+
+[?def violation-paths scope=public pure [returns [sequence string]] ($result::element)
+  [$jsonschema-violation-paths $result]]
+
+# ── fn-docs ──────────────────────────────────────────────────────────────────
+[fn-doc name=validate scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Validate a value against a JSON Schema 2020-12 (MCP subset), returning [ok] or [invalid [violation keyword= path= message=] …]."""]]
+[fn-doc name=is-valid scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """True when the value satisfies every supported keyword of the schema (no violations)."""]]
+[fn-doc name=violations scope=public purity=pure
+  [sig """-> [sequence element]"""]
+  [summary """The [violation …] elements from a validate result — empty for an [ok] result."""]]
+[fn-doc name=violation-paths scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """The JSON-pointer-style paths of each violation in a validate result."""]]

@@ -176,6 +176,11 @@ pub mut:
 	// in order when computing eager const values to honour the const-
 	// to-const reference graph.
 	const_order []string
+	// scope is the module's lexical Scope (its bare defs + consts + the prefixed
+	// members of its own imports), built once on first import and shared by all
+	// importers — a member's body resolves its free names here (#19/#22). nil
+	// until ensure_module_scope builds it.
+	scope &Scope = unsafe { nil }
 }
 
 // ModuleTable is the loader's working state across a load_module
@@ -218,6 +223,10 @@ pub mut:
 	// re-exported, §12.4.4) raises CXER0216 (E_VISIBILITY) — distinct
 	// from CXER0213 (resolver matches no module).
 	alias_modules      map[string]&Module
+	// module_scopes caches each module's lexical Scope (keyed by resolver_source),
+	// built once on first import and shared by all importers (#19/#22). Holds the
+	// module's bare defs + consts + the prefixed members of its own imports.
+	module_scopes      map[string]&Scope
 }
 
 // new_module_table constructs an empty ModuleTable rooted at the
@@ -231,6 +240,7 @@ pub fn new_module_table() ModuleTable {
 		registered_sources: map[string]string{}
 		base_dir:           ''
 		alias_modules:      map[string]&Module{}
+		module_scopes:      map[string]&Scope{}
 	}
 }
 
@@ -666,6 +676,17 @@ fn module_loader_scan_directives(source string) ![]ModuleLoaderDirective {
 		// Skip whitespace.
 		if c == ` ` || c == `\t` || c == `\n` || c == `\r` {
 			i++
+			continue
+		}
+		// Skip CX `#` line comments to end-of-line (#20): a commented-out
+		// `[?lib]` / `[?def]` / `[?const]` must NOT be scanned as a real
+		// directive on import, exactly as the direct-run lexer ignores it. At
+		// the scanner's top level a `#` always begins a line comment (directives
+		// are `[…]`, raw `[# … #]` blocks are skipped as a balanced span below).
+		if c == `#` {
+			for i < src.len && src[i] != `\n` {
+				i++
+			}
 			continue
 		}
 		// Skip CX-style block comments `[- … -]` (depth-aware).

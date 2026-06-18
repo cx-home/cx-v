@@ -1,0 +1,97 @@
+[test-suite name=mcp-server
+  [doc [#
+Conformance fixtures for cx-x/mcp-server — minimal MCP server helpers (#6 Y1). NB
+cx-x/mcp-server is an EXPERIMENTAL x/-TIER module (D3): bundled + gated but exempt
+from the frozen-std stability promise. Programs name the tier via
+[?lib 'cx-x/mcp-server'].
+
+These cover the PURE layer — request reading + JSON-RPC response shaping composed
+from cx-stdlib/jsonrpc + json. The effectful server (cx-stdlib/http serve + a
+dispatching handler) and the client↔server round-trip are proven by
+vcx/tests/v08_mcp_server_real_test.v. The differentiator — a tool handler's effects
+gated by CX capabilities (#6 Y1, ties #7 PEP) — is a property of running the
+handler under a capability grant; tool-error wraps a denied effect (CXER0271) as an
+isError result.
+
+Each program imports the module + json for grounding; the LAST expression renders
+the result (JSON strings single-quoted, the emitted JSON has keys sorted).
+#]]
+
+  [case id=mcp-server-001-initialize-result level=core
+   [tags mcp-server initialize handshake]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$srv:initialize-result 1 "cx-demo" "0.1"]]
+#]]
+   [out-text [#
+'{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"name":"cx-demo","version":"0.1"}}}'
+#]]
+  ]
+
+  [case id=mcp-server-002-tool-result level=core
+   [tags mcp-server tool-result]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$srv:tool-result 2 "72F"]]
+#]]
+   [out-text [#
+'{"id":2,"jsonrpc":"2.0","result":{"content":[{"text":"72F","type":"text"}],"isError":false}}'
+#]]
+  ]
+
+  [case id=mcp-server-003-tool-error-is-error-true level=core
+   [tags mcp-server tool-error capability]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$srv:tool-error 3 "denied: net"]]
+#]]
+   [out-text [#
+'{"id":3,"jsonrpc":"2.0","result":{"content":[{"text":"denied: net","type":"text"}],"isError":true}}'
+#]]
+  ]
+
+  [case id=mcp-server-004-protocol-error-method-not-found level=core
+   [tags mcp-server protocol-error jsonrpc]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$srv:protocol-error 4 "method-not-found"]]
+#]]
+   [out-text [#
+'{"error":{"code":-32601,"message":"Method not found"},"id":4,"jsonrpc":"2.0"}'
+#]]
+  ]
+
+  [case id=mcp-server-005-method-of level=core
+   [tags mcp-server method-of request]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/json' :as json]
+[$srv:method-of [$json:parse "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\"}}"]]
+#]]
+   [out-text [#
+'tools/call'
+#]]
+  ]
+
+  [case id=mcp-server-006-tool-name-of level=core
+   [tags mcp-server tool-name-of request]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/json' :as json]
+[$srv:tool-name-of [$json:parse "{\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"t\":\"hi\"}}}"]]
+#]]
+   [out-text [#
+'echo'
+#]]
+  ]
+]

@@ -1,0 +1,113 @@
+# cx-stdlib/jsonrpc — JSON-RPC 2.0 message model (frozen `std` substrate).
+#
+# The stable wire under both MCP and the LSP (JSON-RPC 2.0, stable since 2010).
+# This module is the MESSAGE MODEL: it builds + classifies + validates JSON-RPC
+# values as CX maps; the codec is `cx-stdlib/json` (`[$json:emit]` / `[$json:parse]`)
+# at the transport boundary. Pure data, no effects. Per ADR
+# spec/03-approved/std-lib/README.md (D3 — substrate in frozen std; the MCP
+# shim that consumes this lives in the `x/` tier). cx-private #6 (S1).
+#
+# A request is {jsonrpc:"2.0", id, method, params?}; a notification omits `id`;
+# a success response is {jsonrpc:"2.0", id, result}; an error response is
+# {jsonrpc:"2.0", id, error:{code, message, data?}}. A batch is a sequence of
+# these. `params`/`data` are omitted when empty (JSON-RPC distinguishes absent).
+
+# ── builders ─────────────────────────────────────────────────────────────────
+[?def request scope=public pure [returns map] ($id::any $method::string $params::any {})
+  [?if [= [$count $params] 0]
+    [then {jsonrpc: "2.0" id: $id method: $method}]
+    [else {jsonrpc: "2.0" id: $id method: $method params: $params}]]]
+
+[?def notification scope=public pure [returns map] ($method::string $params::any {})
+  [?if [= [$count $params] 0]
+    [then {jsonrpc: "2.0" method: $method}]
+    [else {jsonrpc: "2.0" method: $method params: $params}]]]
+
+[?def success scope=public pure [returns map] ($id::any $result::any)
+  {jsonrpc: "2.0" id: $id result: $result}]
+
+[?def error scope=public pure [returns map] ($id::any $code::int $message::string $data::any {})
+  [?if [= [$count $data] 0]
+    [then {jsonrpc: "2.0" id: $id error: {code: $code message: $message}}]
+    [else {jsonrpc: "2.0" id: $id error: {code: $code message: $message data: $data}}]]]
+
+# error-for builds a standard error response for a named kind (parse-error,
+# invalid-request, method-not-found, invalid-params, internal-error).
+[?def error-for scope=public pure [returns map] ($id::any $kind::string)
+  [?let [= $c [$code $kind]]
+   [?let [= $m [$message-for $kind]]
+    [$error $id $c $m {}]]]]
+
+# ── standard error codes (JSON-RPC 2.0 §5.1) ────────────────────────────────
+[?def code scope=public pure [returns int] ($kind::string)
+  [?if [= $kind "parse-error"] [then -32700]
+  [else [?if [= $kind "invalid-request"] [then -32600]
+  [else [?if [= $kind "method-not-found"] [then -32601]
+  [else [?if [= $kind "invalid-params"] [then -32602]
+  [else -32603]]]]]]]]]   # internal-error (and the default for an unknown kind)
+
+[?def message-for scope=public pure [returns string] ($kind::string)
+  [?if [= $kind "parse-error"] [then "Parse error"]
+  [else [?if [= $kind "invalid-request"] [then "Invalid Request"]
+  [else [?if [= $kind "method-not-found"] [then "Method not found"]
+  [else [?if [= $kind "invalid-params"] [then "Invalid params"]
+  [else "Internal error"]]]]]]]]]
+
+# ── classify + validate ──────────────────────────────────────────────────────
+# classify → request | notification | success | error | invalid (by shape).
+[?def classify scope=public pure [returns string] ($msg::any)
+  [?let [= $has-method [not [= [$count $msg/method] 0]]]
+   [?let [= $has-id [not [= [$count $msg/id] 0]]]
+    [?let [= $has-result [not [= [$count $msg/result] 0]]]
+     [?let [= $has-error [not [= [$count $msg/error] 0]]]
+      [?if $has-method
+        [then [?if $has-id [then "request"] [else "notification"]]]
+        [else [?if $has-error
+                [then "error"]
+                [else [?if $has-result [then "success"] [else "invalid"]]]]]]]]]]]
+
+# is-valid → the `jsonrpc` member is exactly "2.0" AND the shape classifies.
+[?def is-valid scope=public pure [returns bool] ($msg::any)
+  [?let [= $ver $msg/jsonrpc]
+   [?let [= $kind [$classify $msg]]
+    [and [= $ver "2.0"] [not [= $kind "invalid"]]]]]]
+
+# is-batch → a non-empty SEQUENCE of messages. A `/jsonrpc` path distributes over
+# a sequence, so a batch of N messages yields N jsonrpc members — equal to its item
+# count; a single message MAP has ≥2 entries but only ONE jsonrpc member, so the
+# counts differ. (A batch whose items aren't all messages yields fewer → not a batch.)
+[?def is-batch scope=public pure [returns bool] ($msg::any)
+  [?let [= $n [$count $msg]]
+   [and [not [= $n 0]] [= $n [$count $msg/jsonrpc]]]]]
+
+# ── fn-docs ──────────────────────────────────────────────────────────────────
+[fn-doc name=request scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a JSON-RPC 2.0 request {jsonrpc:"2.0", id, method, params?} (params omitted when empty)."""]]
+[fn-doc name=notification scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a JSON-RPC 2.0 notification {jsonrpc:"2.0", method, params?} — a request with no id (no response expected)."""]]
+[fn-doc name=success scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a JSON-RPC 2.0 success response {jsonrpc:"2.0", id, result}."""]]
+[fn-doc name=error scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a JSON-RPC 2.0 error response {jsonrpc:"2.0", id, error:{code, message, data?}}."""]]
+[fn-doc name=error-for scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a standard error response for a named kind (parse-error/invalid-request/method-not-found/invalid-params/internal-error)."""]]
+[fn-doc name=code scope=public purity=pure
+  [sig """-> int"""]
+  [summary """The JSON-RPC 2.0 reserved error code for a named kind (-32700..-32603); unknown kinds map to internal-error (-32603)."""]]
+[fn-doc name=message-for scope=public purity=pure
+  [sig """-> string"""]
+  [summary """The canonical message string for a named JSON-RPC error kind."""]]
+[fn-doc name=classify scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Classify a JSON-RPC value by shape: request | notification | success | error | invalid."""]]
+[fn-doc name=is-valid scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """True when the value has jsonrpc:"2.0" and a recognized shape."""]]
+[fn-doc name=is-batch scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """True when the value is a sequence of JSON-RPC messages (its first item carries a jsonrpc member)."""]]

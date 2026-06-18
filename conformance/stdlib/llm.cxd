@@ -1,0 +1,57 @@
+[test-suite name=llm
+  [doc [#
+Conformance fixtures for cx-x/llm — the minimal LLM provider, the first Runnable
+(spec/02-working/agentic_positioning.md D2/S10). NB cx-x/llm is an EXPERIMENTAL
+x/-TIER module (D3): bundled + gated but exempt from the frozen-std stability
+promise. Programs name the tier explicitly via [?lib 'cx-x/llm'].
+
+These fixtures cover the PURE protocol layer (request shaping + response
+extraction) — the request/response CONTRACT, testable with no network. The
+effectful surface (complete / the chat Runnable, which POST to Ollama /api/chat)
+is proven by a live loopback round-trip in vcx/tests/v08_llm_real_test.v (a mock
+Ollama server), since the hermetic conformance harness can't reach a server —
+the same split the http module uses (live round-trips are out-of-band).
+
+Each program imports the module (resolver MUST be quoted) + cx-stdlib/json for
+grounding; the LAST expression renders the result (JSON strings single-quoted).
+#]]
+
+  [case id=llm-001-chat-request-shape level=core
+   [tags llm chat-request ollama shaping]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/llm' :as llm]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$llm:chat-request "llama3" "Hello"]]
+#]]
+   [out-text [#
+'{"messages":[{"content":"Hello","role":"user"}],"model":"llama3","stream":false}'
+#]]
+  ]
+
+  [case id=llm-002-user-message level=core
+   [tags llm user-message shaping]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/llm' :as llm]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$llm:user-message "hi"]]
+#]]
+   [out-text [#
+'{"content":"hi","role":"user"}'
+#]]
+  ]
+
+  [case id=llm-003-completion-of-extracts-assistant-text level=core
+   [tags llm completion-of ollama response]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/llm' :as llm]
+[?lib 'cx-stdlib/json' :as json]
+[$llm:completion-of [$json:parse "{\"model\":\"llama3\",\"message\":{\"role\":\"assistant\",\"content\":\"Hi there!\"},\"done\":true}"]]
+#]]
+   [out-text [#
+'Hi there!'
+#]]
+  ]
+]

@@ -4,6 +4,7 @@ module code
 import cx
 import encoding.base64
 import crypto.sha256
+import crypto.ed25519
 
 // stdlib_session.v — native primitives backing the `cx-stdlib/session`
 // module (spec/02-inprogress/xap/stdlib_session.md). The thin (principal,
@@ -432,6 +433,16 @@ fn session_attach_pipeline(token string, cfg map[string]cx.Node, via string, cha
 		return session_err_with_cause(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: token failed crypto jwt-verify',
 			verified)
 	}
+	return session_establish_from_verified(verified, cfg, via, channel, client_id,
+		issue_csrf, token)
+}
+
+// session_establish_from_verified runs the post-verification tail shared by
+// every attach path (JWT bearer, DID proof-of-control): map the verified
+// claim-set → (principal, tenant), then mirror-attach to a live session for
+// that subject or mint a new one. `token` is '' for non-bearer paths (the
+// bearer token fingerprint index is only written when via == 'bearer').
+fn session_establish_from_verified(verified cx.Node, cfg map[string]cx.Node, via string, channel string, client_id string, issue_csrf bool, token string) cx.Node {
 	// (map) — verified claim-set → (principal, tenant) (§2.3).
 	binding := session_map_claims(verified, cfg)
 	if is_err_value(binding) {
@@ -767,6 +778,9 @@ fn session_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		'session-attach-token' {
 			return session_attach_token_impl(args)
 		}
+		'session-attach-did' {
+			return session_attach_did_impl(args)
+		}
 		'session-detach' {
 			return session_detach_impl(args)
 		}
@@ -945,6 +959,97 @@ fn session_attach_token_impl(args []cx.Node) cx.Node {
 		return mk_err(session_err_insecure_transport, 'E_SESSION_INSECURE_TRANSPORT: attach-token requires a TLS attestation (allow-insecure or $client.tls)')
 	}
 	return session_attach_pipeline(token, cfg, 'bearer', channel, client_id, false)
+}
+
+// attach-did $did $challenge $sig $cfg $client? — establish a (principal,
+// tenant) session by DECENTRALIZED proof-of-control (xap.md R9 / §22.1): the
+// client proves it controls the key behind `did` by signing a server-issued
+// challenge. Identity is the DID; authority (a VC) is consumed by the PEP
+// separately (R9 — DID/VC is the authority-basis transport, not enforcement).
+// Mirrors attach-token's posture: TLS-attested, fail-closed, capability-free.
+// `cfg` supplies `tenant` (required) and may carry a `vc` (+ `now`, `revoked`)
+// that MUST verify valid; the cascade stays identity-agnostic (cx-private#43).
+fn session_attach_did_impl(args []cx.Node) cx.Node {
+	if args.len < 4 {
+		return mk_err(session_err_principal_unresolved, 'E_SESSION_NO_PRINCIPAL: attach-did expects (did, challenge, sig, cfg)')
+	}
+	did := session_arg_str(args[0]) or {
+		return mk_err(session_err_principal_unresolved, 'E_SESSION_NO_PRINCIPAL: attach-did expects a DID string')
+	}
+	challenge := arg_bytes(args[1]) or {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-did challenge must be bytes')
+	}
+	sig := arg_bytes(args[2]) or {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-did signature must be bytes')
+	}
+	cfg := session_opts(args[3])
+	allow_insecure := session_opt_bool(cfg, 'allow-insecure', false)
+	mut channel := 'cx'
+	mut client_id := ''
+	mut tls_attested := allow_insecure
+	if args.len > 4 {
+		cl := session_opts(args[4])
+		channel = session_opt_str(cl, 'channel', 'cx')
+		client_id = session_opt_str(cl, 'id', '')
+		if session_opt_bool(cl, 'tls', false) {
+			tls_attested = true
+		}
+	}
+	if !tls_attested {
+		return mk_err(session_err_insecure_transport, 'E_SESSION_INSECURE_TRANSPORT: attach-did requires a TLS attestation (allow-insecure or \$client.tls)')
+	}
+	// (verify) — proof of DID key control, delegated to cx-stdlib/did
+	// (did:key offline). FAIL-CLOSED: any ambiguity rejects (§2.2).
+	key := did_key_bytes(did) or {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-did cannot recover key for ${did}: ${err.msg()}')
+	}
+	if sig.len != 64 {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-did signature must be 64 bytes')
+	}
+	ok := ed25519.verify(ed25519.PublicKey(key), challenge, sig) or {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-did proof-of-control failed')
+	}
+	if !ok {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-did proof-of-control did not verify')
+	}
+	// (optional VC) — if cfg carries a credential, it MUST verify valid.
+	if vc_node := session_opt_node(cfg, 'vc') {
+		now_node := session_opt_node(cfg, 'now') or { session_str('') }
+		mut vargs := [vc_node, now_node]
+		if r := session_opt_node(cfg, 'revoked') {
+			vargs << cx.Node(cx.Element{
+				name:  '__cx_map__'
+				items: [session_kv('revoked', r)]
+			})
+		}
+		verdict := vc_do_verify(vargs)
+		status := if verdict is cx.Element { (verdict as cx.Element).attr('status') } else { '' }
+		if status != 'valid' {
+			return session_err_with_cause(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-did credential is not valid (status=${status})',
+				verdict)
+		}
+	}
+	tenant := session_opt_str(cfg, 'tenant', '')
+	if tenant == '' {
+		return mk_err(session_err_tenant_unresolved, 'E_SESSION_NO_TENANT: attach-did cfg has no `tenant`')
+	}
+	// (map) — the DID is the principal; build a verified claim-set the shared
+	// establishment maps via sub/tid (§2.3).
+	claims := cx.Element{
+		name:  'claims'
+		attrs: [
+			cx.Attribute{
+				name:  'sub'
+				value: cx.ScalarValue(did)
+			},
+			cx.Attribute{
+				name:  'tid'
+				value: cx.ScalarValue(tenant)
+			},
+		]
+	}
+	return session_establish_from_verified(cx.Node(claims), cfg, 'did', channel, client_id,
+		false, '')
 }
 
 // detach $session — tears the WHOLE session down (terminal "detached",

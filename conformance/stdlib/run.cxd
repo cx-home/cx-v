@@ -1,0 +1,124 @@
+[test-suite name=run
+  [doc [#
+Conformance fixtures for cx-x/run — the Runnable convention + combinator library
+(spec/02-working/agentic_positioning.md D2/M2). NB cx-x/run is an EXPERIMENTAL
+x/-TIER module (D3): bundled + gated like the frozen tier, but exempt from the
+byte-compatible-reimpl stability promise. These fixtures live under the harness
+root (conformance/stdlib/) — the loader resolves cx-x/* from the same seeded
+table — and every program names the tier explicitly via [?lib 'cx-x/run'].
+
+A Runnable is any CALLABLE value (a [?def], a [?fn], a $-bound closure). The
+convention is PURE + homoiconic: invoke applies one→one, batch maps many→many
+(returning a first-class sequence via the frozen fp functor), and
+pipe/compose/fan-out wire Runnables. Each program defines local Runnables,
+imports the module (resolver MUST be quoted), and the LAST expression is the
+rendered result (ints bare, sequences in paren form (a, b)). Combinators that
+RETURN a Runnable (pipe/compose) are grounded by applying the result through
+invoke, since a closure has no literal serialization.
+
+pipe/compose nest to any depth (an LCEL-style algebra): a pipe RESULT fed back
+into another pipe composes >2 stages (run-007), since a re-captured closure
+keeps its own environment (cx-private #45, fixed).
+#]]
+
+  [case id=run-001-invoke-applies-one-to-one level=core
+   [tags run invoke convention]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/run' :as run]
+[?def twice ($x) [+ $x $x]]
+[$run:invoke $twice 21]
+#]]
+   [out-text [#
+42
+#]]
+  ]
+
+  [case id=run-002-batch-maps-many-to-many level=core
+   [tags run batch convention]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/run' :as run]
+[?def twice ($x) [+ $x $x]]
+[$run:batch $twice (1, 2, 3)]
+#]]
+   [out-text [#
+(2, 4, 6)
+#]]
+  ]
+
+  [case id=run-003-pipe-left-to-right level=core
+   [tags run pipe combinator]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/run' :as run]
+[?def twice ($x) [+ $x $x]]
+[?def inc ($x) [+ $x 1]]
+[$run:invoke [$run:pipe $twice $inc] 10]
+#]]
+   [out-text [#
+21
+#]]
+  ]
+
+  [case id=run-004-compose-right-to-left level=core
+   [tags run compose combinator]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/run' :as run]
+[?def twice ($x) [+ $x $x]]
+[?def inc ($x) [+ $x 1]]
+[$run:invoke [$run:compose $twice $inc] 10]
+#]]
+   [out-text [#
+22
+#]]
+  ]
+
+  [case id=run-005-fan-out-same-input level=core
+   [tags run fan-out combinator]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/run' :as run]
+[?def twice ($x) [+ $x $x]]
+[?def inc ($x) [+ $x 1]]
+[$run:fan-out ($twice, $inc) 10]
+#]]
+   [out-text [#
+(20, 11)
+#]]
+  ]
+
+  [case id=run-006-runnable-is-any-callable level=core
+   [tags run invoke fn-literal convention]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/run' :as run]
+[$run:invoke [?fn ($x) [+ $x 100]] 5]
+#]]
+   [out-text [#
+105
+#]]
+  ]
+
+  [case id=run-007-pipe-nests-past-two-stages level=core
+   [tags run pipe compose combinator nesting]
+   [doc [#
+A pipe RESULT fed back into another pipe composes a >2-stage pipeline (the
+LCEL-style algebra): [$run:pipe [$run:pipe twice inc] twice] applied to 10 =
+twice(inc(twice(10))) = twice(inc(20)) = twice(21) = 42. Exercises the
+nested-closure re-capture fixed in cx-private #45 — the inner pipe's returned
+closure keeps its own captured environment when re-captured by the outer pipe.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/run' :as run]
+[?def twice ($x) [+ $x $x]]
+[?def inc ($x) [+ $x 1]]
+[$run:invoke [$run:pipe [$run:pipe $twice $inc] $twice] 10]
+#]]
+   [out-text [#
+42
+#]]
+  ]
+]

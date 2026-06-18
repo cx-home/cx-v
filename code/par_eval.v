@@ -406,11 +406,8 @@ pub fn eval_map_directive_streamed(d cx.ProgramDirective, mut env MatchEnv, mut 
 	}
 	source_val := eval_node(source_node, mut env)!
 	using_val := eval_node(using_slot, mut env)!
-	closure_id := closure_id_of(using_val) or {
+	closure := resolve_closure(using_val, env) or {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?map] :using must evaluate to a closure' }
-	}
-	closure := env.closures[closure_id] or {
-		return EvalError{ code: 'cx-err:CXER0001', message: '[?map] :using closure not found' }
 	}
 	items := iterate(source_val)
 	if par_flag {

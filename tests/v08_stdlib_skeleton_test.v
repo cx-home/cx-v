@@ -32,7 +32,7 @@ import os
 
 fn test_stdlib_surface_enumerates_bundled_subpackages() {
 	names := code.bundled_stdlib_names()
-	assert names.len == 37, 'expected 37 cx-stdlib sub-packages, got ${names.len}: ${names}'
+	assert names.len == 42, 'expected 42 cx-stdlib sub-packages, got ${names.len}: ${names}'
 	expected := [
 		'cx-stdlib/strings',
 		'cx-stdlib/json',
@@ -71,9 +71,70 @@ fn test_stdlib_surface_enumerates_bundled_subpackages() {
 		'cx-stdlib/session',
 		'cx-stdlib/authz',
 		'cx-stdlib/sched',
+		// post-v0.8.0 trust additions (README §3.2; issue #26): 37→38 did, 38→39 vc.
+		'cx-stdlib/did',
+		'cx-stdlib/vc',
+		// working-status transport module (spec/02-working/xsp.md; issue #31):
+		// 39→40 xsp. Bundled to back the XAP web client; graduates to approved
+		// (and the README §3 count) later.
+		'cx-stdlib/xsp',
+		// agentic substrate (spec/03-approved/std-lib/README.md D3; #6 S1):
+		// 40→41 jsonrpc — JSON-RPC 2.0, the wire under MCP + LSP.
+		'cx-stdlib/jsonrpc',
+		// 41→42 jsonschema — JSON Schema 2020-12 (MCP-tool-schema subset; #6 S7).
+		// CX consumes MCP tool schemas (which ARE JSON Schema) without reinventing.
+		'cx-stdlib/jsonschema',
 	]
 	for n in expected {
 		assert n in names, 'expected ${n} in bundled_stdlib_names(), got ${names}'
+	}
+}
+
+// ── x/ experimental tier — separate surface, exempt from the frozen canary ────
+// spec/03-approved/std-lib/README.md D3: the x/ tier is bundled + gated but
+// must NOT be counted by the frozen-surface canary above. Assert the tier
+// resolves, parses, exposes a public [?def] — and crucially that NO x/ name
+// leaks into bundled_stdlib_names() (the tier-separation invariant).
+fn test_x_tier_is_bundled_separately_from_frozen_std() {
+	x_names := code.bundled_x_names()
+	assert x_names.len > 0, 'expected ≥1 bundled cx-x/ module'
+	assert 'cx-x/run' in x_names, 'expected cx-x/run in bundled_x_names(), got ${x_names}'
+	frozen := code.bundled_stdlib_names()
+	for xn in x_names {
+		assert xn !in frozen, '${xn} (x/ tier) must NOT appear in the frozen bundled_stdlib_names()'
+		src := code.bundled_x_source(xn) or {
+			assert false, 'no source for ${xn}'
+			return
+		}
+		assert src.len > 0, 'empty source for ${xn}'
+		// x/ modules MAY import frozen std (e.g. cx-x/run uses cx-stdlib/fp),
+		// so resolve against a table seeded with both tiers — not an empty one.
+		mut table := code.new_module_table()
+		code.register_bundled_stdlib(mut table)
+		code.register_bundled_x(mut table)
+		mod := code.load_module(src, xn, mut table) or {
+			assert false, 'load_module failed for ${xn}: ${err}'
+			return
+		}
+		mut any_public := false
+		for _, def in mod.defs {
+			if scope := def.scope {
+				if scope == 'public' {
+					any_public = true
+					break
+				}
+			}
+		}
+		assert any_public, '${xn} has no scope=public [?def]'
+	}
+}
+
+// register_bundled_x populates every x/ name into a fresh table.
+fn test_x_tier_register_populates_table() {
+	mut table := code.new_module_table()
+	code.register_bundled_x(mut table)
+	for name in code.bundled_x_names() {
+		assert name in table.registered_sources, 'expected ${name} in registered_sources'
 	}
 }
 

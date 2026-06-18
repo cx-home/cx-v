@@ -112,6 +112,43 @@ const stdlib_src_session = $embed_file('../stdlib/session.cx').to_string()
 
 const stdlib_src_authz = $embed_file('../stdlib/authz.cx').to_string()
 
+// did/vc — post-v0.8.0 trust additions (std-lib/README §3.2; issue #26).
+const stdlib_src_did = $embed_file('../stdlib/did.cx').to_string()
+
+const stdlib_src_vc = $embed_file('../stdlib/vc.cx').to_string()
+
+// xsp — XAP Stream Protocol frame codec (spec/02-working/xsp.md; issue #31).
+const stdlib_src_xsp = $embed_file('../stdlib/xsp.cx').to_string()
+
+const stdlib_src_jsonrpc = $embed_file('../stdlib/jsonrpc.cx').to_string()
+
+// jsonschema — JSON Schema 2020-12 validation (MCP-tool-schema subset; #6 S7).
+const stdlib_src_jsonschema = $embed_file('../stdlib/jsonschema.cx').to_string()
+
+// ── x/ experimental tier (spec/03-approved/std-lib/README.md D3) ──────────
+// In-tree, bundled, gated — but EXEMPT from the frozen-`std` stability promise
+// (semver-breaking allowed; marked in the module header + the guide). Kept in a
+// SEPARATE names list from bundled_stdlib_names() so the frozen-surface canary
+// (v08_stdlib_skeleton_test.v) never counts experimental modules. Sources live
+// under the repo-root `x/` directory (parallel to `stdlib/`), so the tier is
+// visible in the layout, not only the resolver name.
+const x_src_run = $embed_file('../../x/run.cx').to_string()
+
+// llm — minimal LLM provider, the first Runnable (#6 S10; Ollama /api/chat).
+const x_src_llm = $embed_file('../../x/llm.cx').to_string()
+
+// mcp — minimal MCP client (#6 S9; JSON-RPC 2.0 over Streamable HTTP).
+const x_src_mcp = $embed_file('../../x/mcp.cx').to_string()
+
+// mcp-server — minimal MCP server helpers (#6 Y1; cap-gated tools, ties #7 PEP).
+const x_src_mcp_server = $embed_file('../../x/mcp-server.cx').to_string()
+
+// a2a — minimal A2A (Agent-to-Agent) protocol client (#6 Y2; JSON-RPC over HTTP).
+const x_src_a2a = $embed_file('../../x/a2a.cx').to_string()
+
+// a2a-xap — A2A tasks over the xap substrate (#6 Y2b; tasks→journal, replayable).
+const x_src_a2a_xap = $embed_file('../../x/a2a-xap.cx').to_string()
+
 // ── Public surface ──────────────────────────────────────────────────
 
 // bundled_stdlib_names returns the 14 frozen `cx-stdlib/*` resolver
@@ -155,6 +192,11 @@ pub fn bundled_stdlib_names() []string {
 		'cx-stdlib/session',
 		'cx-stdlib/authz',
 		'cx-stdlib/sched',
+		'cx-stdlib/did',
+		'cx-stdlib/vc',
+		'cx-stdlib/xsp',
+		'cx-stdlib/jsonrpc',
+		'cx-stdlib/jsonschema',
 	]
 }
 
@@ -200,7 +242,51 @@ pub fn bundled_stdlib_source(name string) ?string {
 		'cx-stdlib/session' { stdlib_src_session }
 		'cx-stdlib/authz'   { stdlib_src_authz }
 		'cx-stdlib/sched'   { stdlib_src_sched }
+		'cx-stdlib/did'     { stdlib_src_did }
+		'cx-stdlib/vc'      { stdlib_src_vc }
+		'cx-stdlib/xsp'     { stdlib_src_xsp }
+		'cx-stdlib/jsonrpc' { stdlib_src_jsonrpc }
+		'cx-stdlib/jsonschema' { stdlib_src_jsonschema }
 		else                { none }
+	}
+}
+
+// ── x/ experimental tier surface (D3) ────────────────────────────────────────
+
+// bundled_x_names returns the bundled `cx-x/<name>` experimental-tier resolver
+// names. SEPARATE from bundled_stdlib_names() — these are exempt from the frozen
+// stability promise and MUST NOT be counted by the frozen-surface canary.
+pub fn bundled_x_names() []string {
+	return [
+		'cx-x/run',
+		'cx-x/llm',
+		'cx-x/mcp',
+		'cx-x/mcp-server',
+		'cx-x/a2a',
+		'cx-x/a2a-xap',
+	]
+}
+
+// bundled_x_source returns the source bytes for one bundled x/-tier module by
+// resolver name (e.g. `cx-x/run`). Returns `none` for an unknown name.
+pub fn bundled_x_source(name string) ?string {
+	return match name {
+		'cx-x/run' { x_src_run }
+		'cx-x/llm' { x_src_llm }
+		'cx-x/mcp' { x_src_mcp }
+		'cx-x/mcp-server' { x_src_mcp_server }
+		'cx-x/a2a' { x_src_a2a }
+		'cx-x/a2a-xap' { x_src_a2a_xap }
+		else       { none }
+	}
+}
+
+// register_bundled_x registers every `cx-x/<name>` experimental-tier resolver
+// into `table` (same in-memory registered-name path as the frozen tier).
+pub fn register_bundled_x(mut table ModuleTable) {
+	for name in bundled_x_names() {
+		src := bundled_x_source(name) or { continue }
+		table.register_source(name, src)
 	}
 }
 
@@ -269,6 +355,7 @@ pub fn register_bundled_codecs(mut table ModuleTable) {
 pub fn new_seeded_module_table() ModuleTable {
 	mut t := new_module_table()
 	register_bundled_stdlib(mut t)
+	register_bundled_x(mut t)
 	register_bundled_codecs(mut t)
 	// cx-xap: its OWN bundled package (not a cx-stdlib name) — registered here
 	// directly rather than via bundled_stdlib_names(); the experience-layer

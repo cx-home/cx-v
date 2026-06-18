@@ -39,6 +39,10 @@
 [?def to-base32   scope=public pure [returns string] ($b::bytes)                           [$bytes-to-base32 $b]]
 [?def from-base32 scope=public pure [returns bytes]  ($s::string)                          [$bytes-from-base32 $s]]
 
+[- §3.5.1 base58btc (Bitcoin alphabet) — multibase 'z' payload for did:key -]
+[?def to-base58   scope=public pure [returns string] ($b::bytes)                           [$bytes-to-base58 $b]]
+[?def from-base58 scope=public pure [returns bytes]  ($s::string)                          [$bytes-from-base58 $s]]
+
 [- §3.6 compression -]
 [?def gzip-compress            scope=public pure [returns bytes] ($input::bytes)             [$bytes-gzip-compress $input]]
 [?def gzip-decompress          scope=public pure [returns bytes] ($input::bytes)             [$bytes-gzip-decompress $input]]
@@ -203,6 +207,14 @@
   [summary """Decode an RFC 4648 base32 string to bytes."""]
   [example [code """[?lib 'cx-stdlib/bytes']
 [$bytes:to-string-utf8 [$bytes:from-base32 [$bytes:to-base32 [$bytes:from-string-utf8 "hello"]]]]"""] [expect """'hello'"""]]
+]
+[fn-doc name=to-base58 scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Encode bytes as a base58btc string (Bitcoin alphabet), the multibase 'z' payload used for did:key."""]
+]
+[fn-doc name=from-base58 scope=public purity=pure
+  [sig """-> bytes"""]
+  [summary """Decode a base58btc string (Bitcoin alphabet) to bytes; raises on characters outside the alphabet."""]
 ]
 [fn-doc name=gzip-compress scope=public purity=pure
   [sig """-> bytes"""]

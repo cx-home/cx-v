@@ -1,0 +1,227 @@
+[test-suite name=jsonrpc
+  [doc [#
+Conformance fixtures for cx-stdlib/jsonrpc (JSON-RPC 2.0; spec/02-working/
+agentic_positioning.md D3 — frozen `std` substrate; cx-private #6 S1).
+
+Each program imports the bundled module via [?lib 'cx-stdlib/jsonrpc'] (resolver
+MUST be quoted) and the codec via [?lib 'cx-stdlib/json']. The module is the
+MESSAGE MODEL (builds/classifies/validates JSON-RPC values as CX maps); the wire
+codec is cx-stdlib/json. The LAST expression is the rendered result: a built
+message is grounded through [$json:emit …] -> the canonical JSON string (keys
+sorted), classify/code/is-valid/is-batch render their scalar directly (string
+single-quoted, int + bool bare). All functions are pure.
+#]]
+
+  [case id=jsonrpc-001-request-with-params level=core
+   [tags jsonrpc request params build]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$rpc:request 1 "subtract" (42,23)]]
+#]]
+   [out-text [#
+'{"id":1,"jsonrpc":"2.0","method":"subtract","params":[42,23]}'
+#]]
+  ]
+
+  [case id=jsonrpc-002-request-omits-empty-params level=core
+   [tags jsonrpc request optional params]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$rpc:request 1 "ping" {}]]
+#]]
+   [out-text [#
+'{"id":1,"jsonrpc":"2.0","method":"ping"}'
+#]]
+  ]
+
+  [case id=jsonrpc-003-notification-no-id level=core
+   [tags jsonrpc notification]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$rpc:notification "update" (1,2)]]
+#]]
+   [out-text [#
+'{"jsonrpc":"2.0","method":"update","params":[1,2]}'
+#]]
+  ]
+
+  [case id=jsonrpc-004-success-response level=core
+   [tags jsonrpc response success result]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$rpc:success 1 19]]
+#]]
+   [out-text [#
+'{"id":1,"jsonrpc":"2.0","result":19}'
+#]]
+  ]
+
+  [case id=jsonrpc-005-error-with-data level=core
+   [tags jsonrpc response error data]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$rpc:error 1 -32602 "Invalid params" {detail: "x"}]]
+#]]
+   [out-text [#
+'{"error":{"code":-32602,"data":{"detail":"x"},"message":"Invalid params"},"id":1,"jsonrpc":"2.0"}'
+#]]
+  ]
+
+  [case id=jsonrpc-006-error-for-standard-kind level=core
+   [tags jsonrpc error error-for standard-code]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$rpc:error-for 5 "invalid-params"]]
+#]]
+   [out-text [#
+'{"error":{"code":-32602,"message":"Invalid params"},"id":5,"jsonrpc":"2.0"}'
+#]]
+  ]
+
+  [case id=jsonrpc-007-code-parse-error level=core
+   [tags jsonrpc code reserved]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:code "parse-error"]
+#]]
+   [out-text [#
+-32700
+#]]
+  ]
+
+  [case id=jsonrpc-008-code-method-not-found level=core
+   [tags jsonrpc code reserved]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:code "method-not-found"]
+#]]
+   [out-text [#
+-32601
+#]]
+  ]
+
+  [case id=jsonrpc-009-classify-request level=core
+   [tags jsonrpc classify]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:classify [$rpc:request 1 "m" {}]]
+#]]
+   [out-text [#
+'request'
+#]]
+  ]
+
+  [case id=jsonrpc-010-classify-notification level=core
+   [tags jsonrpc classify]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:classify [$rpc:notification "m" {}]]
+#]]
+   [out-text [#
+'notification'
+#]]
+  ]
+
+  [case id=jsonrpc-011-classify-success level=core
+   [tags jsonrpc classify]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:classify [$rpc:success 1 42]]
+#]]
+   [out-text [#
+'success'
+#]]
+  ]
+
+  [case id=jsonrpc-012-classify-error level=core
+   [tags jsonrpc classify]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:classify [$rpc:error 1 -32603 "Internal error" {}]]
+#]]
+   [out-text [#
+'error'
+#]]
+  ]
+
+  [case id=jsonrpc-013-classify-parsed-wire level=core
+   [tags jsonrpc classify json parse round-trip]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+[$rpc:classify [$json:parse "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"]]
+#]]
+   [out-text [#
+'request'
+#]]
+  ]
+
+  [case id=jsonrpc-014-is-valid-true level=core
+   [tags jsonrpc is-valid]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:is-valid [$rpc:request 1 "m" {}]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=jsonrpc-015-is-valid-false-missing-version level=core
+   [tags jsonrpc is-valid invalid version]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:is-valid {id: 1 method: "m"}]
+#]]
+   [out-text [#
+false
+#]]
+  ]
+
+  [case id=jsonrpc-016-is-batch-true level=core
+   [tags jsonrpc batch]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?let [= $a [$rpc:request 1 "a" {}]]
+ [?let [= $b [$rpc:request 2 "b" {}]]
+  [$rpc:is-batch ($a, $b)]]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=jsonrpc-017-is-batch-false-single level=core
+   [tags jsonrpc batch single]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[$rpc:is-batch [$rpc:request 1 "a" {}]]
+#]]
+   [out-text [#
+false
+#]]
+  ]
+]

@@ -39,6 +39,7 @@
 [- §3.2 lifecycle — attach / detach (impure) -]
 [?def attach        scope=public impure [returns element] ($req::element $cfg::map)                  [$session-attach $req $cfg]]
 [?def attach-token  scope=public impure [returns element] ($token::string $cfg::map $client::map {}) [$session-attach-token $token $cfg $client]]
+[?def attach-did    scope=public impure [returns element] ($did::string $challenge::bytes $sig::bytes $cfg::map $client::map {}) [$session-attach-did $did $challenge $sig $cfg $client]]
 [?def attach-cookie scope=public impure [returns element] ($req::element $cfg::map)                  [$session-attach-cookie $req $cfg]]
 [?def detach        scope=public impure [returns null]    ($session::element)                        [$session-detach $session]]
 [?def detach-client scope=public impure [returns element] ($session::element $client-id::string)     [$session-detach-client $session $client-id]]
@@ -83,6 +84,10 @@
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/time']
 [?let [= $s [$session:attach-token "eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A" {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]} {tls: true}]] [$session:tenant $s]]"""] [expect """[tenant id=my-api]"""]]
+]
+[fn-doc name=attach-did scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Attach by verifying a DID-signed challenge — bind a client to its (principal, tenant) session from a did, challenge, and signature."""]
 ]
 [fn-doc name=attach-cookie scope=public purity=impure
   [sig """-> element"""]

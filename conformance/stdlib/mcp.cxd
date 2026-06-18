@@ -1,0 +1,104 @@
+[test-suite name=mcp
+  [doc [#
+Conformance fixtures for cx-x/mcp — a minimal MCP (Model Context Protocol) client
+(spec/02-working/agentic_positioning.md #6 S9). NB cx-x/mcp is an EXPERIMENTAL
+x/-TIER module (D3): bundled + gated but exempt from the frozen-std stability
+promise. Programs name the tier via [?lib 'cx-x/mcp'].
+
+MCP is JSON-RPC 2.0 over a transport; this client composes the landed substrate
+(cx-stdlib/jsonrpc S1, cx-stdlib/jsonschema S7, the real http client, json).
+These fixtures cover the PURE layer — JSON-RPC request shaping, response
+extraction, and tool-argument validation against the tool's JSON-Schema
+inputSchema. The effectful transport (rpc-call/list-tools/call-tool POSTing to a
+server) is proven by a live loopback round-trip in vcx/tests/v08_mcp_real_test.v
+(a mock MCP server), the same split http/llm use.
+
+Each program imports the module (resolver MUST be quoted) + json for grounding;
+the LAST expression renders the result (JSON strings single-quoted, ints bare,
+sequences in paren form, the validate outcome as [ok]/[invalid …]).
+#]]
+
+  [case id=mcp-001-call-tool-request-shape level=core
+   [tags mcp call-tool jsonrpc shaping]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$mcp:call-tool-request 1 "get_weather" {location: "NYC"}]]
+#]]
+   [out-text [#
+'{"id":1,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"location":"NYC"},"name":"get_weather"}}'
+#]]
+  ]
+
+  [case id=mcp-002-list-tools-request-omits-params level=core
+   [tags mcp list-tools jsonrpc shaping]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$mcp:list-tools-request 2]]
+#]]
+   [out-text [#
+'{"id":2,"jsonrpc":"2.0","method":"tools/list"}'
+#]]
+  ]
+
+  [case id=mcp-003-result-text-extracts-first-block level=core
+   [tags mcp result-text response]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/json' :as json]
+[$mcp:result-text [$json:parse "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"72F sunny\"}],\"isError\":false}}"]]
+#]]
+   [out-text [#
+'72F sunny'
+#]]
+  ]
+
+  [case id=mcp-004-tools-of-count level=core
+   [tags mcp tools-of response]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/json' :as json]
+[$count [$mcp:tools-of [$json:parse "{\"result\":{\"tools\":[{\"name\":\"a\"},{\"name\":\"b\"}]}}"]]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [case id=mcp-005-validate-args-ok level=core
+   [tags mcp validate-args jsonschema]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/json' :as json]
+[$mcp:validate-args
+  [$json:parse "{\"name\":\"w\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"location\"],\"properties\":{\"location\":{\"type\":\"string\"}}}}"]
+  [$json:parse "{\"location\":\"NYC\"}"]]
+#]]
+   [out-text [#
+[ok]
+#]]
+  ]
+
+  [case id=mcp-006-validate-args-rejects-missing level=core
+   [tags mcp validate-args jsonschema violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[$js:violation-paths
+  [$mcp:validate-args
+    [$json:parse "{\"name\":\"w\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"location\"]}}"]
+    [$json:parse "{}"]]]
+#]]
+   [out-text [#
+('/location')
+#]]
+  ]
+]

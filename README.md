@@ -1,6 +1,6 @@
 # cx — CX for V
 
-[![Version](https://img.shields.io/badge/version-v0.8.0-blue.svg)](#status)
+[![Version](https://img.shields.io/badge/version-v0.11.0-blue.svg)](#status)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-cx--home.github.io%2Fcx-brightgreen.svg)](https://cx-home.github.io/cx/)
 [![Status](https://img.shields.io/badge/status-pre--1.0_experimental-orange.svg)](#status)
@@ -252,10 +252,11 @@ interactive playground — lives at:
 
 ## Status
 
-CX is **pre-1.0** and under active development; **v0.8.0** is the current line.
-The grammar is stable and the C ABI is versioned and forward-compatible.
-Formal security review, fuzz-testing, and the multi-core performance work are
-still ahead — so pin a tested version and apply normal pre-1.0 caution.
+CX is **pre-1.0** and under active development — the current release is the
+version badge above. The grammar is stable and the C ABI is versioned and
+forward-compatible. Formal security review, fuzz-testing, and the multi-core
+performance work are still ahead — so pin a tested version and apply normal
+pre-1.0 caution.
 
 ## License
 
