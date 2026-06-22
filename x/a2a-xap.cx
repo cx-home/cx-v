@@ -1,0 +1,126 @@
+# cx-x/a2a-xap — A2A tasks mapped onto the xap substrate (EXPERIMENTAL x/ tier).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): bundled + gated
+# in-tree but EXEMPT from the frozen-`std` stability promise. #6 Y2 (the "over-xap"
+# layer that makes CX's A2A more than a transport).
+#
+# Y2b — TASKS→JOURNAL. An A2A agent's task lifecycle (submitted → working →
+# completed | failed | canceled) is recorded as events in a cx-stdlib/journal: an
+# append-only, hash-chained, tenant-partitioned log. So an agent's task history is
+# REPLAYABLE and TAMPER-EVIDENT for free — `journal:verify` proves the chain, and
+# `journal:slice`/`lifecycle` reconstruct the ordered state path. This is the
+# distinctive positioning: A2A semantics over CX's durable event substrate, not a
+# bespoke task store.
+#
+# (Siblings of the over-xap set, built alongside: MESSAGES→cx-stdlib/bus for pub/sub
+# fan-out; AUTH→cx-stdlib/did + vc for signed agent cards + message provenance.)
+
+[?lib 'cx-stdlib/journal' :as journal]
+[?lib 'cx-stdlib/bus' :as bus]
+[?lib 'cx-stdlib/did' :as did]
+[?lib 'cx-stdlib/vc' :as vc]
+[?lib 'cx-stdlib/fp' :as fp]
+
+# the attribution stamped on every task event (journal §: actor + authority).
+[?const TASK-ATTRIBUTION {actor: "a2a" authority: "a2a/task"}]
+
+# ── task event shaping ─────────────────────────────────────────────────────────
+# task-event — one task lifecycle transition as a journalable element.
+[?def task-event scope=public pure [returns element] ($id::string $state::string)
+  [a2a-task id=$id state=$state]]
+
+# ── recording (effectful — appends to the journal) ─────────────────────────────
+# record — append a task transition to the journal, returning the committed [entry]
+# (with its sequence, content hash, and predecessor link).
+[?def record scope=public impure [returns element] ($jr::element $id::string $state::string)
+  [$journal:append $jr [$task-event $id $state] TASK-ATTRIBUTION]]
+
+# history — the recorded task entries in sequence order (the replayable lifecycle).
+[?def history scope=public impure [returns [sequence element]] ($jr::element $from::int $to::int)
+  [$journal:slice $jr $from $to]]
+
+# ── projection (pure) ──────────────────────────────────────────────────────────
+# lifecycle — project recorded entries to their ordered state path
+# (e.g. ('submitted', 'working', 'completed')). The replayed task lifecycle.
+[?def lifecycle scope=public pure [returns [sequence string]] ($entries::[sequence element])
+  [$fp:map $entries [?fn ($e) [?let [= $ev $e/event] $ev/@state]]]]
+
+# ── messages → bus (#6 Y2b sibling) ────────────────────────────────────────────
+# An A2A message fans out to every subscriber on a cx-stdlib/bus, so monitors,
+# loggers, and coordinating agents observe traffic live (the complement to the
+# durable journal). Messages ride a single `:a2a-message` topic; a subscriber
+# registers with [$bus:on b :a2a-message handler].
+
+# message-envelope — wrap an A2A message as a topic-carrying bus message.
+[?def message-envelope scope=public pure [returns element] ($message::any)
+  [do :a2a-message [payload $message]]]
+
+# publish-message — emit an A2A message to the bus, returning the delivery report
+# (its @delivered count is the fan-out: how many subscribers received it).
+[?def publish-message scope=public impure [returns element] ($b::element $message::any)
+  [$bus:emit $b [$message-envelope $message] {}]]
+
+# ── auth → did + vc (#6 Y2b sibling) ───────────────────────────────────────────
+# An A2A agent is identified by a DID, and authority between agents is a DID-SIGNED
+# capability delegation carried as a Verifiable Credential (§22.2). So agent
+# authorization is decentralized + verifiable — no shared API keys — and ties
+# directly into #7's PEP (a [delegation …] is the cascade's authz input). An agent
+# issues a grant to a peer; a verifier checks the signature + validity window
+# (+ revocation) with no callback to the issuer.
+
+# agent-did — the DID identifying an agent, derived from its Ed25519 public key.
+[?def agent-did scope=public pure [returns string] ($public-key::bytes)
+  [$did:key-create $public-key]]
+
+# grant-credential — issue a DID-signed capability delegation (a VC) from an issuer
+# agent to a subject agent. `delegation` is a [delegation id [capabilities …]]
+# element; `opts` carries {id, issued-at, expires}.
+[?def grant-credential scope=public pure [returns element] ($issuer-did::string $issuer-key::bytes $subject-did::string $delegation::element $opts::map)
+  [$vc:issue $issuer-did $issuer-key $subject-did $delegation $opts]]
+
+# grant-status — verify a grant credential AT a given time, returning its status
+# ('valid' | 'expired' | 'revoked' | 'invalid-signature' | …) — the PEP's authz gate.
+[?def grant-status scope=public pure [returns string] ($credential::element $now::datetime)
+  [?let [= $report [$vc:verify $credential $now {}]] $report/@status]]
+
+# ── docs ───────────────────────────────────────────────────────────────────────
+[module-doc name=a2a-xap
+  [scope """A2A tasks over the xap substrate (EXPERIMENTAL x/ tier, #6 Y2b). An A2A
+   agent's task lifecycle is recorded into a cx-stdlib/journal — an append-only,
+   hash-chained log — so task history is replayable (journal:slice + lifecycle) and
+   tamper-evident (journal:verify) for free, rather than living in a bespoke task
+   store. task-event shapes a transition; record appends it (returning the committed
+   entry); history reads the ordered entries; lifecycle projects them to the state
+   path. Messages map to a cx-stdlib/bus (message-envelope + publish-message) for
+   live pub/sub fan-out — the complement to the durable journal. Auth maps to
+   cx-stdlib/did + vc: an agent is a DID, and authority is a DID-signed capability
+   delegation carried as a Verifiable Credential (agent-did / grant-credential /
+   grant-status) — decentralized, verifiable, and the input to #7's PEP. Together
+   (journal + bus + did/vc) this is the distinctive A2A-over-xap positioning."""]]
+[fn-doc name=task-event scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Shape one A2A task transition [a2a-task id= state=] as a journalable element."""]]
+[fn-doc name=record scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Append a task transition to the journal, returning the committed hash-chained [entry]."""]]
+[fn-doc name=history scope=public purity=impure
+  [sig """-> [sequence element]"""]
+  [summary """Read the recorded task entries in sequence order (the replayable lifecycle)."""]]
+[fn-doc name=lifecycle scope=public purity=pure
+  [sig """-> [sequence string]"""]
+  [summary """Project recorded entries to their ordered state path, e.g. ('submitted', 'working', 'completed')."""]]
+[fn-doc name=message-envelope scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Wrap an A2A message as a topic-carrying bus message on the :a2a-message topic."""]]
+[fn-doc name=publish-message scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Emit an A2A message to the bus; the delivery report's @delivered count is the subscriber fan-out."""]]
+[fn-doc name=agent-did scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Derive the DID identifying an agent from its Ed25519 public key."""]]
+[fn-doc name=grant-credential scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Issue a DID-signed capability delegation (a Verifiable Credential) from an issuer agent to a subject agent."""]]
+[fn-doc name=grant-status scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Verify a grant credential at a given time, returning its status ('valid'/'expired'/'revoked'/…) — the PEP authz gate."""]]

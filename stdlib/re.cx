@@ -1,8 +1,8 @@
-[- cx-stdlib/re — regular expressions backed by libcx-vendored RE2
+[; cx-stdlib/re — regular expressions backed by libcx-vendored RE2
    (same engine as schema-validator pattern matching, spec/abi.md
    cap bit 25).
 
-   Full v0.8.0 surface per spec/std-lib/re.md §4. Bodies forward to native
+   Full surface per spec/std-lib/re.md §4. Bodies forward to native
    primitives (vcx/code/stdlib_re.v); regex matching is not expressible in
    pure CX. RE2 guarantees linear-time matching (§1): no backreferences /
    lookbehind. Compiled patterns are opaque [regex …] values (§3); matches
@@ -15,42 +15,42 @@
    per-match callable application inside the evaluator while the splice
    stays native.
 
-   NOTE: this const and stdlib/re.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/re.cx are the same source — edit both. ]
 
-[- §4.1 compilation -]
+[; §4.1 compilation ]
 [?def compile            scope=public pure [returns element] ($pattern::string)            [$re-compile $pattern]]
 [?def compile-with-flags scope=public pure [returns element] ($pattern::string $flags::map) [$re-compile-with-flags $pattern $flags]]
 
-[- §4.2 matching -]
+[; §4.2 matching ]
 [?def matches   scope=public pure [returns bool]               ($re::element $s::string)            [$re-matches $re $s]]
 [?def find      scope=public pure [returns element]            ($re::element $s::string)            [$re-find $re $s]]
 [?def find-from scope=public pure [returns element]            ($re::element $s::string $from::int) [$re-find-from $re $s $from]]
 [?def find-all  scope=public pure [returns [sequence element]] ($re::element $s::string)            [$re-find-all $re $s]]
 [?def find-iter scope=public pure [returns [iterator element]] ($re::element $s::string)            [$re-find-iter $re $s]]
 
-[- §4.3 groups -]
+[; §4.3 groups ]
 [?def group       scope=public pure [returns string]            ($m::element $i::int)      [$re-group $m $i]]
 [?def group-named scope=public pure [returns string]            ($m::element $name::string) [$re-group-named $m $name]]
 [?def groups-all  scope=public pure [returns [sequence string]] ($m::element)              [$re-groups-all $m]]
 [?def groups-map  scope=public pure [returns map]               ($m::element)              [$re-groups-map $m]]
 
-[- §4.4 replace -]
+[; §4.4 replace ]
 [?def replace       scope=public pure [returns string] ($re::element $s::string $template::string) [$re-replace $re $s $template]]
 [?def replace-first scope=public pure [returns string] ($re::element $s::string $template::string) [$re-replace-first $re $s $template]]
 [?def replace-fn    scope=public pure [returns string] ($re::element $s::string $f::any)            [$re-replace-splice $s [$re-match-spans $re $s] [$map [$re-find-all $re $s] $f]]]
 
-[- §4.5 split -]
+[; §4.5 split ]
 [?def split       scope=public pure [returns [sequence string]] ($re::element $s::string)          [$re-split $re $s]]
 [?def split-limit scope=public pure [returns [sequence string]] ($re::element $s::string $max::int) [$re-split-limit $re $s $max]]
 
-[- §4.6 inspection -]
+[; §4.6 inspection ]
 [?def group-count   scope=public pure [returns int]               ($re::element) [$re-group-count $re]]
 [?def group-names   scope=public pure [returns [sequence string]] ($re::element) [$re-group-names $re]]
 [?def pattern-text  scope=public pure [returns string]            ($re::element) [$re-pattern-text $re]]
 [?def pattern-flags scope=public pure [returns map]               ($re::element) [$re-pattern-flags $re]]
 [?def escape        scope=public pure [returns string]            ($s::string)   [$re-escape $s]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=re
   [scope """Regular expressions backed by the RE2 engine, guaranteeing linear-time matching against any input with no catastrophic backtracking. The cost is that some PCRE features are unavailable — notably backreferences and lookbehind. Provides pattern compilation; match, find, find-all, and lazy find-iter; literal and function-based replace; split; named and numbered capture groups; and pattern inspection."""]]
 [fn-doc name=compile scope=public purity=pure

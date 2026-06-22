@@ -1,18 +1,18 @@
-[- cx-stdlib/hash — content-addressable hashing.
+[; cx-stdlib/hash — content-addressable hashing.
 
-   Full v0.8.0 surface per spec/stdlib_hash.md §3. Bodies call native
+   Full surface per spec/stdlib_hash.md §3. Bodies call native
    primitives (vcx/code/stdlib_hash.v) since digest / encoding logic is
    not expressible in pure CX. Bridges spec/identity.md and the lockfile
-   SRI format (spec/lockfile.md §4.4). -]
+   SRI format (spec/lockfile.md §4.4). ]
 
-[- §3.1 single-shot hashers -]
+[; §3.1 single-shot hashers ]
 [?def sha256     scope=public pure [returns bytes] ($input::bytes) [$hash-sha256 $input]]
 [?def sha384     scope=public pure [returns bytes] ($input::bytes) [$hash-sha384 $input]]
 [?def sha512     scope=public pure [returns bytes] ($input::bytes) [$hash-sha512 $input]]
 [?def blake3     scope=public pure [returns bytes] ($input::bytes) [$hash-blake3 $input]]
 [?def blake3-xof scope=public pure [returns bytes] ($input::bytes $out-length::int) [$hash-blake3-xof $input $out-length]]
 
-[- §3.2 string convenience -]
+[; §3.2 string convenience ]
 [?def sha256-hex    scope=public pure [returns string] ($input::bytes)  [$hash-sha256-hex $input]]
 [?def sha384-hex    scope=public pure [returns string] ($input::bytes)  [$hash-sha384-hex $input]]
 [?def sha512-hex    scope=public pure [returns string] ($input::bytes)  [$hash-sha512-hex $input]]
@@ -20,28 +20,28 @@
 [?def sha256-string scope=public pure [returns bytes]  ($input::string) [$hash-sha256-string $input]]
 [?def blake3-string scope=public pure [returns bytes]  ($input::string) [$hash-blake3-string $input]]
 
-[- §3.3 streaming hashers -]
+[; §3.3 streaming hashers ]
 [?def hasher-new      scope=public pure [returns element] ($algo::string)             [$hash-hasher-new $algo]]
 [?def hasher-update   scope=public pure [returns element] ($h::element $chunk::bytes)  [$hash-hasher-update $h $chunk]]
 [?def hasher-finalize scope=public pure [returns bytes]   ($h::element)               [$hash-hasher-finalize $h]]
 
-[- §3.4 format conversion -]
+[; §3.4 format conversion ]
 [?def format-hex        scope=public pure [returns string] ($digest::bytes) [$hash-format-hex $digest]]
 [?def format-base64-url scope=public pure [returns string] ($digest::bytes) [$hash-format-base64-url $digest]]
 [?def format-base32     scope=public pure [returns string] ($digest::bytes) [$hash-format-base32 $digest]]
 [?def parse-hex         scope=public pure [returns bytes]  ($s::string)     [$hash-parse-hex $s]]
 [?def parse-base64-url  scope=public pure [returns bytes]  ($s::string)     [$hash-parse-base64-url $s]]
 
-[- §3.5 comparison -]
+[; §3.5 comparison ]
 [?def equals scope=public pure [returns bool] ($a::bytes $b::bytes) [$hash-equals $a $b]]
 
-[- §3.6 SRI helpers -]
+[; §3.6 SRI helpers ]
 [?def sri-format scope=public pure [returns string]  ($digest::bytes $algo::string) [$hash-sri-format $digest $algo]]
 [?def sri-parse  scope=public pure [returns element] ($s::string)                  [$hash-sri-parse $s]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=hash
-  [scope """Content-addressable hashing — fixed-length digests of arbitrary byte payloads. Four algorithms at v0.8.0: SHA-256 (the content-addressing default), SHA-384, SHA-512, and BLAKE3 (with arbitrary-length XOF output). Covers integrity and content addressing, not password hashing or keyed operations — those belong to `cx-stdlib/crypto`. Digests convert to lowercase hex, URL-safe base64, or base32, and carry SRI helpers for module-lockfile integrity."""]]
+  [scope """Content-addressable hashing — fixed-length digests of arbitrary byte payloads. Four algorithms: SHA-256 (the content-addressing default), SHA-384, SHA-512, and BLAKE3 (with arbitrary-length XOF output). Covers integrity and content addressing, not password hashing or keyed operations — those belong to `cx-stdlib/crypto`. Digests convert to lowercase hex, URL-safe base64, or base32, and carry SRI helpers for module-lockfile integrity."""]]
 [fn-doc name=sha256 scope=public purity=pure
   [sig """-> bytes"""]
   [summary """Compute the SHA-256 digest (32 bytes) of the input — the CX content-addressing default."""]

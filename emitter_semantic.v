@@ -133,6 +133,15 @@ fn sem_element(e Element) JsonVal {
 		return JsonVal(ref_obj)
 	}
 
+	// A :table element carries its rows/cols in the pooled `table`
+	// (TableData), NOT in `items` (#10). Project it to a JSON array of
+	// column-keyed row objects; otherwise the generic path below sees an
+	// empty body and emits null. Matches CSV/canonical, which already read
+	// the table payload.
+	if td := e.table_opt() {
+		return sem_table(td)
+	}
+
 	content := e.items.filter(
 		!(it is CommentNode) && !(it is PINode) && !(it is XMLDeclNode) && !(it is CXDirectiveNode)
 		&& !(it is InterpolationNode) && !(it is EvalDirectiveNode)
@@ -247,6 +256,38 @@ fn collection_to_json(n Node) JsonVal {
 			JsonVal(obj)
 		}
 		else { JsonVal(JsonNull{}) }
+	}
+}
+
+// sem_table projects a :table element to a JSON array of row objects, each
+// keyed by column name (#10). Cell values mirror scalar_val_to_json /
+// collection_to_json so typed scalars and collection cells carry through.
+fn sem_table(td &TableData) JsonVal {
+	mut rows := []JsonVal{cap: td.rows.len}
+	for row in td.rows {
+		mut obj := map[string]JsonVal{}
+		for i, cell in row {
+			col := if i < td.cols.len { td.cols[i].name } else { '_${i}' }
+			obj[col] = table_cell_to_json(cell)
+		}
+		rows << JsonVal(obj)
+	}
+	return JsonVal(rows)
+}
+
+// table_cell_to_json converts one TableCellValue to a JsonVal. Scalar
+// variants map to native JSON scalars; collection cells route through
+// collection_to_json (same projection as collection-literal element bodies).
+fn table_cell_to_json(c TableCellValue) JsonVal {
+	return match c {
+		bool         { JsonVal(c as bool) }
+		i64          { JsonVal(c as i64) }
+		f64          { JsonVal(c as f64) }
+		string       { JsonVal(c as string) }
+		NullValue    { JsonVal(JsonNull{}) }
+		ArrayNode    { collection_to_json(Node(c)) }
+		MapNode      { collection_to_json(Node(c)) }
+		SequenceNode { collection_to_json(Node(c)) }
 	}
 }
 

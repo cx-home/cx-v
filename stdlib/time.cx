@@ -1,14 +1,14 @@
-[- cx-stdlib/time — date / datetime / duration / instant manipulation.
+[; cx-stdlib/time — date / datetime / duration / instant manipulation.
 
-   Full v0.8.0 surface per spec/stdlib_time.md §3. Bodies call native
+   Full surface per spec/stdlib_time.md §3. Bodies call native
    primitives (vcx/code/stdlib_time.v) since Gregorian calendar math,
    ISO/RFC parsing, LDML formatting and tz offsets are not expressible
    in pure CX. Instants and durations are carried as int nanoseconds;
    dates / datetimes as typed scalar strings; weekday as an atom.
 
-   NOTE: this const and stdlib/time.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/time.cx are the same source — edit both. ]
 
-[- §3.1 time sources (impure) -]
+[; §3.1 time sources (impure) ]
 [?def now              scope=public impure [returns datetime] ()                   [$time-now]]
 [?def today            scope=public impure [returns date]     ()                   [$time-today]]
 [?def instant-now      scope=public impure [returns instant]  ()                   [$time-instant-now]]
@@ -19,7 +19,7 @@
 [?def mock-advance     scope=public impure [returns null]     ($d::duration)        [$time-mock-advance $d]]
 [?def mock-set         scope=public impure [returns null]     ($t::instant)         [$time-mock-set $t]]
 
-[- §3.2 construction -]
+[; §3.2 construction ]
 [?def date             scope=public pure [returns date] ($year::int $month::int $day::int) [$time-date $year $month $day]]
 [?def datetime         scope=public pure [returns datetime] ($year::int $month::int $day::int $hour::int $minute::int $second::int) [$time-datetime $year $month $day $hour $minute $second]]
 [?def datetime-with-tz scope=public pure [returns datetime] ($year::int $month::int $day::int $hour::int $minute::int $second::int $tz::string) [$time-datetime-with-tz $year $month $day $hour $minute $second $tz]]
@@ -28,7 +28,7 @@
 [?def from-unix-ns     scope=public pure [returns instant] ($unix-nanos::int)   [$time-from-unix-ns $unix-nanos]]
 [?def epoch            scope=public pure [returns instant] () [$time-epoch]]
 
-[- §3.3 decomposition -]
+[; §3.3 decomposition ]
 [?def year             scope=public pure [returns int] ($d::any) [$time-year $d]]
 [?def month            scope=public pure [returns int] ($d::any) [$time-month $d]]
 [?def day              scope=public pure [returns int] ($d::any) [$time-day $d]]
@@ -44,7 +44,7 @@
 [?def to-unix-ms       scope=public pure [returns int] ($dt::datetime) [$time-to-unix-ms $dt]]
 [?def to-unix-ns       scope=public pure [returns int] ($dt::datetime) [$time-to-unix-ns $dt]]
 
-[- §3.4 arithmetic -]
+[; §3.4 arithmetic ]
 [?def add              scope=public pure [returns any] ($t::any $d::duration) [$time-add $t $d]]
 [?def subtract         scope=public pure [returns any] ($t::any $d::duration) [$time-subtract $t $d]]
 [?def diff             scope=public pure [returns duration] ($a::any $b::any) [$time-diff $a $b]]
@@ -56,7 +56,7 @@
 [?def add-minutes       scope=public pure [returns datetime] ($dt::datetime $n::int) [$time-add-minutes $dt $n]]
 [?def add-seconds       scope=public pure [returns datetime] ($dt::datetime $n::int) [$time-add-seconds $dt $n]]
 
-[- §3.5 duration construction and conversion -]
+[; §3.5 duration construction and conversion ]
 [?def duration-ms     scope=public pure [returns duration] ($ms::int) [$time-duration-ms $ms]]
 [?def duration-s      scope=public pure [returns duration] ($s::int)  [$time-duration-s $s]]
 [?def duration-m      scope=public pure [returns duration] ($m::int)  [$time-duration-m $m]]
@@ -71,7 +71,7 @@
 [?def duration-mul    scope=public pure [returns duration] ($d::duration $n::int) [$time-duration-mul $d $n]]
 [?def duration-div    scope=public pure [returns duration] ($d::duration $n::int) [$time-duration-div $d $n]]
 
-[- §3.6 parsing -]
+[; §3.6 parsing ]
 [?def parse-date        scope=public pure [returns date] ($s::string)     [$time-parse-date $s]]
 [?def parse-datetime    scope=public pure [returns datetime] ($s::string) [$time-parse-datetime $s]]
 [?def parse-instant     scope=public pure [returns instant] ($s::string)  [$time-parse-instant $s]]
@@ -81,7 +81,7 @@
 [?def parse-with-format scope=public pure [returns datetime] ($s::string $format::string) [$time-parse-with-format $s $format]]
 [?def parse-strftime    scope=public pure [returns datetime] ($s::string $format::string) [$time-parse-strftime $s $format]]
 
-[- §3.7 formatting -]
+[; §3.7 formatting ]
 [?def format-iso8601     scope=public pure [returns string] ($dt::any) [$time-format-iso8601 $dt]]
 [?def format-rfc3339     scope=public pure [returns string] ($dt::datetime) [$time-format-rfc3339 $dt]]
 [?def format-rfc2822     scope=public pure [returns string] ($dt::datetime) [$time-format-rfc2822 $dt]]
@@ -89,7 +89,7 @@
 [?def format-duration    scope=public pure [returns string] ($d::duration) [$time-format-duration $d]]
 [?def format-relative    scope=public pure [returns string] ($dt::datetime $now-dt::datetime) [$time-format-relative $dt $now-dt]]
 
-[- §3.8 timezone -]
+[; §3.8 timezone ]
 [?def timezone        scope=public pure [returns element] ($name::string) [$time-timezone $name]]
 [?def to-timezone     scope=public pure [returns datetime] ($dt::datetime $tz::string) [$time-to-timezone $dt $tz]]
 [?def to-utc          scope=public pure [returns datetime] ($dt::datetime) [$time-to-utc $dt]]
@@ -97,7 +97,7 @@
 [?def system-timezone scope=public impure [returns string] () [$time-system-timezone]]
 [?def list-timezones  scope=public pure [returns [sequence string]] () [$time-list-timezones]]
 
-[- §3.9 predicates -]
+[; §3.9 predicates ]
 [?def is-leap-year    scope=public pure [returns bool] ($year::int) [$time-is-leap-year $year]]
 [?def is-before       scope=public pure [returns bool] ($a::any $b::any) [$time-is-before $a $b]]
 [?def is-after        scope=public pure [returns bool] ($a::any $b::any) [$time-is-after $a $b]]
@@ -105,7 +105,7 @@
 [?def is-same-day     scope=public pure [returns bool] ($a::datetime $b::datetime) [$time-is-same-day $a $b]]
 [?def days-in-month   scope=public pure [returns int] ($year::int $month::int) [$time-days-in-month $year $month]]
 
-[- §3.10 recurrence rules — RFC 5545 RRULE + cron; all pure (no clock) -]
+[; §3.10 recurrence rules — RFC 5545 RRULE + cron; all pure (no clock) ]
 [?def recurrence       scope=public pure [returns element]             ($freq::atom $anchor::datetime $tz::string $opts::map {}) [$time-recurrence $freq $anchor $tz $opts]]
 [?def validate-rule    scope=public pure [returns element]             ($rule::element) [$time-validate-rule $rule]]
 [?def is-valid-rule    scope=public pure [returns bool]                ($rule::element) [$time-is-valid-rule $rule]]
@@ -120,7 +120,7 @@
 [?def rule-bound       scope=public pure [returns element]             ($rule::element) [$time-rule-bound $rule]]
 [?def rule-is-finite   scope=public pure [returns bool]                ($rule::element) [$time-rule-is-finite $rule]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=time
   [scope """Dates, datetimes, durations, and instants, with wall-clock and monotonic time sources. Covers construction and decomposition, exact-time and calendar arithmetic, ISO 8601 / RFC 3339 / RFC 2822 / ICU-LDML parsing and formatting, timezone handling, RFC 5545 RRULE and cron recurrence rules, and mockable clocks for deterministic-time testing. Durations are signed nanosecond counts; date and datetime values come from the parse and construction functions."""]]
 [fn-doc name=now scope=public purity=impure

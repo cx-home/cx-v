@@ -399,7 +399,7 @@ pub enum ProgramPathAxis {
 pub enum ProgramLiteralKind {
 	string_lit
 	int_lit
-	// v0.8.0 D-H: a bare decimal integer literal that OVERFLOWS i64 auto-
+	// D-H: a bare decimal integer literal that OVERFLOWS i64 auto-
 	// promotes to bigint (stays numeric) rather than degrading to a string.
 	// The verbatim digit text (sign-normalized, `_` stripped) is carried in
 	// `str_val`; eval produces a ScalarNode with data_type=.bigint_type.
@@ -409,11 +409,11 @@ pub enum ProgramLiteralKind {
 	float_lit
 	bool_lit
 	duration_lit
-	// v0.8.0 [L26]: calendar-span literal `3mo`/`1y`. Verbatim text in
+	// [L26]: calendar-span literal `3mo`/`1y`. Verbatim text in
 	// `dur_val` (shared field with duration_lit); eval → ScalarNode of
 	// data_type=.period_type.
 	period_lit
-	// v0.8.0 lexicon §9 [L23]/[L24]: temporal scalars. The verbatim
+	// Lexicon §9 [L23]/[L24]: temporal scalars. The verbatim
 	// source text is carried in `str_val`; eval produces a ScalarNode
 	// with data_type=.date_type / .datetime_type and value=the source.
 	date_lit
@@ -425,13 +425,13 @@ pub enum ProgramLiteralKind {
 	block         // implicit top-level multi-statement program (eval
 	              // each in order; return last value). Parsers emit this
 	              // ONLY at program root with multiple statements.
-	// v0.8.0: atom literal — surface `:NAME`. Carries the
+	// atom literal — surface `:NAME`. Carries the
 	// atom name in `str_val` (without the leading colon). At eval
 	// time produces a ScalarNode with data_type=.atom_type and
 	// value=ScalarValue(name). Equality is name-equality, type-
 	// strict (atom never equals string of same characters).
 	atom_lit
-	// v0.8.0 DATA↔PROGRAM SEAM: an embedded pure-DATA construct the program
+	// DATA↔PROGRAM SEAM: an embedded pure-DATA construct the program
 	// surface carries verbatim — raw text `[#…#]`, an entity / character
 	// reference `&…;` / `&#…;`, or a declaration `[!…]` (DTD declarations +
 	// `[!DOCTYPE …]`). The program lexer captures the construct's SPAN and the
@@ -468,7 +468,7 @@ pub:
 	// for a `[#…#]` raw / `&…;` entity / `[!…]` declaration span. Eval returns it
 	// verbatim. None for every other kind.
 	node ?Node
-	// slots — RETIRED (v0.8.0 / D014). The `[name … :label value]`
+	// slots — RETIRED (D014). The `[name … :label value]`
 	// element-literal colon-slot SOURCE surface no longer parses: element
 	// construction uses attributes (`code="x"`) and positional body only
 	// (spec/core/code.md §9.1: `[ok VALUE]`, `[err code= message= …]`). The

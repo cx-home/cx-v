@@ -109,7 +109,7 @@ pub fn (e LexError) msg() string {
 // This list MUST agree with spec/grammar.ebnf [127e] ProgramDirName and
 // spec/eval.md §12.1–12.6 row count. Gate 3 verifies the equality.
 //
-// v0.8.0 changes: 'find' removed (retired); 'modify' added;
+// Changes: 'find' removed (retired); 'modify' added;
 // 'par-map' / 'par-reduce' renamed to 'map' / 'reduce';
 // Iterator combinator stdlib added (W3c): filter,
 // take, drop, zip, enumerate, chunks, concat, chain, cycle, scan,
@@ -163,7 +163,7 @@ pub const directive_names = [
 	'meta',
 ]
 
-// is_directive_name reports whether `name` is a v0.8.0 directive
+// is_directive_name reports whether `name` is a registered directive
 // per the locked §4.1 registry.
 pub fn is_directive_name(name string) bool {
 	for d in directive_names {

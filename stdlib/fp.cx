@@ -1,4 +1,4 @@
-[- cx-stdlib/fp — functional composition over the value channels
+[; cx-stdlib/fp — functional composition over the value channels
    (spec/std-lib/fp.md). The six-combinator protocol map / flat-map /
    pure / traverse / sequence / fold dispatching on the HEAD TAG of the
    container value (§1). A type is a Functor iff an instance is registered
@@ -19,9 +19,9 @@
    err-boundary combinators (traverse / sequence / fold, §4) receive an
    [err]-holding container as an inspectable value.
 
-   NOTE: this const and stdlib/fp.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/fp.cx are the same source — edit both. ]
 
-[- §1 the six-combinator protocol (head-tag dispatch) -]
+[; §1 the six-combinator protocol (head-tag dispatch) ]
 [?def map      scope=public pure [returns any] ($f::any $fn::any)            [$fp-map $f $fn]]
 [?def flat-map scope=public pure [returns any] ($f::any $fn::any)            [$fp-flat-map $f $fn]]
 [?def pure     scope=public pure [returns any] ($x::any $tag=:sequence)       [$fp-pure $x $tag]]
@@ -29,7 +29,7 @@
 [?def sequence scope=public pure [returns any] ($f::any)                      [$fp-sequence $f]]
 [?def traverse scope=public pure [returns any] ($f::any $fn::any)            [$fp-traverse $f $fn]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=fp
   [scope """Functional composition over the four value channels. A small closed protocol of six combinators — map, flat-map, pure, traverse, sequence, and fold — that dispatch on the head tag of the container value. A type is a functor when an instance is registered for its head tag (duck-typed; there is no static kind system). The built-in instances are sequence (Maybe and List in one: empty is None, a singleton is Some) and result ([ok]/[err], where flat-map is the railway short-circuit); user-defined tagged containers register their own arms."""]]
 [fn-doc name=map scope=public purity=pure

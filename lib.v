@@ -171,7 +171,7 @@ pub fn convert(src string, from Format, to Format) !string {
 
 // convert_opts is convert with a lossless flag. When lossless is true and the
 // target is XML, typed scalars carry their type per conversions.md §0.2
-// (emit_xml_lossless); other targets are unaffected at v0.8.0 (their lossless
+// (emit_xml_lossless); other targets are currently unaffected (their lossless
 // forms are separate work).
 //
 // Both axes route through the codec registry (codec.md §6): convert_opts is a

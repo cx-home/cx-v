@@ -2,7 +2,7 @@ module cx
 
 import crypto.sha256
 
-// match_node.v — MatchNode AST (v0.8.0).
+// match_node.v — MatchNode AST.
 //
 // MatchNode is the spec-canonical first-class AST node for the multi-arm
 // `[?match]` directive — heterogeneous arms of three kinds (`:case`
@@ -208,7 +208,7 @@ pub fn new_else_arm(body string) MatchArm {
 // parses of the same source, we cannot rely on `a == b` for structural
 // equality directly. The kind-plus-name compare here is good enough to
 // demonstrate the structural-graft wiring; the full canonical-bytes
-// hash comparison is the v0.8.x follow-up.
+// hash comparison is a follow-up.
 pub fn node_structural_eq(a Node, b Node) bool {
 	// Same variant + same canonical-name representation, recursing
 	// into Element.items so `[user 1]` and `[user 2]` distinguish.

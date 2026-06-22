@@ -1,14 +1,14 @@
-// Q5 v0.8.0 / Phase 5.5 finish: `cx lsp` — `[?modify]` attribute-axis
+// Q5 / Phase 5.5 finish: `cx lsp` — `[?modify]` attribute-axis
 // diagnostic (CXLS004) + CXPath path-context completion provider.
 //
 // Implements the two affordances reserved by
-// `tooling/lsp/v0_8_0_diagnostics.md` for the second half of Phase 5.5:
+// `tooling/lsp/diagnostics.md` for the second half of Phase 5.5:
 //
 //   1. CXLS004 — `[?modify]` `[set-attr …]` / `[delete-attr …]` invoked
 //      on a focus path whose last step is an attribute axis.
 //   2. Path-context completion — when the cursor sits inside a CXPath
 //      fragment, return axis names / element names / attribute names
-// `v0_8_0_diagnostics.md` `textDocument/
+// `diagnostics.md` `textDocument/
 //      completion` section.
 //
 // Approach for CXLS004

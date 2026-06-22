@@ -423,6 +423,17 @@ fn test_for_on_error_is_retired() {
 	assert false, '[on-error] for-clause must no longer parse'
 }
 
+fn test_where_infix_comparison_hints_prefix_form() {
+	// #18: a bare infix comparison in [where] (`[where $u/@a=true]`) is a
+	// common mis-reach — CX predicates are PREFIX. The error must point at the
+	// prefix form, not give the low-context "expected ']'".
+	cx.parse_program('[?for [in \$u users] [where \$u/@active=true] [yield \$u]]') or {
+		assert err.msg().contains('PREFIX predicate'), 'expected the prefix-form hint, got: ${err.msg()}'
+		return
+	}
+	assert false, 'infix `=` in [where] must be a parse error with the prefix-form hint'
+}
+
 fn test_for_missing_yield_errors() {
 	parse_err('[?for [in $u users]]')
 }

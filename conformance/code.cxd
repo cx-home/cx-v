@@ -387,6 +387,21 @@ note: is the blessed path for both single-char (len=1) and slice access.
 #]]
  ]
 
+ [case id=program-for-011b-map-member-sequence level=core
+  [tags for comprehension map member sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $m {items: ([row n=1], [row n=2])}]
+  [?for [in $x $m/items] [yield [$name $x]]]]
+#]]
+  [out-text [#
+'row'
+'row'
+#]]
+ ]
+
  [case id=program-for-012-let-binding level=core
   [tags let binding-scope]
   [in-cx [#
@@ -4686,6 +4701,19 @@ cx-err:CXER0100
 #]]
  ]
 
+ [case id=program-meta-001-annotate-and-read level=core
+  [tags meta meta-of reflection d5]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?let [= $doc [?meta {author: alice} [report "Q3"]]] [meta-of $doc]]
+#]]
+  [out-text [#
+{author: alice}
+#]]
+ ]
+
  [case id=program-match-multi-011-clause-child-scalar level=core
   [tags match multi-arm case else clause-child]
   [in-cx [#
@@ -6503,7 +6531,7 @@ true
 [cast 1 :widget]
 #]]
   [out-text [#
-[err code=cx-err:CXER0290 message='cast: unknown target kind :widget (v0.8.0 supports :int, :float, :string, :bool, :atom)']
+[err code=cx-err:CXER0290 message='cast: unknown target kind :widget (supported target kinds: :int, :float, :string, :bool, :atom)']
 #]]
  ]
 
@@ -8869,6 +8897,46 @@ cx-err:CXER3000
 #]]
  ]
 
+ [case id=program-num-err-idiv-bigint level=core
+  [tags numeric idiv error-shape bigint type-mismatch]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$idiv 10000000000000000000 7]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='idiv: argument 1 is not numeric']
+#]]
+ ]
+
+ [case id=program-num-err-mod-bigint level=core
+  [tags numeric mod error-shape bigint type-mismatch]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$mod 10000000000000000000 7]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='mod: argument 1 is not numeric']
+#]]
+ ]
+
+ [case id=program-def-body-throw-surfaces level=core
+  [tags def call error-shape error-as-value]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def boom ($x) $x/@nope]
+[?let [= $b [thing here=1]] [boom $b]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0001 message='cx-err:CXER0001: no attribute "nope"']
+#]]
+ ]
+
  [case id=program-fizzbuzz-shapes-rosetta level=core
   [tags corpus rosetta fizzbuzz]
   [in-cx [#
@@ -9801,6 +9869,63 @@ cx-err:CXER0100
 #]]
   [out-text [#
 120
+#]]
+ ]
+
+ [case id=program-fn-005b-recursion-bareword-head level=core
+  [tags def recursion bareword]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def sumto ($n $acc) [?if [<= $n 0] [then $acc] [else [sumto [- $n 1] [+ $acc $n]]]]]
+[sumto 5 0]
+#]]
+  [out-text [#
+15
+#]]
+ ]
+
+ [case id=program-fn-005c-mutual-recursion-bareword level=core
+  [tags def recursion bareword mutual]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def ev ($n) [?if [= $n 0] [then true] [else [od [- $n 1]]]]]
+[?def od ($n) [?if [= $n 0] [then false] [else [ev [- $n 1]]]]]
+[ev 4]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-fn-005d-zero-arg-bareword level=core
+  [tags def bareword zero-arg]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def f impure () [$concat "hi-from-" "f"]]
+[f]
+#]]
+  [out-text [#
+'hi-from-f'
+#]]
+ ]
+
+ [case id=program-fn-005e-bareword-nondef-is-data level=core
+  [tags def bareword data homoiconic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def f impure () "ran"]
+[primary]
+#]]
+  [out-text [#
+[primary]
 #]]
  ]
 

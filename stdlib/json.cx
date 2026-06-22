@@ -1,41 +1,41 @@
-[- cx-stdlib/json — JSON (RFC 8259) parse / emit; round-trips CXDM
+[; cx-stdlib/json — JSON (RFC 8259) parse / emit; round-trips CXDM
    Scalar / Array / Map per spec/std-lib/json.md §2 and elements via the
    lossless `named` encoding. Bodies forward to native primitives
    (vcx/code/stdlib_json.v) since a JSON parser/emitter is not expressible
    in pure CX. NOTE: this const and stdlib/json.cx are the same source —
-   edit both. -]
+   edit both. ]
 
-[- §3.1 parsing -]
+[; §3.1 parsing ]
 [?def parse           scope=public pure [returns any] ($s::string)                 [$json-parse $s]]
 [?def parse-with-opts scope=public pure [returns any] ($s::string $opts::map)      [$json-parse-with-opts $s $opts]]
 [?def parse-bytes     scope=public pure [returns any] ($b::bytes)                  [$json-parse-bytes $b]]
 
-[- §3.2 emitting -]
+[; §3.2 emitting ]
 [?def emit            scope=public pure [returns string] ($value::any)             [$json-emit $value]]
 [?def emit-pretty     scope=public pure [returns string] ($value::any)             [$json-emit-pretty $value]]
 [?def emit-with-opts  scope=public pure [returns string] ($value::any $opts::map)  [$json-emit-with-opts $value $opts]]
 [?def emit-bytes      scope=public pure [returns bytes]  ($value::any)             [$json-emit-bytes $value]]
 
-[- §3.3 streaming -]
+[; §3.3 streaming ]
 [?def parse-stream    scope=public pure [returns [sequence any]]    ($input::[sequence string]) [$json-parse-stream $input]]
 [?def parse-many      scope=public pure [returns [sequence any]]    ($s::string)                [$json-parse-many $s]]
 [?def emit-stream     scope=public pure [returns [sequence string]] ($values::[sequence any])   [$json-emit-stream $values]]
 
-[- §3.4 validation -]
+[; §3.4 validation ]
 [?def is-valid        scope=public pure [returns bool] ($s::string)               [$json-is-valid $s]]
 
-[- `encode` is the entry-file re-export of the package surface
+[; `encode` is the entry-file re-export of the package surface
    (spec/code.md §12.4.4): canonical CX serialization via the core
    `$format-canonical` builtin (used by the module-system conformance
-   fixtures, not part of the json §3 surface). -]
+   fixtures, not part of the json §3 surface). ]
 [?def encode scope=public pure [returns string] ($v::any) [$format-canonical $v]]
 
-[- `encoder-not-reexported` is module-private (no scope=public): reachable
+[; `encoder-not-reexported` is module-private (no scope=public): reachable
    internally but NOT re-exported, so a cross-module reference raises
-   CXER0216 (§12.4.4 / §12.6) — additive-no-leak discipline. -]
+   CXER0216 (§12.4.4 / §12.6) — additive-no-leak discipline. ]
 [?def encoder-not-reexported ($v::any) [$format-canonical $v]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=json
   [scope """Parse JSON (RFC 8259) into CXDM values and emit CXDM values back to JSON. Supports two parse modes (strict and lenient) and three emit modes (canonical, pretty, compact). The data subset round-trips losslessly; CX elements emit idiomatically by default or via a lossless `named` encoding on demand. Distinct from the cross-format CLI conversion path — this is the in-program library form."""]]
 [fn-doc name=parse scope=public purity=pure

@@ -423,7 +423,25 @@ mut:
 	// flushes the end-of-table marker.
 	fd     int = -1
 	closed bool
+	// fd-streaming RSS bound (#52): the per-group framing buffers are
+	// transient (built, written, dropped). Under the default `-gc e`/vgc
+	// the live-set-driven pacer (256 MB floor) does not reclaim them across
+	// a long write loop, so process RSS climbs ~linearly. We force a GC
+	// collection once `bytes_since_gc` crosses the interval, which lets vgc
+	// recycle the dead spans so the loop reuses them instead of growing.
+	// boehm/none are unaffected (gc_collect is a real collect / a no-op
+	// respectively). Bytes mode is exempt: it deliberately retains the whole
+	// document in `buf`, so there is nothing transient to reclaim.
+	bytes_since_gc u64
 }
+
+// streaming_write_gc_interval_bytes is how many bytes of uncompressed row-group
+// payload the fd writer processes between forced GC collections (#52). The peak
+// RSS overshoot is ~2× this (vgc gives a span emptied in cycle N a one-cycle
+// reclaim grace, so the live working set spans two intervals). 4 MiB keeps the
+// overshoot well under the cmp-005 1.5× bound while leaving the collect overhead
+// negligible against the write I/O.
+const streaming_write_gc_interval_bytes = u64(2 * 1024 * 1024)
 
 // new_table_writer_bytes opens an in-memory writer. The caller-
 // supplied col-spec is taken as a framed ast_bin buffer (the same
@@ -516,6 +534,19 @@ pub fn (mut w CxTableWriter) emit_row_group_payload(plain_body []u8) ! {
 		w.buf << group
 	} else {
 		fd_write_all(w.fd, group)!
+		// #52: bound peak RSS over a long streaming write by forcing vgc to
+		// reclaim the transient per-group buffers periodically (see the
+		// bytes_since_gc field doc). Under -gc e this recycles dead spans for
+		// reuse; under boehm it is a redundant collect; under none a no-op.
+		// We pace by the UNCOMPRESSED payload size (the allocation-churn proxy:
+		// the framing buffer plus zstd's internal buffers scale with it), not by
+		// the written group bytes — a highly compressible group writes few bytes
+		// but still churns ~plain_body.len of transient heap.
+		w.bytes_since_gc += u64(plain_body.len)
+		if w.bytes_since_gc >= streaming_write_gc_interval_bytes {
+			w.bytes_since_gc = 0
+			gc_collect()
+		}
 	}
 }
 

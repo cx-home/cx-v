@@ -9,7 +9,7 @@ conformance fixtures for cx-stdlib/hash (spec/std-lib/hash.md §6).
    out_text is a stable lowercase-hex string. Error fixtures use
    --- out_err with the bare CXER code.
 
-   No inter-fixture [- comment -] dividers and no inline comments inside
+   No inter-fixture [; comment ] dividers and no inline comments inside
    in_code: the fixture harness splits on `=== test:` then extracts each
    section to end-of-chunk, so any trailing comment after out_text would
    be swallowed into the expected value. Section grouping is by id range:

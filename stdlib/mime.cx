@@ -1,8 +1,8 @@
-[- cx-stdlib/mime — MIME type registry + Content-Type / Content-Disposition
+[; cx-stdlib/mime — MIME type registry + Content-Type / Content-Disposition
    parsing, multipart-boundary generation, type classification, and Accept
    content negotiation.
 
-   Full v0.8.0 public surface per spec/std-lib/mime.md §3. Bodies forward to
+   Full public surface per spec/std-lib/mime.md §3. Bodies forward to
    native primitives (vcx/code/stdlib_mime.v): the header tokenizer / quoting,
    RFC 5987 extended-parameter decode, the ~200-extension registry, and the
    q-ranked Accept sort are not expressible in pure CX. parse* return an
@@ -13,30 +13,30 @@
    Only load-mime-types touches the filesystem (requires read, §7); register
    -type / multipart-boundary / lookups / parsing operate in memory.
 
-   NOTE: this const and stdlib/mime.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/mime.cx are the same source — edit both. ]
 
-[- §3.1 type lookup -]
+[; §3.1 type lookup ]
 [?def type-for-extension      scope=public pure   [returns string]            ($ext::string)                  [$mime-type-for-extension $ext]]
 [?def extension-for-type      scope=public pure   [returns string]            ($mime-type::string)            [$mime-extension-for-type $mime-type]]
 [?def all-extensions-for-type scope=public pure   [returns [sequence string]] ($mime-type::string)            [$mime-all-extensions-for-type $mime-type]]
 [?def register-type           scope=public impure [returns null]              ($ext::string $mime-type::string) [$mime-register-type $ext $mime-type]]
 [?def load-mime-types         scope=public impure [returns int]               ($path::string)                 [$mime-load-mime-types $path]]
 
-[- §3.2 content-type -]
+[; §3.2 content-type ]
 [?def parse-content-type  scope=public pure [returns element] ($header-value::string)    [$mime-parse-content-type $header-value]]
 [?def format-content-type scope=public pure [returns string]  ($parsed::element)         [$mime-format-content-type $parsed]]
 [?def get-parameter       scope=public pure [returns string]  ($parsed::element $name::string) [$mime-get-parameter $parsed $name]]
 
-[- §3.3 content-disposition -]
+[; §3.3 content-disposition ]
 [?def parse-content-disposition  scope=public pure [returns element] ($header-value::string) [$mime-parse-content-disposition $header-value]]
 [?def format-content-disposition scope=public pure [returns string]  ($parsed::element)      [$mime-format-content-disposition $parsed]]
 [?def disposition-filename       scope=public pure [returns string]  ($parsed::element)      [$mime-disposition-filename $parsed]]
 
-[- §3.4 multipart boundary -]
+[; §3.4 multipart boundary ]
 [?def multipart-boundary scope=public impure [returns string] ()          [$mime-multipart-boundary]]
 [?def is-valid-boundary  scope=public pure   [returns bool]   ($s::string) [$mime-is-valid-boundary $s]]
 
-[- §3.5 type classification -]
+[; §3.5 type classification ]
 [?def is-text-type         scope=public pure [returns bool]   ($mime-type::string) [$mime-is-text-type $mime-type]]
 [?def is-binary-type       scope=public pure [returns bool]   ($mime-type::string) [$mime-is-binary-type $mime-type]]
 [?def is-image-type        scope=public pure [returns bool]   ($mime-type::string) [$mime-is-image-type $mime-type]]
@@ -47,15 +47,15 @@
 [?def is-application-type  scope=public pure [returns bool]   ($mime-type::string) [$mime-is-application-type $mime-type]]
 [?def is-structured-syntax scope=public pure [returns string] ($mime-type::string) [$mime-is-structured-syntax $mime-type]]
 
-[- §3.6 charset -]
+[; §3.6 charset ]
 [?def charset-of   scope=public pure [returns string]  ($parsed::element)            [$mime-charset-of $parsed]]
 [?def with-charset scope=public pure [returns element] ($parsed::element $charset::string) [$mime-with-charset $parsed $charset]]
 
-[- §3.7 accept negotiation -]
+[; §3.7 accept negotiation ]
 [?def parse-accept scope=public pure [returns [sequence element]] ($header-value::string)                    [$mime-parse-accept $header-value]]
 [?def match-accept scope=public pure [returns string]             ($header-value::string $offered::[sequence string]) [$mime-match-accept $header-value $offered]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=mime
   [scope """MIME data-shape handling: a built-in extension-to-type registry, Content-Type and Content-Disposition parsing, multipart boundary generation, type classification, and Accept-header content negotiation. The registry covers ~200 common extensions offline and is extensible at runtime. The data-shape companion to cx-stdlib/url, composing with cx-stdlib/email for multipart messages."""]]
 [fn-doc name=type-for-extension scope=public purity=pure

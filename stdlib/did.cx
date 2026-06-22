@@ -1,26 +1,26 @@
-[- cx-stdlib/did — decentralized identifiers (spec/std-lib/did.md).
+[; cx-stdlib/did — decentralized identifiers (spec/std-lib/did.md).
    A DID identifies a principal (xap.md R9 / §22.1): the decentralized identity
    source, counterpart to crypto's centralized JWT/JWKS. did:key is offline +
    self-describing; did:web is org/domain-anchored (HTTPS resolver seam).
-   Bodies bottom out in the did-* native primitives (vcx/code/stdlib_did.v). -]
+   Bodies bottom out in the did-* native primitives (vcx/code/stdlib_did.v). ]
 
-[- construct: encode an Ed25519 public key as a did:key string -]
+[; construct: encode an Ed25519 public key as a did:key string ]
 [?def key-create  scope=public pure   [returns string]  ($public-key::bytes)         [$did-key-create $public-key]]
 
-[- inspect -]
+[; inspect ]
 [?def parse       scope=public pure   [returns element] ($did::string)               [$did-parse $did]]
 [?def method      scope=public pure   [returns string]  ($did::string)               [$did-method $did]]
 
-[- resolve: `document` is OFFLINE for self-describing methods (did:key); -]
-[- `resolve` handles all methods (did:web performs an HTTPS GET, net-gated). -]
+[; resolve: `document` is OFFLINE for self-describing methods (did:key); ]
+[; `resolve` handles all methods (did:web performs an HTTPS GET, net-gated). ]
 [?def document    scope=public pure   [returns element] ($did::string)               [$did-document $did]]
 [?def resolve     scope=public impure [returns element] ($did::string $opts::map {}) [$did-resolve $did $opts]]
 
-[- keys & proof-of-control -]
+[; keys & proof-of-control ]
 [?def key-of         scope=public pure [returns bytes] ($did::string)                                 [$did-key-of $did]]
 [?def verify-control scope=public pure [returns bool]  ($did::string $challenge::bytes $sig::bytes)    [$did-verify-control $did $challenge $sig]]
 
-[- co-located docs. -]
+[; co-located docs. ]
 [module-doc name=did
   [scope """Decentralized identifiers (DIDs): the decentralized identity source that identifies a principal, counterpart to crypto's centralized JWT/JWKS. Supports did:key — offline and self-describing, encoding an Ed25519 public key directly in the identifier — and did:web, which is org/domain-anchored and resolves over an HTTPS seam. The module parses and inspects DID strings, produces DID documents, resolves them (offline or net-gated), and verifies a principal's proof-of-control."""]]
 [fn-doc name=key-create scope=public purity=pure

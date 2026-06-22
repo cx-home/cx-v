@@ -1650,12 +1650,12 @@ true
 #]]
  ]
 
- [- ───────────────────────────────────────────────────────────────────
+ [; ───────────────────────────────────────────────────────────────────
     §3.10 recurrence — RFC 5545 RRULE + cron (all pure, no clock).
     Expansion vectors cross-validated against a hand-rolled RFC 5545
     reference (Node v22) for last-weekday-of-month (BYSETPOS=-1),
     DST-spanning weekly, and the biweekly MO/WE/FR example.
-    ─────────────────────────────────────────────────────────────────── -]
+    ─────────────────────────────────────────────────────────────────── ]
 
  [case id=time-117-rrule-round-trip-byday-ordinal level=core gate=enforced
   [tags time recurrence rrule round-trip byday]

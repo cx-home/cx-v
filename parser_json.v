@@ -194,6 +194,50 @@ fn jv_to_cx_doc(v JV) Document {
 	}
 }
 
+// jv_to_value_node converts a parsed JV tree to the LOSSLESS native value
+// model — MapNode / ArrayNode / ScalarNode — instead of synthesized Elements.
+// This mirrors the JSON codec's map-model output ({server: {port: 8080}}) so
+// the YAML (#4) and TOML (#5) codecs import losslessly: a mapping is a Map, a
+// sequence is an Array, scalars keep their type. (jv_to_cx_doc / jv_to_nodes
+// remain for the legacy element-synthesising parsers.)
+fn jv_to_value_node(v JV) Node {
+	match v {
+		map[string]JV {
+			obj := v as map[string]JV
+			mut entries := []MapEntry{}
+			for k, child in obj {
+				entries << MapEntry{
+					key_type:  .string_type
+					key_value: ScalarValue(k)
+					value:     jv_to_value_node(child)
+				}
+			}
+			return MapNode{ entries: entries }
+		}
+		[]JV {
+			arr := v as []JV
+			mut items := []Node{}
+			for item in arr {
+				items << jv_to_value_node(item)
+			}
+			return ArrayNode{ items: items }
+		}
+		JVNull { return ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) } }
+		bool   { return ScalarNode{ data_type: .bool_type, value: ScalarValue(v as bool) } }
+		i64    { return ScalarNode{ data_type: .int_type, value: ScalarValue(v as i64) } }
+		f64    { return ScalarNode{ data_type: .float_type, value: ScalarValue(v as f64) } }
+		string { return ScalarNode{ data_type: .string_type, value: ScalarValue(v as string) } }
+	}
+}
+
+// jv_to_value_doc wraps the top-level JV as a single-value Document (Map /
+// Array / Scalar root). sem_document + emit_cx both project a single non-
+// Element root directly, so the import renders `{…}` / `[…]` / a scalar — the
+// lossless read shape shared with the JSON codec.
+fn jv_to_value_doc(v JV) Document {
+	return Document{ elements: [jv_to_value_node(v)] }
+}
+
 // Returns one or more nodes for a key+value. An array of objects becomes
 // repeated elements with the same key name (like CX repeated elements).
 fn jv_to_nodes(name string, v JV) []Node {

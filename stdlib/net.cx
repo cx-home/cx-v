@@ -1,4 +1,4 @@
-[- cx-stdlib/net — L4 networking: sockets, transports, TLS/DTLS.
+[; cx-stdlib/net — L4 networking: sockets, transports, TLS/DTLS.
 
    Full surface per spec/02-inprogress/stdlib_net.md §3. Bodies forward to
    native primitives (vcx/code/stdlib_net.v) since socket/resolver effects
@@ -12,14 +12,14 @@
    registry read; fp landed there afterward). See spec §8 + governance §9.6.
 
    NOTE: this const (vcx/code/stdlib_bundle.v stdlib_src_net) and
-   stdlib/net.cx are the same source — edit both. -]
+   stdlib/net.cx are the same source — edit both. ]
 
-[- §3.1 resolution & addresses -]
+[; §3.1 resolution & addresses ]
 [?def parse-addr   scope=public pure   [returns element]            ($s::string)               [$net-parse-addr $s]]
 [?def addr-to-string scope=public pure [returns string]             ($a::element)              [$net-addr-to-string $a]]
 [?def resolve      scope=public impure [returns [sequence element]] ($host::string $opts::map) [$net-resolve $host $opts]]
 
-[- §3.2 dial (client) -]
+[; §3.2 dial (client) ]
 [?def dial      scope=public impure [returns element] ($url::string $opts::map)  [$net-dial $url $opts]]
 [?def dial-tcp  scope=public impure [returns element] ($url::string $opts::map)  [$net-dial-tcp $url $opts]]
 [?def dial-tls  scope=public impure [returns element] ($url::string $opts::map)  [$net-dial-tls $url $opts]]
@@ -27,7 +27,7 @@
 [?def dial-dtls scope=public impure [returns element] ($url::string $opts::map)  [$net-dial-dtls $url $opts]]
 [?def dial-unix scope=public impure [returns element] ($path::string $opts::map) [$net-dial-unix $path $opts]]
 
-[- §3.3 listen / accept (server) -]
+[; §3.3 listen / accept (server) ]
 [?def listen      scope=public impure [returns element]            ($url::string $opts::map)  [$net-listen $url $opts]]
 [?def listen-tcp  scope=public impure [returns element]            ($url::string $opts::map)  [$net-listen-tcp $url $opts]]
 [?def listen-tls  scope=public impure [returns element]            ($url::string $opts::map)  [$net-listen-tls $url $opts]]
@@ -37,7 +37,7 @@
 [?def accept      scope=public impure [returns element]            ($listener::element)       [$net-accept $listener]]
 [?def accept-iter scope=public impure [returns [iterator element]] ($listener::element)       [$net-accept-iter $listener]]
 
-[- §3.4 stream I/O — UTF-8 text contract -]
+[; §3.4 stream I/O — UTF-8 text contract ]
 [?def read-bytes     scope=public impure [returns bytes]             ($sock::element $n::int)    [$net-read-bytes $sock $n]]
 [?def read-exact     scope=public impure [returns bytes]             ($sock::element $n::int)    [$net-read-exact $sock $n]]
 [?def read-line      scope=public impure [returns string]            ($sock::element)            [$net-read-line $sock]]
@@ -51,19 +51,19 @@
 [?def line-iter      scope=public impure [returns [iterator string]] ($sock::element)            [$net-line-iter $sock]]
 [?def chunk-iter     scope=public impure [returns [iterator bytes]]  ($sock::element $chunk::int) [$net-chunk-iter $sock $chunk]]
 
-[- §3.5 datagram I/O (UDP / Unix-datagram) -]
+[; §3.5 datagram I/O (UDP / Unix-datagram) ]
 [?def send-to   scope=public impure [returns int]     ($sock::element $data $to::element) [$net-send-to $sock $data $to]]
 [?def recv-from scope=public impure [returns element] ($sock::element $n::int)            [$net-recv-from $sock $n]]
 [?def send      scope=public impure [returns int]     ($sock::element $data)              [$net-send $sock $data]]
 [?def recv      scope=public impure [returns bytes]   ($sock::element $n::int)            [$net-recv $sock $n]]
 
-[- §3.6 TLS — client + server upgrade -]
+[; §3.6 TLS — client + server upgrade ]
 [?def tls-wrap   scope=public impure [returns element] ($sock::element $opts::map) [$net-tls-wrap $sock $opts]]
 [?def tls-accept scope=public impure [returns element] ($sock::element $opts::map) [$net-tls-accept $sock $opts]]
 [?def peer-cert  scope=public impure [returns element] ($sock::element)            [$net-peer-cert $sock]]
 [?def tls-info   scope=public impure [returns element] ($sock::element)            [$net-tls-info $sock]]
 
-[- §3.7 lifecycle, deadlines, options, introspection -]
+[; §3.7 lifecycle, deadlines, options, introspection ]
 [?def close        scope=public impure [returns null]               ($handle::element)            [$net-close $handle]]
 [?def shutdown     scope=public impure [returns null]               ($sock::element $dir::string) [$net-shutdown $sock $dir]]
 [?def set-deadline scope=public impure [returns null]               ($sock::element $opts::map)   [$net-set-deadline $sock $opts]]
@@ -72,7 +72,7 @@
 [?def remote-addr  scope=public impure [returns element]            ($sock::element)              [$net-remote-addr $sock]]
 [?def is-open      scope=public impure [returns bool]               ($handle::element)            [$net-is-open $handle]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=net
   [scope """Transport-level (L4) networking: opening and accepting stream connections (TCP, Unix-stream, TLS), exchanging datagrams (UDP, Unix-datagram, DTLS), name resolution, and TLS upgrade or termination. The layer a database driver, custom binary protocol, WebSocket stack, or HTTP implementation is built on top of. Socket and resolver operations are impure and gated by the net capability under deny-by-default; parse-addr and addr-to-string are pure and capability-free. HTTP semantics live in cx-stdlib/http, not here."""]]
 [fn-doc name=parse-addr scope=public purity=pure

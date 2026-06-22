@@ -41,3 +41,34 @@ fn stop_http_listener_for(rec &ServiceRecord) {
 fn start_handler_listener(handler cx.Node, host string, port int, block bool, mut env MatchEnv) !cx.Node {
 	return error('[\$http:serve] real-socket listener is not available in the wasm build (picoev/net not linked under -d wasm32_emcc). Run cx natively.')
 }
+
+// ── SSE topic pub/sub stubs ────────────────────────────────────────────────
+//
+// cx_sse_topic_subscribe, cx_sse_topic_on_close_fd, and cx_sse_topic_publish
+// are defined in services_listener_notd_wasm32_emcc.v (the real picoev
+// listener, excluded from the wasm build). cx_sse_topic_publish is called
+// unconditionally from stdlib_http.v, so it must be present in this stub
+// file. The other two are included for completeness (they may be referenced
+// from future shared code or via V's cross-module analysis).
+//
+// In the wasm playground there are no held SSE fds and no subscriber map, so
+// all three are no-ops / return a benign zero value.
+
+// cx_sse_topic_subscribe — no-op in the wasm build (no picoev, no fds).
+fn cx_sse_topic_subscribe(topic string, fd int) {
+	// No subscriber map in the wasm build; SSE topic pub/sub requires a
+	// real socket listener which is not available under -d wasm32_emcc.
+}
+
+// cx_sse_topic_on_close_fd — no-op in the wasm build (no picoev, no fds).
+fn cx_sse_topic_on_close_fd(fd int) {
+	// No subscriber map to clean up in the wasm build.
+}
+
+// cx_sse_topic_publish — returns 0 (no subscribers) in the wasm build.
+// stdlib_http.v calls this at every [?sse-publish] invocation; returning 0
+// means "zero fds accepted the write", which is the correct answer when
+// there is no real listener.
+fn cx_sse_topic_publish(topic string, frame string) int {
+	return 0
+}

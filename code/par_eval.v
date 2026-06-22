@@ -137,14 +137,14 @@ fn par_map(closure Closure, items []cx.Node, ordered bool, mut env MatchEnv) ![]
 }
 
 // par_reduce runs the associative two-argument `closure` over `items`
-// using `init` as the identity. v0.8.0 splits the work into K chunks
+// using `init` as the identity. The implementation splits the work into K chunks
 // where K is bounded by `max_workers`; each chunk is folded left-to-
 // right sequentially in a `spawn`ed worker; the K partial results are
 // then combined sequentially on the caller thread. This satisfies
 // `spec/code.md §8.10.6` ("any associative parenthesization") without
 // the implementation complexity of a full pairwise-tree reduce, and
 // gives a real wall-clock speedup when the `:using` body itself
-// blocks (e.g. on `[?sleep DUR]`) — which is the v0.8.0 demo case.
+// blocks (e.g. on `[?sleep DUR]`) — which is the demonstrated case.
 //
 // `:init` MUST be the identity for `:using` per the §8.10.6
 // associative contract; we use it both as the per-chunk seed and as

@@ -1,15 +1,15 @@
-[- cx-stdlib/random — PRNG (xoshiro256++) + crypto-random.
+[; cx-stdlib/random — PRNG (xoshiro256++) + crypto-random.
 
-   Full v0.8.0 surface per spec/stdlib_random.md §3. Bodies forward to
+   Full surface per spec/stdlib_random.md §3. Bodies forward to
    native primitives (vcx/code/stdlib_random.v) since generation of
    pseudo-random / cryptographic values is not expressible in pure CX.
 
    PRNG is process-global (impure) with explicit-state -with mirrors
    (pure given the generator). The -with mirrors return [result :value v
    :next-generator g] pairs threaded by the caller. Crypto-random is
-   kernel-backed and never seedable. -]
+   kernel-backed and never seedable. ]
 
-[- §3.1 PRNG process-global (impure) -]
+[; §3.1 PRNG process-global (impure) ]
 [?def seed         scope=public impure [returns null]             ($s::int)               [$random-seed $s]]
 [?def next-int     scope=public impure [returns int]              ()                     [$random-next-int]]
 [?def next-float   scope=public impure [returns float]            ()                     [$random-next-float]]
@@ -20,7 +20,7 @@
 [?def choose       scope=public impure [returns any]              ($xs::[sequence any])   [$random-choose $xs]]
 [?def sample       scope=public impure [returns [sequence any]]   ($xs::[sequence any] $n::int) [$random-sample $xs $n]]
 
-[- §3.2 PRNG explicit-state (pure given generator) -]
+[; §3.2 PRNG explicit-state (pure given generator) ]
 [?def from-seed         scope=public pure [returns element] ($s::int)                            [$random-from-seed $s]]
 [?def next-int-with     scope=public pure [returns element] ($gen::element)                      [$random-next-int-with $gen]]
 [?def next-float-with   scope=public pure [returns element] ($gen::element)                      [$random-next-float-with $gen]]
@@ -31,14 +31,14 @@
 [?def choose-with       scope=public pure [returns element] ($gen::element $xs::[sequence any])   [$random-choose-with $gen $xs]]
 [?def sample-with       scope=public pure [returns element] ($gen::element $xs::[sequence any] $n::int) [$random-sample-with $gen $xs $n]]
 
-[- §3.3 crypto-random (impure, kernel-backed) -]
+[; §3.3 crypto-random (impure, kernel-backed) ]
 [?def crypto-bytes         scope=public impure [returns bytes]  ($n::int)          [$random-crypto-bytes $n]]
 [?def crypto-int           scope=public impure [returns int]    ($lo::int $hi::int) [$random-crypto-int $lo $hi]]
 [?def crypto-hex           scope=public impure [returns string] ($n::int)          [$random-crypto-hex $n]]
 [?def crypto-base64-url    scope=public impure [returns string] ($n::int)          [$random-crypto-base64-url $n]]
 [?def crypto-token-urlsafe scope=public impure [returns string] ($n::int)          [$random-crypto-token-urlsafe $n]]
 
-[- §3.4 distribution helpers -]
+[; §3.4 distribution helpers ]
 [?def gaussian      scope=public impure [returns float] ($mean::float $stddev::float) [$random-gaussian $mean $stddev]]
 [?def exponential   scope=public impure [returns float] ($lambda::float)             [$random-exponential $lambda]]
 [?def poisson       scope=public impure [returns int]   ($lambda::float)             [$random-poisson $lambda]]
@@ -46,19 +46,19 @@
 [?def exponential-with scope=public pure [returns element] ($gen::element $lambda::float)             [$random-exponential-with $gen $lambda]]
 [?def poisson-with     scope=public pure [returns element] ($gen::element $lambda::float)             [$random-poisson-with $gen $lambda]]
 
-[- §3.5 weighted sampling -]
+[; §3.5 weighted sampling ]
 [?def choose-weighted   scope=public impure [returns any]            ($xs::[sequence any] $weights::[sequence float])        [$random-choose-weighted $xs $weights]]
 [?def sample-weighted   scope=public impure [returns [sequence any]] ($xs::[sequence any] $weights::[sequence float] $n::int) [$random-sample-weighted $xs $weights $n]]
 [?def choose-weighted-with scope=public pure [returns element] ($gen::element $xs::[sequence any] $weights::[sequence float])        [$random-choose-weighted-with $gen $xs $weights]]
 [?def sample-weighted-with scope=public pure [returns element] ($gen::element $xs::[sequence any] $weights::[sequence float] $n::int) [$random-sample-weighted-with $gen $xs $weights $n]]
 
-[- §3.6 vectorized generation -]
+[; §3.6 vectorized generation ]
 [?def next-floats    scope=public impure [returns [sequence float]] ($n::int) [$random-next-floats $n]]
 [?def next-ints      scope=public impure [returns [sequence int]]   ($n::int) [$random-next-ints $n]]
 [?def next-floats-with scope=public pure [returns element] ($gen::element $n::int) [$random-next-floats-with $gen $n]]
 [?def next-ints-with   scope=public pure [returns element] ($gen::element $n::int) [$random-next-ints-with $gen $n]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=random
   [scope """Two distinct randomness facilities, kept cleanly separated so PRNG output can never accidentally stand in for crypto. The PRNG path is seeded and reproducible — for simulation, sampling, and shuffling — and comes in a process-global form plus pure explicit-state mirrors. The crypto-random path is kernel-backed cryptographic randomness for tokens, keys, and salts, and is never seedable. This module owns generation of random values; keyed transforms belong to cx-stdlib/crypto."""]]
 [fn-doc name=seed scope=public purity=impure

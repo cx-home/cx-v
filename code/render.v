@@ -412,7 +412,7 @@ fn render_element_to(mut b strings.Builder, n cx.Element) {
 	}
 	b.write_string('[')
 	b.write_string(n.name)
-	// v0.8.0: emit ElementMeta (anchor / merge / id / data_type) so the
+	// emit ElementMeta (anchor / merge / id / data_type) so the
 	// `text`/`cx` render targets round-trip canonical-CX attribute
 	// syntax (e.g. `[section :id "intro"]`). Without this, modify
 	// pipelines that preserve `el.meta` through spine copies emit
@@ -745,7 +745,7 @@ fn render_element(n cx.Element) string {
 	// order, distinguishing labeled-slot children (name prefixed by
 	// `__cx_slot:LABEL`) from positional items.
 	mut s := '[${n.name}'
-	// v0.8.0: emit ElementMeta (anchor / merge / id / data_type) so the
+	// emit ElementMeta (anchor / merge / id / data_type) so the
 	// `text`/`cx` render targets round-trip canonical-CX attribute
 	// syntax — see render_element_to for rationale.
 	if a := n.anchor()    { s += ' &${a}' }
@@ -837,7 +837,7 @@ fn render_attr_value(v cx.ScalarValue) string {
 //
 // Everything else is NOT expressible bare in program source and breaks the
 // re-parse: a leading digit makes `1-doc` lex as `1` `-` `doc`; a `.` is its
-// own path-step token so `v0.8.0` lexes as `v` `.` `0`…; `/` is a path step
+// own path-step token so `pkg.mod` lexes as `pkg` `.` `mod`…; `/` is a path step
 // (`America/New_York` lexes as `America` `/` `New_York`); and any non-ASCII
 // byte (em-dash `—`, emoji `✅`, accented prose) or structural ASCII symbol
 // is rejected ("unexpected character"). All such values MUST be quoted.
@@ -866,7 +866,7 @@ fn needs_quoted_attr(s string) bool {
 	if s.len == 0 { return true }
 	// Only a program-safe bare ident/QName may be emitted unquoted; every
 	// other value (whitespace, brackets, quotes, digit-led `1-doc`, dotted
-	// `v0.8.0`, non-ASCII `—`/`✅`, structural symbols) must be quoted or the
+	// dotted `pkg.mod`, non-ASCII `—`/`✅`, structural symbols) must be quoted or the
 	// program re-parse fails. This is the eval-result renderer feeding a
 	// PROGRAM reader, which is STRICTER than the lenient data reader the
 	// canonical emitter (`cx_quote_attr_if_needed`) targets — the divergence

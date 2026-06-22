@@ -1,6 +1,7 @@
 module code
 
 import cx
+import os
 import strings
 import time
 import math
@@ -114,7 +115,7 @@ fn eval_literal(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 		.map_lit    { eval_map(l.keys, l.items, mut env)! }
 		.cx_element { eval_cx_element(l, mut env)! }
 		.block      { eval_block(l.items, mut env)! }
-		// v0.8.0: atom literal — evaluates to a typed atom
+		// atom literal — evaluates to a typed atom
 		// scalar value carrying the name. Equality is type-strict
 		// per cxdm.md §4.1 (atom never coerces with string).
 		.atom_lit   { scalar(cx.ScalarValue(l.str_val), cx.ScalarType.atom_type) }
@@ -200,6 +201,73 @@ fn eval_block(items []cx.ProgramNode, mut env MatchEnv) !cx.Node {
 		}
 	}
 	return last
+}
+
+// top_level_decl_names are the declaration directives whose evaluation
+// yields a program-internal status element ([result status=ok …]) rather
+// than user-facing output. The CLI/program emit boundary omits their result
+// when rendering each top-level form (#16).
+const top_level_decl_names = ['def', 'const', 'lib', 'import']
+
+fn is_top_level_decl(n cx.ProgramNode) bool {
+	if n is cx.ProgramDirective {
+		return n.name in top_level_decl_names
+	}
+	return false
+}
+
+// eval_top_level_each evaluates a multi-form top-level program block exactly
+// as eval_block does — shared env, §12.5 two-pass const handling, $doc
+// auto-binding — but returns the result of EACH non-declaration top-level
+// form in source order rather than only the last. The CLI/program emit
+// boundary (eval_code) renders each, so a leading data value no longer
+// silently vanishes; this realigns the program reading with the DATA
+// reading, which already emits every top-level root (#16; code.md §2 — the
+// two readings agree on values absent an explicit MODE fork, and multi-root
+// emit is not such a fork). eval_block (last-value) is unchanged, so in-
+// program block semantics and the conformance eval harness are unaffected.
+fn eval_top_level_each(items []cx.ProgramNode, mut env MatchEnv) ![]cx.Node {
+	mut out := []cx.Node{}
+	if items.len == 0 {
+		return out
+	}
+	mut has_top_const := false
+	for it in items {
+		if it is cx.ProgramDirective && it.name == 'const' {
+			has_top_const = true
+			break
+		}
+	}
+	if has_top_const {
+		for it in items {
+			if it is cx.ProgramDirective && (it.name == 'lib' || it.name == 'def') {
+				eval_node(it, mut env)!
+			}
+		}
+		prepare_top_level_consts(items, mut env)!
+	}
+	for it in items {
+		// Skip [?const]/[?lib]/[?def] already evaluated by the two-pass.
+		if has_top_const && it is cx.ProgramDirective
+		   && (it.name == 'const' || it.name == 'lib' || it.name == 'def') {
+			continue
+		}
+		res := eval_node(it, mut env)!
+		if _ := env.bindings['doc'] {
+			// already bound — first hit wins
+		} else {
+			if res is cx.Element {
+				env.bindings['doc'] = res
+				env.bindings['input'] = res
+			}
+		}
+		// Declaration directives are evaluated (for their registrations /
+		// side effects) but their status result is not user output.
+		if !is_top_level_decl(it) {
+			out << res
+		}
+	}
+	return out
 }
 
 fn scalar(v cx.ScalarValue, t cx.ScalarType) cx.Node {
@@ -290,7 +358,7 @@ const map_marker_name = '__cx_map__'
 // record) and gates `[?reveal]` declassification on the `secret-reveal`
 // capability. Best-effort taint propagation (§12.3 derived-value
 // secret-ness) and `::secret` type-annotation enforcement (grammar [26a])
-// are v0.9.0 follow-ups (see SPEC-FINDINGS §AO).
+// are follow-ups (see SPEC-FINDINGS §AO).
 const secret_marker_name = '__cx_secret__'
 
 // meta_marker_name wraps a `[?meta {…} FORM]` value (D5 /
@@ -600,9 +668,10 @@ fn eval_cx_element(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 				for it in first.items {
 					args << eval_node(it, mut env)!
 				}
-				if result := dispatch_call(l.name, args, mut env) {
-					return result
-				}
+				// Confirmed closure + call shape: resolve to its result or
+				// PROPAGATE its error (#46) — never fall through to data
+				// construction, which silently masked the runtime error.
+				return dispatch_call(l.name, args, mut env) or { return err }
 			}
 		}
 		// Bare-binding form `[head $xs]` — when the sole body item is
@@ -622,9 +691,8 @@ fn eval_cx_element(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 		if first is cx.ProgramBinding {
 			if l.name in env.closures {
 				args := [eval_node(first, mut env)!]
-				if result := dispatch_call(l.name, args, mut env) {
-					return result
-				}
+				// Confirmed closure: resolve or propagate its error (#46).
+				return dispatch_call(l.name, args, mut env) or { return err }
 			}
 		}
 		// single-scalar-literal directive form
@@ -642,9 +710,8 @@ fn eval_cx_element(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 				dispatch_ok := (l.name in env.closures)
 				if dispatch_ok {
 					args := [eval_node(first, mut env)!]
-					if result := dispatch_call(l.name, args, mut env) {
-						return result
-					}
+					// Confirmed closure: resolve or propagate its error (#46).
+					return dispatch_call(l.name, args, mut env) or { return err }
 				}
 			}
 		}
@@ -675,16 +742,24 @@ fn eval_cx_element(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 	// as `[$prefix:local …]` (a `$`-headed cx.ProgramCall, §12.1.1), never a
 	// bare slash head; the retired `prefix/local` slash surface was cut
 	// over 2026-05-31 (no dual-accept).
+	// A bareword `[name args…]` whose head is a registered closure dispatches as
+	// a CALL (args pass positionally; a variadic `:rest` closure collects the
+	// trailing ones). `l.items.len >= 0` has no lower bound: a ZERO-item `[f]`
+	// dispatches as a zero-arg call (#55) — `[?def f () "hi"]` then `[f]` runs
+	// `f`, it does not construct the data element `[f]`. Calls win over element
+	// construction precisely when the head names a def; a bareword that is NOT a
+	// def (`[primary]`) falls through and self-evaluates as a data word (the
+	// homoiconic rule). Gated on no slots / attrs / non-operator nested elements.
 	if l.name != '' && l.slots.len == 0 && l.attrs.len == 0
-	   && l.items.len >= 2 && l.name in env.closures
+	   && l.items.len >= 0 && l.name in env.closures
 	   && all_items_are_expr_position(l.items) {
 		mut arg_items := []cx.Node{}
 		for it in l.items {
 			arg_items << eval_node(it, mut env)!
 		}
-		if result := dispatch_call(l.name, arg_items, mut env) {
-			return result
-		}
+		// Confirmed closure (multi-arg whitespace form): resolve or propagate
+		// its error (#46) — never fall through to data construction.
+		return dispatch_call(l.name, arg_items, mut env) or { return err }
 	}
 	// NOTE: a bare ident-headed element `[name a b]` is DATA construction,
 	// never a built-in call — per code.md §6.5 (named built-ins are reached
@@ -693,7 +768,7 @@ fn eval_cx_element(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 	// data elements; the built-in forms are `[$mod 7 3]` / `[$min …]`. The
 	// former bare-ident→built-in dispatch arm was removed (it contradicted
 	// §6.5 and shadowed data elements like `[div interruption]`).
-	// v0.8.0 cast builtin — element-positional form `[cast value :tag]`
+	// cast builtin — element-positional form `[cast value :tag]`
 	// dispatches when name is exactly `cast` and the body is value +
 	// atom-literal tag. This is the user-facing form per the locked
 	// design 2026-05-23 (alternative to a to-int / to-float family).
@@ -1439,7 +1514,7 @@ fn both_int(a cx.Node, b cx.Node) bool {
 // yet validate.
 fn value_matches_type(n cx.Node, typ string) bool {
 	t := typ.trim_space()
-	// Compound / bracketed type expressions: not validated at v0.8.0.
+	// Compound / bracketed type expressions: not validated.
 	if t == '' || t.starts_with('[') {
 		return true
 	}
@@ -1502,7 +1577,33 @@ fn eval_binding(b cx.ProgramBinding, mut env MatchEnv) !cx.Node {
 // (CXPath `//…`, sequences, ranges) evaluate normally.
 fn eval_for_source(src cx.ProgramNode, mut env MatchEnv) !cx.Node {
 	if src is cx.ProgramBinding {
-		return eval_binding_opt(src, mut env, false)!
+		res := eval_binding_opt(src, mut env, false)!
+		// #21: a path-access source landing on a map/element member whose
+		// value is a COLLECTION (sequence/array) must iterate the
+		// collection's MEMBERS — consistent with [$count $m/key] and with
+		// binding the same path to a var first. unwrap_terminal=false keeps
+		// single-match ELEMENT node-sets whole (program-for-011), but a lone
+		// named wrapper holding exactly one collection is NOT an element
+		// node-set — it is that collection. Expose it so iterate() sees the
+		// members (the read path already unwraps it; this realigns [?for]).
+		// Restricted to path access (src.path.len > 0) so a bare `$var`
+		// for-source still iterates whatever value the var holds. A sequence/
+		// array materializes as a seq/arr-marker Element (not a bare
+		// SequenceNode), so detect both shapes.
+		if src.path.len > 0 && res is cx.Element {
+			if res.name != '' && res.name != seq_marker_name && res.name != arr_marker_name
+				&& res.items.len == 1 {
+				inner := res.items[0]
+				if inner is cx.Element {
+					if inner.name == seq_marker_name || inner.name == arr_marker_name {
+						return inner
+					}
+				} else if inner is cx.SequenceNode || inner is cx.ArrayNode {
+					return inner
+				}
+			}
+		}
+		return res
 	}
 	return eval_node(src, mut env)!
 }
@@ -2670,7 +2771,7 @@ fn apply_step_predicates(focus []FocusedNode, preds []cx.ProgramPathPredicate, m
 
 // node_ebv computes the Effective Boolean Value of a CXDM node per
 // (the EBV table in spec/cxpath.md §5.3). Implements only
-// the kinds reachable from predicate body evaluation in v0.8.0; future
+// the kinds reachable from predicate body evaluation currently; future
 // kinds (date, datetime, bytes, atom-with-payload) extend this table.
 fn node_ebv(n_in cx.Node) bool {
 	// D5: truthiness reads through a `[?meta]` wrapper.
@@ -2867,7 +2968,7 @@ fn eval_call(c cx.ProgramCall, mut env MatchEnv) !cx.Node {
 	// closure sentinel reference. An explicit `name()` (explicit_call) or
 	// any args fall through to the call path below.
 	// A bare (`$`-less) name is DATA, never a function value: per the
-	// v0.8.0 surface only `$name` produces a first-class function
+	// the surface only `$name` produces a first-class function
 	// reference (closure / builtin). A bare name that resolves to a bound
 	// value is still the ordinary un-sigiled variable read (e.g. a bare
 	// param ref in a def body); a bare name that resolves to nothing
@@ -3094,17 +3195,44 @@ fn dispatch_call(name string, args []cx.Node, mut env MatchEnv) ?cx.Node {
 	return dispatch_call_l(name, args, []string{}, mut env)
 }
 
+// closure_err_to_value converts a raised invocation error into an err-VALUE
+// node (error-as-value model), preserving the original code / message / cause
+// (#46). Used at the closure-dispatch boundary so a [?def] body that raises
+// surfaces as `[err code=… message=…]` at the call site instead of being
+// swallowed to a silent data literal. Mirrors error_hooks.v's converter.
+fn closure_err_to_value(err IError) cx.Node {
+	if err is EvalError {
+		if err.cause_set {
+			return mk_err_with_cause(err.code, err.cause)
+		}
+		return mk_err(err.code, err.msg())
+	}
+	return mk_err('cx-err:CXER0001', err.msg())
+}
+
 // dispatch_call_l resolves a call, threading named-argument `labels`
 // (parallel to args, '' = positional) into the closure binding
 // D6). Builtins ignore labels (positional only).
 fn dispatch_call_l(name string, args []cx.Node, labels []string, mut env MatchEnv) ?cx.Node {
 	if closure := env.closures[name] {
-		val := invoke_closure_l(closure, args, labels, mut env) or { return none }
+		// A registered closure whose body raises must SURFACE the error
+		// (#46) — not return none, which made element-form callers fall
+		// through to data-element construction (`[fn args]`), masking the
+		// real runtime error as a silent "function not registered" data
+		// literal. The name is a confirmed callable; invocation failure is a
+		// genuine error. Convert the raise to an err-VALUE (error-as-value
+		// model) — the same shape an err-returning body already produces —
+		// so it propagates as the call result instead of vanishing.
+		val := invoke_closure_l(closure, args, labels, mut env) or {
+			return closure_err_to_value(err)
+		}
 		return val
 	}
 	if val := env.bindings[name] {
 		if closure := resolve_closure(val, env) {
-			ret := invoke_closure_l(closure, args, labels, mut env) or { return none }
+			ret := invoke_closure_l(closure, args, labels, mut env) or {
+				return closure_err_to_value(err)
+			}
 			return ret
 		}
 		// un-sigiled variable reference. A bare name with no
@@ -3341,7 +3469,13 @@ fn build_partial_value(c cx.ProgramCall, mut env MatchEnv) !cx.Node {
 // env); a `:rest` param collects the trailing positional args into a
 // `__cx_seq__`. Missing required params / surplus positionals → CXER0100
 // (arity is a call-shape error; CXER0001 is reserved for `!`-panics — D002).
-fn bind_specs_and_eval(c Closure, args []cx.Node, labels []string, mut enclosing MatchEnv) !cx.Node {
+// build_param_call_env builds the call environment for a param-spec closure
+// `c` applied to `args`/`labels`: free names resolve in the closure's defining
+// scope (#19/#22); positional / named / default / rest params bind per the
+// spec list; --strict param typing (CXER0206) is enforced. Extracted from
+// bind_specs_and_eval so the TCO trampoline (run_closure_body) can rebuild a
+// fresh frame for each tail call (#60).
+fn build_param_call_env(c Closure, args []cx.Node, labels []string, mut enclosing MatchEnv) !MatchEnv {
 	mut pos := []cx.Node{}
 	mut named := map[string]cx.Node{}
 	for i, a in args {
@@ -3436,7 +3570,34 @@ fn bind_specs_and_eval(c Closure, args []cx.Node, labels []string, mut enclosing
 			}
 		}
 	}
-	res := eval_node(c.body_node(), mut call_env)!
+	return call_env
+}
+
+// run_closure_body evaluates closure `c`'s body in TAIL position and
+// trampolines tail self/closure-calls (#60): when the body's tail position is
+// a call to a param-spec [?def] closure, it rebinds a fresh frame and LOOPS
+// instead of recursing the native C stack. A tail-recursive cx loop therefore
+// runs in O(1) native stack rather than SIGSEGV-ing at ~190 deep. `call_env`
+// is the frame already built for `c` (by the caller); it is replaced in place
+// on each tail hop, using the just-completed frame as the new enclosing scope.
+fn run_closure_body(c Closure, mut call_env MatchEnv) !cx.Node {
+	mut cur := c
+	for {
+		tr := eval_tail(cur.body_node(), mut call_env)!
+		if !tr.is_tail {
+			return tr.value
+		}
+		call_env = build_param_call_env(tr.closure, tr.args, tr.labels, mut call_env)!
+		cur = tr.closure
+	}
+	return cx.Element{}
+}
+
+// bind_specs_and_eval applies a param-spec closure: build the frame, run the
+// body (TCO-trampolined), then enforce --strict return typing (§12.7).
+fn bind_specs_and_eval(c Closure, args []cx.Node, labels []string, mut enclosing MatchEnv) !cx.Node {
+	mut call_env := build_param_call_env(c, args, labels, mut enclosing)!
+	res := run_closure_body(c, mut call_env)!
 	// --strict return typing (§12.7, CXER0207).
 	if enclosing.state.strict && c.returns_type != '' {
 		if !value_matches_type(res, c.returns_type) {
@@ -3472,6 +3633,16 @@ fn all_items_are_expr_position(items []cx.ProgramNode) bool {
 	for it in items {
 		if it is cx.ProgramLiteral {
 			if it.kind == cx.ProgramLiteralKind.cx_element {
+				// An OPERATOR-headed element (`[- $n 1]`, `[+ …]`, `[> …]`) is an
+				// EXPRESSION that evaluates to a value, not a data child — so it is
+				// a valid positional argument. Without this a recursive / sibling
+				// call whose args do arithmetic, e.g. `[loop [- $n 1] [$concat …]]`,
+				// failed the gate and fell through to data construction (#53):
+				// `[loop …]` became a literal `[loop 1 'x']` instead of recursing.
+				// A plain bareword data element (`[a 1]`) still signals construction.
+				if it.name in operator_element_heads {
+					continue
+				}
 				return false
 			}
 		}
@@ -3508,7 +3679,7 @@ fn builtin_dispatchable(name string) bool {
 		'not', 'and', 'or',
 		// §6.5 P5 — node accessors
 		'name', 'local-name',
-		// §6.5 P6 — type coercion (v0.8.0 cast builtin)
+		// §6.5 P6 — type coercion (cast builtin)
 		'cast' { return true }
 		else { return false }
 	}
@@ -4372,11 +4543,16 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER0100',
 					'mod takes 2 arguments, got ${args.len}')
 			}
-			a_f, a_is_int := math_arg_as_float(args[0]) or {
+			// Strict numeric atomization — same contract as [+]/[-]/[*]
+			// (atomize_numeric): only i64/f64-TYPED scalars qualify. A
+			// bigint or decimal (string-stored, NOT f64-representable) and a
+			// string-typed scalar all reject here rather than silently
+			// lossy-converting (#38: idiv/mod were i64-wrapping a bigint).
+			a_f, a_is_int := atomize_numeric(args[0]) or {
 				return mk_err('cx-err:CXER0100',
 					'mod: argument 1 is not numeric')
 			}
-			b_f, b_is_int := math_arg_as_float(args[1]) or {
+			b_f, b_is_int := atomize_numeric(args[1]) or {
 				return mk_err('cx-err:CXER0100',
 					'mod: argument 2 is not numeric')
 			}
@@ -4411,11 +4587,13 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER0100',
 					'div takes 2 arguments, got ${args.len}')
 			}
-			a_f, a_int := math_arg_as_float(args[0]) or {
+			// Strict numeric atomization (see mod, above): bigint/decimal/
+			// string operands reject instead of lossy-converting (#38).
+			a_f, a_int := atomize_numeric(args[0]) or {
 				return mk_err('cx-err:CXER0100',
 					'div: argument 1 is not numeric')
 			}
-			b_f, b_int := math_arg_as_float(args[1]) or {
+			b_f, b_int := atomize_numeric(args[1]) or {
 				return mk_err('cx-err:CXER0100',
 					'div: argument 2 is not numeric')
 			}
@@ -4442,11 +4620,13 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER0100',
 					'idiv takes 2 arguments, got ${args.len}')
 			}
-			a_f, _ := math_arg_as_float(args[0]) or {
+			// Strict numeric atomization (see mod, above): bigint/decimal/
+			// string operands reject instead of lossy-converting (#38).
+			a_f, _ := atomize_numeric(args[0]) or {
 				return mk_err('cx-err:CXER0100',
 					'idiv: argument 1 is not numeric')
 			}
-			b_f, _ := math_arg_as_float(args[1]) or {
+			b_f, _ := atomize_numeric(args[1]) or {
 				return mk_err('cx-err:CXER0100',
 					'idiv: argument 2 is not numeric')
 			}
@@ -4526,11 +4706,11 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				data_type: cx.ScalarType.string_type
 			})
 		}
-		// ── §6.5 P6 — type coercion (v0.8.0 cast builtin) ────────────
+		// ── §6.5 P6 — type coercion (cast builtin) ────────────────────
 		'cast' {
 			// `cast(value, :type-tag)` — explicit kind coercion. The
 			// type-tag MUST be an atom literal whose name is one of the
-			// v0.8.0 scalar kinds: int, float, string, bool, atom.
+			// scalar kinds: int, float, string, bool, atom.
 			// Compound type expressions (`[or T1 T2]`, `[sequence T]`)
 			// from are reserved for a follow-on iteration;
 			// the slot is held by accepting only kind-name atoms here.
@@ -4566,7 +4746,7 @@ fn cast_value(v cx.Node, target cx.Node) cx.Node {
 		return mk_err('cx-err:CXER0290',
 			'cast: target must be an atom-literal type-tag (e.g. :int, :float, :string, :bool, :atom)')
 	}
-	// Dispatch on target kind. Accepted kinds at v0.8.0: int, float,
+	// Dispatch on target kind. Accepted kinds: int, float,
 	// string, bool, atom. (Future: date, datetime, bytes; compound
 	// type expressions via.)
 	return match tag {
@@ -4577,7 +4757,7 @@ fn cast_value(v cx.Node, target cx.Node) cx.Node {
 		'atom'   { cast_to_atom(v) }
 		else {
 			mk_err('cx-err:CXER0290',
-				'cast: unknown target kind :${tag} (v0.8.0 supports :int, :float, :string, :bool, :atom)')
+				'cast: unknown target kind :${tag} (supported target kinds: :int, :float, :string, :bool, :atom)')
 		}
 	}
 }
@@ -4891,7 +5071,7 @@ fn cast_to_atom(v cx.Node) cx.Node {
 }
 
 // is_valid_atom_name applies a relaxed NCName check sufficient for the
-// v0.8.0 atom name set: first char alpha or underscore; subsequent
+// atom name set: first char alpha or underscore; subsequent
 // chars alphanumeric, underscore, or hyphen. Full XML NCName (including
 // Unicode letter ranges) is a future expansion.
 fn is_valid_atom_name(s string) bool {
@@ -6391,6 +6571,241 @@ fn eval_let(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	return eval_node(positionals[positionals.len - 1], mut extended)!
 }
 
+// ── Tail-call optimization (#60) ─────────────────────────────────────────────
+//
+// cx forever-loops / long-running loops are written as tail recursion (the only
+// looping idiom — there is no imperative loop primitive yet, see #61). The
+// tree-walking evaluator has no TCO, so a tail-recursive loop recurses the
+// native C stack ~42 KB per level and SIGSEGVs at ~190 deep. The trampoline
+// below fixes this at the root, semantics-preserving and with no surface change.
+//
+// eval_tail evaluates `node` in TAIL position. Tail position threads through
+// the chosen branch of [?if] and the body of [?let] — the forms a loop nests
+// its self-call inside. When evaluation bottoms out at a call to a param-spec
+// [?def] closure, eval_tail returns it PENDING (is_tail=true) WITHOUT invoking,
+// so run_closure_body can loop instead of recursing. Any other shape (including
+// multi-expression .block bodies, [?else], builtins, lambdas) is evaluated
+// fully and returned as a value (is_tail=false) — always correct, just not
+// trampolined. The applied tail call takes exactly the binding+eval path
+// invoke_closure_l/bind_specs_and_eval would have taken, so behavior is
+// identical to the recursive evaluation it replaces.
+struct TailResult {
+mut:
+	is_tail bool
+	value   cx.Node = cx.Element{}
+	closure Closure
+	args    []cx.Node
+	labels  []string
+}
+
+fn eval_tail(node cx.ProgramNode, mut env MatchEnv) !TailResult {
+	match node {
+		cx.ProgramDirective {
+			// [?if]: evaluate the condition (not tail), then the chosen branch
+			// in tail position. Mirrors eval_if.
+			if node.name == 'if' && node.slots.len > 0 {
+				cond := eval_node(node.slots[0].value, mut env)!
+				if scalar_bool(cond) {
+					then_expr := directive_clause(node, 'then') or {
+						return TailResult{ value: cx.Element{ name: '' } }
+					}
+					return eval_tail(then_expr, mut env)!
+				}
+				else_expr := directive_clause(node, 'else') or {
+					return TailResult{ value: cx.Element{ name: '' } }
+				}
+				return eval_tail(else_expr, mut env)!
+			}
+			// [?let]: bind the clauses (not tail), then the body in tail position.
+			if node.name == 'let' {
+				return eval_let_tail(node, mut env)!
+			}
+			return TailResult{ value: eval_directive(node, mut env)! }
+		}
+		cx.ProgramCall {
+			return eval_call_tail(node, mut env)!
+		}
+		cx.ProgramLiteral {
+			// A bracket-form call `[loop arg]` is parsed as a cx_element
+			// LITERAL, not a ProgramCall — it is the dominant tail-call shape.
+			if node.kind == .cx_element {
+				return cx_element_as_tail_call(node, mut env)!
+			}
+			return TailResult{ value: eval_node(node, mut env)! }
+		}
+		else {
+			return TailResult{ value: eval_node(node, mut env)! }
+		}
+	}
+}
+
+// tco_trampolinable reports whether a tail call to `cl` can be looped by
+// run_closure_body. Restricted to plain param-spec [?def] closures (the
+// forever-loop case): no builtin wrapper, no partial application, not variadic.
+// Lambdas / variadic / simple-positional closures fall back to ordinary
+// (recursive) application — they are not the long-running-loop idiom.
+fn tco_trampolinable(cl Closure) bool {
+	return cl.builtin_name == '' && cl.partial_target.len == 0
+		&& cl.param_specs.len > 0 && !cl.is_variadic
+}
+
+// cx_element_as_tail_call recognises a bracket-form closure call in tail
+// position and returns it PENDING (#60), mirroring the closure-dispatch shapes
+// of eval_cx_element (paren-sequence args, and the bare whitespace form
+// `[name a b …]` whose head is a registered closure). Any cx_element that is
+// NOT one of those call shapes — data construction, a builtin head, an
+// operator element, a dynamic/typed element — is evaluated normally. Keep the
+// gates in sync with eval_cx_element.
+fn cx_element_as_tail_call(l cx.ProgramLiteral, mut env MatchEnv) !TailResult {
+	// Dynamic-name (`[?element …]`) and glued-`::T` typed elements never
+	// dispatch as calls — construct normally.
+	if l.data_type != '' {
+		return TailResult{ value: eval_node(cx.ProgramNode(l), mut env)! }
+	}
+	if _ := l.name_expr {
+		return TailResult{ value: eval_node(cx.ProgramNode(l), mut env)! }
+	}
+	if l.name == '' || l.name !in env.closures {
+		return TailResult{ value: eval_node(cx.ProgramNode(l), mut env)! }
+	}
+	cl := env.closures[l.name] or {
+		return TailResult{ value: eval_node(cx.ProgramNode(l), mut env)! }
+	}
+	if !tco_trampolinable(cl) {
+		return TailResult{ value: eval_node(cx.ProgramNode(l), mut env)! }
+	}
+	mut args := []cx.Node{}
+	if l.slots.len == 0 && l.items.len == 1 && l.items[0] is cx.ProgramLiteral
+		&& (l.items[0] as cx.ProgramLiteral).kind == .sequence_lit {
+		// `[name (a, b, …)]` — paren-sequence arg shape.
+		seq := l.items[0] as cx.ProgramLiteral
+		for it in seq.items {
+			args << eval_node(it, mut env)!
+		}
+	} else if l.slots.len == 0 && l.attrs.len == 0 && all_items_are_expr_position(l.items) {
+		// `[name a b …]` — bare whitespace call shape (covers single-arg
+		// binding / scalar / nested-element forms too).
+		for it in l.items {
+			args << eval_node(it, mut env)!
+		}
+	} else {
+		// Not a recognised call shape → construct / evaluate normally.
+		return TailResult{ value: eval_node(cx.ProgramNode(l), mut env)! }
+	}
+	for a in args {
+		if a is cx.Element && is_err_value(a) {
+			return TailResult{ value: a }
+		}
+	}
+	return TailResult{
+		is_tail: true
+		closure: cl
+		args:    args
+		labels:  []string{}
+	}
+}
+
+// eval_let_tail mirrors eval_let but evaluates the trailing body in TAIL
+// position (#60). Keep in sync with eval_let.
+fn eval_let_tail(d cx.ProgramDirective, mut env MatchEnv) !TailResult {
+	if bind_slot := labeled_slot(d, 'bind') {
+		value_slot := labeled_slot(d, 'value') or {
+			return EvalError{ code: 'cx-err:CXER0001', message: '[?let] missing value slot' }
+		}
+		body_slot := labeled_slot(d, 'body') or {
+			return EvalError{ code: 'cx-err:CXER0001', message: '[?let] missing body slot' }
+		}
+		bind_name := if bind_slot is cx.ProgramLiteral && bind_slot.kind == .string_lit {
+			bind_slot.str_val
+		} else {
+			return EvalError{ code: 'cx-err:CXER0001', message: '[?let] bind slot malformed' }
+		}
+		value := eval_node(value_slot, mut env)!
+		mut extended := env.clone()
+		extended.bindings[bind_name] = value
+		return eval_tail(body_slot, mut extended)!
+	}
+	mut extended := env.clone()
+	mut positionals := []cx.ProgramNode{}
+	for s in d.slots {
+		if s.kind == .positional {
+			positionals << s.value
+		}
+	}
+	if positionals.len == 0 {
+		return EvalError{ code: 'cx-err:CXER0001', message: '[?let] missing body expression' }
+	}
+	for i := 0; i < positionals.len - 1; i++ {
+		name, vexpr := binding_clause(positionals[i]) or {
+			return EvalError{
+				code:    'cx-err:CXER0001'
+				message: '[?let] expected [= \$x V] binding clause before the body'
+			}
+		}
+		val := eval_node(vexpr, mut extended)!
+		extended.bindings[name] = val
+	}
+	return eval_tail(positionals[positionals.len - 1], mut extended)!
+}
+
+// eval_call_tail decides whether a call in tail position is a trampolinable
+// tail call to a plain param-spec [?def] closure (#60). If so it evaluates the
+// arguments and returns the pending call without dispatching; otherwise it
+// falls back to eval_call unchanged. The callee is resolved by a side-effect-
+// free table lookup BEFORE the arguments are evaluated (args cannot legitimately
+// rebind the callee mid-call); every fallback path returns before any argument
+// is evaluated, so eval_call never double-evaluates them. Mirrors eval_call's
+// dispatch guards (bare-ref, holes, hof/meta/fp shadow, !-postfix).
+fn eval_call_tail(c cx.ProgramCall, mut env MatchEnv) !TailResult {
+	if !c.explicit_call && c.args.len == 0 {
+		return TailResult{ value: eval_call(c, mut env)! }
+	}
+	for a in c.args {
+		if a is cx.ProgramCall && a.name == cx.program_hole_name {
+			return TailResult{ value: eval_call(c, mut env)! }
+		}
+	}
+	if (c.name in ['filter', 'map', 'reduce'] || c.name == 'meta-of' || c.name.starts_with('fp-'))
+		&& c.name !in env.closures && c.name !in env.bindings {
+		return TailResult{ value: eval_call(c, mut env)! }
+	}
+	if c.must_succeed {
+		return TailResult{ value: eval_call(c, mut env)! }
+	}
+	mut cl := Closure{}
+	mut found := false
+	if closure := env.closures[c.name] {
+		cl = closure
+		found = true
+	} else if bval := env.bindings[c.name] {
+		if rc := resolve_closure(bval, env) {
+			cl = rc
+			found = true
+		}
+	}
+	if !found || !tco_trampolinable(cl) {
+		return TailResult{ value: eval_call(c, mut env)! }
+	}
+	// Evaluate args (eager, source order, matching eval_call). An err-value
+	// argument is itself the call result (error-as-value model); return it
+	// without dispatching, exactly as eval_call does.
+	mut args := []cx.Node{}
+	for a in c.args {
+		args << eval_node(a, mut env)!
+	}
+	for a in args {
+		if a is cx.Element && is_err_value(a) {
+			return TailResult{ value: a }
+		}
+	}
+	return TailResult{
+		is_tail: true
+		closure: cl
+		args:    args
+		labels:  c.arg_labels
+	}
+}
+
 // mk_err_code_only builds an [err :code <code>] node (no :message slot).
 // Used as the inner cause node for chained errors (err-004 fixture).
 fn mk_err_code_only(err_code string) cx.Node {
@@ -7842,7 +8257,7 @@ fn rebuild_spine_path_up(spine []cx.Element, path []int, level int,
 // whose canonical render matches.
 //
 // Caveat: two structurally-identical siblings collide on this check.
-// That's acceptable in the v0.8.0 release: applying an action to "the
+// That's acceptable currently: applying an action to "the
 // first sibling matching the focus" is the spec-mandated semantic on
 // :delete / :replace etc. when multiple siblings would satisfy the
 // path. For multi-match runs, the sequential-application loop in
@@ -8279,7 +8694,7 @@ fn apply_element_or_attr_action(el cx.Element, attribute_tail bool,
 // is a single value, ordering is unobservable when :using is
 // associative as required by :par).
 //
-// The v0.8.0 evaluator is single-threaded; `:par` is currently a
+// The evaluator is currently single-threaded; `:par` is currently a
 // declarative annotation honoured for visualization + future
 // parallel-substrate work. Output order under `:par` is source-order
 // (sequential evaluation gives that automatically); under
@@ -9068,7 +9483,7 @@ fn eval_to_map_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 // `[?view EXPR]` flips a slice expression's result from copy (the default
 // slice semantics) to a zero-copy *view*. CX values are immutable
 // so a view is OBSERVATIONALLY IDENTICAL to a copy — it yields
-// the same value. At the v0.8.0 milestone the directive is therefore a
+// the same value. Currently the directive is therefore a
 // **semantic no-op that documents intent**: it evaluates its single operand
 // and returns the result unchanged. `[= [?view $xs[2:4]] $xs[2:4]]` is `true`
 // by construction.
@@ -9082,11 +9497,11 @@ fn eval_to_map_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 // is trivially satisfied: CX has no mutation, so the static "source not
 // mutated for the view's lifetime" check can never fail.
 //
-// DEFERRED (post-v0.8.0): true zero-copy walking — having the view return an
+// DEFERRED (a future revision): true zero-copy walking — having the view return an
 // Iterator-flavored value that strides the source array in place rather than
 // materialising a fresh sequence — is a runtime memory optimisation, not a
 // surface/semantics concern. It is intentionally NOT implemented here; the
-// v0.8.0 milestone ships the surface + semantics only.
+// this revision ships the surface + semantics only.
 fn eval_view_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	vals := collect_positional_values(d, mut env, 'view', [])!
 	if vals.len != 1 {
@@ -9100,7 +9515,7 @@ fn eval_view_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 
 fn eval_views_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	// Scoped form. Each positional slot inside the block is a slice/expr;
-	// at v0.8.0 the view flip is a documented no-op, so every operand
+	// the view flip is a documented no-op, so every operand
 	// yields its own value. A single operand returns that value directly;
 	// multiple operands collect into a `__cx_seq__` envelope (matching the
 	// sequence-of-values shape produced elsewhere).
@@ -9736,7 +10151,7 @@ fn run_for_clauses_streamed(clauses []cx.ProgramForClause, idx int, spec YieldSp
 			items := iterate(source_val)
 			for item in items {
 				if limit_state.remaining == 0 { return }
-				mut next := env.clone()
+				mut next := env.clone_frame_sharing_closures()
 				if expr_pat := c.expr {
 					if expr_pat is cx.ProgramPattern {
 						matched := match_pattern(expr_pat, item) or { continue }
@@ -9762,7 +10177,7 @@ fn run_for_clauses_streamed(clauses []cx.ProgramForClause, idx int, spec YieldSp
 		.binding {
 			expr := c.expr or { return EvalError{ code: 'cx-err:CXER0001', message: ':let missing expr' } }
 			v := eval_node(expr, mut env)!
-			mut next := env.clone()
+			mut next := env.clone_frame_sharing_closures()
 			next.bindings[c.bind] = v
 			run_for_clauses_streamed(clauses, idx + 1, spec, mut next,
 			                          mut ctx, mut limit_state)!
@@ -9987,7 +10402,7 @@ fn run_for_clauses(clauses []cx.ProgramForClause, idx int, spec YieldSpec,
 			// items; if Element with no items, iterate as singleton.
 			items := iterate(source_val)
 			for item in items {
-				mut next := env.clone()
+				mut next := env.clone_frame_sharing_closures()
 				if expr_pat := c.expr {
 					// Destructuring generator: pattern-match each item.
 					if expr_pat is cx.ProgramPattern {
@@ -10013,7 +10428,7 @@ fn run_for_clauses(clauses []cx.ProgramForClause, idx int, spec YieldSpec,
 		.binding {
 			expr := c.expr or { return EvalError{ code: 'cx-err:CXER0001', message: ':let missing expr' } }
 			v := eval_node(expr, mut env)!
-			mut next := env.clone()
+			mut next := env.clone_frame_sharing_closures()
 			next.bindings[c.bind] = v
 			run_for_clauses(clauses, idx + 1, spec, mut next, mut out, mut limit_state)!
 		}
@@ -10068,7 +10483,7 @@ fn generator_pattern_walk(pat cx.ProgramPattern, val cx.Node,
                            mut limit_state ForLimitState) ! {
 	if limit_state.remaining == 0 { return }
 	if matched := match_pattern(pat, val) {
-		mut snap := env.clone()
+		mut snap := env.clone_frame_sharing_closures()
 		for k, v in matched.bindings {
 			snap.bindings[k] = v
 		}
@@ -10160,7 +10575,7 @@ fn iterate(n cx.Node) []cx.Node {
 			// snapshot is no longer a valid replay target for a second
 			// walker. Surface CXER0105 as a renderable err-element so the
 			// caller sees the violation in-band. Multi-use iterators
-			// (all v0.8.0 sources except the [?test-single-use-iter]
+			// (all current sources except the [?test-single-use-iter]
 			// scaffold) skip this branch — their exhausted memo replays
 			// freely. See; W4-C wiring.
 			if n.single_use {
@@ -10430,6 +10845,9 @@ fn iter_http_accept_walk(source_val cx.IteratorNode, c cx.ProgramForClause,
 		}
 		ex := http_exchange_from_conn(conn)
 		gen_emit_item(c, ex, clauses, idx, spec, mut env, mut out, mut limit_state)!
+		// #23: surface a handler that returned without responding (and close
+		// the dangling connection) instead of silently hanging the client.
+		http_finalize_unresponded_exchange(ex)
 	}
 }
 
@@ -10451,6 +10869,9 @@ fn iter_http_accept_walk_streamed(source_val cx.IteratorNode, c cx.ProgramForCla
 		}
 		ex := http_exchange_from_conn(conn)
 		gen_emit_item_streamed(c, ex, clauses, idx, spec, mut env, mut ctx, mut limit_state)!
+		// #23: surface a handler that returned without responding (and close
+		// the dangling connection) instead of silently hanging the client.
+		http_finalize_unresponded_exchange(ex)
 	}
 }
 
@@ -10596,7 +11017,17 @@ fn iter_net_line_walk(source_val cx.IteratorNode, c cx.ProgramForClause,
 			return
 		}
 		mut h := net_mut_handle(sock) or { return }
-		line := net_read_line_buf(mut h) or { return } // none → EOF
+		line := net_read_line_buf(mut h) or {
+			// none → clean EOF, UNLESS a configured read deadline lapsed first
+			// (#56): then surface CXER4507 rather than silently ending the stream.
+			if h.timed_out {
+				return EvalError{
+					code:    net_err_timeout
+					message: 'E_NET_TIMEOUT: line-iter exceeded the ${h.read_deadline_ms}ms read deadline'
+				}
+			}
+			return
+		}
 		gen_emit_item(c, net_str(line), clauses, idx, spec, mut env, mut out, mut limit_state)!
 	}
 }
@@ -10613,7 +11044,15 @@ fn iter_net_line_walk_streamed(source_val cx.IteratorNode, c cx.ProgramForClause
 			return
 		}
 		mut h := net_mut_handle(sock) or { return }
-		line := net_read_line_buf(mut h) or { return }
+		line := net_read_line_buf(mut h) or {
+			if h.timed_out {
+				return EvalError{
+					code:    net_err_timeout
+					message: 'E_NET_TIMEOUT: line-iter exceeded the ${h.read_deadline_ms}ms read deadline'
+				}
+			}
+			return
+		}
 		gen_emit_item_streamed(c, net_str(line), clauses, idx, spec, mut env, mut ctx, mut limit_state)!
 	}
 }
@@ -12124,7 +12563,7 @@ fn eval_sleep(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 // `single_use && exhausted` guard in `iterate()` and returns a
 // CXER0105 err-element. No spec/code.md exposure — this directive
 // exists only to drive the D25 conformance fixtures (no production
-// single-use source kind ships in v0.8.0; HTTP body / file lines /
+// single-use source kind ships currently; HTTP body / file lines /
 // channel reads arrive in a follow-up milestone). Naming convention:
 // the `test-` prefix marks this as a fixture-only helper — the parser
 // admits `test-*` directives (spec/code.md §4.1) and the evaluator
@@ -12240,7 +12679,7 @@ fn eval_test_close_log(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 // [?test-current-scope] — fixture-only helper returning the active
 // dynamic context (the [?with-scope] stack top) as a deterministic
 // key-sorted `k=v,k=v` string, so fixtures can assert merge / restore /
-// nesting without cx-stdlib/log (the v0.8.0 production reader).
+// nesting without cx-stdlib/log (the production reader).
 fn eval_test_current_scope(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	mut parts := []string{}
 	for e in env.dyn_context {
@@ -12630,6 +13069,50 @@ fn run_worker_body(body cx.ProgramNode, mut env MatchEnv) !cx.Node {
 	return eval_node(body, mut env)!
 }
 
+// worker_threads_enabled gates the concurrent [?worker] path (#58). Default
+// OFF → synchronous run-to-completion (unchanged semantics). CX_WORKER_THREADS=1
+// runs each worker body on its own spawned V thread so it coexists with a
+// blocking `[$http:serve {block:true}]` sibling instead of monopolizing the
+// calling thread. Opt-in until the vgc multi-mutator reclamation residual (#63)
+// lands, since a 2nd allocating thread is that bug's precondition.
+fn worker_threads_enabled() bool {
+	return os.getenv('CX_WORKER_THREADS') == '1'
+}
+
+// run_worker_thread is the spawned-thread body for a concurrent [?worker]
+// (#58). It evaluates the worker body against a private env (cloned
+// bindings/closures + shared &ProgramState + the program scope) and publishes
+// the terminal result, flipping `done` last so the [?wait-for] spin-loop reads
+// a complete result. Concurrent map mutations on the shared state are covered
+// by state_locks.v (same discipline as the HTTP reactor workers).
+fn run_worker_thread(rec_ptr &WorkerRecord, state_ptr &ProgramState, binds map[string]cx.Node, closures_snap map[string]Closure, scope_ptr &Scope, dyn []cx.Node, body cx.ProgramNode) {
+	mut rec := unsafe { rec_ptr }
+	mut wenv := MatchEnv{
+		bindings:     binds
+		closures:     closures_snap
+		state:        unsafe { state_ptr }
+		scope:        unsafe { scope_ptr }
+		dyn_context:  dyn
+		anon_counter: 0
+		frame_pool:   &FramePool{}
+	}
+	result := eval_node(body, mut wenv) or {
+		rec.result = mk_err_with_slots('cx-err:CXER0220', [
+			Slot{ label: 'cause', value: mk_err('inner', err.msg()) },
+		])
+		rec.done = true
+		return
+	}
+	if is_err_value(result) {
+		rec.result = mk_err_with_slots('cx-err:CXER0220', [
+			Slot{ label: 'cause', value: result },
+		])
+	} else {
+		rec.result = result
+	}
+	rec.done = true
+}
+
 // eval_worker runs `:body` synchronously and stores the result so
 // `[?wait-for :worker $h]` can observe it. True concurrent execution
 // (V `spawn`) lands with the Phase 3.10 scheduler alongside async
@@ -12663,6 +13146,17 @@ fn eval_worker(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		close_fn:    fn () ! {}
 		handle_kind: 'worker'
 		handle_id:   name
+	}
+	// #58: concurrent path — spawn the body on its own V thread so it runs
+	// alongside a blocking `[$http:serve {block:true}]` sibling (which would
+	// otherwise never be reached, since the synchronous path below runs the
+	// body — possibly a forever-loop — to completion first). Opt-in via
+	// CX_WORKER_THREADS=1 until #63 lands. [?wait-for] spin-waits on rec.done.
+	if worker_threads_enabled() {
+		rec.concurrent = true
+		spawn run_worker_thread(rec, unsafe { env.state }, env.bindings.clone(),
+			env.closures.clone(), env.scope, env.dyn_context.clone(), body)
+		return mk_worker_handle(name)
 	}
 	result := run_worker_body(body, mut env) or {
 		// Hard EvalError → wrap as worker-panic err shape per §10.4.8.
@@ -12733,6 +13227,15 @@ fn eval_wait_for(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 			name := read_worker_name_from_handle(hv)!
 			rec := env.state.worker_get(name) or {
 				return mk_err_with_slots('cx-err:CXER0222', [])
+			}
+			// #58 concurrent worker: the body runs on its own thread; block
+			// until it finishes (or is cancelled). A forever-worker never sets
+			// done → wait-for blocks indefinitely, which is exactly the
+			// process-keepalive the non-blocking-serve idiom relies on.
+			if rec.concurrent {
+				for !rec.done && !rec.cancelled {
+					time.sleep(time.millisecond)
+				}
 			}
 			return rec.result
 		}
@@ -13483,7 +13986,7 @@ fn invoke_closure_l(c Closure, args []cx.Node, labels []string, mut enclosing Ma
 			call_env.bindings[p] = args[i]
 		}
 	}
-	return eval_node(c.body_node(), mut call_env)!
+	return run_closure_body(c, mut call_env)!
 }
 
 // ── Slot helpers ────────────────────────────────────────────────────────────

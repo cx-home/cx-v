@@ -95,7 +95,7 @@ fn eval_http_service(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	proto := service_protocol(d, mut env)!
 	if proto != 'http' {
 		return EvalError{ code: 'cx-err:CXER0001',
-			message: '[?http-service] :on must be `http` in v0.7.6 (got `${proto}`)' }
+			message: '[?http-service] :on must be `http` (got `${proto}`)' }
 	}
 	requested_port := eval_int_slot(d, 'port', mut env, i64(0))!
 	read_to := eval_duration_slot(d, 'read-timeout',     30 * i64(1_000_000_000))!

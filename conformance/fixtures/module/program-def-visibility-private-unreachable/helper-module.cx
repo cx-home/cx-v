@@ -1,5 +1,5 @@
-[- All [?def]s here lack :scope public ⇒ module-private by default. -]
-[- Any importer reference must fail with CXER0213 unreachable.       -]
+[; All [?def]s here lack :scope public ⇒ module-private by default. ]
+[; Any importer reference must fail with CXER0213 unreachable.       ]
 
 [?def private-fn
   (x)

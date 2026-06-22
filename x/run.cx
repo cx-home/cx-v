@@ -1,0 +1,83 @@
+# cx-x/run — the Runnable convention + combinator library (EXPERIMENTAL `x/` tier).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): in-tree (one repo,
+# one toolchain, one gate) but EXEMPT from the frozen-`std` byte-compatible-reimpl
+# stability promise. The convention may evolve (semver-breaking allowed) until it
+# proves out; it graduates to frozen `std` once stable. Users see the tier in the
+# module path (`cx-x/…`, not `cx-stdlib/…`).
+#
+# A "Runnable" (#6 D2 / M2) is a STRUCTURAL CONVENTION, not a language trait: any
+# CALLABLE value is a Runnable — a [?def], a [?fn], a closure bound to a $var, or
+# (later) an MCP-tool / A2A-skill proxy built as a closure over its transport. The
+# convention unifies `local fn ≡ MCP tool ≡ A2A skill ≡ pipeline step`. This is a
+# PURE, fully homoiconic library — zero core change: it relies only on uniform
+# lexical scoping (a callable resolves its free names in its DEFINING scope, so a
+# Runnable composes correctly wherever it runs) and on applying a bound callable as
+# a call head (`[$r $input]`).
+#
+# batch / fan-out return a first-class SEQUENCE value (via the frozen `fp:map`
+# functor) — not a yield-stream — so a Runnable's many→many result composes as
+# ordinary data. Convention verbs: invoke (one→one), batch (many→many). [stream (one→lazy-seq) is
+# deferred until the first streaming consumer lands — it threads the M1a client
+# read path (http:sse-events); with-config (rebind dynamic context + caps, #6 Y7)
+# is deferred with it. Neither is stubbed — they are simply not defined yet.]
+# Combinators: pipe / compose / fan-out — each returning or producing values that
+# are themselves Runnables (an LCEL-style algebra). Nesting pipe/compose to any
+# depth composes (a pipe result re-fed into another pipe keeps its environment;
+# cx-private #45 fixed).
+
+# cx-x/run reuses the frozen `fp` functor map to build sequence results.
+[?lib 'cx-stdlib/fp' :as fp]
+
+# ── convention verbs ──────────────────────────────────────────────────────────
+[?def invoke scope=public pure [returns any] ($r::any $input::any)
+  [$r $input]]
+
+[?def batch scope=public pure [returns any] ($r::any $inputs::any)
+  [$fp:map $inputs $r]]
+
+# ── combinators ────────────────────────────────────────────────────────────────
+# pipe — left-to-right composition: feed input through $f then $g. The result is
+# itself a Runnable (a closure capturing $f/$g). Nests to any depth: feeding a pipe
+# result back into another pipe (`[$run:pipe [$run:pipe a b] c]`) composes a
+# >2-stage pipeline — a re-captured closure keeps its own environment (cx-private
+# #45 fixed; conformance run-007).
+[?def pipe scope=public pure [returns any] ($f::any $g::any)
+  [?fn ($x) [$g [$f $x]]]]
+
+# compose — right-to-left (mathematical) composition: $f after $g.
+[?def compose scope=public pure [returns any] ($f::any $g::any)
+  [?fn ($x) [$f [$g $x]]]]
+
+# fan-out — apply EACH Runnable in $rs to the SAME input, collecting results in
+# order (the structural form of parallel; concurrency is an optimization a future
+# scheduler may add, NOT part of the contract — semantics stay deterministic).
+[?def fan-out scope=public pure [returns any] ($rs::any $input::any)
+  [$fp:map $rs [?fn ($r1) [$r1 $input]]]]
+
+# ── docs ───────────────────────────────────────────────────────────────────────
+[module-doc name=run
+  [scope """The Runnable convention + combinator library (EXPERIMENTAL x/ tier, #6
+   D2/M2). A Runnable is any callable value — a [?def], [?fn], $-bound closure, or
+   transport proxy; the convention unifies local fn / MCP tool / A2A skill /
+   pipeline step under one structural contract, with no language trait system
+   (#37). invoke applies a Runnable one→one; batch maps it many→many; pipe /
+   compose / fan-out wire Runnables into Runnables (an LCEL-style algebra). Pure
+   and homoiconic — relies only on uniform lexical scoping + applying a bound
+   callable as a call head. stream + with-config are deferred to their first
+   consumer (S10 LLM provider / streaming)."""]]
+[fn-doc name=invoke scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Apply a Runnable to one input (one→one). [$run:invoke R input] = [R input]."""]]
+[fn-doc name=batch scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Apply a Runnable to each input in a sequence, collecting results in order (many→many)."""]]
+[fn-doc name=pipe scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Left-to-right composition: returns a Runnable that feeds input through f then g (nests to any depth)."""]]
+[fn-doc name=compose scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Right-to-left (mathematical) composition: returns a Runnable computing f after g."""]]
+[fn-doc name=fan-out scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Apply each Runnable in a sequence to the same input, collecting results in order (structural parallel)."""]]

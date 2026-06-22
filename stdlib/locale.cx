@@ -1,4 +1,4 @@
-[- cx-stdlib/locale — locale-aware collation, number / date / currency
+[; cx-stdlib/locale — locale-aware collation, number / date / currency
    formatting, BCP-47 introspection, and locale-aware case mapping per
    spec/std-lib/locale.md §3. Bodies forward to native primitives
    (vcx/code/stdlib_locale.v): the UCA-subset collation weights, CLDR-subset
@@ -12,29 +12,29 @@
    invalid BCP-47 tag, invalid ICU pattern, invalid ISO-4217 currency,
    number-parse failure.
 
-   NOTE: this const and stdlib/locale.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/locale.cx are the same source — edit both. ]
 
-[- §3.1 collation -]
+[; §3.1 collation ]
 [?def collate           scope=public pure [returns int]   ($a::string $b::string $locale::string) [$locale-collate $a $b $locale]]
 [?def collate-with-opts scope=public pure [returns int]   ($a::string $b::string $opts::map)       [$locale-collate-with-opts $a $b $opts]]
 [?def collate-key       scope=public pure [returns bytes] ($s::string $locale::string)              [$locale-collate-key $s $locale]]
 
-[- §3.2 number formatting -]
+[; §3.2 number formatting ]
 [?def format-number           scope=public pure [returns string] ($n::any $locale::string) [$locale-format-number $n $locale]]
 [?def format-number-with-opts scope=public pure [returns string] ($n::any $opts::map)       [$locale-format-number-with-opts $n $opts]]
 [?def parse-number-locale     scope=public pure [returns number] ($s::string $locale::string) [$locale-parse-number-locale $s $locale]]
 
-[- §3.3 date / time formatting -]
+[; §3.3 date / time formatting ]
 [?def format-date       scope=public pure [returns string] ($d::date $locale::string $pattern::string)     [$locale-format-date $d $locale $pattern]]
 [?def format-datetime   scope=public pure [returns string] ($dt::datetime $locale::string $pattern::string) [$locale-format-datetime $dt $locale $pattern]]
 [?def format-date-style scope=public pure [returns string] ($d::date $locale::string $style::atom)         [$locale-format-date-style $d $locale $style]]
 [?def parse-date-locale scope=public pure [returns date]   ($s::string $locale::string $pattern::string)   [$locale-parse-date-locale $s $locale $pattern]]
 
-[- §3.4 currency formatting -]
+[; §3.4 currency formatting ]
 [?def format-currency scope=public pure [returns string] ($n::any $currency::string $locale::string) [$locale-format-currency $n $currency $locale]]
 [?def currency-symbol scope=public pure [returns string] ($currency::string $locale::string)          [$locale-currency-symbol $currency $locale]]
 
-[- §3.5 locale information -]
+[; §3.5 locale information ]
 [?def list-locales   scope=public pure   [returns [sequence string]] ()                                   [$locale-list-locales]]
 [?def is-supported   scope=public pure   [returns bool]   ($locale::string)                              [$locale-is-supported $locale]]
 [?def default-locale scope=public impure [returns string] ()                                              [$locale-default-locale]]
@@ -44,12 +44,12 @@
 [?def script-of      scope=public pure   [returns string] ($locale::string)                              [$locale-script-of $locale]]
 [?def text-direction scope=public pure   [returns atom]   ($locale::string)                              [$locale-text-direction $locale]]
 
-[- §3.6 locale-aware case mapping -]
+[; §3.6 locale-aware case mapping ]
 [?def upper-locale scope=public pure [returns string] ($s::string $locale::string) [$locale-upper-locale $s $locale]]
 [?def lower-locale scope=public pure [returns string] ($s::string $locale::string) [$locale-lower-locale $s $locale]]
 [?def title-locale scope=public pure [returns string] ($s::string $locale::string) [$locale-title-locale $s $locale]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=locale
   [scope """The primitives layer of CX's internationalization surface. Provides locale-aware string collation (Unicode Collation Algorithm with per-locale tailorings), number, date, time, and currency formatting, BCP 47 locale introspection, and locale-aware case mapping such as Turkish dotted-i and German sharp-s. Ships a CLDR-subset offline catalog as a zero-dependency fallback. Message catalogs, translation, and ICU MessageFormat live in the sibling module cx-stdlib/i18n, which depends one-way on this one; RTL bidi operations are deferred."""]]
 [fn-doc name=collate scope=public purity=pure

@@ -1,6 +1,6 @@
-[- cx-stdlib/store — content-addressed object store with URL-dispatched backends.
+[; cx-stdlib/store — content-addressed object store with URL-dispatched backends.
 
-   Full v0.8.0 public surface per spec/std-lib/store.md §3. Bodies forward
+   Full public surface per spec/std-lib/store.md §3. Bodies forward
    to native primitives (vcx/code/stdlib_store.v): a Store is mutable
    in-process state, not expressible as a pure CX value. Doc identity is
    SHA-256 of the doc strict canonical bytes (§2.1), portable across
@@ -8,7 +8,7 @@
 
    mem:// (Memory tier) is capability-free (§9): pure in-process, no
    filesystem or network. file:// and remote backends are capability-gated
-   and denied at open under deny-by-default until a grant surface lands. -]
+   and denied at open under deny-by-default until a grant surface lands. ]
 
 [?def open           scope=public impure [returns element]              ($url::string)                              [$store-open $url]]
 [?def open-opts      scope=public impure [returns element]              ($url::string $opts::map)                   [$store-open-opts $url $opts]]
@@ -29,7 +29,7 @@
 [?def delete-alias   scope=public impure [returns bool]                 ($store::element $name::string)             [$store-delete-alias $store $name]]
 [?def migrate        scope=public impure [returns element]              ($from::element $to::element)               [$store-migrate $from $to]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=store
   [scope """A content-addressed object store with URL-dispatched backends. A single API surface operates against multiple storage backends (local filesystem, in-memory, HTTP, S3-compatible, WebDAV, FTP/FTPS/SFTP, and a CSRP service tier), selected at open time by the URL scheme. Doc IDs are the SHA-256 of a document's strict canonical bytes, so identity is identical across bindings, backends, compression states, and wire encodings — enabling lossless migration and free dedup. A mutable alias layer maps names to hashes on top of the immutable content."""]]
 [fn-doc name=open scope=public purity=impure

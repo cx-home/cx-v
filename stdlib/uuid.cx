@@ -1,6 +1,6 @@
-[- cx-stdlib/uuid — UUID generation, parsing, formatting, validation.
+[; cx-stdlib/uuid — UUID generation, parsing, formatting, validation.
 
-   Full v0.8.0 surface per spec/stdlib_uuid.md §3. v4 (random) + v7
+   Full surface per spec/stdlib_uuid.md §3. v4 (random) + v7
    (time-ordered, intra-millisecond monotonic) generators; v5 (SHA-1)
    + v3 (MD5) name-based deterministic generators; parse / format /
    validate; variant / version inspection; nil-uuid + four predefined
@@ -13,37 +13,37 @@
    into the lenient forms (hyphen-less / urn:uuid: / brace-wrapped) per
    spec §4. format never emits those relaxed forms.
 
-   NOTE: this const and stdlib/uuid.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/uuid.cx are the same source — edit both. ]
 
-[- §3.1 random / time-ordered generators (impure) -]
+[; §3.1 random / time-ordered generators (impure) ]
 [?def v4         scope=public impure [returns string]  ()                              [$uuid-v4]]
 [?def v7         scope=public impure [returns string]  ()                              [$uuid-v7]]
 [?def v4-bytes   scope=public impure [returns bytes]   ()                              [$uuid-v4-bytes]]
 [?def v7-bytes   scope=public impure [returns bytes]   ()                              [$uuid-v7-bytes]]
 
-[- §3.2 name-based generators (pure / deterministic) -]
+[; §3.2 name-based generators (pure / deterministic) ]
 [?def v5         scope=public pure   [returns string]  ($namespace::bytes $name::string) [$uuid-v5 $namespace $name]]
 [?def v3         scope=public pure   [returns string]  ($namespace::bytes $name::string) [$uuid-v3 $namespace $name]]
 [?def v5-bytes   scope=public pure   [returns bytes]   ($namespace::bytes $name::string) [$uuid-v5-bytes $namespace $name]]
 [?def v3-bytes   scope=public pure   [returns bytes]   ($namespace::bytes $name::string) [$uuid-v3-bytes $namespace $name]]
 
-[- §3.3 parse and format -]
+[; §3.3 parse and format ]
 [?def parse      scope=public pure   [returns bytes]   ($s::string *$opts)          [$uuid-parse $s $opts]]
 [?def format     scope=public pure   [returns string]  ($b::bytes)                      [$uuid-format $b]]
 
-[- §3.4 validation and inspection -]
+[; §3.4 validation and inspection ]
 [?def validate   scope=public pure   [returns bool]    ($s::string)                     [$uuid-validate $s]]
 [?def variant    scope=public pure   [returns int]     ($b::bytes)                      [$uuid-variant $b]]
 [?def version    scope=public pure   [returns int]     ($b::bytes)                      [$uuid-version $b]]
 [?def nil-uuid   scope=public pure   [returns string]  ()                              [$uuid-nil]]
 
-[- §3.5 predefined namespace constants -]
+[; §3.5 predefined namespace constants ]
 [?def ns-dns     scope=public pure   [returns bytes]   ()                              [$uuid-ns-dns]]
 [?def ns-url     scope=public pure   [returns bytes]   ()                              [$uuid-ns-url]]
 [?def ns-oid     scope=public pure   [returns bytes]   ()                              [$uuid-ns-oid]]
 [?def ns-x500    scope=public pure   [returns bytes]   ()                              [$uuid-ns-x500]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=uuid
   [scope """Generate, parse, format, and validate Universally Unique Identifiers.
    Four variants are supported: v4 (fully random), v7 (timestamp-ordered with an

@@ -2,7 +2,7 @@ module cx
 
 import crypto.sha256
 
-// def_node.v — DefNode AST (v0.8.0).
+// def_node.v — DefNode AST.
 //
 // DefNode is the spec-canonical first-class AST node for the
 // `[?def NAME (PARAMS…) BODY]` module-level static function directive —

@@ -1,6 +1,6 @@
-[- cx-stdlib/url — RFC 3986 URL parse / build / encode / decode.
+[; cx-stdlib/url — RFC 3986 URL parse / build / encode / decode.
 
-   Full v0.8.0 public surface per spec/std-lib/url.md §3. Bodies forward
+   Full public surface per spec/std-lib/url.md §3. Bodies forward
    to native primitives (vcx/code/stdlib_url.v): percent-encoding,
    RFC 3986 reference resolution, WHATWG / lenient parse modes, and the
    canonicalizing build (default-port strip, scheme/host lowercasing,
@@ -11,9 +11,9 @@
    query-parse a map; query-encode a string. Errors are values
    (CXER1400 / 1401 / 1402 / 1403, §5).
 
-   NOTE: this const and stdlib/url.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/url.cx are the same source — edit both. ]
 
-[- §3.1 parse and build -]
+[; §3.1 parse and build ]
 [?def parse           scope=public pure [returns element] ($s::string)               [$url-parse $s]]
 [?def parse-lenient   scope=public pure [returns element] ($s::string)               [$url-parse-lenient $s]]
 [?def parse-whatwg    scope=public pure [returns element] ($s::string)               [$url-parse-whatwg $s]]
@@ -22,19 +22,19 @@
 [?def build-raw       scope=public pure [returns string]  ($parts::element)          [$url-build-raw $parts]]
 [?def normalize       scope=public pure [returns string]  ($s::string)               [$url-normalize $s]]
 
-[- §3.2 generic encode / decode -]
+[; §3.2 generic encode / decode ]
 [?def encode scope=public pure [returns string] ($s::string) [$url-encode $s]]
 [?def decode scope=public pure [returns string] ($s::string) [$url-decode $s]]
 
-[- §3.3 query strings -]
+[; §3.3 query strings ]
 [?def query-parse  scope=public pure [returns map]    ($s::string) [$url-query-parse $s]]
 [?def query-encode scope=public pure [returns string] ($m::map)    [$url-query-encode $m]]
 
-[- §3.4 composition -]
+[; §3.4 composition ]
 [?def join        scope=public pure [returns string] ($base::string $ref::string) [$url-join $base $ref]]
 [?def is-absolute scope=public pure [returns bool]   ($s::string)                 [$url-is-absolute $s]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=url
   [scope """RFC 3986 and WHATWG-URL-aligned URL parsing, building, and component encoding. Split URLs into named components, reconstruct them, percent-encode and decode arbitrary byte sequences, and parse or serialize query strings. The parse-then-build round-trip is canonical rather than byte-identical: it strips default ports, lowercases scheme and host, and normalizes percent-encoding. Transport is out of scope — this module produces URL strings and parsed components, not network requests."""]]
 [fn-doc name=parse scope=public purity=pure

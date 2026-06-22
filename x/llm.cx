@@ -1,0 +1,82 @@
+# cx-x/llm — a minimal LLM provider, the FIRST Runnable (EXPERIMENTAL `x/` tier).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): bundled + gated
+# in-tree but EXEMPT from the frozen-`std` byte-compatible-reimpl stability promise
+# (semver-breaking allowed until it proves out). #6 D2/S10.
+#
+# This is the first deliverable UNDER the Runnable convention (cx-x/run): `complete`
+# is an LLM call that composes as a Runnable, so `local fn ≡ MCP tool ≡ A2A skill ≡
+# LLM step`. Wrap it in a lib-qualified closure to get a Runnable bound to a base +
+# model, then compose via cx-x/run:
+#     [$run:invoke [?fn ($p) [$llm:complete $base $model $p]] "Hi"]
+#     [$run:pipe preprocess [?fn ($p) [$llm:complete $base $model $p]]]
+# (A dedicated `chat` factory that RETURNS this closure from the module is deferred:
+# a returned closure can't yet resolve unqualified module-siblings, and a captured
+# binding is lost when the closure is applied from another module — closure-scoping
+# gaps adjacent to #45. The lib-qualified call-site closure above sidesteps both and
+# is the supported composition idiom until that lands.)
+# Pure protocol shaping (chat-request / completion-of) is split from the effectful
+# call (complete) so the request/response CONTRACT is testable without a network;
+# `complete` composes the existing real cx-stdlib/http client + cx-stdlib/json codec
+# (NO new transport, NO V backing).
+#
+# Provider: Ollama (local, no API key) — POST {base}/api/chat with
+# {model, messages:[{role,content}], stream:false}; the reply carries the
+# assistant turn at /message/content. Run under a SCOPED grant
+# (`--allow-net=127.0.0.1:11434`), never --allow-all.
+#
+# `stream` (prompt→lazy token sequence) is DEFERRED (S10b): Ollama streams NDJSON
+# (newline-delimited JSON objects), NOT SSE, so it needs a chunked-line reader
+# distinct from cx-stdlib/http's sse-events — its own increment. Not stubbed here.
+
+[?lib 'cx-stdlib/http' :as http]
+[?lib 'cx-stdlib/json' :as json]
+
+# ── pure protocol shaping ──────────────────────────────────────────────────────
+# user-message — one chat turn {role:"user", content}.
+[?def user-message scope=public pure [returns map] ($content::string)
+  {role: "user" content: $content}]
+
+# chat-request — the /api/chat request body for a single-prompt, non-streaming turn.
+[?def chat-request scope=public pure [returns map] ($model::string $prompt::string)
+  {model: $model messages: ([$user-message $prompt]) stream: false}]
+
+# completion-of — extract the assistant's text from an /api/chat response value.
+# (Bind the intermediate `message` map before reading `content`: a chained
+# `/message/content` path does not descend into a map VALUE — the inner map must
+# be bound first.)
+[?def completion-of scope=public pure [returns string] ($response::any)
+  [?let [= $msg $response/message] $msg/content]]
+
+# ── effectful call (composes the real http client + json codec) ────────────────
+# complete — POST one prompt to {base}/api/chat and return the completion text.
+[?def complete scope=public impure [returns string] ($base::string $model::string $prompt::string)
+  [$completion-of
+    [$json:parse
+      [$http:body-text
+        [$http:post [$concat $base "/api/chat"] [$json:emit [$chat-request $model $prompt]] {}]]]]]
+
+# ── docs ───────────────────────────────────────────────────────────────────────
+[module-doc name=llm
+  [scope """A minimal LLM provider (EXPERIMENTAL x/ tier, #6 D2/S10) — the first
+   Runnable. complete POSTs one prompt to Ollama /api/chat and returns the
+   completion; wrap it in a lib-qualified closure
+   ([?fn ($p) [$llm:complete base model $p]]) to compose it through cx-x/run like
+   any other Runnable. Pure request/response shaping (chat-request, completion-of) is
+   separated from the effectful call (complete), which composes the real
+   cx-stdlib/http client + cx-stdlib/json codec — no new transport. Targets the
+   Ollama /api/chat protocol (local, keyless; run under a scoped net grant). A
+   dedicated chat Runnable-factory + stream (NDJSON token sequence) are deferred
+   (closure-scoping gap #45 / S10b respectively)."""]]
+[fn-doc name=user-message scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build one chat turn {role:"user", content}."""]]
+[fn-doc name=chat-request scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build the Ollama /api/chat request body for a single-prompt, non-streaming turn."""]]
+[fn-doc name=completion-of scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Extract the assistant's completion text (/message/content) from an /api/chat response value."""]]
+[fn-doc name=complete scope=public purity=impure
+  [sig """-> string"""]
+  [summary """POST one prompt to {base}/api/chat (net) and return the completion text. Composes http:post + json. Wrap as [?fn ($p) [$llm:complete base model $p]] to use as a cx-x/run Runnable."""]]

@@ -376,6 +376,9 @@ fn http_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		'http-send-event' {
 			return http_send_event_impl(args)
 		}
+		'http-sse-publish' {
+			return http_sse_publish_impl(args)
+		}
 		'http-heartbeat' {
 			return http_heartbeat_impl(args)
 		}
@@ -1887,6 +1890,26 @@ fn http_exchange_from_conn(conn cx.Node) cx.Node {
 	}
 }
 
+// http_finalize_unresponded_exchange — the accept-iter walker calls this after
+// each per-exchange handler returns (#23). A handler that responded closed the
+// connection (http_respond_impl closes on write); an SSE handler holds it open
+// via is_sse_stream. So an exchange left OPEN and not-SSE means the handler
+// returned WITHOUT responding — e.g. a denied capability poisoned the response
+// argument, so [$http:respond] short-circuited on the err-value and never
+// wrote. The connection would then dangle: the client hangs and there is NO
+// diagnostic (the handler's yielded err-value sits unflushed in the server's
+// streamed-stdout buffer for the lifetime of the never-ending accept loop).
+// Fail loud — write the cause to STDERR (unbuffered, so it surfaces at once)
+// and close the connection so the client observes EOF instead of hanging.
+fn http_finalize_unresponded_exchange(ex cx.Node) {
+	id := net_handle_id(ex) or { return }
+	h := net_lookup(id) or { return }
+	if h.is_open && !h.is_sse_stream {
+		eprintln('cx http: accept-iter handler returned without responding on exchange fd=${id} — no response was written. A handler that errors (e.g. a denied capability poisoning [\$http:respond], which short-circuits on the err-value arg) must still respond. Closing the connection so the client does not hang.')
+		net_close_id(id)
+	}
+}
+
 // ════════════════════════════════════════════════════════════════════
 // §3.6 SSE / streaming — held-open server push + client read.
 //
@@ -2173,6 +2196,44 @@ fn http_send_event_impl(args []cx.Node) cx.Node {
 	return http_null()
 }
 
+// http_sse_publish_impl — #28: fan out one SSE event to every connection
+// subscribed to `topic` (held-open feeds promoted via an `[sse-subscribe]`
+// response on the concurrent `[$http:serve]` path). Returns the number of
+// subscribers the frame was delivered to. This is the producer half of the
+// concurrent-SSE model: a handler on any reactor thread publishes; no reactor
+// is blocked, unlike a producer loop on a single accept-iter exchange.
+//
+//   [$http:sse-publish "prices" [event data="42"]]
+//
+// Writing to the already-open subscriber sockets is a net effect → guard net.
+fn http_sse_publish_impl(args []cx.Node) cx.Node {
+	if args.len < 2 {
+		return mk_err(http_err_arg_invalid, 'E_HTTP_ARG_INVALID: sse-publish expects (topic, [event …])')
+	}
+	topic := http_arg_str(args[0]) or {
+		return mk_err(http_err_arg_invalid, 'E_HTTP_ARG_INVALID: sse-publish expects a topic string')
+	}
+	if topic == '' {
+		return mk_err(http_err_arg_invalid, 'E_HTTP_ARG_INVALID: sse-publish topic must be non-empty')
+	}
+	ev := http_elem(args[1]) or {
+		return mk_err(http_err_arg_invalid, 'E_HTTP_ARG_INVALID: sse-publish expects an [event]')
+	}
+	if ev.name != 'event' {
+		return mk_err(http_err_arg_invalid, 'E_HTTP_ARG_INVALID: sse-publish expects an [event]')
+	}
+	// frame the event — surfaces CXER4539 (empty) / CXER4531 (CR/LF)
+	framed := http_sse_frame_event(ev)
+	if framed is cx.Element && framed.name == 'err' {
+		return framed
+	}
+	if d := cap_guard('net', 'sse-publish ${topic}') {
+		return d
+	}
+	n := cx_sse_topic_publish(topic, http_node_str(framed))
+	return http_int(i64(n))
+}
+
 // http_heartbeat_impl — §3.6: write one `:`-comment liveness frame.
 fn http_heartbeat_impl(args []cx.Node) cx.Node {
 	stream := http_elem(args[0]) or {
@@ -2250,7 +2311,7 @@ fn http_sse_open_source(url string, opts_node cx.Node, leid string) cx.Node {
 		tls_opts := http_tls_opts_node(verify, ca_eff)
 		net_dial_tls_real(pinned, host, port, tls_opts, NetAddr{ host: host, port: port, scheme: 'tls' })
 	} else {
-		net_dial_tcp_real(NetAddr{ host: pinned, port: port, scheme: 'tcp' })
+		net_dial_tcp_real(NetAddr{ host: pinned, port: port, scheme: 'tcp' }, cx.Node(cx.Element{ name: '__cx_map__' }))
 	}
 	if is_err_value(dialed) {
 		return dialed

@@ -1,6 +1,6 @@
-[- cx-stdlib/log — structured logging (spec/std-lib/log.md).
+[; cx-stdlib/log — structured logging (spec/std-lib/log.md).
 
-   Full v0.8.0 public surface per §3. Bodies forward to native primitives
+   Full public surface per §3. Bodies forward to native primitives
    (vcx/code/stdlib_log.v): leveled / generic emit format an event record
    and write it to the active sink (process-global config set by
    `configure`); `current-scope` reads the active [?with-scope] dynamic
@@ -14,31 +14,31 @@
    (invalid rotation, or rotation on a non-file sink) / CXER2405
    (sample-rate out of 0.0–1.0), per §5.
 
-   NOTE: this const and stdlib/log.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/log.cx are the same source — edit both. ]
 
-[- §3.1 level-keyed emit -]
+[; §3.1 level-keyed emit ]
 [?def debug scope=public impure [returns null] ($message::string $fields={}) [$log-debug $message]]
 [?def info  scope=public impure [returns null] ($message::string $fields={}) [$log-info $message]]
 [?def warn  scope=public impure [returns null] ($message::string $fields={}) [$log-warn $message]]
 [?def error scope=public impure [returns null] ($message::string $fields={}) [$log-error $message]]
 [?def fatal scope=public impure [returns null] ($message::string $fields={}) [$log-fatal $message]]
 
-[- §3.2 generic emit -]
+[; §3.2 generic emit ]
 [?def log scope=public impure [returns null] ($level::atom $message::string $fields={}) [$log-log $level $message]]
 
-[- §3.3 scope introspection -]
+[; §3.3 scope introspection ]
 [?def current-scope scope=public impure [returns map] () [$log-current-scope]]
 
-[- §3.4 configuration -]
+[; §3.4 configuration ]
 [?def configure scope=public impure [returns null] ($config::map) [$log-configure $config]]
 
-[- §3.5 direct sink emission -]
+[; §3.5 direct sink emission ]
 [?def emit-raw scope=public impure [returns null] ($record::element) [$log-emit-raw $record]]
 
-[- §3.6 level check -]
+[; §3.6 level check ]
 [?def is-enabled scope=public pure [returns bool] ($level::atom) [$log-is-enabled $level]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=log
   [scope """Structured logging: leveled emit with arbitrary structured fields. Configurable sinks support single or multi-sink fan-out with optional async, rotation, and sampling. Dynamic contextual scopes attach fields automatically to every log call within their extent via the [?with-scope] directive. Each event is a record of level, message, timestamp, and a fields map."""]]
 [fn-doc name=debug scope=public purity=impure

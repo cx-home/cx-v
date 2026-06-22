@@ -208,10 +208,19 @@ fn test_line_comment_skipped() {
 	assert texts(t)[..2] == ['foo', 'bar']
 }
 
-fn test_dash_block_comment_skipped() {
-	// `[-- … --]` is the program block comment and IS skipped by the lexer.
-	t := cx.tokenize('a [-- block\ncomment --] b') or { panic(err) }
+fn test_block_comment_skipped() {
+	// `[; … ]` is the block comment and IS skipped by the lexer.
+	t := cx.tokenize('a [; block\ncomment ] b') or { panic(err) }
 	assert kinds(t) == [cx.ProgramTokenKind.ident, .ident, .eof]
+}
+
+fn test_dash_is_minus_not_comment() {
+	// `[- …]` is now the minus operator head, NEVER a comment — so it is NOT
+	// skipped: it lexes to real tokens (lbrack + minus + operands + rbrack),
+	// not collapsed to a lone eof the way a `[; … ]` comment would be.
+	t := cx.tokenize('[- 3 1]') or { panic(err) }
+	assert kinds(t) != [cx.ProgramTokenKind.eof]
+	assert kinds(t).len > 3
 }
 
 fn test_raw_span_is_a_data_span() {

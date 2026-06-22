@@ -34,7 +34,7 @@ $(RE2_SHIM_LIB): deps/re2_shim/re2_shim.cc deps/re2_shim/re2_shim.h
 # cmd/main.v + the tests import BOTH `cx` (this package root) and `code` (the
 # eval/stdlib module in code/). We stage a temporary _modules/ with a symlink
 # per module so VMODULES resolves both regardless of the shell's VMODULES.
-MODSETUP = mkdir -p _modules && ln -sfn $$(pwd) _modules/cx && ln -sfn $$(pwd)/code _modules/code
+MODSETUP = mkdir -p _modules && ln -sfn $$(pwd) _modules/cx && ln -sfn $$(pwd)/code _modules/code && ln -sfn $$(pwd)/transport _modules/transport
 
 # NOTE: not `-prod`. `-prod` turns V warnings into errors, and the cmd/ LSP
 # files carry benign unused-import warnings (same class as cx-home/cx-private#13);
@@ -47,7 +47,7 @@ CX_VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0-dev)
 
 install: re2-shim
 	@mkdir -p $(PREFIX) && $(MODSETUP)
-	@VMODULES=$$(pwd)/_modules $(V) -cflags "-O2" -d cx_version=$(CX_VERSION) -o $(PREFIX)/cx cmd/; STATUS=$$?; rm -rf _modules; \
+	@VMODULES=$$(pwd)/_modules $(V) -cc cc -cflags "-O2" -d cx_version=$(CX_VERSION) -o $(PREFIX)/cx cmd/; STATUS=$$?; rm -rf _modules; \
 	  [ $$STATUS -eq 0 ] && echo "installed: $(PREFIX)/cx — make sure $(PREFIX) is on your PATH"; exit $$STATUS
 
 uninstall:
@@ -56,4 +56,4 @@ uninstall:
 
 test: re2-shim
 	@$(MODSETUP)
-	@VMODULES=$$(pwd)/_modules $(V) test tests/; STATUS=$$?; rm -rf _modules; exit $$STATUS
+	@VMODULES=$$(pwd)/_modules $(V) -cc cc test tests/; STATUS=$$?; rm -rf _modules; exit $$STATUS

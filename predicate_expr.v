@@ -2,7 +2,7 @@ module cx
 
 import crypto.sha256
 
-// predicate_expr.v — PredicateExpr AST (v0.8.0, Phase 2.19).
+// predicate_expr.v — PredicateExpr AST (Phase 2.19).
 //
 // PredicateExpr is the structural body of a CXPath predicate `[…]` per
 // grammar production [159]: `PredicateExpr ::= '[' ProgramExpr ']'`.
@@ -41,7 +41,7 @@ import crypto.sha256
 //
 //   - ast_bin codec extension — Phase 2.1 codec encodes ONLY the predicate
 //     source string; the expr is recomputed from source on decode by the
-//     parser. The optional expr field is parse-only at v0.8.0; revisit
+//     parser. The optional expr field is parse-only currently; revisit
 //     when the predicate-body wire layout is allocated in spec/core/ast-bin.md.
 //   - path_renderer.v atomic-template recognition — the renderer continues
 //     to emit verbatim source; the AST shape provided here makes the
@@ -59,7 +59,7 @@ import crypto.sha256
 // D6. At Phase 2.19 only the atomic-template kinds are exercised by the
 // parser; the larger `bool_expr` / `instance_of` / `cast_as` / `sequence_op`
 // / `generic` slots are reserved for the follow-up phases so the AST
-// shape stays stable across the v0.8.0 rollout.
+// shape stays stable across rollout.
 pub enum PredicateExprKind {
 	atom_test         // `@name` — attribute-existence
 	attr_test         // alias for atom_test in the AttrTest sense
@@ -506,7 +506,7 @@ fn (mut c PredicateParseCursor) read_rhs_value() ?string {
 //
 // On any other body shape returns an error — the caller (path_parser.v)
 // falls back to source-only PathPredicate. This is by design: we want
-// the atomic-template AST graft to be conservative at v0.8.0; the full
+// the atomic-template AST graft to be conservative; the full
 // ProgramExpr surface lands at follow-up phases.
 pub fn predicate_expr_parse(source string) !&PredicateExpr {
 	if source.len == 0 {
@@ -694,7 +694,7 @@ fn parse_function_call(mut c PredicateParseCursor, source string) !&PredicateExp
 	c.skip_ws()
 	// Currently only `count(*)` is recognised — single `*` arg.
 	if c.at_end() || c.peek() != `*` {
-		return error('PREDICATE_EXPR_PARSE: only `${fn_name}(*)` is recognised at v0.8.0')
+		return error('PREDICATE_EXPR_PARSE: only `${fn_name}(*)` is recognised')
 	}
 	c.advance() // *
 	c.skip_ws()

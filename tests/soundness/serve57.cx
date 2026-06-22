@@ -1,0 +1,7 @@
+[?lib 'cx-stdlib/http' :as http]
+[?lib 'cx-stdlib/strings' :as s]
+[?def handler impure ($req)
+  [?let [= $base [$concat "row-" "data-" "payload-" "chunk-"]]
+   [?let [= $big [$s:repeat $base 4000]]
+    [response status=200 [headers [header name="content-type" value="text/plain"]] [body $big]]]]]
+[$http:serve "tcp://127.0.0.1:9031" handler {block: true}]

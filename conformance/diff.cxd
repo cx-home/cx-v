@@ -46,9 +46,9 @@ no changes
 [server host=localhost]
 #]]
   [in-b [#
-[- a leading comment]
+[; a leading comment]
 [server host=localhost]
-[- a trailing comment]
+[; a trailing comment]
 #]]
   [expected-unified [##]]
   [expected-summary [#

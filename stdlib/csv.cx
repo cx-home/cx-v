@@ -1,6 +1,6 @@
-[- cx-stdlib/csv — RFC 4180 + Excel-pragmatic CSV / TSV parse and emit.
+[; cx-stdlib/csv — RFC 4180 + Excel-pragmatic CSV / TSV parse and emit.
 
-   Full v0.8.0 public surface per spec/std-lib/csv.md §3. Bodies forward
+   Full public surface per spec/std-lib/csv.md §3. Bodies forward
    to native primitives (vcx/code/stdlib_csv.v): the quote-state tokenizer,
    dialect resolution, and RFC-4180 quoting are not expressible in pure CX.
    Rows round-trip to CXDM maps (header dialect) or positional arrays
@@ -8,21 +8,21 @@
    parse-with-schema. Errors are values, not control flow: under
    [on-error "collect"] a [csv-result [rows …] [errors …]] is returned.
 
-   NOTE: this const and stdlib/csv.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/csv.cx are the same source — edit both. ]
 
-[- §3.1 parsing -]
+[; §3.1 parsing ]
 [?def parse              scope=public pure [returns [sequence any]] ($s::string)                       [$csv-parse $s]]
 [?def parse-with-dialect scope=public pure [returns [sequence any]] ($s::string $dialect::element)      [$csv-parse-with-dialect $s $dialect]]
 [?def parse-with-schema  scope=public pure [returns [sequence any]] ($s::string $schema::map)          [$csv-parse-with-schema $s $schema]]
 
-[- §3.2 emitting -]
+[; §3.2 emitting ]
 [?def emit              scope=public pure [returns string] ($rows::[sequence any])                      [$csv-emit $rows]]
 [?def emit-with-dialect scope=public pure [returns string] ($rows::[sequence any] $dialect::element)    [$csv-emit-with-dialect $rows $dialect]]
 
-[- §3.3 built-in dialects -]
+[; §3.3 built-in dialects ]
 [?def dialects-builtin scope=public pure [returns map] ()                                              [$csv-dialects-builtin]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=csv
   [scope """Parse and emit CSV/TSV following RFC 4180 with Excel-pragmatic extensions. Rows round-trip between strings and CXDM records: a header dialect yields maps keyed by header strings, while a headerless dialect yields positional arrays. Dialect handling covers delimiter, quote, escape, and line-terminator, and cell values are strings unless coerced via a schema. Distinct from the cross-format CLI conversion path — this is the in-program library form."""]]
 [fn-doc name=parse scope=public purity=pure

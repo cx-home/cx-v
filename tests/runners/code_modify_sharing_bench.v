@@ -1,4 +1,4 @@
-// v0.8.0 §11.6 Gate 30.5 — [?modify] structural-sharing microbench.
+// §11.6 Gate 30.5 — [?modify] structural-sharing microbench.
 //
 // Threshold:
 //   - Single-match `:set` on 10 MB doc: heap delta < 1 KB.
@@ -11,7 +11,7 @@
 // modify. Boehm GC is the V runtime; gc_memory_use() is the canonical
 // accessor (wraps GC_get_memory_use()).
 //
-// **v0.8.0 status (2026-05-23, post Element + Attribute diets):**
+// **Status (2026-05-23, post Element + Attribute diets):**
 // The two struct diets brought sizeof(cx.Element) 536 B → 96 B (5.6×)
 // and sizeof(cx.Attribute) 208 B → 48 B (4.3×). Per-match heap delta
 // dropped from ~14 KB pre-diet to ~1.5 KB post-Attribute-diet (≈10×
@@ -24,7 +24,7 @@
 // AttributeMeta on the touched attribute, totalling ~1-1.5 KB across
 // the six spine frames. Closing the remaining gap to <100 B/match
 // would require deeper items[] structural sharing (e.g. immutable
-// HAMT-backed items containers) — a v0.9.0+ exercise.
+// HAMT-backed items containers) — a future exercise.
 //
 // Output:
 //
@@ -145,7 +145,7 @@ fn main() {
 	println('gate-30.5 doc-bytes=${doc_bytes} doc-nodes=${leaf_count}')
 
 	mut overall_pass := true
-	// At v0.8.0 (post Element + Attribute diets) the absolute byte
+	// Currently (post Element + Attribute diets) the absolute byte
 	// budgets in are still tracked as ADVISORY: the diets
 	// shrank sizeof(cx.Element) to 96 B and sizeof(cx.Attribute) to
 	// 48 B, but per-match heap remains ~1.5 KB at fanout-4 depth-6
@@ -154,7 +154,7 @@ fn main() {
 	// invariant plus the algorithmic shape — sharing
 	// ratio relative to sizeof(cx.Element) is the load-bearing PASS
 	// criterion. Set GATE305_ENFORCE_ABSOLUTE=1 to promote the byte
-	// thresholds to hard failures (e.g. for v0.9.0 immutable-items
+	// thresholds to hard failures (e.g. for future immutable-items
 	// container work).
 	enforce_absolute := os.getenv('GATE305_ENFORCE_ABSOLUTE') == '1'
 	// ── Single-match :set (attribute set on first leaf) ─────────────

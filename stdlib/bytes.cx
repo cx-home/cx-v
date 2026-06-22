@@ -1,18 +1,18 @@
-[- cx-stdlib/bytes — byte-level operations on the CXDM bytes scalar
+[; cx-stdlib/bytes — byte-level operations on the CXDM bytes scalar
    kind (spec/stdlib_bytes.md).
 
    Bodies bottom out in native bytes-* primitives (vcx/code/stdlib_bytes.v).
    The primitive names are bytes-prefixed so they never collide with the
-   language-core builtin set (length / slice / head / concat / find / etc.). -]
+   language-core builtin set (length / slice / head / concat / find / etc.). ]
 
-[- §3.1 inspection -]
+[; §3.1 inspection ]
 [?def length               scope=public pure [returns int]   ($b::bytes)                [$bytes-length $b]]
 [?def at                   scope=public pure [returns int]   ($b::bytes $i::int)         [$bytes-at $b $i]]
 [?def is-empty             scope=public pure [returns bool]  ($b::bytes)                [$bytes-is-empty $b]]
 [?def equals               scope=public pure [returns bool]  ($a::bytes $b::bytes)       [$bytes-equals $a $b]]
 [?def constant-time-equals scope=public pure [returns bool]  ($a::bytes $b::bytes)       [$bytes-ct-equals $a $b]]
 
-[- §3.2 slicing + search -]
+[; §3.2 slicing + search ]
 [?def slice        scope=public pure [returns bytes] ($b::bytes $start::int $end::int)        [$bytes-slice $b $start $end]]
 [?def head         scope=public pure [returns bytes] ($b::bytes $n::int)                     [$bytes-head $b $n]]
 [?def tail         scope=public pure [returns bytes] ($b::bytes $n::int)                     [$bytes-tail $b $n]]
@@ -24,44 +24,44 @@
 [?def ends-with    scope=public pure [returns bool]  ($b::bytes $suffix::bytes)              [$bytes-ends-with $b $suffix]]
 [?def split        scope=public pure [returns [sequence bytes]] ($b::bytes $sep::bytes)      [$bytes-split $b $sep]]
 
-[- §3.3 hex -]
+[; §3.3 hex ]
 [?def to-hex       scope=public pure [returns string] ($b::bytes)                         [$bytes-to-hex $b]]
 [?def from-hex     scope=public pure [returns bytes]  ($s::string)                        [$bytes-from-hex $s]]
 [?def to-hex-upper scope=public pure [returns string] ($b::bytes)                         [$bytes-to-hex-upper $b]]
 
-[- §3.4 base64 -]
+[; §3.4 base64 ]
 [?def to-base64       scope=public pure [returns string] ($b::bytes)                       [$bytes-to-base64 $b]]
 [?def to-base64-url   scope=public pure [returns string] ($b::bytes)                       [$bytes-to-base64-url $b]]
 [?def from-base64     scope=public pure [returns bytes]  ($s::string)                      [$bytes-from-base64 $s]]
 [?def from-base64-url scope=public pure [returns bytes]  ($s::string)                      [$bytes-from-base64-url $s]]
 
-[- §3.5 base32 -]
+[; §3.5 base32 ]
 [?def to-base32   scope=public pure [returns string] ($b::bytes)                           [$bytes-to-base32 $b]]
 [?def from-base32 scope=public pure [returns bytes]  ($s::string)                          [$bytes-from-base32 $s]]
 
-[- §3.5.1 base58btc (Bitcoin alphabet) — multibase 'z' payload for did:key -]
+[; §3.5.1 base58btc (Bitcoin alphabet) — multibase 'z' payload for did:key ]
 [?def to-base58   scope=public pure [returns string] ($b::bytes)                           [$bytes-to-base58 $b]]
 [?def from-base58 scope=public pure [returns bytes]  ($s::string)                          [$bytes-from-base58 $s]]
 
-[- §3.6 compression -]
+[; §3.6 compression ]
 [?def gzip-compress            scope=public pure [returns bytes] ($input::bytes)             [$bytes-gzip-compress $input]]
 [?def gzip-decompress          scope=public pure [returns bytes] ($input::bytes)             [$bytes-gzip-decompress $input]]
 [?def zstd-compress            scope=public pure [returns bytes] ($input::bytes)             [$bytes-zstd-compress $input]]
 [?def zstd-decompress          scope=public pure [returns bytes] ($input::bytes)             [$bytes-zstd-decompress $input]]
 [?def zstd-compress-with-level scope=public pure [returns bytes] ($input::bytes $level::int)  [$bytes-zstd-compress-level $input $level]]
 
-[- §3.7 binary packing -]
+[; §3.7 binary packing ]
 [?def pack   scope=public pure [returns bytes]          ($format::string $values::[sequence any]) [$bytes-pack $format $values]]
 [?def unpack scope=public pure [returns [sequence any]] ($format::string $b::bytes)               [$bytes-unpack $format $b]]
 
-[- §3.8 string conversion -]
+[; §3.8 string conversion ]
 [?def from-string-utf8     scope=public pure [returns bytes]  ($s::string)                 [$bytes-from-string-utf8 $s]]
 [?def to-string-utf8       scope=public pure [returns string] ($b::bytes)                  [$bytes-to-string-utf8 $b]]
 [?def to-string-utf8-lossy scope=public pure [returns string] ($b::bytes)                  [$bytes-to-string-utf8-lossy $b]]
 [?def from-string-latin1   scope=public pure [returns bytes]  ($s::string)                 [$bytes-from-string-latin1 $s]]
 [?def to-string-latin1     scope=public pure [returns string] ($b::bytes)                  [$bytes-to-string-latin1 $b]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=bytes
   [scope """Byte-level operations on the CX bytes scalar kind. Covers inspection and slicing, search, hex/base64/base32 encoding, gzip and zstd compression, fixed-width binary pack and unpack, and UTF-8/Latin-1 string conversion. All operations are pure with no I/O, and every result is a new immutable bytes value. For file and stream I/O see cx-stdlib/io."""]]
 [fn-doc name=length scope=public purity=pure

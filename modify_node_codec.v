@@ -36,7 +36,7 @@ module cx
 // (u32 LE byte length + UTF-8) all match the existing conventions in
 // binary.v + path_node_codec.v + match_node_codec.v.
 //
-// Slot semantics at v0.8.0 Phase 2.5.
+// Slot semantics (Phase 2.5).
 // Spec §4.6 says doc / focus / name / value slots carry "the verbatim
 // source-text snippet" — mirroring the PathPredicate `source`
 // convention in §4.4 and the MatchArm pattern/guard/body convention
@@ -44,7 +44,7 @@ module cx
 // strings with encode_node-dispatched node bytes and the focus
 // string with a nested PathNode payload (tag 0x13 / §4.4) without
 // bumping the version byte; cap-bit-36 readers MUST tolerate the
-// Phase-2.5 string-shape during the v0.8.0-dev window.
+// Phase-2.5 string-shape during the pre-graft window.
 //
 // Advisory fields elided (per by symmetry with):
 //   - ModifyNode.source / ModifyNode.loc (top-level advisory)

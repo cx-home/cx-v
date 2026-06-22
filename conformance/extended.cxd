@@ -258,7 +258,7 @@
 
  [case id=011-no-autotype-child-element level=extended
   [tags scalar autotype element mixed-content]
-  [- @CHOICE-1 / mixed-content (cxdm §1.2): a typed scalar token beside a
+  [; @CHOICE-1 / mixed-content (cxdm §1.2): a typed scalar token beside a
      child element is a DISCRETE TYPED CHILD (not merged into untyped text).
      `42` here is an int Scalar sibling of `[x]`, matching the program reader.
      (The legacy id "no-autotype" predates @CHOICE-1; kept for ref stability.) ]

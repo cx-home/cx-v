@@ -7,7 +7,7 @@ module code
 // HTTPS fetch, no SRI verification, no version pin beyond the
 // `bundled:<binary-version>` tag in cx.lock.
 //
-// This file ships the **v0.8.0 signature-only skeleton** — each of the
+// This file ships the **signature-only skeleton** — each of the
 // 14 frozen sub-packages from spec/stdlib.md §3 is represented by a
 // single CX source file whose [?def] declarations expose the public
 // surface only. Bodies are `null` placeholders + TODO markers; full
@@ -112,7 +112,7 @@ const stdlib_src_session = $embed_file('../stdlib/session.cx').to_string()
 
 const stdlib_src_authz = $embed_file('../stdlib/authz.cx').to_string()
 
-// did/vc — post-v0.8.0 trust additions (std-lib/README §3.2; issue #26).
+// did/vc — deferred trust additions (std-lib/README §3.2; issue #26).
 const stdlib_src_did = $embed_file('../stdlib/did.cx').to_string()
 
 const stdlib_src_vc = $embed_file('../stdlib/vc.cx').to_string()
@@ -132,22 +132,22 @@ const stdlib_src_jsonschema = $embed_file('../stdlib/jsonschema.cx').to_string()
 // (v08_stdlib_skeleton_test.v) never counts experimental modules. Sources live
 // under the repo-root `x/` directory (parallel to `stdlib/`), so the tier is
 // visible in the layout, not only the resolver name.
-const x_src_run = $embed_file('../../x/run.cx').to_string()
+const x_src_run = $embed_file('../x/run.cx').to_string()
 
 // llm — minimal LLM provider, the first Runnable (#6 S10; Ollama /api/chat).
-const x_src_llm = $embed_file('../../x/llm.cx').to_string()
+const x_src_llm = $embed_file('../x/llm.cx').to_string()
 
 // mcp — minimal MCP client (#6 S9; JSON-RPC 2.0 over Streamable HTTP).
-const x_src_mcp = $embed_file('../../x/mcp.cx').to_string()
+const x_src_mcp = $embed_file('../x/mcp.cx').to_string()
 
 // mcp-server — minimal MCP server helpers (#6 Y1; cap-gated tools, ties #7 PEP).
-const x_src_mcp_server = $embed_file('../../x/mcp-server.cx').to_string()
+const x_src_mcp_server = $embed_file('../x/mcp-server.cx').to_string()
 
 // a2a — minimal A2A (Agent-to-Agent) protocol client (#6 Y2; JSON-RPC over HTTP).
-const x_src_a2a = $embed_file('../../x/a2a.cx').to_string()
+const x_src_a2a = $embed_file('../x/a2a.cx').to_string()
 
 // a2a-xap — A2A tasks over the xap substrate (#6 Y2b; tasks→journal, replayable).
-const x_src_a2a_xap = $embed_file('../../x/a2a-xap.cx').to_string()
+const x_src_a2a_xap = $embed_file('../x/a2a-xap.cx').to_string()
 
 // ── Public surface ──────────────────────────────────────────────────
 
@@ -330,9 +330,9 @@ fn bundled_codec_module_names() []string {
 // (`<fmt>-parse` etc., vcx/code/stdlib_codec.v → vcx/cx/codec.v node entry
 // points). `pure` per §5 — codecs charge no capability.
 fn codec_module_source(fmt string) string {
-	return '[- cx-stdlib/${fmt} — codec surface (core; codec.md §3). Synthesized
+	return '[; cx-stdlib/${fmt} — codec surface (core; codec.md §3). Synthesized
    from the codec registry; bodies forward to registry-driven native
-   primitives. The CX tree is the universal pivot (codec.md §1). -]
+   primitives. The CX tree is the universal pivot (codec.md §1). ]
 [?def parse        scope=public pure [returns any]    (\$s::string) [\$${fmt}-parse \$s]]
 [?def parse-bytes  scope=public pure [returns any]    (\$b::bytes)  [\$${fmt}-parse-bytes \$b]]
 [?def emit         scope=public pure [returns string] (\$v::any)    [\$${fmt}-emit \$v]]

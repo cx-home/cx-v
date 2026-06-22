@@ -273,7 +273,7 @@ fn map_key_type_tag_name(t ScalarType) string {
 		.bigint_type   { 'bigint' }
 		.duration_type { 'duration' }
 		.period_type   { 'period' }
-		// Atoms are not valid map keys in v0.8.0 per
+		// Atoms are not valid map keys per
 		// spec/cxdm.md §2.5 closing note. This branch
 		// is unreachable for well-formed inputs; we still spell it so
 		// the V exhaustive-match rule passes. Reachable only via a

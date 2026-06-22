@@ -77,7 +77,7 @@ import os
 // Lockfile carries the parsed shape of a `cx.lock` file.
 //
 // `schema_version` carries the value of the root `:version` attribute
-// per spec/lockfile.md §3.1. v0.8.0 ships schema version `1`; the
+// per spec/lockfile.md §3.1. ships schema version `1`; the
 // reader returns CXLOCK_UNSUPPORTED_VERSION for any other value.
 //
 // `modules` carries one `ModuleLock` per `[module]` entry in source
@@ -106,7 +106,7 @@ pub mut:
 // `"file://…"` / `"./…"` for filesystem, `"https://…"` for HTTPS,
 // `"bundled:<version>"` for stdlib.
 //
-// `version` is the optional semver-style version string. v0.8.0
+// `version` is the optional semver-style version string. The
 // loader does NOT parse or compare versions per §4.3.
 //
 // `integrity` is the optional SRI hash (per §4.4); REQUIRED for

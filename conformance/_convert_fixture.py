@@ -103,13 +103,13 @@ def parse_suite(path):
 
 
 def header_doc(header):
-    """Pull the prose out of a leading [- … -] block comment, if present.
+    """Pull the prose out of a leading [; … ] block comment, if present.
 
     Kept multi-line and verbatim; emitted as a RawText [doc …] (NOT a CX
     block comment, which would terminate at the first ']' in the prose).
     """
     text = "\n".join(header).strip()
-    m = re.match(r"\[-\s*(.*?)\s*-\]\s*\Z", text, re.S)
+    m = re.match(r"\[;\s*(.*?)\s*\]\s*\Z", text, re.S)
     return (m.group(1) if m else text).strip()
 
 

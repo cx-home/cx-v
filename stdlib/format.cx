@@ -1,29 +1,29 @@
-[- cx-stdlib/format — canonical-form emission + pretty-print +
+[; cx-stdlib/format — canonical-form emission + pretty-print +
    indent / wrap controls. Bridges spec/canonical.md.
 
-   Full v0.8.0 surface per spec/stdlib_format.md §3. Bodies call native
+   Full surface per spec/stdlib_format.md §3. Bodies call native
    primitives (vcx/code/stdlib_format.v) since CX-value text emission
    (canonical / pretty / compact / diff-friendly / streaming) reuses the
-   V renderer (vcx/code/render.v) and is not expressible in pure CX. -]
+   V renderer (vcx/code/render.v) and is not expressible in pure CX. ]
 
-[- §3.1 single-shot formatters -]
+[; §3.1 single-shot formatters ]
 [?def canonical scope=public pure [returns string] ($value::any) [$format-canonical $value]]
 [?def pretty    scope=public pure [returns string] ($value::any) [$format-pretty $value]]
 [?def compact   scope=public pure [returns string] ($value::any) [$format-compact $value]]
 
-[- §3.2 pretty-print options -]
+[; §3.2 pretty-print options ]
 [?def pretty-with-opts scope=public pure [returns string] ($value::any $opts::map) [$format-pretty-with-opts $value $opts]]
 
-[- §3.3 canonical with reasoning hooks -]
+[; §3.3 canonical with reasoning hooks ]
 [?def canonical-with-context scope=public pure [returns element] ($value::any) [$format-canonical-with-context $value]]
 
-[- §3.4 diff-friendly emission -]
+[; §3.4 diff-friendly emission ]
 [?def diff-friendly scope=public pure [returns string] ($value::any) [$format-diff-friendly $value]]
 
-[- §3.5 streaming emission -]
+[; §3.5 streaming emission ]
 [?def emit-stream scope=public pure [returns [sequence string]] ($value::any $opts::map) [$format-emit-stream $value $opts]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=format
   [scope """Emit CX values back to CX text in four forms: canonical, pretty, compact, and diff-friendly.
 

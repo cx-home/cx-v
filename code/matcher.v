@@ -166,7 +166,7 @@ pub mut:
 	// close_log records, in invocation order, the label of every close_fn
 	// the runtime actually fired. Observable via `[?test-close-log]` so
 	// conformance fixtures assert LIFO / idempotence without a real io
-	// handle (the v0.8.0 closeable producers — io/process/store — land in
+	// handle (the closeable producers — io/process/store — land in
 	// later waves; the contract + directive are validated here against a
 	// synthetic [?test-closeable]).
 	closeables_lock &sync.RwMutex = unsafe { nil }
@@ -344,6 +344,13 @@ pub mut:
 	done      bool
 	cancelled bool
 	result    cx.Node
+	// concurrent is set when the body runs on its own spawned V thread
+	// (CX_WORKER_THREADS=1, #58): the worker then runs alongside a blocking
+	// `[$http:serve {block:true}]` instead of monopolizing the calling thread.
+	// `done` flips (with `result`) when the thread finishes; [?wait-for]
+	// spin-waits on it. Default (flag off) keeps the synchronous run-to-
+	// completion semantics (done already true when eval_worker returns).
+	concurrent bool
 }
 
 // CbStateRecord tracks one circuit-breaker's state per spec §10.2.3.
@@ -622,6 +629,34 @@ fn (e MatchEnv) clone() MatchEnv {
 	}
 	for k, c in e.closures {
 		copy.closures[k] = c
+	}
+	return copy
+}
+
+// clone_frame_sharing_closures returns a per-iteration child frame for the
+// `[?for]` comprehension walker (#57). It copies `bindings` into a fresh map
+// (the walker writes the loop variable / let-bindings there) but ALIASES the
+// `closures` table read-only (`closures_shared = true`) instead of deep-copying
+// it — the same B17 optimization the closure-call path already uses
+// (eval.v build_param_call_env). Cloning the whole closures table per generator
+// item was the dominant per-request memory high-water in a `[?lib]`-loaded HTTP
+// handler: an N-item `[?for]` copied the entire stdlib closure set N times, and
+// under `-gc e` that transient high-water is held (not reclaimed), so sustained
+// traffic exhausts the heap → `malloc` fails → the #57 OOM panic. Matches
+// `clone()`'s field handling exactly apart from the closures alias; safe because
+// every `env.closures` write site calls `cow_closures()` first.
+fn (e MatchEnv) clone_frame_sharing_closures() MatchEnv {
+	mut copy := MatchEnv{
+		bindings:        map[string]cx.Node{}
+		closures:        e.closures // aliased; cow_closures() before any write
+		closures_shared: true
+		state:           e.state
+		anon_counter:    e.anon_counter
+		dyn_context:     e.dyn_context.clone()
+		scope:           e.scope
+	}
+	for k, v in e.bindings {
+		copy.bindings[k] = v
 	}
 	return copy
 }

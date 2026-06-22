@@ -38,7 +38,7 @@ module cx
 // Step-trailing `:LABEL` where LABEL is one of these names terminates the
 // path; the `:LABEL` belongs to the enclosing directive (e.g., `[?modify]`
 // action, `[?for]` clause). The list mirrors the
-// spec/grammar.ebnf [131b] disambiguation note as of v0.8.0.
+// spec/grammar.ebnf [131b] disambiguation note.
 //
 // NOTE: the spec calls this list authoritative in spec/code.md. The V
 // reference implementation embeds the list here; any spec addition cascades
@@ -229,7 +229,7 @@ pub fn parse_path_consumed(source string) !(PathNode, int) {
 		// non-default axis already). Per grammar [131], an explicit
 		// AxisSpecifier on the head step composes WITH the leading `//`
 		// shorthand — but that composition lowers to two AST steps in
-		// XPath semantics. We take the simpler reading at v0.8.0: the
+		// XPath semantics. We take the simpler reading currently: the
 		// leading `//` only re-axes a default-axis (.child) head step;
 		// an explicit axis prefix on the head step takes precedence and
 		// the `//` is treated as no-op (since the cursor only saw one
@@ -330,7 +330,7 @@ pub fn parse_path_consumed(source string) !(PathNode, int) {
 //
 // `@name` attribute sugar is recognised: it desugars to
 // `attribute::<name>` per spec/grammar.ebnf [131] note about the
-// shorthand axis. (Not currently in [131] verbatim, but the v0.8.0 surface
+// shorthand axis. (Not currently in [131] verbatim, but the current surface
 // admits `@name` everywhere `attribute::name` is admitted — see
 // spec/code.md §6.2.)
 fn parse_one_step(mut c PathParseCursor) !PathStep {
@@ -381,8 +381,8 @@ fn parse_one_step(mut c PathParseCursor) !PathStep {
 // path_kind_test_names lists the four kind-test names admitted by [131b].
 // Each parses as `Name '(' ')'` and is recorded in `node_test` verbatim
 // including the parens (e.g., `node()`). Per the kind-test
-// surface stays narrow at v0.8.0 — no `element(QName)` / `attribute(QName)`
-// parametric forms; those are post-v0.8.0.
+// surface stays narrow — no `element(QName)` / `attribute(QName)`
+// parametric forms; those are deferred.
 const path_kind_test_names = ['node', 'text', 'element', 'attribute']
 
 // finish_node_test reads the NodeTest portion of a step (after any
@@ -449,7 +449,7 @@ fn finish_node_test(mut c PathParseCursor, axis PathAxis) !PathStep {
 		// spec/namespaces.md the prefix is recorded verbatim in the
 		// node_test string (e.g., `xml:lang`); resolution into a
 		// `(ns_uri, local)` pair happens at evaluation time against
-		// the document's in-scope xmlns map (no hook at v0.8.0 — we
+		// the document's in-scope xmlns map (no hook currently — we
 		// only record the source form, which is what canonical emit
 		// and AST equality compare on).
 		c.advance() // `:`
@@ -536,7 +536,7 @@ fn finish_step(mut c PathParseCursor, axis PathAxis, node_test string) !PathStep
 		body := read_predicate_body(mut c)!
 		// Phase 2.19: attempt to promote the body into a structural
 		// PredicateExpr AST. The parser only
-		// recognises the atomic-template forms at v0.8.0; bodies
+		// recognises the atomic-template forms currently; bodies
 		// outside that scope (`and`/`or` connectives, arbitrary
 		// function calls, instance-of, etc.) gracefully fall back
 		// to source-only mode — the structural promotion is purely

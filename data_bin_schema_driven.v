@@ -719,7 +719,7 @@ fn decl_name_from_element(e Element) string {
 
 // ── 6.f — schema vocabulary (constraint clauses) ────────────────────
 //
-// The v0.8.0 schema shape drops the legacy `:flag`
+// The current schema shape drops the legacy `:flag`
 // trailing-sigil convention in favour of explicit `[clause …]` child
 // elements and a `name::T` glued type ascription:
 //
@@ -1156,7 +1156,7 @@ fn encode_header_schema_driven(mut buf []u8) {
 	buf << cxcol_version
 	buf << (cxcol_flags_le | cxcol_flags_schema_driven)
 	encode_u32_le(mut buf, cxcol_default_depth)
-	buf << u8(0)  // reserved (1 byte — magic grew from 4→5 in v0.8.0)
+	buf << u8(0)  // reserved (1 byte — magic grew from 4→5)
 }
 
 fn encode_schema_reference(opts SchemaDrivenEmitOptions, _sm SchemaModel, mut buf []u8) ! {

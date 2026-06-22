@@ -255,6 +255,24 @@ pub fn codec_parse_node(name string, src string) !Node {
 		return error('codec ${name}: multi-document (---) streams are not yet supported by parse → node')
 	}
 	doc := res.single or { return error('codec ${name}: parse produced no document') }
+	return parse_doc_to_value_node(doc)
+}
+
+// parse_doc_to_value_node shapes a parsed Document for the in-program parse
+// surface (`[$<codec>:parse]`). Per codec.md §7: a document with a SINGLE
+// top-level node (no prolog / doctype) returns THAT node directly — so a
+// `[$cx:parse "[feature name=helm]"]` is navigable as the element
+// (`$f@name`, `$f/child`), not only via the descendant axis (#39). A
+// multi-top-level / prolog / doctype document returns the transparent
+// DocumentNode (D7), navigated with `//`.
+fn parse_doc_to_value_node(doc Document) Node {
+	mut has_doctype := false
+	if _ := doc.doctype {
+		has_doctype = true
+	}
+	if doc.elements.len == 1 && doc.prolog.len == 0 && !has_doctype {
+		return doc.elements[0]
+	}
 	return doc_to_node(doc)
 }
 
@@ -275,7 +293,7 @@ pub fn codec_parse_bytes_node(name string, b []u8) !Node {
 	c := codec_lookup(name) or { return error('unknown codec: ${name}') }
 	if pbf := c.parse_bytes {
 		doc := pbf(b)!
-		return doc_to_node(doc)
+		return parse_doc_to_value_node(doc)
 	}
 	return codec_parse_node(name, codec_strip_bom(b.bytestr()))!
 }

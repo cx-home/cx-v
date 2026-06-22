@@ -1,6 +1,6 @@
 module cx
 
-// ── v0.8.0 Phase 2.11 — cx_code_tree real walker ──────────────
+// ── Phase 2.11 — cx_code_tree real walker ──────────────
 //
 // Produces the JSON contract for the playground's Tree View per
 // `spec/core/ast.md`.

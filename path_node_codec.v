@@ -31,7 +31,7 @@ module cx
 // (u32 LE byte length + UTF-8) all match the existing conventions in
 // binary.v.
 //
-// Predicate body encoding at v0.8.0 Phase 2.1.
+// Predicate body encoding (Phase 2.1).
 // Spec §4.4 says each predicate is "a recursively-encoded
 // ProgramExpr Node (§4 envelope)" — but the ProgramExpr AST does not
 // exist in V at Phase 2.1 (PathPredicate carries a verbatim `source
@@ -41,7 +41,7 @@ module cx
 // predicate-body source text. The Phase 2.4 migration will replace
 // this string-shaped payload with `encode_node`-dispatched node
 // bytes; cap-bit-36 readers MUST tolerate this Phase-2.1 placeholder
-// shape during the v0.8.0-dev window. Cross-ref: path_node.v
+// shape during the pre-graft window. Cross-ref: path_node.v
 // "Out of scope at Phase 2.1" comment block.
 //
 // Cross-references:

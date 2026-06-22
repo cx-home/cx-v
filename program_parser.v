@@ -29,6 +29,12 @@ pub:
 	code    string = 'cx-err:CXER0100'
 	message string
 	pos     Position
+	// `unknown_directive` marks the one parse failure that is a SEMANTIC
+	// rejection of an unregistered / retired `[?name]` directive (vs a syntactic
+	// failure on data/prose that merely fails to parse as a program). The eval
+	// boundary's data-fallback (#11) consults this: an unknown directive is
+	// program intent and MUST stay fail-loud, never silently re-read as data.
+	unknown_directive bool
 }
 
 pub fn (e ParseError) msg() string {
@@ -85,7 +91,7 @@ mut:
 // parses on the optimised binary also parses under the test build. Exceeding
 // it raises a parse error (surfaced as cx-err:CXER0100 PARSE_ERROR, like the
 // data parser's element-nesting bound, parser.v `max_recursion_depth`)
-// instead of segfaulting — core-bug #2 of the v0.8.0 stdlib audit
+// instead of segfaulting — core-bug #2 of the stdlib audit
 // remediation. Mirrors the §13.7 element-nesting `max_depth` defense for code.
 const max_program_parse_depth = 256
 
@@ -657,7 +663,7 @@ pub fn axis_to_name(a ProgramPathAxis) string {
 // bodies needs spec clarification before we can land it cleanly. Until
 // then, predicate sources that aren't `[INT]` or `[@…]` raise CXER0100
 // with an explicit deferral note — matching the no-stubs/no-partial-impl
-// gate from the v0.8.0 design lock.
+// gate from the design lock.
 fn (mut p ProgramParser) parse_path_predicate() !ProgramPathPredicate {
 	start := p.peek().pos
 	p.expect(.lbrack, "'[' opening CXPath predicate")!
@@ -1198,7 +1204,7 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 // `parse_slice_postfix`. When none is present the bracket is left for
 // outer handling — `$xs[2]` with a single-Expr body falls back to the
 // predicate semantics on the existing parsing path (which at
-// v0.8.0 has no rule for a `[Expr]` postfix on a bare binding; that
+// There is currently no rule for a `[Expr]` postfix on a bare binding; that
 // arm is currently unreachable and will surface as a parse error
 // upstream).
 //
@@ -2186,7 +2192,7 @@ fn (mut p ProgramParser) parse_cx_element_from_inside(start Position) !ProgramLi
 			// `[= :ok "ok"]`, `[err :code "x"]` → atoms `:code` + string).
 			// The retired `:label value` element-literal slot surface (e.g.
 			// `[err :code "x"]` read as a `code`-labeled slot) was RETIRED in
-			// the v0.8.0 surface cutover (D014): element construction uses
+			// the surface cutover (D014): element construction uses
 			// attributes (`code="x"`) and positional body only — no colon
 			// slots. No dual-accept; the slot reshape is gone.
 			atom := p.parse_atom_literal()!
@@ -2500,7 +2506,7 @@ fn (mut p ProgramParser) parse_pattern_body_from_inside(start Position) !Program
 			attrs << p.parse_pattern_attr()!
 			continue
 		}
-		// `direct=true` adjacency modifier ([126f]); the v0.8.0 surface
+		// `direct=true` adjacency modifier ([126f]); the current surface
 		// (replacing the retired `:direct` colon slot).
 		if p.peek_kind() == .ident && p.peek().text == 'direct'
 		   && p.peek_kind_at(1) == .eq {
@@ -2989,8 +2995,9 @@ fn (mut p ProgramParser) parse_directive() !ProgramNode {
 	// helper table; outside that mode the evaluator rejects them.
 	if !is_directive_name(name_tok.text) && !name_tok.text.starts_with('test-') {
 		return ParseError{
-			message: "unknown directive '[?${name_tok.text}]' — not in §4.1 registry"
-			pos:     name_tok.pos
+			message:           "unknown directive '[?${name_tok.text}]' — not in §4.1 registry"
+			pos:               name_tok.pos
+			unknown_directive: true
 		}
 	}
 	// Special-form: for-comprehension has its own clause grammar.
@@ -3106,8 +3113,8 @@ fn (mut p ProgramParser) parse_directive() !ProgramNode {
 
 // parse_directive_slot reads one slot. surface: every directive
 // modifier is either a scalar attribute (`name=value`) or a clause-child
-// element (`[name …]`); the legacy `:label V` surface was removed in the
-// v0.8.0 capstone. `find` and `match` directives switch the first positional
+// element (`[name …]`); the legacy `:label V` surface was removed.
+// `find` and `match` directives switch the first positional
 // slot into pattern mode per spec/code.md §5.
 fn (mut p ProgramParser) parse_directive_slot(directive_name string) !ProgramSlot {
 	// scalar modifier as attribute: `name=value` in directive
@@ -3222,8 +3229,8 @@ fn (mut p ProgramParser) parse_let_body(start Position) !ProgramDirective {
 			pos:   start
 		}
 	}
-	// The legacy `[?let $name = expr :in body]` colon surface was retired in
-	// the v0.8.0 capstone; only the clause-child form above is accepted.
+	// The legacy `[?let $name = expr :in body]` colon surface was retired;
+	// only the clause-child form above is accepted.
 	return ParseError{
 		message: "[?let] requires a `[= \$name value]` binding clause then a body (spec/code.md §8.5); the `\$name = expr :in body` colon form is no longer accepted"
 		pos:     p.peek().pos
@@ -3303,6 +3310,16 @@ fn (mut p ProgramParser) parse_match_clause(mut slots []ProgramSlot) ! {
 				p.advance() // '['
 				p.advance() // 'where'
 				guard := p.parse_expr()!
+				// #18: a bare infix comparison (`[where $x/@a=v]`) is a common
+				// mis-reach — CX predicates are PREFIX. Point at the prefix form
+				// instead of the low-context "expected ']'".
+				if p.peek_kind() in [ProgramTokenKind.eq, .neq, .lt, .le, .gt, .ge] {
+					op := p.peek().text
+					return ParseError{
+						message: '[where] takes a PREFIX predicate — write `[where [${op} LHS RHS]]` (e.g. `[where [= \$x/@attr value]]`), not infix `LHS ${op} RHS`'
+						pos:     p.peek().pos
+					}
+				}
 				p.expect(.rbrack, "']' (closing [where] clause)")!
 				slots << ProgramSlot{ kind: .labeled, label: 'where', value: guard }
 			}
@@ -4163,6 +4180,15 @@ fn (mut p ProgramParser) parse_for_comp_body(start Position, outer_form ProgramF
 						}
 						'where' {
 							e := p.parse_expr()!
+							// #18: a bare infix comparison (`[where $x/@a=v]`) is a common
+							// mis-reach — CX predicates are PREFIX. Point at the prefix form.
+							if p.peek_kind() in [ProgramTokenKind.eq, .neq, .lt, .le, .gt, .ge] {
+								op := p.peek().text
+								return ParseError{
+									message: '[where] takes a PREFIX predicate — write `[where [${op} LHS RHS]]` (e.g. `[where [= \$x/@attr value]]`), not infix `LHS ${op} RHS`'
+									pos:     p.peek().pos
+								}
+							}
 							p.expect(.rbrack, "']' (closing [where …])")!
 							clauses << ProgramForClause{ kind: .filter, expr: e }
 						}

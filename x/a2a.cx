@@ -1,0 +1,107 @@
+# cx-x/a2a — a minimal A2A (Agent-to-Agent) protocol client (EXPERIMENTAL x/ tier).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): bundled + gated
+# in-tree but EXEMPT from the frozen-`std` stability promise. #6 Y2.
+#
+# A2A is JSON-RPC 2.0 over HTTP (like MCP), so this completes the agentic protocol
+# triad (S9 MCP client → Y1 MCP server → Y2 A2A) on the SAME substrate —
+# cx-stdlib/jsonrpc (S1), the real cx-stdlib/http client, cx-stdlib/json. NO new
+# transport, NO V backing. An A2A peer composes as a cx-x/run Runnable via the
+# call-site idiom: [$run:invoke [?fn ($t) [$a2a:ask $endpoint $t]] "hello"].
+#
+# This is Y2a — the protocol + client. Y2b layers the "over-xap" mapping that is
+# the distinctive positioning: an agent's TASKS persist to a cx-stdlib/journal
+# (replayable lifecycle), MESSAGES publish to a cx-stdlib/bus (pub/sub fan-out),
+# and AUTH (agent-card + message provenance) is signed/verified with cx-stdlib/did
+# + cx-stdlib/vc. Those are documented here and built next; not stubbed.
+#
+# Shapes (A2A 0.2.x): a message is {role, parts:[{kind:"text",text}], messageId,
+# kind:"message"}; message/send carries {message}; the reply is a Message (sync) or
+# a Task {id, status:{state}, …} (async). An Agent Card describes the peer.
+
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+[?lib 'cx-stdlib/http' :as http]
+
+# ── pure protocol shaping ──────────────────────────────────────────────────────
+# text-part — one text content part of a message.
+[?def text-part scope=public pure [returns map] ($text::string)
+  {kind: "text" text: $text}]
+
+# message — an A2A message with a single text part.
+[?def message scope=public pure [returns map] ($role::string $text::string $message-id::string)
+  {role: $role parts: ([$text-part $text]) messageId: $message-id kind: "message"}]
+
+# user-message — a message from the user role (the common client send).
+[?def user-message scope=public pure [returns map] ($text::string $message-id::string)
+  [$message "user" $text $message-id]]
+
+# send-request — the JSON-RPC `message/send` request carrying a message.
+[?def send-request scope=public pure [returns map] ($id::any $msg::any)
+  [$rpc:request $id "message/send" {message: $msg}]]
+
+# agent-card — a minimal A2A Agent Card (served at /.well-known/agent.json).
+[?def agent-card scope=public pure [returns map] ($name::string $description::string $url::string $version::string)
+  {name: $name description: $description url: $url version: $version
+   capabilities: {streaming: false} skills: ()}]
+
+# ── pure response extractors ───────────────────────────────────────────────────
+# message-text — the first text part of a Message reply (result.parts[0].text).
+[?def message-text scope=public pure [returns string] ($response::any)
+  [?let [= $result $response/result]
+    [?let [= $part [$first $result/parts]] $part/text]]]
+
+# task-state — the lifecycle state of a Task reply (result.status.state:
+# submitted | working | input-required | completed | canceled | failed).
+[?def task-state scope=public pure [returns string] ($response::any)
+  [?let [= $result $response/result]
+    [?let [= $status $result/status] $status/state]]]
+
+# ── effectful transport (JSON-RPC over HTTP) ───────────────────────────────────
+# send-message — POST a message/send request to an A2A endpoint, return the parsed reply.
+[?def send-message scope=public impure [returns any] ($endpoint::string $msg::any)
+  [$json:parse [$http:body-text [$http:post $endpoint [$json:emit [$send-request 1 $msg]] {}]]]]
+
+# ask — send a user text message to an A2A peer and return its reply text. Compose
+# as a cx-x/run Runnable via [?fn ($t) [$a2a:ask endpoint $t]].
+[?def ask scope=public impure [returns string] ($endpoint::string $text::string)
+  [$message-text [$send-message $endpoint [$user-message $text "m1"]]]]
+
+# ── docs ───────────────────────────────────────────────────────────────────────
+[module-doc name=a2a
+  [scope """A minimal A2A (Agent-to-Agent) protocol client (EXPERIMENTAL x/ tier, #6
+   Y2) — completing the agentic triad (S9 MCP client, Y1 MCP server, Y2 A2A) on the
+   shared substrate (jsonrpc + http + json), no new transport. Pure shaping
+   (text-part, message, user-message, send-request, agent-card) + response
+   extractors (message-text, task-state) + the effectful client (send-message, ask).
+   An A2A peer composes as a cx-x/run Runnable via a call-site closure. This is Y2a
+   (protocol + client); Y2b maps A2A onto the xap substrate — tasks→cx-stdlib/journal
+   (replayable lifecycle), messages→cx-stdlib/bus (pub/sub), auth→cx-stdlib/did + vc
+   (signed agent cards + message provenance)."""]]
+[fn-doc name=text-part scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build one text content part {kind:"text", text}."""]]
+[fn-doc name=message scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build an A2A message {role, parts:[…], messageId, kind:"message"} with a single text part."""]]
+[fn-doc name=user-message scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a user-role A2A message (the common client send)."""]]
+[fn-doc name=send-request scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build the JSON-RPC `message/send` request carrying a message."""]]
+[fn-doc name=agent-card scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a minimal A2A Agent Card (name/description/url/version/capabilities/skills)."""]]
+[fn-doc name=message-text scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Extract the first text part of a Message reply (result.parts[0].text)."""]]
+[fn-doc name=task-state scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Extract the lifecycle state of a Task reply (result.status.state)."""]]
+[fn-doc name=send-message scope=public purity=impure
+  [sig """-> any"""]
+  [summary """POST a message/send request to an A2A endpoint (net) and return the parsed reply."""]]
+[fn-doc name=ask scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Send a user text message to an A2A peer (net) and return its reply text. Compose as a cx-x/run Runnable."""]]

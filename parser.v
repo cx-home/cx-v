@@ -596,7 +596,7 @@ fn (mut p Parser) parse_document() !Document {
 }
 
 // peek_table_block_open returns true if the parser is positioned at the
-// v0.8.0 TableBlock clause-child opener `[table[` (TABLE_OPEN per
+// TableBlock clause-child opener `[table[` (TABLE_OPEN per
 // spec/grammar.ebnf [29] + lexer note lines 1660-1662): a `[`, the
 // reserved name `table`, optional whitespace, then a header `[` whose
 // next byte is not `]` (so `[table[]` is not a TableBlock). `[table foo]`
@@ -640,7 +640,7 @@ fn (mut p Parser) parse_table_header() ![]TableColumn {
 		// glued `::`, so the typed form arrives as the bare name followed by
 		// `::type`; a token with no `::` is name-only (::string default).
 		full := p.read_name()!
-		// RETIRED (v0.8.0 / D014): the legacy single-colon `name:type` column
+		// RETIRED (D014): the legacy single-colon `name:type` column
 		// type form. A single `:` in a column-header token is a hard parse
 		// error — column types use the glued `::T` form exclusively.
 		if full.contains(':') {
@@ -895,7 +895,9 @@ fn (p &Parser) is_prolog_node() bool {
 	if p.pos >= p.src.len || p.src[p.pos] != `[` { return false }
 	if p.pos + 1 >= p.src.len { return false }
 	b1 := p.src[p.pos + 1]
-	if b1 == `?` || b1 == `-` { return true }
+	// `[?…]` PI/directive or `[; … ]` block comment (the `[;` comment head —
+	// was `[-` before the comment-syntax change).
+	if b1 == `?` || b1 == `;` { return true }
 	if b1 == `!` {
 		if p.pos + 9 <= p.src.len {
 			return p.src[p.pos+2..p.pos+9] == 'DOCTYPE'.bytes()
@@ -1003,11 +1005,11 @@ fn (mut p Parser) parse_bracket_node() !Node {
 	// through array detection").
 	//
 	// Structural sigils with opaque inner content also keep absolute
-	// priority: `-` (block comment), `!` (declaration), `|` (block
+	// priority: `;` (block comment), `!` (declaration), `|` (block
 	// content), `#` (raw text). Otherwise a comma inside an opaque
-	// span — e.g. `[- comment, with, commas ]` — would be misread as
-	// an Array literal with `-` (or `!`/`|`/`#`) as the first slot.
-	is_opaque_sigil := b == `-` || b == `!` || b == `|` || b == `#`
+	// span — e.g. `[; comment, with, commas ]` — would be misread as
+	// an Array literal with `;` (or `!`/`|`/`#`) as the first slot.
+	is_opaque_sigil := b == `;` || b == `!` || b == `|` || b == `#`
 	// Headless WS array (@CHOICE-1, G-ARRAY-1): a no-comma bracket of 2+ typed
 	// scalar tokens — `[80 443]` — is an Array node of discrete typed items (the
 	// node-kind twin of the element whitespace typed list, slice A). Checked before
@@ -1024,7 +1026,7 @@ fn (mut p Parser) parse_bracket_node() !Node {
 	}
 	return match b {
 		`?` { p.parse_pi_or_decl()! }
-		`-` { p.parse_comment()! }
+		`;` { p.parse_comment()! }
 		`#` { p.parse_raw_text()! }
 		`!` { p.parse_decl()! }
 		`*` { p.parse_alias()! }
@@ -1078,7 +1080,7 @@ fn (mut p Parser) parse_pi_or_decl() !Node {
 // Built-in filter directives (CX code 1.0, spec/eval.md §4): the frozen
 // filter set is reserved as EvalNames because filter invocations use
 // the `?`-prefixed bracket form (`[?upper x]`, `[?trim x]`).
-// CX code 3.1 control-flow (v0.9.0+): `let`, `fn`, `match`, `try`.
+// CX code 3.1 control-flow: `let`, `fn`, `match`, `try`.
 fn is_cx_eval_name(name string) bool {
 	return match name {
 		// CX code 1.0 control-flow + A13/A14 FLWOR windows
@@ -1256,7 +1258,7 @@ fn (mut p Parser) parse_interpolation() !Node {
 // (`:lazy`) round-trip as atoms. No data-side clause interpretation;
 // the data side only round-trips. (The former positional/labeled
 // ArgArray machinery with per-directive `:slot` desugar tables was
-// retired with the v0.8.0 colon-slot surface.)
+// retired with the colon-slot surface cutover.)
 //
 // `[?cx …]` is NOT handled here — it's a CXDirective (config), parsed
 // separately via parse_cx_directive.
@@ -1299,7 +1301,7 @@ fn record_declared_template(mut p Parser, directive_name string, items []Node) {
 		}
 		return
 	}
-	// `?def` parses as uniform BodyItems per [59]; the v0.8.0 surface
+	// `?def` parses as uniform BodyItems per [59]; the current surface
 	// (`[?def name modifiers… (params) body]`) carries the name as the
 	// leading bare token of the first body item. The positional array
 	// form (`[?def [name, params, body]]`) falls through to the
@@ -1510,8 +1512,11 @@ fn (mut p Parser) parse_pi_body(target string) !Node {
 
 // ── [-...] comment ────────────────────────────────────────────────────────────
 
+// parse_comment reads a `[; … ]` block comment (the single CX block-comment
+// form). The `;` head is unambiguous — `[- …]` is the minus operator / a data
+// element, never a comment. Asymmetric: the body runs to the matching `]`.
 fn (mut p Parser) parse_comment() !Node {
-	p.advance() // consume '-'
+	p.advance() // consume ';'
 	value := p.read_until_close()!
 	p.expect(`]`)!
 	return CommentNode{ value: value }
@@ -1955,7 +1960,7 @@ fn (mut p Parser) parse_element() !Node {
 		}
 
 		if kind == .colon || kind == .double_colon {
-			// (The v0.8.0 TableBlock opener is the clause-child `[table[ … ]]`
+			// (The TableBlock opener is the clause-child `[table[ … ]]`
 			// form, detected in body position below — see peek_table_block_open.
 			// The retired v0.7 `:table[ … ]` meta-slot opener was removed in the
 			// table-surface cutover.)
@@ -1971,7 +1976,7 @@ fn (mut p Parser) parse_element() !Node {
 			// `a:b` are glued into the name by `read_name` and never reach here.)
 			// A spaced single-colon `:NAME` is an atom body item in EVERY
 			// context, including schema documents. The legacy schema
-			// `:slot` / `:flag` meta-label form was retired in the v0.8.0
+			// `:slot` / `:flag` meta-label form was retired in the
 			// surface cutover — schemas now use `[clause …]` children and
 			// glued `name::T` ascriptions exclusively. Keeping the old
 			// in_schema exemption here mis-parsed atom members such as
@@ -1999,7 +2004,7 @@ fn (mut p Parser) parse_element() !Node {
 			break
 		}
 
-		// RETIRED (v0.8.0 / D014, grammar [55b]): the boolean-flag sigil
+		// RETIRED (D014, grammar [55b]): the boolean-flag sigil
 		// `+name` / `-name`. In ElementMeta position a `+`/`-` immediately
 		// followed by a name-start byte is the retired flag form and is a
 		// hard parse error — booleans are written explicitly as `name=true` /
@@ -2129,12 +2134,12 @@ fn (mut p Parser) parse_element() !Node {
 		return error(p.make_error("bareword followed by ',' is an ambiguous bare array — quote the items (['${name}', …]) or name the list ([list ${name}, …]) (cx-err:CXER0100)"))
 	}
 
-	// v0.8.0 (grammar [29]/[50] + TABLE_OPEN lexer note): the TableBlock
+	// (grammar [29]/[50] + TABLE_OPEN lexer note): the TableBlock
 	// clause-child form `[NAME [table[ COLS ]] ROWS]`. When the element
 	// body opens with the reserved `[table[` head, the element is the
 	// tabular alternative of [50]: the `[table[ … ]]` clause declares the
 	// columns, the remaining body items are the rows, and no other Body
-	// items apply. (The retired v0.7 `:table[ … ]` meta-slot form is
+	// items apply. (The earlier `:table[ … ]` meta-slot form is
 	// handled above and is being cut over to this clause-child form.)
 	if p.peek_table_block_open() {
 		p.expect(`[`)!                  // outer '[' of the `[table` opener
@@ -2230,7 +2235,7 @@ fn (mut p Parser) parse_element() !Node {
 			}
 		}
 		if !matched {
-			return error('E207: cx-err: `ref` is reserved at v0.7.0 — only `[ref @<Name>]` body-position form is admitted; migration: rename to `[reference …]` or wrap content in a non-reserved element. See `docs/migrations/v0.6-to-v0.7.md §M7`.')
+			return error('E207: cx-err: `ref` is reserved — only `[ref @<Name>]` body-position form is admitted; migration: rename to `[reference …]` or wrap content in a non-reserved element.')
 		}
 	}
 
@@ -3702,7 +3707,7 @@ fn (mut p Parser) read_attr_value() !string {
 fn (mut p Parser) read_attr_value_typed() !(ScalarValue, ?string) {
 	if p.at_end() { return error(p.make_error('expected attr value')), none }
 	b := p.peek()
-	// RETIRED (v0.8.0 / D014): the legacy colon-typed attribute value
+	// RETIRED (D014): the legacy colon-typed attribute value
 	// `name=:T=value` (e.g. `port=:u16=8080`). When the value position
 	// opens with `:TypeName` immediately followed by `=`, it is the retired
 	// colon-type prefix — a hard parse error. Typed attributes use the

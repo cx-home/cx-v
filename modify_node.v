@@ -2,7 +2,7 @@ module cx
 
 import crypto.sha256
 
-// modify_node.v — ModifyNode AST (v0.8.0).
+// modify_node.v — ModifyNode AST.
 //
 // ModifyNode is the spec-canonical first-class AST node for the
 // `[?modify]` directive — `[?modify DOC FOCUS ACTION+]`

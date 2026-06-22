@@ -1,4 +1,4 @@
-[- cx-stdlib/authz — the XAP trust model + the single PEP decision
+[; cx-stdlib/authz — the XAP trust model + the single PEP decision
    function (spec/02-working/stdlib_authz.md). Principals, capabilities,
    attenuating/time-bounded/revocable delegations, guardian grants behind an
    incapacity-typed [gate …], the signed+versioned incapacity-predicate
@@ -50,45 +50,45 @@
    (grammar.ebnf [153b]).
 
    NOTE: this const and the native primitives (vcx/code/stdlib_authz.v) are
-   the same surface — edit both. -]
+   the same surface — edit both. ]
 
-[- §3.1 authority store construction (the trust-state backend) -]
+[; §3.1 authority store construction (the trust-state backend) ]
 [?def store scope=public impure [returns element] ($opts::map {})    [$authz-store $opts]]
 [?def close scope=public impure [returns null]    ($handle::element)  [$authz-close $handle]]
 
-[- §3.2 issue + revoke a delegation (the dial) -]
+[; §3.2 issue + revoke a delegation (the dial) ]
 [?def delegate scope=public impure [returns element] ($store::element $delegation::element $opts::map {}) [$authz-delegate $store $delegation $opts]]
 [?def revoke   scope=public impure [returns element] ($store::element $id::string         $opts::map {}) [$authz-revoke $store $id $opts]]
 
-[- §3.3 issue a guardian grant (the conditional pre-issued delegation) -]
+[; §3.3 issue a guardian grant (the conditional pre-issued delegation) ]
 [?def grant-guardian scope=public impure [returns element] ($store::element $grant::element $opts::map {}) [$authz-grant-guardian $store $grant $opts]]
 
-[- §3.4 the PEP decision function — check / authorize (pure) -]
+[; §3.4 the PEP decision function — check / authorize (pure) ]
 [?def check     scope=public pure [returns element]            ($store::element $req::element $opts::map {}) [$authz-check $store $req $opts]]
 [?def authorize scope=public pure [returns element]            ($store::element $req::element $opts::map {}) [$authz-authorize $store $req $opts]]
 [?def find      scope=public pure [returns element]            ($store::element $id::string)                 [$authz-find $store $id]]
 [?def grants-of scope=public pure [returns [sequence element]] ($store::element $actor::element)             [$authz-grants-of $store $actor]]
 
-[- §3.5 the incapacity-predicate library + gate well-formedness -]
+[; §3.5 the incapacity-predicate library + gate well-formedness ]
 [?def predicate        scope=public pure   [returns element]            ($store::element $name-at-version::string) [$authz-predicate $store $name-at-version]]
 [?def predicates       scope=public pure   [returns [sequence element]] ($store::element)                          [$authz-predicates $store]]
-[- gate-wellformed: the spec names this `gate-wellformed?`, but `?` is not a
+[; gate-wellformed: the spec names this `gate-wellformed?`, but `?` is not a
    grammar NameChar in a call head ([$authz:VERB …]) — the same constraint that
    forced net's addr->string → addr-to-string. The verb is spelled WITHOUT the
    trailing `?`; semantics are identical (a [valid]/[invalid] VALUE, never an
-   [err]). -]
+   [err]). ]
 [?def gate-wellformed scope=public pure    [returns element]            ($gate::element $opts::map {})            [$authz-gate-wellformed $gate $opts]]
 [?def verify-tier      scope=public impure [returns element]            ($store::element $grant::element $tier::string "" $opts::map {}) [$authz-verify-tier $store $grant $tier $opts]]
 
-[- §3.6 effective envelope — the intersection (pure) -]
+[; §3.6 effective envelope — the intersection (pure) ]
 [?def effective scope=public pure [returns element] ($store::element $actor::element $opts::map {}) [$authz-effective $store $actor $opts]]
 
-[- §3.7 dry-run / explain / trace — why can / can't X do Y? (pure) -]
+[; §3.7 dry-run / explain / trace — why can / can't X do Y? (pure) ]
 [?def dry-run scope=public pure [returns element]            ($store::element $req::element $opts::map {}) [$authz-dry-run $store $req $opts]]
 [?def explain scope=public pure [returns element]            ($decision::element)                          [$authz-explain $decision]]
 [?def trace   scope=public pure [returns [sequence element]] ($store::element $req::element $opts::map {}) [$authz-trace $store $req $opts]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=authz
   [scope """The XAP authority model as data plus a single decision function. It represents principals, capabilities, attenuating/time-bounded/revocable delegations, and guardian grants gated behind incapacity-typed predicates, then decides authority at one point of enforcement: check/authorize answers whether an actor holds a capability over a slice in a tenant at the required assurance tier, returning a [permit] or [deny] value. Authority originates only from principals and can only attenuate down a delegation chain, so privilege escalation is structurally impossible. This is delegated authority — who authorized whom to do what — distinct from and AND-composed with the effect-permission capability system."""]]
 [fn-doc name=store scope=public purity=impure

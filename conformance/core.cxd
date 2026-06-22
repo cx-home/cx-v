@@ -270,7 +270,7 @@
  [case id=010-comment level=core
   [tags comment]
   [in-cx [#
-[-a comment]
+[;a comment]
 [p text]
 #]]
   [out-ast [#
@@ -293,7 +293,7 @@
 <p>text</p>
 #]]
   [out-cx [#
-[-a comment]
+[;a comment]
 [p text]
 #]]
  ]
@@ -302,7 +302,7 @@
   [tags comment element]
   [in-cx [#
 [div
-  [-section one]
+  [;section one]
   [p Hello]
 ]
 #]]
@@ -333,7 +333,7 @@
 #]]
   [out-cx [#
 [div
-  [-section one]
+  [;section one]
   [p Hello]
 ]
 #]]

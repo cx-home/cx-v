@@ -16,7 +16,7 @@ import strings
 // by an integer handle carried on the returned `[store handle=N …]`
 // element.
 //
-// BACKEND COVERAGE (v0.8.0): `mem://` and `file://` are functional.
+// BACKEND COVERAGE: `mem://` and `file://` are functional.
 // `mem://` is the Memory tier (§2.2.1) — pure in-process, no filesystem
 // and no network — so per §9 it requires NO host capability (D-STORE-1).
 // `file://` is the LocalFiles tier (§2.2.1): it persists the same in-process
@@ -25,7 +25,7 @@ import strings
 // CXER0271 when ungranted (deny-by-default, security.md §4). On open it
 // loads the directory's index (if any); each mutation is written through to
 // the index file, so docs/aliases survive across opens of the same path.
-// The v0.8.0 on-disk form is a single length-prefixed `.cxstore-index`
+// The current on-disk form is a single length-prefixed `.cxstore-index`
 // file; the §4.1 sharded/zstd layout is a future on-disk refinement
 // (the API contract + content-addressed identity are unaffected). The
 // remote/service backends (network I/O) remain deferred to the integration
@@ -733,7 +733,7 @@ fn store_decode_doc(text string) cx.Node {
 // `action`, store the result as a NEW doc (content-addressed = immutable;
 // the original is never deleted), return the new hash.
 //
-// SUBSET (v0.8.0 first landing): the action verbs supported in the mem://
+// SUBSET (first landing): the action verbs supported in the mem://
 // backend are `[set-attr name=N value=V]`, `[remove-attr name=N]`,
 // `[append CHILD…]`, and `[rename NEW]` on the doc root element. The full
 // Layer-1 modify surface (path-targeted edits) is deferred to the

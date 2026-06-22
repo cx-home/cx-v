@@ -1,6 +1,6 @@
-[- cx-stdlib/ft — fulltext search with structured ranking.
+[; cx-stdlib/ft — fulltext search with structured ranking.
 
-   Full v0.8.0 public surface per spec/std-lib/ft.md §3. Bodies forward to
+   Full public surface per spec/std-lib/ft.md §3. Bodies forward to
    native primitives (vcx/code/stdlib_ft.v): an inverted index, the
    UAX-#29 segmentation + Porter2 stemming pipeline, TF-IDF / BM25 scoring,
    boolean / phrase / field query evaluation, and snippet extraction are
@@ -12,34 +12,34 @@
    per doc and is handled by the env-aware native hook; all other surfaces
    route through the env-free primitive chain.
 
-   NOTE: this const and stdlib/ft.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/ft.cx are the same source — edit both. ]
 
-[- §3.1 building an index -]
+[; §3.1 building an index ]
 [?def index           scope=public pure [returns element] ($docs::[sequence any])              [$ft-index $docs]]
 [?def index-with-opts scope=public pure [returns element] ($docs::[sequence any] $opts::map)   [$ft-index-with-opts $docs $opts]]
 
-[- §3.2 searching -]
+[; §3.2 searching ]
 [?def search           scope=public pure [returns [sequence element]] ($idx::element $query::string $limit::int) [$ft-search $idx $query $limit]]
 [?def search-with-opts scope=public pure [returns [sequence element]] ($idx::element $query::string $opts::map)  [$ft-search-with-opts $idx $query $opts]]
 
-[- §3.3 store-integrated search -]
+[; §3.3 store-integrated search ]
 [?def search-store scope=public impure [returns [sequence element]] ($store::element $query::string $limit::int) [$ft-search-store $store $query $limit]]
 
-[- §3.4 snippets -]
+[; §3.4 snippets ]
 [?def snippet           scope=public pure [returns string] ($doc::any $query::string $context-chars::int) [$ft-snippet $doc $query $context-chars]]
 [?def snippet-with-opts scope=public pure [returns string] ($doc::any $query::string $opts::map)          [$ft-snippet-with-opts $doc $query $opts]]
 
-[- §3.5 tokenizer access -]
+[; §3.5 tokenizer access ]
 [?def tokenize scope=public pure [returns [sequence string]] ($text::string $language::string) [$ft-tokenize $text $language]]
 
-[- §3.6 result helpers -]
+[; §3.6 result helpers ]
 [?def doc-ids  scope=public pure [returns [sequence string]] ($results::[sequence element]) [$ft-doc-ids $results]]
 [?def score-of scope=public pure [returns float]             ($result::element)             [$ft-score-of $result]]
 
-[- §3.7 index introspection -]
+[; §3.7 index introspection ]
 [?def index-stats scope=public pure [returns map] ($idx::element) [$ft-index-stats $idx]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=ft
   [scope """In-program fulltext search with structured ranking and snippet generation. Builds a naive in-memory inverted index from a document set or a store, then runs a query language (keyword conjunctions, phrases, boolean operators, field restriction) ranked by TF-IDF (default) or BM25. The tokenization pipeline — Unicode word segmentation, case folding, stopword removal, and English stemming — runs entirely inside the process, with no persistent index and no external engine. The Index is an opaque in-memory value rebuilt per run."""]]
 [fn-doc name=index scope=public purity=pure

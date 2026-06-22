@@ -1,4 +1,4 @@
-[- cx-stdlib/bus — in-process publish/subscribe with synchronous,
+[; cx-stdlib/bus — in-process publish/subscribe with synchronous,
    deterministic, ordered dispatch (spec/02-inprogress/xap/stdlib_bus.md,
    band CXER4650-4699). A [bus] owns an ordered subscription list and a
    re-entrant FIFO emission queue; each published message is delivered to
@@ -16,27 +16,27 @@
 
    pattern forms (§2.2): a topic atom (:order.placed; trailing .* is a
    prefix-glob), a head-name string, or an arity-1 boolean predicate fn over
-   the message (the CXPath-predicate form, realized as a pure callable). -]
+   the message (the CXPath-predicate form, realized as a pure callable). ]
 
-[- §3.1 construction -]
+[; §3.1 construction ]
 [?def bus   scope=public pure   [returns element] ($opts::map {}) [$bus-bus $opts]]
 [?def close scope=public impure [returns null]    ($bus::element) [$bus-close $bus]]
 
-[- §3.2 / §3.3 subscribe / unsubscribe -]
+[; §3.2 / §3.3 subscribe / unsubscribe ]
 [?def on  scope=public impure [returns element] ($bus::element $pattern::any $handler::any $opts::map {}) [$bus-on $bus $pattern $handler $opts]]
 [?def off scope=public impure [returns bool]    ($bus::element $sub::any)                                  [$bus-off $bus $sub]]
 
-[- §3.4 publish -]
+[; §3.4 publish ]
 [?def emit scope=public impure [returns element] ($bus::element $msg::element $opts::map {}) [$bus-emit $bus $msg $opts]]
 
-[- §3.5 introspection (pure) -]
+[; §3.5 introspection (pure) ]
 [?def subscribers scope=public pure [returns [sequence element]] ($bus::element $pattern::any {}) [$bus-subscribers $bus $pattern]]
 [?def topics      scope=public pure [returns [sequence element]] ($bus::element)                   [$bus-topics $bus]]
 [?def match       scope=public pure [returns [sequence element]] ($bus::element $msg::element)    [$bus-match $bus $msg]]
 [?def topic       scope=public pure [returns element]            ($msg::element)                   [$bus-topic $msg]]
 [?def matches     scope=public pure [returns bool]               ($msg::element $pattern::any)    [$bus-matches $msg $pattern]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=bus
   [scope """In-process publish/subscribe that delivers each published message to its matching subscribers synchronously and in a defined order. Subscribers attach a (pattern, handler) registration; messages are matched by topic atom, head name, or an arity-1 boolean predicate. A re-entrant FIFO emission queue drains every message a handler publishes during dispatch before the next externally-published message, keeping delivery deterministic and replayable. The bus has no socket, thread, or timer of its own and introduces no capability — every effect is performed by the handlers it invokes."""]]
 [fn-doc name=bus scope=public purity=pure

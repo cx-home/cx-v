@@ -1,4 +1,4 @@
-[- cx-stdlib/session — (principal, tenant) web sessions for the XAP web
+[; cx-stdlib/session — (principal, tenant) web sessions for the XAP web
    stack (spec/02-inprogress/xap/stdlib_session.md). The THIN seam between
    authentication (external IdP → verified token, done by cx-stdlib/crypto)
    and authorization (cx-stdlib/authz, the PEP). It COMPOSES the shipped
@@ -34,9 +34,9 @@
    The trailing $opts::map {} / $cfg::map {} / $client::map {} are
    DEFAULTED positional parameters (grammar.ebnf [153b]).
 
-   NOTE: this const and stdlib/session.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/session.cx are the same source — edit both. ]
 
-[- §3.2 lifecycle — attach / detach (impure) -]
+[; §3.2 lifecycle — attach / detach (impure) ]
 [?def attach        scope=public impure [returns element] ($req::element $cfg::map)                  [$session-attach $req $cfg]]
 [?def attach-token  scope=public impure [returns element] ($token::string $cfg::map $client::map {}) [$session-attach-token $token $cfg $client]]
 [?def attach-did    scope=public impure [returns element] ($did::string $challenge::bytes $sig::bytes $cfg::map $client::map {}) [$session-attach-did $did $challenge $sig $cfg $client]]
@@ -45,12 +45,12 @@
 [?def detach-client scope=public impure [returns element] ($session::element $client-id::string)     [$session-detach-client $session $client-id]]
 [?def touch         scope=public impure [returns element] ($session::element $client-id::string)     [$session-touch $session $client-id]]
 
-[- §3.3 resolve (impure read of server state) -]
+[; §3.3 resolve (impure read of server state) ]
 [?def of        scope=public impure [returns element] ($req-or-conn::element) [$session-of $req-or-conn]]
 [?def by-id     scope=public impure [returns element] ($session-id::string)   [$session-by-id $session-id]]
 [?def by-client scope=public impure [returns element] ($client-id::string)    [$session-by-client $client-id]]
 
-[- §3.4 accessors (pure) -]
+[; §3.4 accessors (pure) ]
 [?def principal  scope=public pure [returns element]            ($session::element)             [$session-principal $session]]
 [?def tenant     scope=public pure [returns element]            ($session::element)             [$session-tenant $session]]
 [?def clients    scope=public pure [returns [sequence element]] ($session::element)             [$session-clients $session]]
@@ -58,7 +58,7 @@
 [?def claims     scope=public pure [returns element]            ($session::element)             [$session-claims $session]]
 [?def map-claims scope=public pure [returns element]            ($claim-set::element $cfg::map) [$session-map-claims $claim-set $cfg]]
 
-[- §3.5 cookie transport + CSRF (the browser surface) -]
+[; §3.5 cookie transport + CSRF (the browser surface) ]
 [?def from-cookie  scope=public impure [returns element] ($req::element $cfg::map {})                 [$session-from-cookie $req $cfg]]
 [?def set-cookie   scope=public impure [returns element] ($session::element $cfg::map {})             [$session-set-cookie $session $cfg]]
 [?def clear-cookie scope=public pure   [returns element] ($cfg::map {})                                [$session-clear-cookie $cfg]]
@@ -66,7 +66,7 @@
 [?def csrf-token   scope=public pure   [returns string]  ($session::element)                          [$session-csrf-token $session]]
 [?def csrf-verify  scope=public impure [returns element] ($req::element $session::element $cfg::map {}) [$session-csrf-verify $req $session $cfg]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=session
   [scope """The server-held (principal, tenant) session for a web app. A small, durable association between a verified external identity and a tenant-scoped principal — established by attach, looked up by of, and torn down by detach. One session can carry multiple concurrent clients (a human's browser and their agent mirror-attach to it) and survives the death of any individual client. Two attach transports converge on one session model: Bearer tokens for agents and service clients, and an opaque-session-id cookie (with synchronizer-token CSRF defense) for browsers. It delegates all token verification to crypto and all transport to http, adding no cryptography or sockets of its own."""]]
 [fn-doc name=attach scope=public purity=impure

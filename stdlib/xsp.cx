@@ -1,27 +1,27 @@
-[- cx-stdlib/xsp — the XAP Stream Protocol frame codec (spec/02-working/xsp.md).
+[; cx-stdlib/xsp — the XAP Stream Protocol frame codec (spec/02-working/xsp.md).
    XSP carries XAP over any transport: a self-describing, self-delimiting frame
    [version · type · stream-id · principal-DID · flags · len · payload]. The
    payload is opaque bytes; the canonical binary encoding dogfoods CX `data-bin`.
    Identity is orthogonal to transport — the `principal` field names a DID
    (#26 / xap.md §22.1); verification & authorization are separate concerns.
-   Bodies bottom out in the xsp-* native primitives (vcx/code/stdlib_xsp.v). -]
+   Bodies bottom out in the xsp-* native primitives (vcx/code/stdlib_xsp.v). ]
 
-[- encode: a [frame type=… stream=… principal=… eos=…? binary=…? [payload V]]
+[; encode: a [frame type=… stream=… principal=… eos=…? binary=…? [payload V]]
    element → wire bytes. binary=true (default) data-bin-encodes the payload
-   value; binary=false encodes a text (string) payload as UTF-8. -]
+   value; binary=false encodes a text (string) payload as UTF-8. ]
 [?def encode      scope=public pure [returns bytes]    ($frame::element)  [$xsp-encode $frame]]
 
-[- decode: ONE frame at offset 0 → a [frame …] element (attrs version/type/
+[; decode: ONE frame at offset 0 → a [frame …] element (attrs version/type/
    stream/principal/eos/binary/consumed + a [payload V] child). `consumed` is
-   the total frame length, so a reader advances to the next frame. -]
+   the total frame length, so a reader advances to the next frame. ]
 [?def decode      scope=public pure [returns element]  ($bytes::bytes)    [$xsp-decode $bytes]]
 
-[- decode-all: a buffer of concatenated frames → a [frames …] element whose
+[; decode-all: a buffer of concatenated frames → a [frames …] element whose
    children are the parsed [frame …] elements (navigable via $fs//frame /
-   [$count $fs] / [?for]); a trailing partial frame is a [remainder …] child. -]
+   [$count $fs] / [?for]); a trailing partial frame is a [remainder …] child. ]
 [?def decode-all  scope=public pure [returns element]  ($bytes::bytes)    [$xsp-decode-all $bytes]]
 
-[- co-located docs. -]
+[; co-located docs. ]
 [module-doc name=xsp
   [scope """The XAP Stream Protocol frame codec — a self-describing, self-delimiting frame [version · type · stream-id · principal-DID · flags · len · payload] that carries XAP over any transport. The payload is opaque bytes and the canonical binary encoding dogfoods CX `data-bin`. Identity is orthogonal to transport: the `principal` field names a DID, while verification and authorization remain separate concerns."""]]
 [fn-doc name=encode scope=public purity=pure

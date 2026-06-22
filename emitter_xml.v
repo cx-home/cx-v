@@ -82,7 +82,7 @@ fn emit_xml_node(n Node, depth int, lossless bool, mut out []string) {
 			emit_xml_sequence(iterator_to_sequence(n), depth, lossless, mut out)
 		}
 		MatchNode    {
-			// v0.8.0 — no XML-native equivalent for the
+			// No XML-native equivalent for the
 			// CX `[?match]` value kind; round-trip via a cx-namespaced
 			// PI carrying the verbatim source-text snippet. Matches
 			// the InterpolationNode convention above.
@@ -90,7 +90,7 @@ fn emit_xml_node(n Node, depth int, lossless bool, mut out []string) {
 			out << '${xml_indent(depth)}<?cx:match ${xml_escape_attr(src)}?>\n'
 		}
 		ModifyNode   {
-			// v0.8.0 — same PI convention as MatchNode.
+			// Same PI convention as MatchNode.
 			src := n.source or { '' }
 			out << '${xml_indent(depth)}<?cx:modify ${xml_escape_attr(src)}?>\n'
 		}

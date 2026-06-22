@@ -1,4 +1,4 @@
-[- cx-stdlib/sched — scheduled events & timers: after / at / every
+[; cx-stdlib/sched — scheduled events & timers: after / at / every
    (fixed-delay|fixed-rate) / recur (a time [recurrence …] rule) / cron, cancel,
    durable timers (journal-backed, survive restart via restore), a catch-up
    policy (on-missed), and a controllable :manual test clock
@@ -40,9 +40,9 @@
    The trailing $opts::map {} is a DEFAULTED positional parameter
    (grammar.ebnf [153b]).
 
-   NOTE: this const is the loader source of truth for cx-stdlib/sched. -]
+   NOTE: this const is the loader source of truth for cx-stdlib/sched. ]
 
-[- §3.1 scheduling / cancellation / state -]
+[; §3.1 scheduling / cancellation / state ]
 [?def after        scope=public impure [returns element] ($dur::duration  $ev $opts::map {}) [$sched-after $dur $ev $opts]]
 [?def at           scope=public impure [returns element] ($when::datetime $ev $opts::map {}) [$sched-at $when $ev $opts]]
 [?def every        scope=public impure [returns element] ($dur::duration  $ev $opts::map {}) [$sched-every $dur $ev $opts]]
@@ -51,14 +51,14 @@
 [?def cancel       scope=public impure [returns bool]    ($timer::element)                     [$sched-cancel $timer]]
 [?def timer-state  scope=public pure   [returns string]  ($timer::element)                     [$sched-timer-state $timer]]
 
-[- §3.2 durable timers — persistence & restore -]
+[; §3.2 durable timers — persistence & restore ]
 [?def restore scope=public impure [returns element] ($journal::element $registry::map $opts::map {}) [$sched-restore $journal $registry $opts]]
 
-[- §3.3 the test clock — a controllable / fast-forward hook -]
+[; §3.3 the test clock — a controllable / fast-forward hook ]
 [?def test-clock-advance scope=public impure [returns null]   ($dur::duration) [$sched-test-clock-advance $dur]]
 [?def clock-mode         scope=public pure   [returns string] ()                [$sched-clock-mode]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=sched
   [scope """Scheduled events and timers on the event loop. Arm a timer that fires a callback or posts a tick to a channel — after a relative duration, at an absolute tz-aware instant, on a recurring cadence (fixed-delay or fixed-rate), against a recurrence rule, or on a cron schedule — then cancel it or observe its state. Timers can be made durable so they survive a process restart (persisted to a journal and re-armed via restore), apply a catch-up policy for occurrences missed while down, and run under a manual test clock that advances virtual time deterministically. It composes time, journal, and the shared event loop, adding no calendar grammar, persistence mechanism, or new capability of its own."""]]
 [fn-doc name=after scope=public purity=impure

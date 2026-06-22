@@ -4,7 +4,7 @@ import cx
 
 // purity_checker.v — static purity checker.
 //
-// Phase 2.22 (partial, v0.8.0-dev). Sound-but-incomplete inference: walks
+// Phase 2.22 (partial). Sound-but-incomplete inference: walks
 // the call graph of every `[?def]` body and every PredicateExpr body, then
 // reads the closed builtin purity classification (`spec/code.md §6.5.x`) to
 // decide whether the annotation matches the inferred purity. The algorithm
@@ -722,7 +722,7 @@ fn scan_body_for_calls(body string) []string {
 			}
 			continue
 		}
-		// Head-dispatch call: `[$NAME …]` (v0.8.0 built-in / function
+		// Head-dispatch call: `[$NAME …]` (built-in / function
 		// invocation). The bare `$NAME` skip below handles binding refs;
 		// a `[`-adjacent `$NAME` is a CALLEE, so record it here.
 		if b == `[` && i + 1 < src.len && src[i + 1] == `$` {

@@ -4,7 +4,7 @@ import cx
 
 // predicate_eval.v — standalone PredicateExpr evaluator.
 //
-// Phase 2.21 (partial, v0.8.0-dev). This file ships the eager-iteration
+// Phase 2.21 (partial). This file ships the eager-iteration
 // evaluator described by in a STANDALONE form. The wider
 // CXPath axis-walker (which produces the candidate sequence that feeds
 // the predicate) is Phase 2.6 and not yet started; until that lands the
@@ -39,7 +39,7 @@ import cx
 
 // ── Item placeholder ─────────────────────────────────────────────────────────
 //
-// `Item` is the v0.8.0-dev Phase 2.21-standalone stand-in for a CXDM
+// `Item` is the Phase 2.21-standalone stand-in for a CXDM
 // item. It carries just enough shape for the evaluator to honour the
 // atomic-template predicates (attribute existence/compare,
 // positional, count, $_-family). Once the CXPath axis walker lands at

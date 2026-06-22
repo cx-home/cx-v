@@ -276,20 +276,21 @@ fn scan_lib_directives(source string) ![]cx.LibNode {
 			i++
 			continue
 		}
-		if i + 1 < src.len && c == `[` && src[i + 1] == `-` {
-			// CX block comment — skip [- ... -] depth-aware.
+		if i + 1 < src.len && c == `[` && src[i + 1] == `;` {
+			// CX block comment `[; … ]` — skip depth-aware over nested `[`…`]`.
+			// Body is OPAQUE prose, so NOT quote-shielded (an apostrophe must not
+			// open a string span and swallow the close). Mirrors
+			// module_loader_scan_directives and the reader's read_until_close.
+			// (`[- a b]` is the subtraction operator post-migration, not a comment.)
 			mut depth := 1
 			i += 2
 			for i < src.len && depth > 0 {
-				if i + 1 < src.len && src[i] == `[` && src[i + 1] == `-` {
+				if src[i] == `[` {
 					depth++
-					i += 2
-				} else if i + 1 < src.len && src[i] == `-` && src[i + 1] == `]` {
+				} else if src[i] == `]` {
 					depth--
-					i += 2
-				} else {
-					i++
 				}
+				i++
 			}
 			continue
 		}

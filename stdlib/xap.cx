@@ -1,8 +1,8 @@
-[- cx-xap — the XAP orchestrator subsystem (spec/03-approved/xap/xap.md). Composes the
+[; cx-xap — the XAP orchestrator subsystem (spec/03-approved/xap/xap.md). Composes the
    cx-stdlib primitives (bus/journal/authz/session/sched). component/surface/
    panel are pure constructors; render is the materializer; run/emit/state/on/
    dial/why-allowed are the runtime. cx-xap is its OWN bundled package, not a
-   cx-stdlib module. -]
+   cx-stdlib module. ]
 
 [?def component   scope=public pure   [returns element] ($name $opts::map {})              [$xap-component $name $opts]]
 [?def surface     scope=public pure   [returns element] ($name $panels $opts::map {})      [$xap-surface $name $panels]]
@@ -13,14 +13,14 @@
 [?def emit        scope=public impure [returns element] ($runtime::element $intent::element $opts::map {}) [$xap-emit $runtime $intent $opts]]
 [?def on          scope=public impure [returns null]    ($runtime::element $pattern::element $handler)     [$xap-on $runtime $pattern $handler]]
 [?def state       scope=public impure [returns element] ($runtime::element $cxpath::string) [$xap-state $runtime $cxpath]]
-[- #25 Tier-2: transient coordination channel — ephemeral viewport/selection, latest-wins, off the journal/PEP cascade -]
+[; #25 Tier-2: transient coordination channel — ephemeral viewport/selection, latest-wins, off the journal/PEP cascade ]
 [?def coord-publish scope=public impure [returns element] ($runtime::element $channel::string $frame::element) [$xap-coord-publish $runtime $channel $frame]]
 [?def coord-read    scope=public impure [returns element] ($runtime::element $channel::string) [$xap-coord-read $runtime $channel]]
 [?def dial        scope=public impure [returns element] ($runtime::element *$parts) [$xap-dial $runtime $parts]]
 [?def revoke      scope=public impure [returns element] ($runtime::element $id::string) [$xap-revoke $runtime $id]]
 [?def why-allowed scope=public impure [returns element] ($runtime::element $intent::element $opts::map {})    [$xap-why-allowed $runtime $intent $opts]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=xap
   [scope """The XAP orchestrator — the experience layer at the top of the CX web
    stack. It composes the general-purpose primitives (bus, journal, authz, session)

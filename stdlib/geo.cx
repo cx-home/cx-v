@@ -1,6 +1,6 @@
-[- cx-stdlib/geo — WGS84 coordinate primitives.
+[; cx-stdlib/geo — WGS84 coordinate primitives.
 
-   Full v0.8.0 public surface per spec/std-lib/geo.md §3. Bodies forward
+   Full public surface per spec/std-lib/geo.md §3. Bodies forward
    to native primitives (vcx/code/stdlib_geo.v): Haversine + Vincenty
    distance, bearing, bbox / polygon operations, OGC validity, WKT and
    GeoJSON I/O, and lat/lon normalization are not expressible in pure CX.
@@ -12,21 +12,21 @@
    §5): invalid coordinate, Vincenty non-convergence, invalid polygon,
    malformed WKT / GeoJSON, unsupported geometry type.
 
-   NOTE: this const and stdlib/geo.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/geo.cx are the same source — edit both. ]
 
-[- §3.1 construction -]
+[; §3.1 construction ]
 [?def point              scope=public pure [returns element] ($lat::float $lon::float)                                  [$geo-point $lat $lon]]
 [?def bbox               scope=public pure [returns element] ($points::[sequence element])                               [$geo-bbox $points]]
 [?def polygon            scope=public pure [returns element] ($outer::[sequence element])                                [$geo-polygon $outer]]
 [?def polygon-with-holes scope=public pure [returns element] ($outer::[sequence element] $holes::[sequence [sequence element]]) [$geo-polygon-with-holes $outer $holes]]
 
-[- §3.2 distance and bearing -]
+[; §3.2 distance and bearing ]
 [?def distance          scope=public pure [returns float]   ($a::element $b::element $unit::string)                     [$geo-distance $a $b $unit]]
 [?def distance-vincenty scope=public pure [returns float]   ($a::element $b::element $unit::string)                     [$geo-distance-vincenty $a $b $unit]]
 [?def bearing           scope=public pure [returns float]   ($a::element $b::element)                                    [$geo-bearing $a $b]]
 [?def destination       scope=public pure [returns element] ($origin::element $bearing::float $distance::float $unit::string) [$geo-destination $origin $bearing $distance $unit]]
 
-[- §3.3 bounding-box operations -]
+[; §3.3 bounding-box operations ]
 [?def bbox-of         scope=public pure [returns element] ($points::[sequence element])      [$geo-bbox-of $points]]
 [?def bbox-of-polygon scope=public pure [returns element] ($poly::element)                   [$geo-bbox-of-polygon $poly]]
 [?def within-bbox     scope=public pure [returns bool]    ($p::element $bb::element)         [$geo-within-bbox $p $bb]]
@@ -35,7 +35,7 @@
 [?def bbox-expand     scope=public pure [returns element] ($bb::element $by-meters::float)   [$geo-bbox-expand $bb $by-meters]]
 [?def bbox-center     scope=public pure [returns element] ($bb::element)                      [$geo-bbox-center $bb]]
 
-[- §3.4 polygon operations -]
+[; §3.4 polygon operations ]
 [?def polygon-area      scope=public pure [returns float]   ($poly::element $unit::string)   [$geo-polygon-area $poly $unit]]
 [?def polygon-perimeter scope=public pure [returns float]   ($poly::element $unit::string)   [$geo-polygon-perimeter $poly $unit]]
 [?def polygon-centroid  scope=public pure [returns element] ($poly::element)                  [$geo-polygon-centroid $poly]]
@@ -43,7 +43,7 @@
 [?def polygon-is-valid  scope=public pure [returns bool]    ($poly::element)                  [$geo-polygon-is-valid $poly]]
 [?def polygon-is-closed scope=public pure [returns bool]    ($poly::element)                  [$geo-polygon-is-closed $poly]]
 
-[- §3.5 normalization -]
+[; §3.5 normalization ]
 [?def normalize-lat   scope=public pure [returns float]   ($lat::float)   [$geo-normalize-lat $lat]]
 [?def normalize-lon   scope=public pure [returns float]   ($lon::float)   [$geo-normalize-lon $lon]]
 [?def normalize-point scope=public pure [returns element] ($p::element)    [$geo-normalize-point $p]]
@@ -51,15 +51,15 @@
 [?def is-valid-lat    scope=public pure [returns bool]    ($lat::float)   [$geo-is-valid-lat $lat]]
 [?def is-valid-lon    scope=public pure [returns bool]    ($lon::float)   [$geo-is-valid-lon $lon]]
 
-[- §3.6 WKT format -]
+[; §3.6 WKT format ]
 [?def parse-wkt  scope=public pure [returns element] ($s::string)     [$geo-parse-wkt $s]]
 [?def format-wkt scope=public pure [returns string]  ($geom::element) [$geo-format-wkt $geom]]
 
-[- §3.7 GeoJSON format -]
+[; §3.7 GeoJSON format ]
 [?def parse-geojson  scope=public pure [returns element] ($s::string)     [$geo-parse-geojson $s]]
 [?def format-geojson scope=public pure [returns string]  ($geom::element) [$geo-format-geojson $geom]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=geo
   [scope """Coordinate primitives without a new scalar kind — geometries are ordinary CXDM elements. Covers construction of points, bounding boxes, and polygons; distance and bearing (Haversine by default, high-precision Vincenty on demand); bounding-box and polygon operations including area, centroid, and point-in-polygon; WKT and GeoJSON format I/O; and longitude/latitude normalization. All coordinates are WGS84 (EPSG:4326) latitude and longitude in decimal degrees, with no reprojection or alternate coordinate systems."""]]
 [fn-doc name=point scope=public purity=pure

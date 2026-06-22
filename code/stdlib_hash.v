@@ -18,7 +18,7 @@ import encoding.base32
 // The CX bodies below are written in CALL FORM `prim(args)` bottoming
 // out in the `hash_stdlib_builtin` primitives. The const is a single-
 // quoted V string, so the CX source contains NO single-quote characters
-// (comments use [- -], strings use double quotes).
+// (comments use [; … ], strings use double quotes).
 
 const stdlib_src_hash = $embed_file('../stdlib/hash.cx').to_string()
 

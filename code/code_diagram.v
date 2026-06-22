@@ -1,6 +1,6 @@
 module code
 
-// ── v0.8.0 Phase 2.10 — code_diagram ────────────────────────────
+// ── Phase 2.10 — code_diagram ────────────────────────────
 //
 // New diagram emitter/§D3/§D4. Distinct from the
 // the `render_diagram` in `diagram.v` (gate-9 round-trip embed-
@@ -45,7 +45,7 @@ import cx
 // max_block_lines is the §D4 "basic-block N-line cap" overflow
 // threshold. Once a sequential block accumulates N directive labels,
 // further additions are collapsed into a `(+K more)` overflow row.
-// Raised from 6 → 10 in v0.8.0 — the original cap clipped on
+// Raised from 6 → 10 — the original cap clipped on
 // normal-looking fixture programs, and the literal `[...]` row
 // was misread as a CX form (square-bracket sigil) rather than as
 // an ellipsis. The "+K more" indicator is unambiguous.
@@ -299,7 +299,7 @@ fn split_case_head(s string) (string, string) {
 
 // rewrite_match_inner walks the body of a `[?match …]` directive
 // looking for clause-child arms `[case PAT BODY]` / `[else BODY]`
-// (the canonical v0.8.0 surface) and the legacy colon form
+// (the canonical surface) and the legacy colon form
 // `[:case PAT BODY]` / `[:else BODY]`. Each is normalised to the
 // canonical clause-child form; the only substantive rewrite is on
 // the case pattern (see below). Literal / string / name / atom /
@@ -775,7 +775,10 @@ pub fn code_diagram_cfg(prog cx.Program) !string {
 fn is_block_candidate(n cx.ProgramNode) bool {
 	if n is cx.ProgramDirective {
 		match n.name {
-			'if', 'match', 'modify', 'def', 'for' { return false }
+			// `let` breaks the block too: its body carries control flow
+			// ([?for]/[?if]/[?match]) that emit_let descends into, rather
+			// than collapsing the whole [?let] into one opaque block.
+			'if', 'match', 'modify', 'def', 'for', 'let' { return false }
 			else { return true }
 		}
 	}
@@ -829,6 +832,7 @@ fn emit_branching(n cx.ProgramNode, mut s CFGState) !(string, string) {
 			'if'     { return emit_if(n, mut s) }
 			'match'  { return emit_match(n, mut s) }
 			'modify' { return emit_modify(n, mut s) }
+			'let'    { return emit_let(n, mut s) }
 			else {}
 		}
 	}
@@ -836,6 +840,54 @@ fn emit_branching(n cx.ProgramNode, mut s CFGState) !(string, string) {
 		return emit_for(n, mut s)
 	}
 	return error('emit_branching: not a branching node')
+}
+
+// emit_let renders `[?let [= $name V]… BODY]` as a binding-setup node
+// feeding into the BODY's control flow. Without this a `[?let]` collapsed
+// into one opaque block (is_block_candidate), hiding the [?for]/[?if]/
+// [?match] inside its body — and "bind, then compute" is the most common
+// program shape, so the whole flow vanished. Returns (entry, exit): entry
+// is the setup node (or the body entry when there are no bindings); exit is
+// the body's exit. The `[= $name V]` clause-children carry name=`=` per
+// the let surface (mirrors flatten_let_seq_aliasing).
+fn emit_let(d cx.ProgramDirective, mut s CFGState) (string, string) {
+	mut bind_labels := []string{}
+	mut body_nodes := []cx.ProgramNode{}
+	for slot in d.slots {
+		v := slot.value
+		if v is cx.ProgramLiteral && v.kind == .cx_element && v.name == '=' {
+			bind_labels << short_label(v)
+			continue
+		}
+		body_nodes << slot.value
+	}
+	mut setup_id := ''
+	if bind_labels.len > 0 {
+		setup_id = s.scoped_id('lt')
+		label := mermaid_escape(bind_labels.join('\n'))
+		s.lines << '  ${setup_id}["${label}"]'
+	}
+	// Single branching body ([?for]/[?if]/[?match]/[?modify]/nested [?let]):
+	// descend so the loop/diamond renders, wiring setup → body entry.
+	if body_nodes.len == 1 && !is_block_candidate(body_nodes[0]) {
+		be, bx := emit_branching(body_nodes[0], mut s) or { return setup_id, setup_id }
+		if setup_id != '' {
+			s.lines << '  ${setup_id} --> ${be}'
+			return setup_id, bx
+		}
+		return be, bx
+	}
+	// Non-branching body (or several statements) → one basic block.
+	if body_nodes.len > 0 {
+		bid := emit_block_node(body_nodes, mut s)
+		if setup_id != '' {
+			s.lines << '  ${setup_id} --> ${bid}'
+			return setup_id, bid
+		}
+		return bid, bid
+	}
+	// Bindings only, no body — degenerate but valid.
+	return setup_id, setup_id
 }
 
 // emit_if renders `[?if cond :then T :else E]` as a diamond with two
@@ -2297,7 +2349,7 @@ fn emit_seq_select(d cx.ProgramDirective, mut s SeqState) {
 				}
 			}
 			label := match head_kind {
-				'from'    { 'msg from \$${ch_name}' }
+				'from'    { 'msg from ${ch_name}' }
 				'timeout' { if timeout_label != '' { 'timeout (${timeout_label})' } else { 'timeout' } }
 				'default' { 'default' }
 				else      { 'case' }
@@ -2307,6 +2359,18 @@ fn emit_seq_select(d cx.ProgramDirective, mut s SeqState) {
 				first = false
 			} else {
 				s.lines << '  else ${label}'
+			}
+			// Each arm needs an interaction INSIDE its branch, else the alt
+			// frame is empty and Mermaid lays the participants out with no
+			// messages (the #27 render). A `[from CH $msg]` arm is the channel
+			// delivering to the worker; `[timeout]` is a worker self-loop;
+			// `default` is a note. Plain `->>` (no activation) keeps Mermaid's
+			// activation-depth checker happy.
+			match head_kind {
+				'from'    { s.lines << '    ${ch_name} ->> ${worker} : msg' }
+				'timeout' { s.lines << '    ${worker} ->> ${worker} : ${label}' }
+				'default' { s.lines << '    Note over ${worker}: default' }
+				else      {}
 			}
 		}
 	}
@@ -2608,12 +2672,19 @@ pub fn code_diagram_cfg_full(prog cx.Program) !string {
 	intros := collect_binding_intros(prog)
 	mut have_lb := false
 	mut have_b := false
+	mut have_lt := false
 	for ln in out {
 		if ln.contains('lb[') || ln.contains('lb{') { have_lb = true }
 		if ln.contains('  b[') || ln.contains('  b{') { have_b = true }
+		if ln.contains('  lt[') || ln.contains('  lt{') { have_lt = true }
 	}
 	mut resolve_target := ''
-	if have_lb {
+	if have_lt {
+		// `[?let]` now renders its binding-setup node (`lt`) and descends into
+		// the body, so bindings resolve to that introducer rather than the old
+		// collapsed-let block.
+		resolve_target = 'lt'
+	} else if have_lb {
 		resolve_target = 'lb'
 	} else if have_b {
 		resolve_target = 'b'

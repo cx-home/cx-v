@@ -1,4 +1,4 @@
-[- cx-stdlib/http — L7 HTTP/1.1 client + server, built ON net.
+[; cx-stdlib/http — L7 HTTP/1.1 client + server, built ON net.
 
    Full surface per spec/02-inprogress/stdlib_http.md §3. Bodies forward to
    native primitives (vcx/code/stdlib_http.v): the network verbs reach the
@@ -19,13 +19,13 @@
    registry + this impl use 4525-4543.
 
    NOTE: this const (vcx/code/stdlib_bundle.v stdlib_src_http) and
-   stdlib/http.cx are the same source — edit both. -]
+   stdlib/http.cx are the same source — edit both. ]
 
-[- §3.1 client construction (PURE — no net at construction) -]
+[; §3.1 client construction (PURE — no net at construction) ]
 [?def client scope=public impure [returns element] ($opts::map {})    [$http-client $opts]]
 [?def close  scope=public impure [returns null]    ($handle::element) [$http-close $handle]]
 
-[- §3.2 one-shot verbs (URL-first; trailing $opts::map {} defaulted) -]
+[; §3.2 one-shot verbs (URL-first; trailing $opts::map {} defaulted) ]
 [?def get     scope=public impure [returns element] ($url::string $opts::map {})        [$http-get $url $opts]]
 [?def post    scope=public impure [returns element] ($url::string $body $opts::map {})  [$http-post $url $body $opts]]
 [?def put     scope=public impure [returns element] ($url::string $body $opts::map {})  [$http-put $url $body $opts]]
@@ -35,10 +35,10 @@
 [?def options scope=public impure [returns element] ($url::string $opts::map {})        [$http-options $url $opts]]
 [?def request scope=public impure [returns element] ($method::string $url::string $opts::map {}) [$http-request $method $url $opts]]
 
-[- §3.3 connection reuse — issue through a client -]
+[; §3.3 connection reuse — issue through a client ]
 [?def send scope=public impure [returns element] ($client::element $req::element) [$http-send $client $req]]
 
-[- §3.4 message introspection (PURE) -]
+[; §3.4 message introspection (PURE) ]
 [?def status         scope=public pure [returns int]                ($resp::element)            [$http-status $resp]]
 [?def ok             scope=public pure [returns bool]               ($resp::element)            [$http-ok $resp]]
 [?def header         scope=public pure [returns element]            ($msg::element $name::string) [$http-header $msg $name]]
@@ -49,7 +49,7 @@
 [?def body-bytes-wire scope=public pure [returns bytes]             ($msg::element)            [$http-body-bytes-wire $msg]]
 [?def body-text      scope=public pure [returns string]             ($msg::element)            [$http-body-text $msg]]
 
-[- §3.5 server — programmatic, built on net's listener -]
+[; §3.5 server — programmatic, built on net's listener ]
 [?def serve            scope=public impure [returns element]            ($url::string $handler $opts::map {}) [$http-serve $url $handler $opts]]
 [?def listen           scope=public impure [returns element]            ($url::string $opts::map {})          [$http-listen $url $opts]]
 [?def accept-iter      scope=public impure [returns [iterator element]] ($server::element)                    [$http-accept-iter $server]]
@@ -57,9 +57,10 @@
 [?def respond          scope=public impure [returns null]               ($exchange::element $resp::element)   [$http-respond $exchange $resp]]
 [?def stop             scope=public impure [returns null]               ($server::element)                    [$http-stop $server]]
 
-[- §3.6 SSE / streaming — held-open server push + client read -]
+[; §3.6 SSE / streaming — held-open server push + client read ]
 [?def sse           scope=public impure [returns element]            ($exchange::element $opts::map {}) [$http-sse $exchange $opts]]
 [?def send-event    scope=public impure [returns null]               ($stream::element $event::element) [$http-send-event $stream $event]]
+[?def sse-publish   scope=public impure [returns int]                ($topic::string $event::element)   [$http-sse-publish $topic $event]]
 [?def heartbeat     scope=public impure [returns null]               ($stream::element)                 [$http-heartbeat $stream]]
 [?def stream-open   scope=public pure   [returns bool]               ($stream::element)                 [$http-stream-open $stream]]
 [?def sse-connect   scope=public impure [returns element]            ($url::string $opts::map {})       [$http-sse-connect $url $opts]]
@@ -67,7 +68,7 @@
 [?def source-open   scope=public pure   [returns bool]               ($source::element)                 [$http-source-open $source]]
 [?def last-event-id scope=public pure   [returns element]            ($source::element)                 [$http-last-event-id $source]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=http
   [scope """HTTP/1.1 request/response semantics: a programmatic client and server built on the `cx-stdlib/net` transport. The client offers method verbs, headers, materialized bodies, redirects, content decoding, and connection pooling; the server drives an event-loop accept/respond loop with optional Server-Sent Events streaming. Network operations are gated by the `net` capability — http adds no capability of its own; message construction and introspection are pure. A non-2xx status is a value that flows, not a fault."""]]
 [fn-doc name=client scope=public purity=impure
@@ -238,6 +239,12 @@
   [summary """Frame and flush one `[event]` as a chunk on an SSE stream."""]
   [example [code """[?lib 'cx-stdlib/http']
 [$http:send-event [sse-stream open=true] [event]]"""] [expect """cx-err:CXER4539"""]]
+]
+[fn-doc name=sse-publish scope=public purity=impure
+  [sig """-> int"""]
+  [summary """Fan out one `[event]` to every connection subscribed to a topic (the concurrent-SSE producer half on the `serve` path); returns the delivered count. Subscribe by returning `[sse-subscribe topic="…" [event …]?]` from a `serve` handler."""]
+  [example [code """[?lib 'cx-stdlib/http']
+[$http:sse-publish "prices" [event]]"""] [expect """cx-err:CXER4539"""]]
 ]
 [fn-doc name=heartbeat scope=public purity=impure
   [sig """-> null"""]

@@ -37,6 +37,36 @@ pub fn eval_code(input string, program_src string, output_target string) !string
 		}
 	}
 	prog := cx.parse_program(program_src) or {
+		// Spec invariant (code.md §1.3): "a pure-data resource evaluates to
+		// itself." The program reader is tokenized and cannot lex free-text
+		// element-body prose — em-dash, `;`, `,`, bullets, … — that the
+		// scannerless DATA reader accepts (#11; the data ⊂ program seam from the
+		// cxparse unification). When the program parse fails AND there is no
+		// `$doc` input AND the target is a value-render target, fall back to the
+		// data reading: a resource that is valid DATA but not a valid PROGRAM
+		// evaluates to itself. We route through the SAME data pipeline as
+		// `cx --from=cx --to=<target>` (convert_by_name) so the output is
+		// byte-identical to the documented data path — a faithful, semantic
+		// conversion of the data document, not the eval-result renderer. A
+		// genuine program syntax error that ALSO fails to parse as data surfaces
+		// the ORIGINAL program error below.
+		//
+		// #11 regression fix: the fallback is for prose/markup/scalars the PROGRAM
+		// reader can't read but the DATA reader accepts (em-dash, `;`, `,`,
+		// bullets, `5mph`, …) — these fail either in `tokenize()` (LexError) or at
+		// the parse level with a syntactic error (e.g. "unexpected token ','").
+		// The ONE failure that must NOT fall back is a semantic rejection of an
+		// unknown / retired `[?name]` directive: that is unambiguous PROGRAM
+		// intent, so it stays fail-loud (CXER0100) rather than being silently
+		// re-read as the data element `[?name]` (which it also happens to be).
+		is_unknown_directive := if err is cx.ParseError { err.unknown_directive } else { false }
+		if !is_unknown_directive && input.len == 0
+		   && output_target !in ['mermaid', 'svg', 'png'] {
+			to_codec := if output_target in ['', 'text'] { 'cx' } else { output_target }
+			if out := cx.convert_by_name(program_src, 'cx', to_codec, false) {
+				return out
+			}
+		}
 		return EvalError{
 			code:    'cx-err:CXER0100'
 			message: 'parse: ${err.msg()}'
@@ -63,6 +93,29 @@ pub fn eval_code(input string, program_src string, output_target string) !string
 		}
 		env.bindings['doc'] = doc_node
 		env.bindings['input'] = doc_node
+	}
+	// Multi-form top-level program: render EACH top-level form's result
+	// (declaration directives omitted), agreeing with the data reading's
+	// multi-root emit, rather than silently dropping all but the last (#16).
+	// A single-form program keeps the scalar one-shot path below.
+	if prog.body is cx.ProgramLiteral {
+		if prog.body.kind == .block {
+			results := eval_top_level_each(prog.body.items, mut env)!
+			mut parts := []string{}
+			for r in results {
+				if r is cx.Element && r.name == closure_sentinel_name {
+					return EvalError{
+						code:    'cx-err:CXER0291'
+						message: 'a function value is not serialisable (cx-err:CXER0291 E_FN_NOT_SERIALIZABLE)'
+					}
+				}
+				rendered := render(r, output_target)!
+				if rendered.trim_space().len > 0 {
+					parts << rendered
+				}
+			}
+			return parts.join('\n')
+		}
 	}
 	result := eval(prog.body, mut env)!
 	// A function value is opaque and not data-serialisable; reaching a

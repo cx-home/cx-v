@@ -2,6 +2,7 @@ module main
 
 import cx
 import code
+import os
 
 // ── program evaluator tests (pure-functional core) ───────────────────────────────
 //
@@ -657,4 +658,55 @@ fn test_adr0041_iterator_strided() {
 		}
 		assert false
 	}
+}
+
+// ── Tail-call optimization (#60) ─────────────────────────────────────────────
+// A tail-recursive loop must run in O(1) native C stack. Before TCO the tree-
+// walker recursed ~42 KB/level and SIGSEGV'd at ~190 deep — a depth these tests
+// blow past, so they would crash the test process rather than fail an assert if
+// the trampoline regressed. 50k deep is well beyond the old limit yet fast.
+
+fn test_tco_deep_tail_recursion_via_if() {
+	src := '[?def loop (\$n) [?if [= \$n 0] [then "ok"] [else [loop [- \$n 1]]]]]
+[loop 50000]'
+	r := run(src)
+	assert s_string(r, 'ok')
+}
+
+fn test_tco_deep_tail_recursion_through_let_body() {
+	// Tail position must thread through a [?let] body (the streaming read-loop
+	// shape), not just [?if] branches.
+	src := '[?def loop (\$n)
+  [?let [= \$m [- \$n 1]]
+   [?if [= \$n 0] [then "done"] [else [loop \$m]]]]]
+[loop 50000]'
+	r := run(src)
+	assert s_string(r, 'done')
+}
+
+fn test_tco_accumulator_loop_returns_correct_value() {
+	// TCO must preserve semantics: a tail-recursive sum 0..n must compute the
+	// right total, not merely avoid overflow.
+	src := '[?def sum (\$n \$acc) [?if [= \$n 0] [then \$acc] [else [sum [- \$n 1] [+ \$acc \$n]]]]]
+[sum 1000 0]'
+	r := run(src)
+	assert s_int(r, 500500)
+}
+
+// ── Concurrent [?worker] (#58, CX_WORKER_THREADS) ────────────────────────────
+// With the flag on, a [?worker] body runs on its own spawned V thread (so it
+// coexists with a blocking serve sibling) and [?wait-for] joins it via the
+// done spin-loop. A finite body must still return the correct terminal value.
+fn test_concurrent_worker_returns_result() {
+	os.setenv('CX_WORKER_THREADS', '1', true)
+	r := run('[?let [= \$wh [?worker name=w [+ 1 2]]] [?wait-for worker=\$wh]]')
+	os.setenv('CX_WORKER_THREADS', '', true) // reset before asserting
+	assert s_int(r, 3)
+}
+
+// Default (flag off): worker runs synchronously to completion; same result.
+fn test_synchronous_worker_returns_result() {
+	os.setenv('CX_WORKER_THREADS', '', true)
+	r := run('[?let [= \$wh [?worker name=w2 [+ 10 5]]] [?wait-for worker=\$wh]]')
+	assert s_int(r, 15)
 }

@@ -101,13 +101,13 @@ fn json_node(n Node) string {
 			'{"type":"Sequence","items":[${items.join(',')}]}'
 		}
 		MatchNode {
-			// v0.8.0 — delegate to the canonical AST-JSON
+			// Delegate to the canonical AST-JSON
 			// projection in match_node.v (`"type":"ProgramMatchExpr"`,
 			// arm-kind discriminator, scrutinee + arms[]).
 			match_node_to_json(n)
 		}
 		ModifyNode {
-			// v0.8.0 — delegate to modify_node.v's
+			// Delegate to modify_node.v's
 			// AST-JSON projection (`"type":"ProgramModifyExpr"`,
 			// doc + focus + action-kind discriminator).
 			modify_node_to_json(n)

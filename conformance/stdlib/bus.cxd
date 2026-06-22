@@ -42,7 +42,7 @@ ordered dispatch (band CXER4650-4699).
      031-037  negatives: CXER4660/4661-n.a./4662/4663/4664/4665
 #]]
 
- [- ── 001-006 on + emit delivery ─────────────────────────────────────── -]
+ [; ── 001-006 on + emit delivery ─────────────────────────────────────── ]
 
  [case id=bus-001-on-emit-single-subscriber level=core gate=enforced
   [tags bus on emit dispatch delivery]
@@ -159,7 +159,7 @@ ordered dispatch (band CXER4650-4699).
 #]]
  ]
 
- [- ── 007-013 pattern forms + topic derivation ──────────────────────── -]
+ [; ── 007-013 pattern forms + topic derivation ──────────────────────── ]
 
  [case id=bus-007-atom-topic-match level=core gate=enforced
   [tags bus matches atom-topic pattern]
@@ -245,7 +245,7 @@ true
 #]]
  ]
 
- [- ── 014-018 re-entrant drain, once, mutation-during-dispatch ───────── -]
+ [; ── 014-018 re-entrant drain, once, mutation-during-dispatch ───────── ]
 
  [case id=bus-014-reentrant-emit-queued-and-drained level=core gate=enforced
   [tags bus emit reentrant fifo cascade depth]
@@ -320,7 +320,7 @@ true
 #]]
  ]
 
- [- ── 019-022 introspection ─────────────────────────────────────────── -]
+ [; ── 019-022 introspection ─────────────────────────────────────────── ]
 
  [case id=bus-019-subscribers-count level=core gate=enforced
   [tags bus subscribers introspection]
@@ -379,7 +379,7 @@ true
 #]]
  ]
 
- [- ── 023-026 off idempotence + handler capability effect ────────────── -]
+ [; ── 023-026 off idempotence + handler capability effect ────────────── ]
 
  [case id=bus-023-off-returns-true-then-false level=core gate=enforced
   [tags bus off idempotent value]
@@ -442,7 +442,7 @@ true
 #]]
  ]
 
- [- ── 027-030 fault policies (§4.3) ─────────────────────────────────── -]
+ [; ── 027-030 fault policies (§4.3) ─────────────────────────────────── ]
 
  [case id=bus-027-isolate-peer-still-fires level=core gate=enforced
   [tags bus emit on-fault isolate fault]
@@ -501,7 +501,7 @@ true
 #]]
  ]
 
- [- ── 031-037 negatives (band CXER4660-4665) ────────────────────────── -]
+ [; ── 031-037 negatives (band CXER4660-4665) ────────────────────────── ]
 
  [case id=bus-031-non-callable-handler-CXER4660 level=core gate=enforced
   [tags bus on CXER4660 arg-invalid negative]

@@ -41,6 +41,22 @@ fn s_bool(v bool) cx.Node {
 	})
 }
 
+fn s_float(v f64) cx.Node {
+	return cx.Node(cx.ScalarNode{
+		value:     cx.ScalarValue(v)
+		data_type: cx.ScalarType.float_type
+	})
+}
+
+// s_absence returns the CX absence channel — the empty sequence `()` that
+// `[?else]` / coalescing treat as "missing" (eval.v::is_empty_absence). The
+// `to-number` / `to-int` / `to-float` parsers return this for a non-numeric
+// input instead of a silent string passthrough (#54), so the caller can branch
+// with `[?else …]` rather than discover the failure at a later arithmetic op.
+fn s_absence() cx.Node {
+	return cx.Node(cx.Element{ name: '__cx_seq__' })
+}
+
 fn s_seq_str(items []string) cx.Node {
 	mut nodes := []cx.Node{}
 	for it in items {
@@ -158,6 +174,87 @@ fn is_unicode_digit(r rune) bool {
 		}
 	}
 	return false
+}
+
+// ── locale-free numeric parsing (§3.11, #54) ─────────────────────────────────
+
+// strings_classify_number validates a LOCALE-FREE numeric string against a
+// fixed grammar and reports `is_int`:
+//
+//   number   = ws? sign? mantissa exponent? ws?
+//   sign     = "+" | "-"
+//   mantissa = digits | digits "." digits? | "." digits      (at least one digit)
+//   exponent = ("e"|"E") sign? digits                         (at least one digit)
+//
+// `is_int` is true iff the (trimmed) string is pure integer syntax — no `.`
+// and no exponent (e.g. "-5", "42"); a `.` and/or an exponent make it false
+// ("3.07", "1e3", ".5", "5."). Returns none — i.e. NOT a number — for the
+// empty string, a lone sign, a lone `.`, a missing-mantissa exponent ("e3"),
+// thousands separators ("1,234"), and any trailing junk ("3.07abc"). ASCII
+// digits only (this is the locale-free surface; cx-stdlib/locale owns
+// grouping / Unicode-digit / alternate-decimal parsing).
+fn strings_classify_number(raw string) ?bool {
+	s := raw.trim_space()
+	if s == '' {
+		return none
+	}
+	mut i := 0
+	n := s.len
+	if s[i] == `+` || s[i] == `-` {
+		i++
+	}
+	mut int_digits := 0
+	for i < n && s[i] >= `0` && s[i] <= `9` {
+		int_digits++
+		i++
+	}
+	mut seen_dot := false
+	mut frac_digits := 0
+	if i < n && s[i] == `.` {
+		seen_dot = true
+		i++
+		for i < n && s[i] >= `0` && s[i] <= `9` {
+			frac_digits++
+			i++
+		}
+	}
+	if int_digits == 0 && frac_digits == 0 {
+		return none // no mantissa digits (e.g. "", "+", ".", "-.")
+	}
+	mut seen_exp := false
+	if i < n && (s[i] == `e` || s[i] == `E`) {
+		seen_exp = true
+		i++
+		if i < n && (s[i] == `+` || s[i] == `-`) {
+			i++
+		}
+		mut exp_digits := 0
+		for i < n && s[i] >= `0` && s[i] <= `9` {
+			exp_digits++
+			i++
+		}
+		if exp_digits == 0 {
+			return none // "e" / "E" with no exponent digits
+		}
+	}
+	if i != n {
+		return none // trailing junk (e.g. "3.07abc", "1,234")
+	}
+	return !seen_dot && !seen_exp
+}
+
+// strings_num_node converts an ALREADY-VALIDATED numeric string (per
+// strings_classify_number) to an int or float scalar. A leading `+` is dropped
+// first so `"+5".i64()` parses (V's int parse does not consume the sign).
+fn strings_num_node(validated string, is_int bool) cx.Node {
+	mut c := validated
+	if c.starts_with('+') {
+		c = c[1..]
+	}
+	if is_int {
+		return s_int(c.i64())
+	}
+	return s_float(c.f64())
 }
 
 fn is_unicode_alpha(r rune) bool {
@@ -657,6 +754,36 @@ fn strings_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 				}
 			}
 			return s_bool(true)
+		}
+		// §3.11 Locale-free numeric parsing (#54). Each returns a numeric
+		// scalar for a valid input and the absence channel `()` (s_absence) for
+		// a non-numeric one — NEVER a silent string passthrough (the unsafe
+		// behavior of the `[$cx:parse …]` workaround). For grouping / Unicode
+		// digits / alternate decimal separators use cx-stdlib/locale.
+		'str-to-number' {
+			// int for pure-integer syntax ("-5"), float for fractional /
+			// exponent syntax ("3.07", "1e3").
+			s := s_arg_str(args[0]) or { return none }
+			t := s.trim_space()
+			is_int := strings_classify_number(t) or { return s_absence() }
+			return strings_num_node(t, is_int)
+		}
+		'str-to-int' {
+			// pure-integer syntax only; "3.07" / "1e3" → absence (not integers).
+			s := s_arg_str(args[0]) or { return none }
+			t := s.trim_space()
+			is_int := strings_classify_number(t) or { return s_absence() }
+			if !is_int {
+				return s_absence()
+			}
+			return strings_num_node(t, true)
+		}
+		'str-to-float' {
+			// any valid numeric syntax, coerced to float ("5" → 5.0).
+			s := s_arg_str(args[0]) or { return none }
+			t := s.trim_space()
+			strings_classify_number(t) or { return s_absence() }
+			return strings_num_node(t, false)
 		}
 		// §3.9 Format / interpolation
 		'str-format' {

@@ -345,9 +345,10 @@ pub fn parse_toml(src string) !Document {
 		}
 	}
 
-	mut doc := jv_to_cx_doc(JV(root))
-	resolve_namespaces(mut doc)
-	return doc
+	// #5: import losslessly to the native value model (Map/Array/scalars),
+	// matching JSON/YAML — TOML tables → nested maps, arrays-of-tables →
+	// arrays of maps — not synthesized elements. No XML namespaces in TOML.
+	return jv_to_value_doc(JV(root))
 }
 
 // Set key=val inside the last element of the array-of-tables at path

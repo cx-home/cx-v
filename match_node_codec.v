@@ -34,13 +34,13 @@ module cx
 // (u32 LE byte length + UTF-8) all match the existing conventions in
 // binary.v + path_node_codec.v.
 //
-// Pattern / guard slot semantics at v0.8.0 Phase 2.4.
+// Pattern / guard slot semantics (Phase 2.4).
 // Spec §4.5 says pattern / guard / body slots carry "the verbatim
 // source-text snippet" — mirroring the PathPredicate `source`
 // convention in §4.4. The Phase 2.x ProgramExpr-AST graft will
 // replace these strings with encode_node-dispatched node bytes
 // without bumping the version byte; cap-bit-36 readers MUST tolerate
-// the Phase-2.4 string-shape during the v0.8.0-dev window.
+// the Phase-2.4 string-shape during the pre-graft window.
 //
 // Advisory fields elided (per by symmetry with):
 //   - MatchNode.source / MatchNode.loc (top-level advisory)

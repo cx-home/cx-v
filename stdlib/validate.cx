@@ -1,4 +1,4 @@
-[- cx-stdlib/validate — runtime DATA-RECORD schema validation
+[; cx-stdlib/validate — runtime DATA-RECORD schema validation
    (JSON-Schema / pydantic-shaped) per spec/std-lib/validate.md.
 
    validate-shape validates a CX data record (map / element / scalar) against
@@ -9,21 +9,21 @@
    primitives (vcx/code/stdlib_validate.v); the record-field walk and RE2
    pattern matching are not expressible in pure CX.
 
-   NOTE: this const and stdlib/validate.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/validate.cx are the same source — edit both. ]
 
-[- §3.1 / §3.2 validation -]
+[; §3.1 / §3.2 validation ]
 [?def validate-shape   scope=public pure [returns element] ($value::any $schema::element)        [$validate-shape $value $schema]]
 [?def validate-against scope=public pure [returns element] ($value::any $schema-ref::string)      [$validate-against $value $schema-ref]]
 
-[- §3.3 result inspection -]
+[; §3.3 result inspection ]
 [?def is-ok     scope=public pure [returns bool]              ($result::element) [$validate-is-ok $result]]
 [?def errors-of scope=public pure [returns [sequence element]] ($result::element) [$validate-errors-of $result]]
 
-[- §3.4 projections -]
+[; §3.4 projections ]
 [?def violation-paths    scope=public pure [returns [sequence string]] ($result::element) [$validate-violation-paths $result]]
 [?def violation-messages scope=public pure [returns [sequence string]] ($result::element) [$validate-violation-messages $result]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=validate
   [scope """Validate a CX data record against a record-schema at runtime, in the
    JSON-Schema / pydantic style. validate-shape checks a map, element, or scalar

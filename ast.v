@@ -30,7 +30,7 @@ pub type Node = Element
 	| SequenceNode
 	| ArrayNode
 	| MapNode
-	// v0.8.0 — first-class program-AST value kinds.
+	// First-class program-AST value kinds.
 	// MatchNode + ModifyNode join the Node sum-type so the standalone
 	// AST helpers (`match_node.v` / `modify_node.v`) can participate in
 	// emitter / decoder / dispatcher pattern-matches uniformly. Wire
@@ -45,7 +45,7 @@ pub type Node = Element
 	// alongside the structural ProgramExpr work in a later phase.
 	| MatchNode
 	| ModifyNode
-	// v0.8.0 — DocumentNode: the first-class transparent carrier for a whole
+	// DocumentNode: the first-class transparent carrier for a whole
 	// CX document as ONE node (codec.md §1 — "every document is one CX node
 	// tree"; design D7). Mirrors `Document` (prolog/doctype/elements) so a
 	// `[$cx:parse]` of a multi-root / prolog-bearing / doctype-bearing source
@@ -54,7 +54,7 @@ pub type Node = Element
 	// It is the codec pivot's parse return value; it is NOT a surface form (no
 	// grammar production yields it) and emitters render it transparently.
 	| DocumentNode
-	// v0.8.0 — Iterator value kind. Lazy + memoized stream of
+	// Iterator value kind. Lazy + memoized stream of
 	// items; materializes to a Sequence at every host-language /
 	// emitter boundary (D7). Identity-only equality per OQ4 — two
 	// IteratorNode values compare equal iff their `id` field matches.
@@ -75,7 +75,7 @@ pub mut:
 
 // ── Element ───────────────────────────────────────────────────────────────────
 //
-// v0.8.0 — Element header diet (gate 30.5 /).
+// Element header diet (gate 30.5 /).
 //
 // The previous Element carried seven `?string` fields + an inline
 // `?TableData` directly, totalling ~536 bytes per element struct.
@@ -105,12 +105,12 @@ pub mut:
 	name  string
 	attrs []Attribute
 	items []Node
-	// v0.8.0 diet: pooled optional metadata. `nil` when the element
+	// Pooled optional metadata. `nil` when the element
 	// carries no anchor/merge/id/body_ref/lang/namespace/data-type
 	// data — the overwhelming majority of parsed elements. Allocated
 	// lazily by parser / namespace-resolver / mutator helpers.
 	meta  &ElementMeta = unsafe { nil }
-	// v0.8.0 diet: pointer-ized table payload. `nil` for non-table
+	// Pointer-ized table payload. `nil` for non-table
 	// elements (i.e. nearly all elements); a heap-allocated TableData
 	// for elements that parsed `:table` blocks.
 	table &TableData = unsafe { nil }
@@ -474,7 +474,7 @@ pub fn cell_rows_from_scalars(rows [][]ScalarValue) [][]TableCellValue {
 
 // ── Attribute ─────────────────────────────────────────────────────────────────
 //
-// v0.8.0 — Attribute struct diet (gate 30.5 /).
+// Attribute struct diet (gate 30.5 /).
 //
 // The previous Attribute carried four cold optional/string fields
 // inline (`data_type ?ScalarType`, `local string`, `ns_uri ?string`,
@@ -509,7 +509,7 @@ pub mut:
 	// form on emit. References resolve via Document.resolve_id() at
 	// parse end. Inline (bool) — read on every emit path.
 	is_ref bool
-	// v0.8.0 diet: pooled cold metadata (data_type, local, ns_uri,
+	// Pooled cold metadata (data_type, local, ns_uri,
 	// body). nil when the attribute carries no ascribed type, no
 	// namespace data, and no BracketBody — the overwhelming majority
 	// of parsed attributes. Allocated lazily by parser / namespace-
@@ -528,7 +528,7 @@ pub mut:
 	// type NAME (e.g. `int`, `date`, `u16`, `decimal`, `atom`). none for
 	// default-typed/string attributes.
 	//
-	// D3 (v0.8.0): widened from `?ScalarType` (a closed enum that could
+	// D3: widened from `?ScalarType` (a closed enum that could
 	// not name the sized numerics) to `?string` so a typed attribute can
 	// preserve sized-int / decimal / bigint / bytes / atom types across
 	// the CX⇄XML round-trip via the `cx:attr-types` sidecar. The runtime
@@ -661,14 +661,14 @@ pub enum ScalarType {
 	// v3.4 additions
 	decimal_type
 	bigint_type
-	// v0.8.0 D-A4 / new type: temporal-span refinements (lexicon [L25]/[L26]).
+	// D-A4 / new type: temporal-span refinements (lexicon [L25]/[L26]).
 	// Both carry their verbatim CX form as a string ScalarValue (like
 	// decimal/bigint). `duration` is an EXACT span ({ns,us,ms,s,m,h,d,w} →
 	// i64 ns); `period` is a CALENDAR span ({mo,y}, needs an anchor date).
 	// XML image is ISO 8601 (PT1H30M / P10D ; P1Y2M).
 	duration_type
 	period_type
-	// v0.8.0: atom — tag-shaped scalar, surface `:NAME`,
+	// atom — tag-shaped scalar, surface `:NAME`,
 	// type-strict (atom never equals string of same characters). The
 	// ScalarValue payload is a `string` carrying the atom's name
 	// (without the leading `:`). See spec/cxdm.md §2.2 / §4.1.
@@ -947,7 +947,7 @@ pub mut:
 	entries []MapEntry
 }
 
-// ── Iterator value kind (v0.8.0) ──────────────────────────────────
+// ── Iterator value kind ───────────────────────────────────────────
 //
 // IteratorNode is the lazy + memoized stream value kind, sitting
 // alongside the existing Sequence / Array / Map kinds (CXDM
@@ -1037,7 +1037,7 @@ pub mut:
 //                     `count` items each (final chunk may be short)
 //   iter_cycle        [src_iter, max_scalar] — repeats source up to
 // `max` total items (bounded; no
-//                     unbounded cycle in v0.8.0)
+//                     unbounded cycle currently)
 //   iter_scan         [src_iter, closure_sentinel, init_value] — emits
 //                     running fold prefixes (init, f(init, a), f(.., b)..)
 //   iter_flatten      [src_iter] — flattens one level of sequence nesting

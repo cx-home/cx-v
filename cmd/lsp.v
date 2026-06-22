@@ -50,7 +50,7 @@ fn run_lsp(args []string) {
 	// LSP is silent on stderr by default; --verbose enables tracing.
 	verbose := '--verbose' in args
 	if verbose {
-		eprintln('cx lsp: starting (v0.7.0)')
+		eprintln('cx lsp: starting (v${version})')
 	}
 	mut state := new_lsp_state(verbose)
 	for {
@@ -259,7 +259,9 @@ fn handle_initialize(msg LspMessage, mut state LspState) {
 
 	mut server_info := map[string]json2.Any{}
 	server_info['name'] = json2.Any('cx lsp')
-	server_info['version'] = json2.Any('0.8.0')
+	// Derive from the `cx_version` build define (repo-root VERSION is the
+	// single source of truth), never a hardcoded literal — see main.v.
+	server_info['version'] = json2.Any(version)
 
 	mut result := map[string]json2.Any{}
 	result['capabilities'] = json2.Any(caps)
@@ -311,7 +313,7 @@ fn publish_diagnostics(uri string, mut state LspState) {
 	mut diagnostics := []json2.Any{}
 	// A `.cx` resource has TWO legitimate readings, both served by the ONE
 	// cxparse engine: the DATA reading (cx.parse — scannerless; handles prose,
-	// `[- … ]` comments, mixed-content markup like a tour/doc) and the PROGRAM
+	// `[; … ]` comments, mixed-content markup like a tour/doc) and the PROGRAM
 	// reading (cx.parse_program — tokenised; handles `[$call]`, directives,
 	// operator heads). These are reading MODES of one engine, not two parsers.
 	// A file is well-formed if it parses under EITHER mode, so we only raise a
@@ -346,7 +348,7 @@ fn publish_diagnostics(uri string, mut state LspState) {
 			diagnostics << json2.Any(diag)
 		}
 	}
-	// v0.8.0 Phase 5.5 — CXLS001 / CXLS002 / CXLS003 from [?match] arm
+	// Phase 5.5 — CXLS001 / CXLS002 / CXLS003 from [?match] arm
 	// analysis. match_diagnostics returns an empty slice on parse
 	// failure (mid-edit / unrelated syntax error), so we always emit
 	// any parse-error diag first and then layer match-arm diags on
@@ -354,7 +356,7 @@ fn publish_diagnostics(uri string, mut state LspState) {
 	for d in match_diagnostics(source) {
 		diagnostics << d
 	}
-	// v0.8.0 Phase 5.5 finish — CXLS004 from [?modify] :set-attr /
+	// Phase 5.5 finish — CXLS004 from [?modify] :set-attr /
 	// delete-attr on attribute-step focus paths. The
 	// analyser recognises both the static parse-error signal (the
 	// code parser raises CXER0100 before producing the AST) and the
@@ -430,7 +432,7 @@ fn handle_hover(msg LspMessage, mut state LspState) {
 		write_lsp_response(msg.id, json2.Any(json2.Null{}))
 		return
 	}
-	// v0.8.0 Phase 5.5 — CXPath focus hover. When the
+	// Phase 5.5 — CXPath focus hover. When the
 	// cursor sits inside a ProgramPathExpr's source range, return
 	// the structural breakdown ahead of the per-word docs path.
 	if path_md := cxpath_hover_md(source, line, col) {
@@ -465,7 +467,7 @@ fn handle_hover(msg LspMessage, mut state LspState) {
 fn handle_completion(msg LspMessage, mut state LspState) {
 	mut items := []json2.Any{}
 
-	// v0.8.0 Phase 5.5 finish — path-context completion.
+	// Phase 5.5 finish — path-context completion.
 	// When the cursor sits inside a CXPath fragment, prepend axis /
 	// element / attribute completions sourced from
 	// vcx/cmd/lsp_modify_diagnostics.v. The path-context check is
@@ -560,7 +562,7 @@ fn semantic_tokens_legend() json2.Any {
 		json2.Any('property'),     // 4  — attribute names
 		json2.Any('string'),       // 5  — quoted string values
 		json2.Any('number'),       // 6  — numeric scalars
-		json2.Any('comment'),      // 7  — # line comments + [-...] blocks
+		json2.Any('comment'),      // 7  — # line comments + [; ...] blocks
 		json2.Any('operator'),     // 8  — |>, =>, ||, ->, !, to
 		json2.Any('decorator'),    // 9  — #id, &anchor, *merge
 		json2.Any('enumMember'),   // 10 — atom literal :NAME (tt_atom)

@@ -1,11 +1,14 @@
+@[has_globals]
 module code
 
 import cx
+import os
 import net
+import runtime
 import transport.picoev
 import transport.picohttpparser
-import runtime
 import strings
+import sync
 import time
 
 // services_listener.v — real-socket HTTP/1.1 listener for [?http-service]
@@ -68,7 +71,10 @@ enum ListenerMode {
 // closure value (.handler) across the picoev C-callback boundary via the
 // `user_data voidptr`. Per-request env clones happen in dispatch_request.
 // One picoev instance (hence one handler) per listener, so the pointer is
-// stable for the listener's life.
+// stable for the listener's life. @[heap] — always created via `&ListenerHandler{}`
+// and shared by reference (picoev voidptr + the cx_http_live_handlers vgc root, #57);
+// the attribute lets the reference be stored in that global retainer.
+@[heap]
 struct ListenerHandler {
 	mode         ListenerMode
 	service_name string
@@ -107,12 +113,132 @@ struct WireResp {
 	// prelude, holds the fd, and subscribes it instead of a one-shot response.
 	sse    bool
 	sse_rt int
+	// Generic SSE topic (#28): when sse=true and sse_topic is non-empty, the fd
+	// joins the named string-keyed topic in the generic registry instead of an
+	// xap runtime's set — the concurrent-SSE path for `[$http:serve]` handlers
+	// (a handler returns `[sse-subscribe topic="…" [event …]?]`; any other
+	// handler fans out with `[$http:sse-publish "…" [event …]]`).
+	sse_topic string
 }
 
 // listener_callback is the picoev request callback — a TOP-LEVEL fn (no
 // closure) so V's C-callback ABI gets a clean function pointer. picoev
 // has already accepted, read, and parsed the request via picohttpparser
 // by the time we are called.
+__global (
+	cx_http_gc_lock  sync.Mutex
+	cx_http_gc_count u64
+	cx_http_gc_every u64
+	cx_http_gc_bytes u64
+	cx_http_gc_last  u64
+	cx_http_gc_init  bool
+)
+
+// ── #57 reactor UAF fix: retain &ListenerHandler as a vgc root ───────────────
+// picoev stores the handler only as a `voidptr` (Config/Picoev.user_data),
+// which vgc cannot trace. The only V-typed reference is the local `h` in
+// start_*_listener, which goes dead after spawn (and during the block-loop).
+// So the collector frees the handler AND its enclosing_bindings strings while
+// the reactor threads still read them via the voidptr — under concurrent
+// multi-reactor load a reactor's per-request `env.clone()` then reads a freed
+// binding string and crashes in builtin__string_clone (#57: the residual
+// "vgc frees a live object" UAF; boehm was clean because its conservative scan
+// kept the handler alive). Retaining each handler here roots it: the fixed
+// array's pointer slots live in the __DATA segment, which vgc scans
+// conservatively (vgc_data_segments), so the handler + its bindings stay
+// marked. Handlers live for the process lifetime (no stop path — see the
+// KNOWN LIMITATION), so retaining forever is correct and bounded (a handful
+// per process, capped well under the slot count).
+__global (
+	cx_http_live_handlers [256]&ListenerHandler
+	cx_http_live_count    int
+	cx_http_live_lock     sync.Mutex
+)
+
+// retain_listener_handler pins `h` so vgc never reclaims it while reactors hold
+// it only through picoev's untraced voidptr user_data (#57).
+fn retain_listener_handler(h &ListenerHandler) {
+	cx_http_live_lock.lock()
+	if cx_http_live_count < 256 {
+		cx_http_live_handlers[cx_http_live_count] = h
+		cx_http_live_count++
+	}
+	cx_http_live_lock.unlock()
+}
+
+// http_reactor_maybe_collect drives a periodic GC collection from the reactor
+// request loop (#57). The per-request path allocates transient garbage — the
+// parsed [request], the handler's comprehension results and cx:parse ASTs, the
+// [response] tree — that is dead once the response is written. vgc's auto-collect
+// (the heap-doubling trigger) does NOT fire on the reactor's allocation pattern,
+// so this garbage accumulates monotonically until malloc returns null →
+// `V panic: memory allocation failure` (the reported OOM). It is genuinely
+// reclaimable, not rooted: forcing a collect holds RSS to the working set
+// (verified — a 200-item `[?for]` handler grows unbounded past 1.4 GB at 2000
+// requests without this; with periodic collects it plateaus near baseline,
+// ~50 MB).
+//
+// The collect is gated by HEAP GROWTH, not request count. A request-count gate
+// cannot serve both handler shapes: a small count (the old default 64) fires a
+// global STW collect ~hundreds of times/sec under load, which serialized every
+// reactor thread and cut throughput ~3x (125k→61k single, and NEGATIVE
+// multi-reactor scaling); a large count would OOM a heavy handler. Instead we
+// collect once the heap has grown by CX_HTTP_GC_MB megabytes since the last
+// collect (default 64): a light handler barely allocates so it almost never
+// trips (full throughput + multi-reactor scaling restored), while a heavy
+// 200-item-[?for] handler trips every few requests so RSS stays bounded (#57;
+// the rss-bound test holds well under its 300 MB ceiling). CX_HTTP_GC_MB=0
+// disables it. Legacy CX_HTTP_GC_EVERY (request count) is still honored when
+// explicitly set, for callers that pinned it.
+fn http_reactor_maybe_collect() {
+	cx_http_gc_lock.lock()
+	if !cx_http_gc_init {
+		cx_http_gc_init = true
+		cx_http_gc_bytes = u64(64) * 1024 * 1024 // 64 MB heap-growth default
+		if ov := os.getenv_opt('CX_HTTP_GC_MB') {
+			k := ov.i64()
+			if k >= 0 {
+				cx_http_gc_bytes = u64(k) * 1024 * 1024 // 0 ⇒ disabled
+			}
+		}
+		// Legacy request-count gate — only when explicitly set; takes precedence.
+		if ov := os.getenv_opt('CX_HTTP_GC_EVERY') {
+			k := ov.i64()
+			if k >= 0 {
+				cx_http_gc_every = u64(k)
+			}
+		}
+		cx_http_gc_last = u64(gc_memory_use())
+	}
+	mut hit := false
+	if cx_http_gc_every > 0 {
+		cx_http_gc_count++
+		if cx_http_gc_count >= cx_http_gc_every {
+			cx_http_gc_count = 0
+			hit = true
+		}
+	} else if cx_http_gc_bytes > 0 {
+		cur := u64(gc_memory_use())
+		if cur >= cx_http_gc_last + cx_http_gc_bytes {
+			// Claim the growth window under the lock so peer reactors don't
+			// also trip and double-collect; the post-collect reset below
+			// corrects the baseline down to the live set.
+			cx_http_gc_last = cur
+			hit = true
+		}
+	}
+	cx_http_gc_lock.unlock()
+	// Collect outside the lock; the STW pause must not serialize other reactor
+	// threads behind a held mutex.
+	if hit {
+		gc_collect()
+		cur2 := u64(gc_memory_use())
+		cx_http_gc_lock.lock()
+		cx_http_gc_last = cur2
+		cx_http_gc_lock.unlock()
+	}
+}
+
 fn listener_callback(data voidptr, req picohttpparser.Request, mut res picohttpparser.Response) {
 	mut h := unsafe { &ListenerHandler(data) }
 	w := dispatch_request(mut h, req.method, req.path, req.body)
@@ -124,11 +250,20 @@ fn listener_callback(data voidptr, req picohttpparser.Request, mut res picohttpp
 		prelude := 'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n'
 		send_all(res.fd, prelude + w.body)
 		picoev.cx_hold_fd(res.fd)
-		xap_sse_subscribe(w.sse_rt, res.fd)
+		if w.sse_topic != '' {
+			// #28: generic string-topic feed (the `[$http:serve]` concurrent path).
+			cx_sse_topic_subscribe(w.sse_topic, res.fd)
+		} else {
+			// XAP runtime feed (the original §24 path).
+			xap_sse_subscribe(w.sse_rt, res.fd)
+		}
 		return
 	}
 	is_head := req.method.to_upper() == 'HEAD'
 	send_all(res.fd, serialize_wire(w, is_head))
+	// Reclaim this request's transients before the next one (#57). Runs after
+	// the response is on the wire, so the collect never delays this response.
+	http_reactor_maybe_collect()
 }
 
 // send_all writes the full response on the connection fd, bypassing
@@ -343,7 +478,115 @@ fn invoke_handler(svc &ServiceRecord, res ResourceRecord, path_params []cx.Node,
 // cx_response_to_wire converts a CX response envelope (cx.Element named
 // 'response') to a WireResp, applying default headers where the handler
 // did not override (per-key, per-response overrides win).
+// ── generic SSE topic registry (#28) ─────────────────────────────────────────
+//
+// The concurrent-SSE path for `[$http:serve]`. Mirrors the proven XAP SSE
+// machinery (xap_sse_subs) but keyed by a generic STRING topic instead of an
+// xap runtime id, so a plain CX handler can promote a connection to a live feed
+// and any other handler can fan-out to it WITHOUT blocking a reactor thread:
+//
+//   - A handler returns `[sse-subscribe topic="…" [event …]?]`; listener_callback
+//     writes the SSE prelude + the optional initial frame, holds the fd
+//     (exempt from the idle timeout), and adds it to `cx_sse_topic_subs[topic]`.
+//   - Any handler (on any reactor) calls `[$http:sse-publish "…" [event …]]`,
+//     which renders one SSE frame and writes it to every subscriber fd.
+//
+// Cleanup is synchronous: picoev's close_conn invokes cx_sse_topic_on_close_fd
+// (registered via cx_set_sse_on_close at handler-listener startup) under this
+// lock BEFORE the socket closes, so a push from another reactor can never write
+// to a reused fd. Same safety model as the XAP feed.
+__global (
+	cx_sse_topic_subs map[string][]int
+	cx_sse_topic_lock sync.Mutex
+)
+
+// cx_sse_topic_subscribe adds a held SSE fd to a topic's subscriber set.
+fn cx_sse_topic_subscribe(topic string, fd int) {
+	cx_sse_topic_lock.lock()
+	cx_sse_topic_subs[topic] << fd
+	cx_sse_topic_lock.unlock()
+}
+
+// cx_sse_topic_on_close_fd drops `fd` from every topic. Invoked by picoev's
+// close_conn (held-fd close) and by a failed publish write; idempotent.
+fn cx_sse_topic_on_close_fd(fd int) {
+	cx_sse_topic_lock.lock()
+	for topic, fds in cx_sse_topic_subs {
+		mut kept := []int{}
+		for f in fds {
+			if f != fd {
+				kept << f
+			}
+		}
+		cx_sse_topic_subs[topic] = kept
+	}
+	cx_sse_topic_lock.unlock()
+}
+
+// cx_sse_topic_publish writes `frame` to every subscriber of `topic` and returns
+// the number of fds that accepted the write. A fd whose write fails (peer gone)
+// is dropped (picoev closes the socket on its own disconnect read event).
+fn cx_sse_topic_publish(topic string, frame string) int {
+	cx_sse_topic_lock.lock()
+	fds := (cx_sse_topic_subs[topic] or { []int{} }).clone()
+	cx_sse_topic_lock.unlock()
+	mut dead := []int{}
+	mut delivered := 0
+	for fd in fds {
+		mut off := 0
+		mut ok := true
+		for off < frame.len {
+			n := unsafe { C.write(fd, voidptr(frame.str + off), usize(frame.len - off)) }
+			if n <= 0 {
+				ok = false
+				break
+			}
+			off += int(n)
+		}
+		if ok {
+			delivered++
+		} else {
+			dead << fd
+		}
+	}
+	for fd in dead {
+		cx_sse_topic_on_close_fd(fd)
+	}
+	return delivered
+}
+
 fn cx_response_to_wire(node cx.Node, defaults []cx.Attribute) WireResp {
+	// #28 concurrent-SSE: a handler promotes its connection to a live feed by
+	// returning `[sse-subscribe topic="…" [event …]?]`. The reactor holds the fd
+	// and subscribes it to the topic; pushes arrive via [$http:sse-publish] from
+	// other handlers. The optional `[event …]` child is the initial frame.
+	if node is cx.Element {
+		sub := node as cx.Element
+		if sub.name == 'sse-subscribe' {
+			topic := sub.attr('topic')
+			if topic == '' {
+				return mk_wire(500, defaults, 'sse-subscribe requires a non-empty topic="…" attribute\n')
+			}
+			mut frame := ''
+			for it in sub.items {
+				if it is cx.Element && (it as cx.Element).name == 'event' {
+					fr := http_sse_frame_event(it as cx.Element)
+					if fr is cx.Element && (fr as cx.Element).name == 'err' {
+						// malformed initial [event] — surface it instead of holding a feed
+						return mk_wire(500, defaults, 'sse-subscribe initial event invalid\n')
+					}
+					frame = http_node_str(fr)
+					break
+				}
+			}
+			return WireResp{
+				status:    200
+				sse:       true
+				sse_topic: topic
+				body:      frame
+			}
+		}
+	}
 	if node !is cx.Element {
 		return mk_wire(200, defaults, render_node_text(node))
 	}
@@ -529,9 +772,13 @@ fn render_node_text(n cx.Node) string {
 	return render(n, 'text') or { '' }
 }
 
-// http_listener_max_loops caps worker count regardless of core count
-// (each worker holds its own picoev per-fd buffers, ~12 MiB).
-const http_listener_max_loops = 16
+// http_listener_max_loops is an ABSOLUTE safety ceiling on worker count — a
+// typo guard (`CX_HTTP_WORKERS=99999`), NOT a functional cap: it sits well above
+// any realistic core count so `max` and explicit requests (e.g. a 64-core test)
+// are honored, never silently shrunk. Each worker holds its own picoev per-fd
+// buffers (~12 MiB), so 256 workers ≈ 3 GiB of buffers — only reachable by
+// explicitly asking for it.
+const http_listener_max_loops = 256
 
 // spawn_shared_reactors binds ONE listening socket and spawns N picoev
 // worker loops (one per core) that all watch that shared fd — the kernel
@@ -554,12 +801,56 @@ fn spawn_shared_reactors(mut h ListenerHandler, host string, port int) ! {
 	// cache fills concurrently afterward under its own rwlock).
 	serve_file_cache_init()
 	listen_fd := picoev.listen_socket(config)!
-	mut n := runtime.nr_cpus()
+	// Default to a SINGLE reactor for soundness. The multi-reactor model exposes a
+	// residual macOS-specific vgc allocator concurrency corruption (#57): under >=2
+	// concurrent reactor mutators a small-object span slot can be reissued while live,
+	// crashing ~3% of heavy-load runs. Single-reactor is sound BY CONSTRUCTION — one
+	// mutator on the HTTP request path means the race's >=2-mutator precondition cannot
+	// occur (verified: 0 crashes single-reactor vs ~3% multi; Linux 0/92, i.e. the bug
+	// is in the macOS mach-suspend-STW interaction, not the request logic). That residual
+	// is fixed on the cooperative-safepoint collector (the default -gc e; #63/#58 — the
+	// concurrency-soundness gate passes on it), so the listener now DEFAULTS to a small
+	// multi-core fan-out (min(4, cores)); CX_HTTP_WORKERS tunes it. The #37 own-vs-rent
+	// allocator rework remains a perf follow-up. The #57 OOM is addressed in three parts: the vgc_alloc_large wait
+	// (large-span path), the per-iteration closures-table aliasing in the [?for] walker
+	// (eval.v / matcher.v clone_frame_sharing_closures), and http_reactor_maybe_collect()
+	// below, which bounds the per-request transient heap (the large-span fix alone left a
+	// linear small-object leak that still OOM'd under sustained polling).
+	// Reactor (worker) count. Default: a small multi-core fan-out — min(4, cores).
+	// 4 is where the per-request global GC lock starts to dominate on a many-core
+	// box, so the default doesn't fan out to every core (it scales sensibly from a
+	// laptop to a big server without tuning). CX_HTTP_WORKERS overrides:
+	//   - an integer → that many workers (HONORED, incl. > cores — a 64-core test
+	//                  gets 64; only the http_listener_max_loops typo-guard caps it).
+	//                  > cores oversubscribes (kernel time-slices, usually slower) —
+	//                  honored but flagged, never silently shrunk.
+	//   - `max`      → one worker per core.
+	ncpu := runtime.nr_cpus()
+	mut n := if ncpu < 4 { ncpu } else { 4 }
+	mut requested := 0 // >0 when the user asked for an explicit count
+	if ov := os.getenv_opt('CX_HTTP_WORKERS') {
+		s := ov.trim_space().to_lower()
+		if s == 'max' {
+			n = ncpu
+		} else {
+			k := s.int()
+			if k >= 1 {
+				n = k
+				requested = k
+			}
+		}
+	}
 	if n < 1 {
 		n = 1
 	}
 	if n > http_listener_max_loops {
+		eprintln('cx http: ${n} workers exceeds the ${http_listener_max_loops} safety ceiling — using ${http_listener_max_loops}')
 		n = http_listener_max_loops
+	}
+	if requested > ncpu && n > ncpu {
+		// Guidance, not a cap: more workers than cores time-slice and usually run
+		// SLOWER on this workload. Honored as asked.
+		eprintln('cx http: ${n} workers on ${ncpu} cores — oversubscribed (usually slower than ~${ncpu})')
 	}
 	for _ in 0 .. n {
 		mut w := picoev.new_with_listen_fd(config, listen_fd)!
@@ -586,6 +877,7 @@ fn start_http_listener(mut rec ServiceRecord, mut env MatchEnv) ! {
 	// Stash the handler pointer (no stoppable server handle exists — see
 	// KNOWN LIMITATION). stop is observed via the service `status`.
 	rec.listener_handle = voidptr(h)
+	retain_listener_handler(h) // vgc root — picoev holds h only as voidptr (#57)
 	spawn_shared_reactors(mut h, host, rec.port)!
 	if rec.block {
 		// Block until [?stop] or process termination flips status. Polls
@@ -619,6 +911,12 @@ fn start_handler_listener(handler cx.Node, host string, port int, block bool, mu
 		enclosing_scope:    env.scope
 		state:              unsafe { env.state }
 	}
+	// #28: register the generic-topic SSE close hook so a held feed fd is dropped
+	// from every topic synchronously when picoev closes the socket (under the
+	// publish lock), preventing a concurrent [$http:sse-publish] from writing to
+	// a reused fd. Matches the XAP feed's cx_set_sse_on_close discipline.
+	picoev.cx_set_sse_on_close(cx_sse_topic_on_close_fd)
+	retain_listener_handler(h) // vgc root — picoev holds h only as voidptr (#57)
 	spawn_shared_reactors(mut h, host, port)!
 	bind_host := if host == '' { '0.0.0.0' } else { host }
 	url := 'tcp://${bind_host}:${port}'

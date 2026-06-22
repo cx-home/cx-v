@@ -6,7 +6,7 @@ import cx
 // D2 (the 12 XPath 3.1 axes) and (per-step candidate
 // materialisation feeding PredicateExpr eager iteration).
 //
-// This file is Phase 2.6 PART 1 of 3 of the v0.8.0 CXPath evaluator:
+// This file is Phase 2.6 PART 1 of 3 of the CXPath evaluator:
 //
 //   - PART 1 (this file + cxpath_forward.v) — dispatcher contract +
 //     shared item / node / node-test types + the 3 forward axes

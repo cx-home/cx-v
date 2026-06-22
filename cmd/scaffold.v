@@ -11,14 +11,14 @@ const scaffold_config = '# A CX config skeleton — typed, commented, format-sta
 # Convert: cx --json this.cx hash: cx canonical this.cx | cx hash
 
 [config
- [- environment selector: dev / staging / prod ]
+ [; environment selector: dev / staging / prod ]
  env=dev
 
  [server
  host=localhost
  port:u16=8080
- +tls
- -debug
+ tls=true
+ debug=false
  ]
 
  [database
@@ -37,9 +37,9 @@ const scaffold_config = '# A CX config skeleton — typed, commented, format-sta
 const scaffold_data = '# A CX data skeleton — typed entities, repeated structures.
 
 [catalog
- [product id=001 name=widget price:decimal=12.50 +in_stock]
- [product id=002 name=gadget price:decimal=29.99 +in_stock]
- [product id=003 name=gizmo price:decimal=8.75 -in_stock]
+ [product id=001 name=widget price:decimal=12.50 in_stock=true]
+ [product id=002 name=gadget price:decimal=29.99 in_stock=true]
+ [product id=003 name=gizmo price:decimal=8.75 in_stock=false]
 ]
 '
 
@@ -50,7 +50,7 @@ const scaffold_doc = '# A CX document skeleton — mixed prose + structured data
  [author erik]
  [date :date 2026-05-12]
 
- [- The intro paragraph below mixes prose with inline data references. ]
+ [; The intro paragraph below mixes prose with inline data references. ]
  [p
  We evaluated CX as a replacement for our YAML configs. Key wins:
  [strong real types], [strong canonical hashing], and
@@ -83,7 +83,7 @@ const scaffold_table = '# A CX :table skeleton — column-typed rows.
  3 carol 40 lisbon carol@example.com
 ]
 
-[- Convert: cx --csv this.cx round-trip: cx table dump this.cx --to=cx ]
+[; Convert: cx --csv this.cx round-trip: cx table dump this.cx --to=cx ]
 '
 
 fn run_scaffold(args []string) {

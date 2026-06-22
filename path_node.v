@@ -2,7 +2,7 @@ module cx
 
 import crypto.sha256
 
-// path_node.v — PathNode AST (v0.8.0).
+// path_node.v — PathNode AST.
 //
 // PathNode is the spec-canonical first-class AST node for CXPath value-kind
 // expressions: `//user[@active=true]`, `/root/item`, `user/email`, `$u/name`,
@@ -332,7 +332,7 @@ fn path_predicates_eq(a []PathPredicate, b []PathPredicate) bool {
 // `\x02`-delimited fields. The `\x00` byte after the type tag cannot
 // occur inside a CX scalar string canonical encoding (which is
 // always quote-wrapped) nor inside an Element canonical CX form
-// (which never contains a NUL byte at v0.8.0), so PathNode hashes
+// (which never contains a NUL byte), so PathNode hashes
 // inhabit a domain that cannot collide with element/scalar/atom
 // hashes by construction.
 //

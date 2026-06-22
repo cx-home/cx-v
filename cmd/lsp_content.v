@@ -231,7 +231,7 @@ const module_fn_docs = {
 	'log:warn':            '**log:warn(msg, fields…)** — Warn-level log.'
 	'log:error':           '**log:error(msg, fields…)** — Error-level log.'
 	'log:with-context':    '**log:with-context(fields, body)** — Bind ambient log context for the dynamic extent of `body`.'
-	'fn:format-number':    '**fn:format-number(value, picture, :locale ?)** — Locale-aware number formatting. v0.7.0: en/de/fr. Full CLDR/ICU at v0.7.x.'
+	'fn:format-number':    '**fn:format-number(value, picture, :locale ?)** — Locale-aware number formatting. Currently en/de/fr; full CLDR/ICU is a follow-up.'
 	'fn:safe-url':         '**fn:safe-url(url)** — Returns `url` if the scheme is allowlisted; raises CXER0014 for javascript:, data:, vbscript:, file:.'
 }
 
@@ -444,6 +444,81 @@ fn compute_semantic_tokens(source string) []int {
 		if c == ` ` || c == `\t` || c == `\r` {
 			col++
 			i++
+			continue
+		}
+		// Block comment `[; … ]` — emit a comment token for the WHOLE span so it
+		// DIMS like the line comment. Without this the tokenizer descended into the
+		// body and emitted code tokens (atoms / types / directives / bindings) that
+		// OVERRIDE the editor's tmLanguage + tree-sitter comment highlighting (the
+		// reported "interior not dimmed"). Balance nested `[ ]` to the matching `]`
+		// (mirrors the parser's read_until_close), treating `[#…#]` / `[|…|]` as
+		// atomic so their inner `]` does not miscount. LSP tokens cannot span lines,
+		// so emit ONE comment token per line the comment covers (as the string arm
+		// does); skip zero-length segments.
+		if c == `[` && i + 1 < source.len && source[i + 1] == `;` {
+			mut j := i
+			mut depth := 0
+			mut seg_col := col
+			mut cur_line := line
+			mut cur_col := col
+			for j < source.len {
+				ch := source[j]
+				if ch == `\n` {
+					if cur_col > seg_col {
+						tokens << SemToken{line: cur_line, col: seg_col, length: cur_col - seg_col, tt: tt_comment, tm: 0}
+					}
+					cur_line++
+					cur_col = 0
+					seg_col = 0
+					j++
+					continue
+				}
+				// Atomic raw/block span: skip to #] / |] so its inner ] is not counted.
+				if ch == `[` && j + 1 < source.len && (source[j + 1] == `#` || source[j + 1] == `|`) {
+					cf := source[j + 1]
+					cur_col += 2
+					j += 2
+					for j < source.len {
+						if source[j] == cf && j + 1 < source.len && source[j + 1] == `]` {
+							cur_col += 2
+							j += 2
+							break
+						}
+						if source[j] == `\n` {
+							if cur_col > seg_col {
+								tokens << SemToken{line: cur_line, col: seg_col, length: cur_col - seg_col, tt: tt_comment, tm: 0}
+							}
+							cur_line++
+							cur_col = 0
+							seg_col = 0
+						} else {
+							cur_col++
+						}
+						j++
+					}
+					continue
+				}
+				if ch == `[` {
+					depth++
+				} else if ch == `]` {
+					depth--
+					cur_col++
+					j++
+					if depth == 0 {
+						break
+					}
+					continue
+				}
+				cur_col++
+				j++
+			}
+			if cur_col > seg_col {
+				tokens << SemToken{line: cur_line, col: seg_col, length: cur_col - seg_col, tt: tt_comment, tm: 0}
+			}
+			line = cur_line
+			col = cur_col
+			i = j
+			expect_head = false
 			continue
 		}
 		// Raw text `[# … #]` and block content `[| … |]` are OPAQUE regions:

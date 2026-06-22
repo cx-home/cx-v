@@ -164,15 +164,29 @@ fn check_l001_comment_style(input string, doc Document, mut findings []Finding) 
 			for i < input.len && input[i] != `\n` { i++; col++ }
 			continue
 		}
-		// Block comment: [- ... ]. Multi-line if body contains a newline.
-		if c == `[` && i + 1 < input.len && input[i + 1] == `-` {
+		// Block comment: [; ... ]. The body runs to the matching `]`, balancing
+		// nested `[`…`]` (a comment may contain bracketed prose), mirroring the
+		// reader's read_until_close. Multi-line if the body contains a newline.
+		// (`[-` is the subtraction operator post the [; …] migration, never a
+		// comment — so this rule no longer keys on it.)
+		if c == `[` && i + 1 < input.len && input[i + 1] == `;` {
 			start_line := line
 			start_col := col
 			start_byte := i
 			i += 2; col += 2
 			mut multiline := false
-			for i < input.len && input[i] != `]` {
-				if input[i] == `\n` { multiline = true; line++; col = 1 } else { col++ }
+			mut depth := 0
+			for i < input.len {
+				ch := input[i]
+				if ch == `[` {
+					depth++
+				} else if ch == `]` {
+					if depth == 0 {
+						break
+					}
+					depth--
+				}
+				if ch == `\n` { multiline = true; line++; col = 1 } else { col++ }
 				i++
 			}
 			if i < input.len { i++; col++ }
@@ -190,7 +204,7 @@ fn check_l001_comment_style(input string, doc Document, mut findings []Finding) 
 			findings << Finding{
 				check: 'CX-L001'
 				severity: .info
-				message: "single-line block comment '[- ... ]' alongside # line comments — pick one style"
+				message: "single-line block comment '[; ... ]' alongside # line comments — pick one style"
 				path: ''
 				line: blk[1]
 				col: blk[2]

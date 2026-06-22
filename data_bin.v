@@ -76,7 +76,7 @@ fn encode_header(mut buf []u8) {
 	buf << cxcol_version
 	buf << cxcol_flags_le
 	encode_u32_le(mut buf, cxcol_default_depth)
-	buf << u8(0)  // reserved (1 byte — magic grew from 4→5 in v0.8.0)
+	buf << u8(0)  // reserved (1 byte — magic grew from 4→5)
 }
 
 // ── Document → semantic-data projection ──────────────────────────────────────
@@ -441,7 +441,7 @@ fn dataval_to_table_cell(v DataVal) !TableCellValue {
 		DataBytes    { TableCellValue(v.value.bytestr()) }
 		[]DataVal    { TableCellValue(array_dataval_to_node(v)) }
 		DataPairs    { TableCellValue(map_dataval_to_node(v)) }
-		DataTable    { return error('table cell cannot itself be a DataTable (nested tables not supported at v0.6.0)') }
+		DataTable    { return error('table cell cannot itself be a DataTable (nested tables not supported)') }
 	}
 }
 

@@ -288,7 +288,7 @@ fn emit_directive_slot(mut b strings.Builder, directive_name string, s cx.Progra
 	}
 }
 
-// emit_let_directive emits `[?let]` in the canonical v0.8.0 surface
+// emit_let_directive emits `[?let]` in the canonical surface
 // `[?let [= $name value] body]` (code.md §8.5). Two stored encodings are
 // reshaped to this one surface: the legacy parse produced three labeled
 // slots (`:bind STRING_LIT`, `:value EXPR`, `:body EXPR`); the clause-child
@@ -344,7 +344,7 @@ fn emit_let_directive(mut b strings.Builder, d cx.ProgramDirective) {
 	b.write_string(']')
 }
 
-// emit_modify_directive emits `[?modify]` in its v0.8.0 surface form
+// emit_modify_directive emits `[?modify]` in its surface form
 // `[?modify DOC FOCUS_PATH ACTION+]` with each action as a clause-child
 // `[label …]` (code.md §8.10). Action emit is heterogeneous per
 // `parse_modify_action` in `parser.v`:
@@ -423,10 +423,10 @@ fn emit_modify_action(mut b strings.Builder, s cx.ProgramSlot) {
 
 // ── cx.ProgramForComp — for-comprehension per §7 ────────────────────────────────
 //
-// Emitted in the canonical v0.8.0 clause-child surface (grammar [129],
+// Emitted in the canonical clause-child surface (grammar [129],
 // code.md §7): `[?for [in $x SRC] [where …] [= $y E] … [yield EXPR]]`.
 // Clauses emit in source order; the yield clause emits last. The legacy
-// `:label` colon surface was retired in the v0.8.0 capstone.
+// `:label` colon surface was retired in the capstone.
 fn emit_program_for_comp(mut b strings.Builder, f cx.ProgramForComp) {
 	// outer-container heads.
 	head := match f.outer_form {

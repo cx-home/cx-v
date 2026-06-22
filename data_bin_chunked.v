@@ -553,7 +553,7 @@ pub fn chunked_group_row_counts(framed []u8) ![]int {
 		max_depth: int(cxcol_default_depth)
 	}
 	// CXCol header is 12 bytes (5 magic + 1 version + 1 flags + 4
-	// max_depth_u32 + 1 reserved — magic grew 4→5 in v0.8.0). Validate
+	// max_depth_u32 + 1 reserved — magic grew 4→5). Validate
 	// magic but skip the per-field check — chunked_group_row_counts is
 	// an inspection helper, not a strict-decode entry point.
 	r.read_header()!

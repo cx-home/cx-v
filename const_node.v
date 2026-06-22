@@ -2,7 +2,7 @@ module cx
 
 import crypto.sha256
 
-// const_node.v — ConstNode AST (v0.8.0).
+// const_node.v — ConstNode AST.
 //
 // ConstNode is the spec-canonical first-class AST node for the
 // `[?const NAME EXPR]` module-level constant directive

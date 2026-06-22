@@ -263,7 +263,7 @@ fn ft_stopwords_for(language string) map[string]bool {
 	// other bundled languages have lists in the spec table; only `en` is
 	// exercised by the fixtures and is the only bundled list materialized
 	// here. Non-`en` languages drop no stopwords (matches §2.1 "other
-	// languages default to no stemming/stopwords until v0.8.x" intent and
+	// languages default to no stemming/stopwords" intent and
 	// ft-018: a non-bundled language keeps "the").
 	return set
 }

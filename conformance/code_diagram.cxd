@@ -809,8 +809,10 @@ kind: code
 sequenceDiagram
   participant a
   participant main
-  alt msg from $a
+  alt msg from a
+    a ->> main : msg
   else timeout (50ms)
+    main ->> main : timeout (50ms)
   end
 #]]
  ]
@@ -1140,13 +1142,20 @@ flowchart TD
   output([OUTPUT])
   start([entry])
   done([exit])
-  b["[?let]"]
-  start --> b
-  b --> done
+  lt["[= $x 1]"]
+  i{"if true"}
+  t["$x"]
+  i -- "true" --> t
+  t --> done
+  e["0"]
+  i -- "false" --> e
+  e --> done
+  lt --> i
+  start --> lt
   input --> start
   done --> output
   b_x((("$x")))
-  b_x -. "resolves" .-> b
+  b_x -. "resolves" .-> lt
 #]]
  ]
 

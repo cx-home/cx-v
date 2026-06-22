@@ -86,7 +86,7 @@ import os
 //     wired into `resolve_lib`. Module-private is the default per
 // importers must use a `:scope public` symbol or
 //     receive `MODULE_SYMBOL_NOT_PUBLIC`. (No CXER0* wire code is
-//     allocated for visibility violations at v0.8.0 — the Module-
+//     allocated for visibility violations currently — the Module-
 //     system range CXER0204..CXER0215 is fully claimed; a future
 //     spec amendment may add CXER0216+ for this case.)
 //   - Full cx.ProgramExpr evaluation of const bodies is the Phase 2.x
@@ -139,7 +139,7 @@ import os
 // symbol that exists in the target module but is module-private
 // per (default visibility). The error message names
 // both the owning module and the requested symbol. No CXER0* wire
-// code is allocated for this case at v0.8.0 (module-system range
+// code is allocated for this case currently (module-system range
 // CXER0204..CXER0215 is full).
 //
 // MODULE_SYMBOL_NOT_FOUND — a cross-module symbol lookup named a
@@ -659,7 +659,7 @@ struct ModuleLoaderDirective {
 // module_loader_scan_directives walks the module source string and
 // returns the list of top-level `[?lib …]` / `[?def …]` /
 // `[?const …]` directive forms in source order. Skips comments
-// (`[- … -]`) and whitespace between directives. Other top-level
+// (`[; … ]`) and whitespace between directives. Other top-level
 // content is permitted and silently ignored at Phase 2.13 partial
 // (a future hardening pass will raise on stray text).
 //
@@ -689,20 +689,22 @@ fn module_loader_scan_directives(source string) ![]ModuleLoaderDirective {
 			}
 			continue
 		}
-		// Skip CX-style block comments `[- … -]` (depth-aware).
-		if i + 1 < src.len && c == `[` && src[i + 1] == `-` {
+		// Skip CX `[; … ]` block comments (the current comment form, depth-aware
+		// over nested `[`…`]`). The body is OPAQUE prose, so — unlike a directive
+		// span — it is NOT quote-shielded: an apostrophe in the prose (e.g.
+		// "draft's") must not open a string span and swallow the closing `]`.
+		// Mirrors the data reader's read_until_close (parser.v). Without this a
+		// `[; … ]` comment fell through to find_close_bracket and mis-balanced.
+		if i + 1 < src.len && c == `[` && src[i + 1] == `;` {
 			mut depth := 1
 			i += 2
 			for i < src.len && depth > 0 {
-				if i + 1 < src.len && src[i] == `[` && src[i + 1] == `-` {
+				if src[i] == `[` {
 					depth++
-					i += 2
-				} else if i + 1 < src.len && src[i] == `-` && src[i + 1] == `]` {
+				} else if src[i] == `]` {
 					depth--
-					i += 2
-				} else {
-					i++
 				}
+				i++
 			}
 			continue
 		}

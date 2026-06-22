@@ -176,7 +176,7 @@ S012: unknown attribute 'region'
   [schema-cxs-b [#
 [?cx schema-of server]
 
-[- a comment that does not change semantics -]
+[; a comment that does not change semantics ]
 [server [body elem] [attr host::string [req]] ]
 #]]
   [sd-assert-hash-equal [#

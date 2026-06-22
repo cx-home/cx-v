@@ -1,0 +1,111 @@
+# cx-x/mcp-server — minimal MCP (Model Context Protocol) SERVER helpers (x/ tier).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): bundled + gated
+# in-tree but EXEMPT from the frozen-`std` stability promise. #6 Y1.
+#
+# The server counterpart to cx-x/mcp (S9 client). An MCP server is a JSON-RPC 2.0
+# responder over a transport; these are the PURE response-shaping + request-reading
+# helpers, composed from the substrate (cx-stdlib/jsonrpc S1 + cx-stdlib/json). The
+# transport is the real cx-stdlib/http server (`[$http:serve url handler]`) — the
+# handler is an ordinary [?def] that reads the request body, dispatches on the
+# JSON-RPC method, runs the tool, and returns a [response] carrying the emitted
+# JSON-RPC reply. (A handler is a [?def], whose body resolves its scope correctly
+# when invoked by the serve loop — unlike a returned [?fn], so this sidesteps the
+# #45 closure-scoping family. A GENERIC tool registry — tool closures stored in
+# data + dispatched by name — does want #45; until then dispatch directly on the
+# method/name with [?if], as the demo server in v08_mcp_server_real_test.v shows.)
+#
+# THE DIFFERENTIATOR (#6 Y1, ties #7's PEP): a tool handler is ordinary CX, so its
+# effects are gated by CX CAPABILITIES at the effect point — a tool that reads a
+# file / opens a socket is DENIED (CXER0271) unless the server process was granted
+# that capability (`--allow-read` / `--allow-net=…`). The language enforces the
+# tool sandbox; the server maps a denied effect to an isError tool result.
+#
+# stdio transport + the full initialize-handshake session lifecycle are later
+# increments; this covers the request→response core over HTTP.
+
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/json' :as json]
+
+# ── request reading ────────────────────────────────────────────────────────────
+# method-of — the JSON-RPC method of a parsed request ("initialize"/"tools/list"/…).
+[?def method-of scope=public pure [returns string] ($request::any)
+  $request/method]
+
+# id-of — the request id (echoed into the response).
+[?def id-of scope=public pure [returns any] ($request::any)
+  $request/id]
+
+# tool-name-of — the tools/call target name (params.name).
+[?def tool-name-of scope=public pure [returns string] ($request::any)
+  [?let [= $params $request/params] $params/name]]
+
+# tool-args-of — the tools/call arguments object (params.arguments).
+[?def tool-args-of scope=public pure [returns any] ($request::any)
+  [?let [= $params $request/params] $params/arguments]]
+
+# ── response shaping ───────────────────────────────────────────────────────────
+# initialize-result — the MCP `initialize` success reply.
+[?def initialize-result scope=public pure [returns map] ($id::any $name::string $version::string)
+  [$rpc:success $id
+    {protocolVersion: "2024-11-05" capabilities: {tools: {}} serverInfo: {name: $name version: $version}}]]
+
+# tools-list-result — a tools/list success reply wrapping a [tools] array.
+[?def tools-list-result scope=public pure [returns map] ($id::any $tools::any)
+  [$rpc:success $id {tools: $tools}]]
+
+# tool-result — a tools/call success reply carrying one text content block.
+[?def tool-result scope=public pure [returns map] ($id::any $text::string)
+  [$rpc:success $id {content: ({type: "text" text: $text}) isError: false}]]
+
+# tool-error — a tools/call reply reporting a TOOL failure (isError:true with the
+# message as text). Use this for a denied capability (CXER0271) or a tool fault —
+# distinct from protocol-error, which is a malformed/unknown JSON-RPC request.
+[?def tool-error scope=public pure [returns map] ($id::any $message::string)
+  [$rpc:success $id {content: ({type: "text" text: $message}) isError: true}]]
+
+# protocol-error — a JSON-RPC error response (e.g. method-not-found for an unknown
+# method). Forwards to jsonrpc:error-for's standard codes.
+[?def protocol-error scope=public pure [returns map] ($id::any $kind::string)
+  [$rpc:error-for $id $kind]]
+
+# ── docs ───────────────────────────────────────────────────────────────────────
+[module-doc name=mcp-server
+  [scope """Minimal MCP server helpers (EXPERIMENTAL x/ tier, #6 Y1) — the server
+   counterpart to cx-x/mcp. Pure request readers (method-of, id-of, tool-name-of,
+   tool-args-of) + response builders (initialize-result, tools-list-result,
+   tool-result, tool-error, protocol-error) composed from cx-stdlib/jsonrpc + json.
+   The transport is the real cx-stdlib/http server: a [?def] handler reads the
+   request, dispatches on the method, runs the tool, and returns a [response]. The
+   differentiator (ties #7's PEP): a tool handler is ordinary CX, so its effects are
+   gated by CX capabilities at the effect point — a tool is denied (CXER0271) unless
+   the server was granted that capability, which the server maps to an isError tool
+   result. A generic tool registry (closures-in-data) awaits the #45 closure fix;
+   direct [?if] dispatch on method/name works today."""]]
+[fn-doc name=method-of scope=public purity=pure
+  [sig """-> string"""]
+  [summary """The JSON-RPC method of a parsed request."""]]
+[fn-doc name=id-of scope=public purity=pure
+  [sig """-> any"""]
+  [summary """The request id, to echo into the response."""]]
+[fn-doc name=tool-name-of scope=public purity=pure
+  [sig """-> string"""]
+  [summary """The tools/call target name (params.name)."""]]
+[fn-doc name=tool-args-of scope=public purity=pure
+  [sig """-> any"""]
+  [summary """The tools/call arguments object (params.arguments)."""]]
+[fn-doc name=initialize-result scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build the MCP initialize success reply (protocolVersion + capabilities + serverInfo)."""]]
+[fn-doc name=tools-list-result scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a tools/list success reply wrapping a tools array."""]]
+[fn-doc name=tool-result scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a tools/call success reply with one text content block (isError:false)."""]]
+[fn-doc name=tool-error scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a tools/call reply reporting a tool failure (isError:true) — e.g. a denied capability."""]]
+[fn-doc name=protocol-error scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build a JSON-RPC error response for a standard kind (e.g. method-not-found)."""]]

@@ -1514,7 +1514,7 @@ null
 #]]
  ]
 
- [- ── std-stream handles (cx-stdlib/env stdin/stdout/stderr) flow through
+ [; ── std-stream handles (cx-stdlib/env stdin/stdout/stderr) flow through
     the ordinary io read/write surface. Regression guard for the defect
     where io ops rejected the `[std-stream name=… fd=N]` handle shape with
     CXER0100 (E_OPERAND_KIND), so a CX CLI could not write to stdout/stderr
@@ -1522,7 +1522,7 @@ null
     string, so the in-process fixture harness emits nothing to its own
     streams. The terminal-visibility + exit-flush behaviour is exercised
     out of band (env.md §3.5: exit flushes pending I/O; exercising the
-    terminating path here would tear down the runner). ── -]
+    terminating path here would tear down the runner). ── ]
  [case id=io-102-write-string-stdout-granted level=core gate=enforced grant='write'
   [tags io write-string std-stream stdout granted]
   [in-cx [#

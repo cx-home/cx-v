@@ -38,7 +38,7 @@ module cx
 //   - The deferred `:in-memory` / `:version` modifiers are explicitly
 //     recognised and surfaced as CXLIB_UNKNOWN_MODIFIER per Phase
 //     2.12 Part 3 scope (the slot reservation is grammar-only at
-//     v0.8.0 first release).
+//     the first release).
 //
 // Out of scope at Phase 2.12 Part 3 (deferred):
 //   - Loader semantics — file read, registered lookup, HTTPS fetch,
@@ -47,7 +47,7 @@ module cx
 //     CXLIB_INSECURE_TRANSPORT error code; the loader maps to
 //     CXER0208 at the surface).
 //   - `cx.lock` consultation — Phase 2.14.
-//   - `:version` body-shape parsing (semver / range) — post-v0.8.0.
+//   - `:version` body-shape parsing (semver / range) — deferred.
 //
 // Cross-references:
 //   - spec/grammar.ebnf productions [149]–[151]
@@ -112,8 +112,8 @@ fn (mut c LibParseCursor) skip_ws() {
 // ── Public entry point ────────────────────────────────────────────────────────
 
 // The canonical set of modifier labels admitted on `[?lib]` per
-// grammar [151]. `in-memory` / `version` are reserved slots at
-// v0.8.0 — recognising them as modifier-labels
+// grammar [151]. `in-memory` / `version` are reserved slots —
+// recognising them as modifier-labels
 // at the parse layer is a future patch; the Phase 2.12 Part 3
 // surface treats them as CXLIB_UNKNOWN_MODIFIER.
 const lib_modifier_labels = ['as', 'only']
@@ -195,7 +195,7 @@ pub fn parse_lib(source string) !LibNode {
 		if c.peek() == `]` {
 			break
 		}
-		// v0.8.0 attribute-modifier form: `as=NAME` (dual-accept with the
+		// Attribute-modifier form: `as=NAME` (dual-accept with the
 		// legacy `:as NAME` slot). A bareword followed by `=` is a scalar
 		// modifier attribute.
 		if lib_is_name_start(c.peek()) {
@@ -332,7 +332,7 @@ fn lib_read_name(mut c LibParseCursor) string {
 // Escape handling is minimal at this layer — `\\` and `\<quote>` are
 // recognised; everything else passes through verbatim. The resolver
 // string never contains structurally-significant escapes in
-// practice, so this is sufficient at v0.8.0.
+// practice, so this is sufficient.
 fn lib_read_quoted_string(mut c LibParseCursor) !string {
 	if c.at_end() {
 		return error('CXLIB_PARSE: unexpected end of input — missing resolver string')

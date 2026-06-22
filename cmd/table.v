@@ -98,7 +98,7 @@ fn write_output_text(o &TableOpts, body string) {
 fn run_table_info(args []string) {
 	o := parse_table_opts(args)
 	if o.from_fmt != 'cx' {
-		eprintln('cx table info: ${o.from_fmt} input not supported at v0.6.0 (Parquet/Arrow info defer to v0.7.0 — libcx_arrow Phase C)')
+		eprintln('cx table info: ${o.from_fmt} input not supported (Parquet/Arrow info defers to libcx_arrow Phase C)')
 		exit(2)
 	}
 	src := read_input_text(&o)
@@ -131,7 +131,7 @@ fn run_table_info(args []string) {
 fn run_table_dump(args []string) {
 	o := parse_table_opts(args)
 	if o.from_fmt != 'cx' {
-		eprintln('cx table dump: --from=${o.from_fmt} not supported at v0.6.0 (use load to import non-CX)')
+		eprintln('cx table dump: --from=${o.from_fmt} not supported (use load to import non-CX)')
 		exit(2)
 	}
 	src := read_input_text(&o)

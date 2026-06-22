@@ -236,7 +236,7 @@ pub fn parse_def(source string) !DefNode {
 			continue
 		}
 		// attribute modifier: `scope=public` (grammar [152a] ScopeAttr). The
-		// legacy `:scope public` colon-slot was RETIRED in the v0.8.0 surface
+		// legacy `:scope public` colon-slot was RETIRED in the surface
 		// cutover (D014) — a leading `:` modifier is now a parse error (handled
 		// below). A bareword followed by `=` is a scalar-modifier attribute.
 		if def_is_name_start(c.peek()) {
@@ -286,7 +286,7 @@ pub fn parse_def(source string) !DefNode {
 			}
 			continue
 		}
-		// RETIRED (v0.8.0 / D014): the legacy `:scope`/`:returns`/`:throws`/
+		// RETIRED (D014): the legacy `:scope`/`:returns`/`:throws`/
 		// `:pure`/`:impure` colon-slot modifier surface. The spec (grammar
 		// [152a]) admits ONLY: `scope=public|private` (attribute, above),
 		// `pure`/`impure` (bareword, above), `[returns T]` / `[throws T]`
@@ -413,7 +413,7 @@ fn def_parse_param_list(mut c DefParseCursor) ![]DefParam {
 			c.advance() // consume `)`
 			return params
 		}
-		// v0.8.0 [153]: every parameter carries the `$` binding sigil.
+		// [153]: every parameter carries the `$` binding sigil.
 		//   PositionalParam  `$Name TypeAnnot?`             [153b]
 		//   NamedParam       `$Name TypeAnnot? '=' Default` [153c]/[153f]
 		//   RestParam        `*$Name TypeAnnot?`            [153e]
@@ -549,7 +549,7 @@ fn def_read_optional_type_annot(mut c DefParseCursor) !string {
 	next := c.src[c.pos + 1]
 	// the canonical (and ONLY admitted) per-parameter type label is the
 	// glued double-colon `::T` (grammar [153f] TypeAnnot ::= '::' Type).
-	// The legacy single-colon `:T` form was RETIRED in the v0.8.0 surface
+	// The legacy single-colon `:T` form was RETIRED in the surface
 	// cutover (D014) — a single `:` here is a hard parse error, no dual-accept.
 	if next != `:` {
 		return error('CXDEF_PARSE: retired single-colon `:T` parameter type — use the glued `::T` form (grammar [153f]), e.g. `(\$x::int)`')

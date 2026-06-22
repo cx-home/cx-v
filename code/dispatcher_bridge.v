@@ -580,7 +580,7 @@ fn index_path_of_cxnode(target &CxNode, index_map []CxNodeIndex) ?[]int {
 // `path` (sequence of child positions in `.items[]`) and applies the
 // `action`. The walk rebuilds the spine bottom-up so the doc-root
 // returns a freshly-allocated tree with the action's effect at the
-// target position (v0.8.0 ships full-copy).
+// target position (full-copy).
 fn apply_action_at_index_path(doc cx.Node, path []int,
 	action cx.ModifyAction) !cx.Node {
 	// Empty path → action targets the root.

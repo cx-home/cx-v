@@ -3,7 +3,7 @@ module code
 import cx
 
 // match_eval.v — STANDALONE multi-arm `[?match]` evaluator
-// Phase 2.7 (v0.8.0). This is a self-contained surface — it does NOT
+// Phase 2.7. This is a self-contained surface — it does NOT
 // integrate with the existing directive-evaluator dispatch path in
 // `eval.v` (which still uses cx.ProgramDirective + MatchEnv and threads
 // ProgramState through every arm). Wiring the AST-level MatchNode

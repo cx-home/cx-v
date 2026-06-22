@@ -1,7 +1,7 @@
-[- cx-stdlib/crypto — keyed / secret / authentication primitives
+[; cx-stdlib/crypto — keyed / secret / authentication primitives
    (spec/std-lib/crypto.md). Security sibling of cx-stdlib/hash.
 
-   Full v0.8.0 surface per spec/std-lib/crypto.md §3. Bodies forward to
+   Full surface per spec/std-lib/crypto.md §3. Bodies forward to
    native primitives (vcx/code/stdlib_crypto.v) since HMAC / HKDF /
    keyed-BLAKE3 / AEAD / Ed25519 / X25519 / Argon2id are not expressible
    in pure CX. Keys / messages / MACs / salts / IKM / PRK / info / OKM /
@@ -15,23 +15,23 @@
    are impure — they draw fresh randomness (§2.4). Errors are values
    (CXER3700/3701/3703/3704/3705/3706/3707, §5).
 
-   NOTE: this const and stdlib/crypto.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/crypto.cx are the same source — edit both. ]
 
-[- §3.1 HMAC single-shot -]
+[; §3.1 HMAC single-shot ]
 [?def hmac-sha256 scope=public pure [returns bytes] ($key::bytes $msg::bytes) [$crypto-hmac-sha256 $key $msg]]
 [?def hmac-sha384 scope=public pure [returns bytes] ($key::bytes $msg::bytes) [$crypto-hmac-sha384 $key $msg]]
 [?def hmac-sha512 scope=public pure [returns bytes] ($key::bytes $msg::bytes) [$crypto-hmac-sha512 $key $msg]]
 
-[- §3.2 HMAC streaming -]
+[; §3.2 HMAC streaming ]
 [?def hmac-new      scope=public pure [returns element] ($algo::string $key::bytes) [$crypto-hmac-new $algo $key]]
 [?def hmac-update   scope=public pure [returns element] ($h::element $chunk::bytes) [$crypto-hmac-update $h $chunk]]
 [?def hmac-finalize scope=public pure [returns bytes]   ($h::element)               [$crypto-hmac-finalize $h]]
 
-[- §3.3 keyed-BLAKE3 -]
+[; §3.3 keyed-BLAKE3 ]
 [?def blake3-keyed      scope=public pure [returns bytes] ($key::bytes $msg::bytes)                  [$crypto-blake3-keyed $key $msg]]
 [?def blake3-mac-verify scope=public pure [returns bool]  ($key::bytes $msg::bytes $expected::bytes) [$crypto-blake3-mac-verify $key $msg $expected]]
 
-[- §3.4 HKDF -]
+[; §3.4 HKDF ]
 [?def hkdf-extract scope=public pure [returns bytes] ($salt::bytes $ikm::bytes)               [$crypto-hkdf-extract $salt $ikm]]
 [?def hkdf-expand  scope=public pure [returns bytes] ($prk::bytes $info::bytes $length::int)   [$crypto-hkdf-expand $prk $info $length]]
 [?def hkdf         scope=public pure [returns bytes] ($ikm::bytes $salt::bytes $info::bytes $length::int) [$crypto-hkdf $ikm $salt $info $length]]
@@ -39,14 +39,14 @@
 [?def hkdf-expand-sha512  scope=public pure [returns bytes] ($prk::bytes $info::bytes $length::int) [$crypto-hkdf-expand-sha512 $prk $info $length]]
 [?def hkdf-sha512         scope=public pure [returns bytes] ($ikm::bytes $salt::bytes $info::bytes $length::int) [$crypto-hkdf-sha512 $ikm $salt $info $length]]
 
-[- §3.6 verification contract -]
+[; §3.6 verification contract ]
 [?def hmac-verify scope=public pure [returns bool] ($algo::string $key::bytes $msg::bytes $expected::bytes) [$crypto-hmac-verify $algo $key $msg $expected]]
 
-[- §3.7 AEAD -]
+[; §3.7 AEAD ]
 [?def aead-encrypt scope=public impure [returns element] ($algo::string $key::bytes $plaintext::bytes $aad::bytes) [$crypto-aead-encrypt $algo $key $plaintext $aad]]
 [?def aead-decrypt scope=public pure   [returns bytes]   ($algo::string $key::bytes $aead::element $aad::bytes)    [$crypto-aead-decrypt $algo $key $aead $aad]]
 
-[- §3.8 asymmetric -]
+[; §3.8 asymmetric ]
 [?def ed25519-keypair      scope=public impure [returns element] ()                                    [$crypto-ed25519-keypair]]
 [?def ed25519-sign         scope=public pure   [returns bytes]   ($private-key::bytes $msg::bytes)       [$crypto-ed25519-sign $private-key $msg]]
 [?def ed25519-verify       scope=public pure   [returns bool]    ($public-key::bytes $msg::bytes $sig::bytes) [$crypto-ed25519-verify $public-key $msg $sig]]
@@ -55,18 +55,18 @@
 [?def rsa-verify           scope=public pure   [returns bool]    ($public-key::element $msg::bytes $sig::bytes $opts::map {}) [$crypto-rsa-verify $public-key $msg $sig $opts]]
 [?def ecdsa-verify         scope=public pure   [returns bool]    ($public-key::element $msg::bytes $sig::bytes $opts::map {}) [$crypto-ecdsa-verify $public-key $msg $sig $opts]]
 
-[- §3.9 password hashing -]
+[; §3.9 password hashing ]
 [?def password-hash   scope=public impure [returns string] ($password::bytes $cost::element) [$crypto-password-hash $password $cost]]
 [?def password-verify scope=public pure   [returns bool]   ($password::bytes $encoded::string) [$crypto-password-verify $password $encoded]]
 
-[- §3.10 JWT / JWKS verification — fail-closed; verify-only -]
+[; §3.10 JWT / JWKS verification — fail-closed; verify-only ]
 [?def jwt-verify scope=public pure   [returns element] ($token::string $key::element $now::datetime $opts::map {}) [$crypto-jwt-verify $token $key $now $opts]]
 [?def jwks-fetch scope=public impure [returns element] ($jwks-uri::string $opts::map {})                          [$crypto-jwks-fetch $jwks-uri $opts]]
 [?def jwks-parse scope=public pure   [returns element] ($json-text::string)                                       [$crypto-jwks-parse $json-text]]
 [?def claim      scope=public pure   [returns element] ($claims::element $name::string)                          [$crypto-claim $claims $name]]
 [?def jwk-by-kid scope=public pure   [returns element] ($jwks::element $kid::string)                             [$crypto-jwk-by-kid $jwks $kid]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=crypto
   [scope """Operations involving a key, a secret, or authentication. The security sibling of cx-stdlib/hash, which fingerprints public data: if it involves a key, a secret, or authentication it lives here; a bare fingerprint lives in hash. Covers HMAC, keyed-BLAKE3, HKDF, constant-time MAC verification, AEAD, Ed25519/X25519, Argon2id password hashing, and fail-closed JWT/JWKS verification. Keys, messages, MACs, and other byte material are all CXDM bytes — convert hex or base64 via cx-stdlib/bytes before passing in."""]]
 [fn-doc name=hmac-sha256 scope=public purity=pure

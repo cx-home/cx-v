@@ -1,0 +1,112 @@
+# cx-x/mcp — a minimal MCP (Model Context Protocol) CLIENT (EXPERIMENTAL x/ tier).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): bundled + gated
+# in-tree but EXEMPT from the frozen-`std` stability promise. #6 S9.
+#
+# MCP is JSON-RPC 2.0 over a transport. This client builds on the SUBSTRATE that
+# already landed: cx-stdlib/jsonrpc (S1, the message model), cx-stdlib/jsonschema
+# (S7, validates tool inputs — MCP tool inputSchemas ARE JSON Schema), the real
+# cx-stdlib/http client (Streamable-HTTP transport), and cx-stdlib/json. NO new
+# transport, NO V backing — pure composition over the substrate.
+#
+# A remote MCP tool composes as a Runnable (cx-x/run) via the call-site idiom:
+#     [$run:invoke [?fn ($args) [$mcp:call-tool $endpoint "get_weather" $args]] {city: "NYC"}]
+# (a `tool-proxy` factory that RETURNS this closure from the module is blocked by
+# the #45 closure-scoping family — Bug-2; the lib-qualified call-site [?fn] above
+# is the supported idiom, same as cx-x/llm.)
+#
+# Pure protocol shaping (the *-request builders + the response extractors +
+# validate-args) is split from the effectful transport (rpc-call / list-tools /
+# call-tool) so the JSON-RPC + validation CONTRACT is testable without a server.
+# Transport: Streamable HTTP — POST the JSON-RPC request to the MCP endpoint, the
+# reply is a JSON-RPC response. stdio transport is a later increment.
+
+[?lib 'cx-stdlib/jsonrpc' :as rpc]
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?lib 'cx-stdlib/json' :as json]
+[?lib 'cx-stdlib/http' :as http]
+
+# ── pure protocol shaping: JSON-RPC request builders ───────────────────────────
+# initialize — the MCP handshake (first call on a session).
+[?def initialize-request scope=public pure [returns map] ($id::any $client-name::string $client-version::string)
+  [$rpc:request $id "initialize"
+    {protocolVersion: "2024-11-05" capabilities: {} clientInfo: {name: $client-name version: $client-version}}]]
+
+# list-tools — enumerate the server's tools (name, description, inputSchema).
+[?def list-tools-request scope=public pure [returns map] ($id::any)
+  [$rpc:request $id "tools/list" {}]]
+
+# call-tool — invoke a tool by name with an arguments object.
+[?def call-tool-request scope=public pure [returns map] ($id::any $name::string $arguments::any)
+  [$rpc:request $id "tools/call" {name: $name arguments: $arguments}]]
+
+# ── pure response extractors ───────────────────────────────────────────────────
+# tools-of — the [tools] array from a tools/list response.
+[?def tools-of scope=public pure [returns any] ($response::any)
+  [?let [= $result $response/result] $result/tools]]
+
+# result-text — the first text content block from a tools/call response.
+[?def result-text scope=public pure [returns string] ($response::any)
+  [?let [= $result $response/result]
+    [?let [= $block [$first $result/content]] $block/text]]]
+
+# ── argument validation (the S7 differentiator) ────────────────────────────────
+# validate-args — check an arguments object against a tool's JSON-Schema inputSchema,
+# returning the cx-stdlib/jsonschema [ok] / [invalid [violation …]] outcome. Call
+# this BEFORE call-tool to enforce the tool contract client-side.
+[?def validate-args scope=public pure [returns element] ($tool::any $arguments::any)
+  [?let [= $schema $tool/inputSchema] [$js:validate $arguments $schema]]]
+
+# ── effectful transport (Streamable HTTP) ──────────────────────────────────────
+# rpc-call — POST one JSON-RPC request to the MCP endpoint, return the parsed reply.
+[?def rpc-call scope=public impure [returns any] ($endpoint::string $request::any)
+  [$json:parse [$http:body-text [$http:post $endpoint [$json:emit $request] {}]]]]
+
+# list-tools — fetch the server's tool list.
+[?def list-tools scope=public impure [returns any] ($endpoint::string)
+  [$tools-of [$rpc-call $endpoint [$list-tools-request 1]]]]
+
+# call-tool — invoke a remote tool and return its first text result. Compose as a
+# Runnable via [?fn ($args) [$mcp:call-tool endpoint name $args]] (see header).
+[?def call-tool scope=public impure [returns string] ($endpoint::string $name::string $arguments::any)
+  [$result-text [$rpc-call $endpoint [$call-tool-request 1 $name $arguments]]]]
+
+# ── docs ───────────────────────────────────────────────────────────────────────
+[module-doc name=mcp
+  [scope """A minimal MCP (Model Context Protocol) client (EXPERIMENTAL x/ tier, #6
+   S9). MCP is JSON-RPC 2.0 over a transport; this client composes the landed
+   substrate — cx-stdlib/jsonrpc (message model), cx-stdlib/jsonschema (validates
+   tool inputs), the real cx-stdlib/http client (Streamable-HTTP transport), and
+   cx-stdlib/json — with no new transport and no V backing. Pure request builders
+   (initialize/list-tools/call-tool) + response extractors (tools-of, result-text)
+   + validate-args are split from the effectful transport (rpc-call, list-tools,
+   call-tool). A remote tool composes as a cx-x/run Runnable via the call-site
+   closure idiom. stdio transport + the initialize-handshake session state are
+   later increments."""]]
+[fn-doc name=initialize-request scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build the MCP `initialize` JSON-RPC request (the session handshake)."""]]
+[fn-doc name=list-tools-request scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build the MCP `tools/list` JSON-RPC request."""]]
+[fn-doc name=call-tool-request scope=public purity=pure
+  [sig """-> map"""]
+  [summary """Build the MCP `tools/call` JSON-RPC request for a tool name + arguments object."""]]
+[fn-doc name=tools-of scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Extract the tools array from a tools/list response value."""]]
+[fn-doc name=result-text scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Extract the first text content block from a tools/call response value."""]]
+[fn-doc name=validate-args scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Validate an arguments object against a tool's JSON-Schema inputSchema ([ok]/[invalid …]). Call before call-tool."""]]
+[fn-doc name=rpc-call scope=public purity=impure
+  [sig """-> any"""]
+  [summary """POST one JSON-RPC request to the MCP endpoint (Streamable HTTP) and return the parsed reply."""]]
+[fn-doc name=list-tools scope=public purity=impure
+  [sig """-> any"""]
+  [summary """Fetch the MCP server's tool list (net)."""]]
+[fn-doc name=call-tool scope=public purity=impure
+  [sig """-> string"""]
+  [summary """Invoke a remote MCP tool (net) and return its first text result. Compose as a cx-x/run Runnable via a call-site closure."""]]

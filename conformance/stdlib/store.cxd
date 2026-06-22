@@ -53,7 +53,7 @@ conformance fixtures for cx-stdlib/store (spec/std-lib/store.md §8).
    all explanatory prose lives in this doc header or in tags.
 #]]
 
- [- ── (A) mem:// functional matrix — capability-free (§9, D-STORE-1) ── -]
+ [; ── (A) mem:// functional matrix — capability-free (§9, D-STORE-1) ── ]
 
  [case id=store-rt-001-round-trip-get level=core
   [tags store mem put-doc get-doc round-trip]
@@ -293,8 +293,8 @@ false
 #]]
  ]
 
- [- SAP C1 §1: an alias miss is the ABSENCE channel (the empty sequence
-    `()`, code.md §9.1.2), NEVER `null` (the §9.1.2.1 no-conflation guard). -]
+ [; SAP C1 §1: an alias miss is the ABSENCE channel (the empty sequence
+    `()`, code.md §9.1.2), NEVER `null` (the §9.1.2.1 no-conflation guard). ]
  [case id=store-alias-002-get-missing-absence level=core
   [tags store mem get-alias absence sap c1]
   [in-cx [#
@@ -309,8 +309,8 @@ false
 #]]
  ]
 
- [- SAP C1: getOrElse over an alias miss — `[?else]` coalesces absence to the
-    default (§8.13), proving the alias-miss empty IS the absence channel. -]
+ [; SAP C1: getOrElse over an alias miss — `[?else]` coalesces absence to the
+    default (§8.13), proving the alias-miss empty IS the absence channel. ]
  [case id=sap-absence-store-01-alias-miss-else level=core
   [tags store mem get-alias absence else getorelse sap c1]
   [in-cx [#
@@ -325,8 +325,8 @@ false
 #]]
  ]
 
- [- SAP C1: a RESOLVED alias still returns its hash (present value flows) —
-    pins that the cutover did not turn every alias return into absence. -]
+ [; SAP C1: a RESOLVED alias still returns its hash (present value flows) —
+    pins that the cutover did not turn every alias return into absence. ]
  [case id=sap-absence-store-02-alias-hit-value level=core
   [tags store mem get-alias set-alias absence sap c1]
   [in-cx [#
@@ -481,7 +481,7 @@ true
 #]]
  ]
 
- [- ── (B) file:// open / open-opts capability-deny paths (CXER0271) ── -]
+ [; ── (B) file:// open / open-opts capability-deny paths (CXER0271) ── ]
 
  [case id=store-001-open-cap-denied level=core
   [tags store open capability CXER0271]
@@ -511,14 +511,14 @@ cx-err:CXER0271
 #]]
  ]
 
- [- ── Effort B granted-harness pilot: `grant=` injects a least-privilege
+ [; ── Effort B granted-harness pilot: `grant=` injects a least-privilege
     capability set for this case (vs the empty deny-lane default). With the
     read/write grant the file:// open clears the capability gate (no longer
     CXER0271, cf. store-001) and reaches the now-functional file:// backend
     (§2.2.1 LocalFiles), which opens a real on-disk Store. This proves the
     per-fixture [grant] path end-to-end against the same effect point
     store-001 denies. The file:// behavior cases below are kept hermetic by
-    rooting each Store at a fresh `io/temp-dir`. ── -]
+    rooting each Store at a fresh `io/temp-dir`. ── ]
  [case id=store-003-open-file-granted-reaches-backend level=core grant='read write'
   [tags store open capability grant effort-b file-backend]
   [in-cx [#
@@ -587,7 +587,7 @@ true
 #]]
  ]
 
- [- ── put-doc-stream + query (mem://, no host capability; §3.2 / §3.5) ── -]
+ [; ── put-doc-stream + query (mem://, no host capability; §3.2 / §3.5) ── ]
  [case id=store-017-put-doc-stream-equals-put-doc level=core
   [tags store put-doc-stream put-doc mem]
   [in-cx [#

@@ -231,9 +231,9 @@ pub fn cx_code_diagram_with_level(source &char, source_len usize, level i32) &ch
 // globals and use a plain (non-closure) V sink that reads them.
 // Single-threaded model: cx_code_eval_streaming is the only writer;
 // it sets / clears the globals across each call. Concurrent streaming
-// evaluations within one process are NOT supported in v0.8.0 (the
+// evaluations within one process are NOT currently supported (the
 // streaming eval path carries additional shared state); making the
-// streaming evaluator fully re-entrant is tracked with the v0.9.0
+// streaming evaluator fully re-entrant is tracked in the
 // concurrency work (readiness-rubric §15, ROADMAP "jobs:"). Callers
 // that need parallel streaming use separate processes today.
 __global (

@@ -68,7 +68,25 @@ fn yaml_array(arr []JsonVal, depth int) string {
 	ind := '  '.repeat(depth)
 	mut lines := []string{}
 	for v in arr {
-		lines << '${ind}- ${yaml_value(v, depth + 1, false)}'
+		if v is map[string]JsonVal || v is []JsonVal {
+			// A block item (mapping / nested sequence). Render the child at
+			// depth+1 so its indentation equals the column just after "- ",
+			// then splice the dash onto the first line and keep the rest
+			// aligned. Previously the child's full indent was appended after
+			// "- ", so the first key sat deeper than its siblings → invalid
+			// YAML (#10).
+			child := yaml_value(v, depth + 1, false)
+			child_lines := child.split('\n')
+			for i, cl in child_lines {
+				if i == 0 {
+					lines << '${ind}- ${cl.trim_left(' ')}'
+				} else {
+					lines << cl
+				}
+			}
+		} else {
+			lines << '${ind}- ${yaml_value(v, depth + 1, false)}'
+		}
 	}
 	return lines.join('\n')
 }

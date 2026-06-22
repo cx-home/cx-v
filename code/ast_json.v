@@ -450,7 +450,7 @@ fn emit_literal(l cx.ProgramLiteral, mut sb strings.Builder, depth int) {
 			sb.write_string(']')
 		}
 		.atom_lit {
-			// v0.8.0: atom literal — emit as a tagged JSON
+			// atom literal — emit as a tagged JSON
 			// object so the kind is preserved alongside the name. Distinct
 			// from `.string_lit` (which emits a bare JSON string); atoms
 			// carry the discriminator at the AST surface so downstream

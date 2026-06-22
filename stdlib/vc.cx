@@ -1,24 +1,24 @@
-[- cx-stdlib/vc — verifiable credentials (spec/std-lib/vc.md).
+[; cx-stdlib/vc — verifiable credentials (spec/std-lib/vc.md).
    A VC IS a portable, signed, attenuating §22.2 delegation (xap.md R9): the
    decentralized way to carry authority between DIDs, verifiable offline. The
    PEP (§22.3) and N-TRUST-1 are unchanged — vc is the authority transport,
-   the counterpart to `did` (identity). Bodies bottom out in vc-* primitives. -]
+   the counterpart to `did` (identity). Bodies bottom out in vc-* primitives. ]
 
-[- issue: sign a credential conveying `claim` (a §22.2 [delegation …]). -]
+[; issue: sign a credential conveying `claim` (a §22.2 [delegation …]). ]
 [?def issue   scope=public pure   [returns element] ($issuer-did::string $issuer-key::bytes $subject-did::string $claim::element $opts::map {}) [$vc-issue $issuer-did $issuer-key $subject-did $claim $opts]]
 
-[- verify: signature + validity window + non-revocation → [vc-verification status=…]. -]
+[; verify: signature + validity window + non-revocation → [vc-verification status=…]. ]
 [?def verify  scope=public pure   [returns element] ($vc::element $now::datetime $opts::map {}) [$vc-verify $vc $now $opts]]
 [?def valid?  scope=public pure   [returns bool]    ($vc::element $now::datetime $opts::map {}) [$vc-valid $vc $now $opts]]
 
-[- present: package a VC for a verifier (holder proof-of-possession later). -]
+[; present: package a VC for a verifier (holder proof-of-possession later). ]
 [?def present scope=public pure   [returns element] ($vc::element $opts::map {}) [$vc-present $vc $opts]]
 
-[- revoke: append a revoke event to a journal; revoked-set folds them (§5, #3a). -]
+[; revoke: append a revoke event to a journal; revoked-set folds them (§5, #3a). ]
 [?def revoke      scope=public impure [returns element] ($journal::element $vc-id::string $opts::map {}) [$vc-revoke $journal $vc-id $opts]]
 [?def revoked-set scope=public impure [returns element] ($journal::element) [$vc-revoked-set $journal]]
 
-[- co-located docs. -]
+[; co-located docs. ]
 [module-doc name=vc
   [scope """Verifiable credentials: portable, signed, attenuating delegations that carry authority between DIDs and verify offline (the §22.2 delegation transport, counterpart to `did` for identity). An issuer signs a credential conveying a claim to a subject; a verifier checks its signature, validity window, and non-revocation; a holder presents it to a verifier; and revocation is recorded as an append-only journal whose events fold into a revoked set."""]]
 [fn-doc name=issue scope=public purity=pure

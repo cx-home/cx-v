@@ -145,7 +145,7 @@
 <root/>
 #]]
   [out-cx [#
-[-a comment]
+[;a comment]
 [root]
 #]]
  ]

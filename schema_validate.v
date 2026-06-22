@@ -813,7 +813,7 @@ fn validate_container_body(e Element, body BodyRule, mut diags []Diagnostic) {
 // single_collection_node returns the lone collection-literal body
 // item of `e`, or none if `e` carries zero, more than one, or a
 // non-collection body. Comment / PI / directive nodes are skipped so
-// `[ports [- comment -] [80, 443]]` still resolves to the ArrayNode.
+// `[ports [; comment ] [80, 443]]` still resolves to the ArrayNode.
 fn single_collection_node(e Element) ?Node {
 	// Index-based, NOT a `mut found ?Node` accumulator: under the newer V a
 	// sum-type-option local mis-codegens both `found != none` (reads `.state` off

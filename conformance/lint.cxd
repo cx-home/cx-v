@@ -128,7 +128,7 @@ warn
   [tags lint l001]
   [in-cx [#
 # top-level note
-[server [- single-line block ] host=localhost]
+[server [; single-line block ] host=localhost]
 #]]
   [expected-check-count [#
 1
@@ -156,9 +156,9 @@ info
  [case id=042-l001-only-block-comments-no-warn level=core
   [tags lint l001 clean]
   [in-cx [#
-[- top-level note ]
+[; top-level note ]
 [server host=localhost]
-[- another single-liner ]
+[; another single-liner ]
 #]]
   [expected-check-count [#
 0
@@ -169,7 +169,7 @@ info
   [tags lint l001 multiline]
   [in-cx [#
 # header
-[- this is a
+[; this is a
    multi-line block comment ]
 [server host=localhost]
 #]]

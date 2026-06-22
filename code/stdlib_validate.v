@@ -745,10 +745,10 @@ fn validate_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		// ── §3.2 validate-against (named registry — unpopulable §3.2) ─
 		'validate-against' {
-			// The named-schema registry is unpopulable at v0.8.0, so this
+			// The named-schema registry is unpopulable, so this
 			// always raises CXER1600 (§3.2).
 			return mk_err('cx-err:CXER1600',
-				'E_VALIDATE_SCHEMA_NOT_FOUND: no schema registered under the given name (registry is unpopulable at v0.8.0)')
+				'E_VALIDATE_SCHEMA_NOT_FOUND: no schema registered under the given name (registry is unpopulable)')
 		}
 		// ── §3.3 result inspection ───────────────────────────────────
 		'validate-is-ok' {

@@ -59,7 +59,7 @@ conformance fixtures for cx-stdlib/http (spec/02-inprogress/stdlib_http.md §10)
    base-url → CXER4525, http-021). Recorded in SPEC-FINDINGS.
 #]]
 
- [- §3.4 introspection — status / ok (PURE, response-only) -]
+ [; §3.4 introspection — status / ok (PURE, response-only) ]
 
  [case id=http-001-status-200 level=core
   [tags http status pure]
@@ -131,7 +131,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [- §3.4 header / headers / headers-named (PURE, case-insensitive) -]
+ [; §3.4 header / headers / headers-named (PURE, case-insensitive) ]
 
  [case id=http-006-header-case-insensitive level=core
   [tags http header case-insensitive pure]
@@ -287,7 +287,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [- §3.4 / §2.5 body presence + accessors (PURE, total) -]
+ [; §3.4 / §2.5 body presence + accessors (PURE, total) ]
 
  [case id=http-017-has-body-true level=core
   [tags http has-body pure]
@@ -415,7 +415,7 @@ cx-err:CXER4532
 #]]
  ]
 
- [- §3.1 client construction (PURE bookkeeping — no net at construction) -]
+ [; §3.1 client construction (PURE bookkeeping — no net at construction) ]
 
  [case id=http-026-client-default level=core
   [tags http client pure]
@@ -459,7 +459,7 @@ null
 #]]
  ]
 
- [- §3.2 one-shot verbs — GATED on net → CXER0271 under the empty set -]
+ [; §3.2 one-shot verbs — GATED on net → CXER0271 under the empty set ]
 
  [case id=http-029-get-cap-denied level=core
   [tags http get capability CXER0271]
@@ -573,7 +573,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §2.6 / §7 ❌ — scheme dispatch: only http(s); other → CXER4525 (PURE) -]
+ [; §2.6 / §7 ❌ — scheme dispatch: only http(s); other → CXER4525 (PURE) ]
 
  [case id=http-037-ftp-scheme-url-invalid level=core
   [tags http get CXER4525 scheme error]
@@ -603,7 +603,7 @@ cx-err:CXER4525
 #]]
  ]
 
- [- §3.2 generic-verb arg validation (PURE, ahead of cap) -]
+ [; §3.2 generic-verb arg validation (PURE, ahead of cap) ]
 
  [case id=http-039-request-connect-arg-invalid level=core
   [tags http request CONNECT CXER4539 error]
@@ -633,7 +633,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [- §3.3 send — client-form [request] (url=) through a pooled client -]
+ [; §3.3 send — client-form [request] (url=) through a pooled client ]
 
  [case id=http-041-send-cap-denied level=core
   [tags http send capability CXER0271]
@@ -691,7 +691,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [- §3.5 server — bind URLs are net transport URLs (tcp/tls), GATED on net -]
+ [; §3.5 server — bind URLs are net transport URLs (tcp/tls), GATED on net ]
 
  [case id=http-045-serve-cap-denied level=core
   [tags http serve capability CXER0271]
@@ -835,7 +835,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- capability-GRANTED SERVER lane — these prims (listen / serve / accept-iter
+ [; capability-GRANTED SERVER lane — these prims (listen / serve / accept-iter
     / exchange-request / respond) are now REAL: listen/serve bind a real net
     listener, accept-iter pulls real connections, exchange-request parses a real
     request off the wire, respond serializes + writes a real response. None of
@@ -848,7 +848,7 @@ cx-err:CXER0271
     era granted fixtures (http-059/060/061/062/064, which asserted synthetic
     shapes) were retired when the impl became real. Only the deterministic
     call-shape check that does NOT touch a socket remains here: stop on an
-    unregistered handle is idempotent → null (http-063). -]
+    unregistered handle is idempotent → null (http-063). ]
 
  [case id=http-063-stop-granted-null level=core
   [tags http stop granted null]
@@ -975,7 +975,21 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §3.6 SSE GRANTED-LANE TRANSPORT is now REAL (held-open sockets), not the
+ [case id=http-083-sse-publish-empty-event level=core gate=enforced
+  [tags http sse sse-publish CXER4539 empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/http']
+[$http:sse-publish "prices" [event]]
+#]]
+  [out-err [#
+cx-err:CXER4539
+#]]
+ ]
+
+ [; §3.6 SSE GRANTED-LANE TRANSPORT is now REAL (held-open sockets), not the
     synthetic `wire=`/fd-less shapes the stub-era fixtures asserted: `sse` writes
     the event-stream prelude and holds the connection; `send-event`/`heartbeat`
     flush real frames; `sse-connect` opens a real streaming GET; `sse-events` is
@@ -987,7 +1001,7 @@ cx-err:CXER0271
     fixtures (http-073/074/075/076/078/081/082) were retired when the transport
     became real; the deterministic PURE validation/accessor checks (4539/4531/
     4544 + stream-open/source-open/last-event-id) remain below, and one denial
-    case keeps the sse-events name covered. -]
+    case keeps the sse-events name covered. ]
 
  [case id=http-073-sse-events-denied level=core gate=enforced
   [tags http sse-events CXER0271 net-denial]
@@ -1017,11 +1031,11 @@ cx-err:CXER4544
 #]]
  ]
 
- [- http-078 (send-event-granted-null) retired: a real send-event flushes the
+ [; http-078 (send-event-granted-null) retired: a real send-event flushes the
     framed bytes on the stream's connection, so a synthetic fd-less [sse-stream]
     can no longer return a deterministic null — the live flush is covered by
     vcx/tests/v08_http_sse_real_test.v. The pure pre-flush validation faults
-    (empty/CR-LF/closed) remain below + above (http-069/070/077/079/080). -]
+    (empty/CR-LF/closed) remain below + above (http-069/070/077/079/080). ]
 
  [case id=http-079-send-event-empty-unknown-attr level=core gate=enforced
   [tags http send-event CXER4539 empty-frame hostile]
@@ -1061,12 +1075,12 @@ cx-err:CXER4531
 #]]
  ]
 
- [- http-081 (sse-events-frame-too-large, CXER4550) + http-082 (clean-roundtrip)
+ [; http-081 (sse-events-frame-too-large, CXER4550) + http-082 (clean-roundtrip)
     retired: sse-events is now a live single-use iterator that reads frames off a
     held-open socket, not a parse of a synthetic `wire=` buffer. The max-event-
     bytes cap (CXER4550), malformed-frame fault (CXER4551), and event round-trip
     are enforced on the live read path (http_sse_read_frame) and covered
     behaviorally in vcx/tests/v08_http_sse_real_test.v; the pure framing/parsing
-    symmetry invariant is covered by vcx/tests/http_sse_test.v. -]
+    symmetry invariant is covered by vcx/tests/http_sse_test.v. ]
 
 ]

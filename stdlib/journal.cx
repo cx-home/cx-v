@@ -1,4 +1,4 @@
-[- cx-stdlib/journal — append-only, hash-chained, tenant-partitioned event
+[; cx-stdlib/journal — append-only, hash-chained, tenant-partitioned event
    log + deterministic fold→state, built ON store (persistence) + hash (chain
    links) + crypto (snapshot signing). Thin: ordered append + fold + verify.
 
@@ -6,7 +6,7 @@
    is [err]; an empty/out-of-range read is absence (); a verify of a corrupt
    chain is a present [verification valid=false …] FINDING (not [err]). The
    fold/replay/dry-run/snapshot/fold-from reducers MUST be pure (CXER4611).
-   journal adds NO new capability — persistence is gated by store. -]
+   journal adds NO new capability — persistence is gated by store. ]
 
 [?def open           scope=public impure [returns element]            ($store-url::string $tenant::string $opts::map {}) [$journal-open $store-url $tenant $opts]]
 [?def attach         scope=public impure [returns element]            ($store::element $tenant::string $opts::map {})    [$journal-attach $store $tenant $opts]]
@@ -31,7 +31,7 @@
 [?def retain         scope=public impure [returns element]            ($journal::element $policy::map)                   [$journal-retain $journal $policy]]
 [?def compact        scope=public impure [returns element]            ($journal::element $opts::map {})                  [$journal-compact $journal $opts]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=journal
   [scope """An append-only, hash-chained, tenant-partitioned event log and the deterministic projection of that log into state. Open or attach a journal over a `store` backend, `append` attributed events (each returning a committed `[entry]` with its sequence, content hash, and predecessor link), `read` / `slice` / `query` ranges, and `fold` the log into a state projection. The chain is deterministic — replayable, dry-runnable, and hash-verifiable — which is the entire reason it exists. `snapshot`, `retain`, and `compact` accelerate and bound replay as derived artifacts; they never edit the live chain, so append-only and chain integrity hold permanently."""]]
 [fn-doc name=open scope=public purity=impure

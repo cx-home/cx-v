@@ -1,15 +1,15 @@
-[- cx-stdlib/io — file and stream I/O. Bridges the streaming events
+[; cx-stdlib/io — file and stream I/O. Bridges the streaming events
    API (spec/core/streaming.md).
 
-   Full v0.8.0 surface per spec/std-lib/io.md §3. Bodies forward to native
+   Full surface per spec/std-lib/io.md §3. Bodies forward to native
    primitives (vcx/code/stdlib_io.v) since filesystem effects are not
    expressible in pure CX. Tier-B, necessarily impure: every function is
    impure and every effect point is capability-gated (§7) — under the
    deny-by-default empty set each raises cx-err:CXER0271. close needs no
    capability. NOTE: this const and stdlib/io.cx are the same source —
-   edit both. -]
+   edit both. ]
 
-[- §3.1 whole-file convenience -]
+[; §3.1 whole-file convenience ]
 [?def read-file        scope=public impure [returns string]            ($path::string)                  [$io-read-file $path]]
 [?def read-file-bytes  scope=public impure [returns bytes]             ($path::string)                  [$io-read-file-bytes $path]]
 [?def read-file-lines  scope=public impure [returns [sequence string]] ($path::string)                  [$io-read-file-lines $path]]
@@ -19,12 +19,12 @@
 [?def append-file      scope=public impure [returns null]              ($path::string $content::string) [$io-append-file $path $content]]
 [?def append-file-bytes scope=public impure [returns null]             ($path::string $content::bytes)  [$io-append-file-bytes $path $content]]
 
-[- §3.2 streaming handles -]
+[; §3.2 streaming handles ]
 [?def open           scope=public impure [returns element] ($path::string $mode::string) [$io-open $path $mode]]
 [?def open-with-opts scope=public impure [returns element] ($path::string $opts::map)    [$io-open-with-opts $path $opts]]
 [?def close          scope=public impure [returns null]    ($handle::element)            [$io-close $handle]]
 
-[- §3.3 stream operations -]
+[; §3.3 stream operations ]
 [?def read-bytes     scope=public impure [returns bytes]  ($handle::element $n::int)     [$io-read-bytes $handle $n]]
 [?def read-line      scope=public impure [returns string] ($handle::element)             [$io-read-line $handle]]
 [?def read-all       scope=public impure [returns string] ($handle::element)             [$io-read-all $handle]]
@@ -37,10 +37,10 @@
 [?def tell           scope=public impure [returns int]    ($handle::element)             [$io-tell $handle]]
 [?def is-eof         scope=public impure [returns bool]   ($handle::element)             [$io-is-eof $handle]]
 
-[- §3.4 lazy line iteration -]
+[; §3.4 lazy line iteration ]
 [?def line-iter scope=public impure [returns [iterator string]] ($handle::element) [$io-line-iter $handle]]
 
-[- §3.5 filesystem queries -]
+[; §3.5 filesystem queries ]
 [?def exists         scope=public impure [returns bool]     ($path::string) [$io-exists $path]]
 [?def is-file        scope=public impure [returns bool]     ($path::string) [$io-is-file $path]]
 [?def is-directory   scope=public impure [returns bool]     ($path::string) [$io-is-directory $path]]
@@ -50,7 +50,7 @@
 [?def modified-time  scope=public impure [returns datetime] ($path::string) [$io-modified-time $path]]
 [?def created-time   scope=public impure [returns datetime] ($path::string) [$io-created-time $path]]
 
-[- §3.6 directory operations -]
+[; §3.6 directory operations ]
 [?def list-dir    scope=public impure [returns [sequence string]] ($path::string) [$io-list-dir $path]]
 [?def make-dir    scope=public impure [returns null]   ($path::string)              [$io-make-dir $path]]
 [?def make-dirs   scope=public impure [returns null]   ($path::string)              [$io-make-dirs $path]]
@@ -63,21 +63,21 @@
 [?def symlink     scope=public impure [returns null]   ($target::string $link::string) [$io-symlink $target $link]]
 [?def readlink    scope=public impure [returns string] ($path::string)              [$io-readlink $path]]
 
-[- §3.7 globbing -]
+[; §3.7 globbing ]
 [?def glob      scope=public impure [returns [sequence string]]  ($pattern::string) [$io-glob $pattern]]
 [?def glob-iter scope=public impure [returns [iterator string]]  ($pattern::string) [$io-glob-iter $pattern]]
 [?def walk      scope=public impure [returns [iterator element]] ($root::string)    [$io-walk $root]]
 
-[- §3.8 tempfile -]
+[; §3.8 tempfile ]
 [?def temp-file       scope=public impure [returns element] ($prefix::string $suffix::string) [$io-temp-file $prefix $suffix]]
 [?def temp-dir        scope=public impure [returns string]  ($prefix::string)                 [$io-temp-dir $prefix]]
 [?def system-temp-dir scope=public impure [returns string]  ()                                [$io-system-temp-dir]]
 
-[- §3.9 file locking -]
+[; §3.9 file locking ]
 [?def lock   scope=public impure [returns element] ($handle::element $kind::atom) [$io-lock $handle $kind]]
 [?def unlock scope=public impure [returns null]    ($handle::element)             [$io-unlock $handle]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=io
   [scope """File and stream I/O — whole-file reads and writes, streaming handles, line iteration, filesystem queries, directory operations, globbing, tempfiles, and advisory file locking. Whole-file operations materialize content in memory; streaming handles and lazy iterators process arbitrary-size inputs with bounded memory. Path arguments resolve via cx-stdlib/path. Every function is impure and capability-gated: read or write access is checked at the effect point and denied by default."""]]
 [fn-doc name=read-file scope=public purity=impure

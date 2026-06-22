@@ -1,15 +1,15 @@
-[- cx-stdlib/strings — string inspection, search, transform.
+[; cx-stdlib/strings — string inspection, search, transform.
 
-   Full v0.8.0 surface per spec/stdlib_strings.md §3. Every [?def]
+   Full surface per spec/stdlib_strings.md §3. Every [?def]
    body bottoms out in a native primitive (vcx/code/stdlib_strings.v,
    `str-`-prefixed names so they never clash with a language-core
    builtin). CX strings are UTF-8; indexing / length / slicing are
    codepoint-aware (spec §2).
 
    NOTE: this const and stdlib/strings.cx are the same source — edit
-   both. -]
+   both. ]
 
-[- §3.1 Inspection -]
+[; §3.1 Inspection ]
 [?def length          scope=public pure [returns int]    ($s::string)                  [$str-length $s]]
 [?def length-bytes    scope=public pure [returns int]    ($s::string)                  [$str-length-bytes $s]]
 [?def is-empty        scope=public pure [returns bool]   ($s::string)                  [$str-is-empty $s]]
@@ -17,7 +17,7 @@
 [?def slice           scope=public pure [returns string] ($s::string $start::int $end::int) [$str-slice $s $start $end]]
 [?def reverse         scope=public pure [returns string] ($s::string)                  [$str-reverse $s]]
 
-[- §3.2 Search -]
+[; §3.2 Search ]
 [?def contains        scope=public pure [returns bool]   ($s::string $needle::string)          [$str-contains $s $needle]]
 [?def find            scope=public pure [returns int]    ($s::string $needle::string)          [$str-find $s $needle]]
 [?def find-from       scope=public pure [returns int]    ($s::string $needle::string $from::int) [$str-find-from $s $needle $from]]
@@ -27,7 +27,7 @@
 [?def count           scope=public pure [returns int]    ($s::string $needle::string)          [$str-count $s $needle]]
 [?def find-all        scope=public pure [returns [sequence int]] ($s::string $needle::string)  [$str-find-all $s $needle]]
 
-[- §3.3 Case -]
+[; §3.3 Case ]
 [?def upper           scope=public pure [returns string] ($s::string)                  [$str-upper $s]]
 [?def lower           scope=public pure [returns string] ($s::string)                  [$str-lower $s]]
 [?def title           scope=public pure [returns string] ($s::string)                  [$str-title $s]]
@@ -36,7 +36,7 @@
 [?def upper-locale    scope=public pure [returns string] ($s::string $locale::string)   [$str-upper-locale $s $locale]]
 [?def lower-locale    scope=public pure [returns string] ($s::string $locale::string)   [$str-lower-locale $s $locale]]
 
-[- §3.4 Trim -]
+[; §3.4 Trim ]
 [?def trim            scope=public pure [returns string] ($s::string)                        [$str-trim $s]]
 [?def trim-start      scope=public pure [returns string] ($s::string)                        [$str-trim-start $s]]
 [?def trim-end        scope=public pure [returns string] ($s::string)                        [$str-trim-end $s]]
@@ -44,25 +44,25 @@
 [?def trim-start-chars scope=public pure [returns string] ($s::string $chars::string)         [$str-trim-start-chars $s $chars]]
 [?def trim-end-chars  scope=public pure [returns string] ($s::string $chars::string)          [$str-trim-end-chars $s $chars]]
 
-[- §3.5 Split and join -]
+[; §3.5 Split and join ]
 [?def split           scope=public pure [returns [sequence string]] ($s::string $sep::string)         [$str-split $s $sep]]
 [?def split-limit     scope=public pure [returns [sequence string]] ($s::string $sep::string $max::int) [$str-split-limit $s $sep $max]]
 [?def split-lines     scope=public pure [returns [sequence string]] ($s::string)                     [$str-split-lines $s]]
 [?def split-whitespace scope=public pure [returns [sequence string]] ($s::string)                    [$str-split-whitespace $s]]
 [?def join            scope=public pure [returns string] ($parts::[sequence string] $sep::string)     [$str-join $parts $sep]]
 
-[- §3.6 Replace -]
+[; §3.6 Replace ]
 [?def replace         scope=public pure [returns string] ($s::string $from::string $to::string)       [$str-replace $s $from $to]]
 [?def replace-first   scope=public pure [returns string] ($s::string $from::string $to::string)       [$str-replace-first $s $from $to]]
 [?def replace-n       scope=public pure [returns string] ($s::string $from::string $to::string $n::int) [$str-replace-n $s $from $to $n]]
 
-[- §3.7 Pad and repeat -]
+[; §3.7 Pad and repeat ]
 [?def pad-start       scope=public pure [returns string] ($s::string $target::int $pad::string)   [$str-pad-start $s $target $pad]]
 [?def pad-end         scope=public pure [returns string] ($s::string $target::int $pad::string)   [$str-pad-end $s $target $pad]]
 [?def center          scope=public pure [returns string] ($s::string $target::int $pad::string)   [$str-center $s $target $pad]]
 [?def repeat          scope=public pure [returns string] ($s::string $n::int)                    [$str-repeat $s $n]]
 
-[- §3.8 Character class predicates -]
+[; §3.8 Character class predicates ]
 [?def is-ascii        scope=public pure [returns bool] ($s::string)  [$str-is-ascii $s]]
 [?def is-digit        scope=public pure [returns bool] ($s::string)  [$str-is-digit $s]]
 [?def is-alpha        scope=public pure [returns bool] ($s::string)  [$str-is-alpha $s]]
@@ -72,17 +72,22 @@
 [?def is-lower        scope=public pure [returns bool] ($s::string)  [$str-is-lower $s]]
 [?def is-blank        scope=public pure [returns bool] ($s::string)  [$str-is-blank $s]]
 
-[- §3.9 Format / interpolation -]
+[; §3.11 Locale-free numeric parsing — number for valid input, absence () otherwise ]
+[?def to-number       scope=public pure [returns [or number [sequence number]]] ($s::string) [$str-to-number $s]]
+[?def to-int          scope=public pure [returns [or int [sequence int]]]       ($s::string) [$str-to-int $s]]
+[?def to-float        scope=public pure [returns [or float [sequence float]]]   ($s::string) [$str-to-float $s]]
+
+[; §3.9 Format / interpolation ]
 [?def format          scope=public pure [returns string] ($template::string $args::[sequence any])  [$str-format $template $args]]
 
-[- §3.10 Encoding helpers -]
+[; §3.10 Encoding helpers ]
 [?def escape-html     scope=public pure [returns string] ($s::string)  [$str-escape-html $s]]
 [?def unescape-html   scope=public pure [returns string] ($s::string)  [$str-unescape-html $s]]
 [?def escape-shell    scope=public pure [returns string] ($s::string)  [$str-escape-shell $s]]
 [?def escape-json     scope=public pure [returns string] ($s::string)  [$str-escape-json $s]]
 [?def escape-regex    scope=public pure [returns string] ($s::string)  [$str-escape-regex $s]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=strings
   [scope """String inspection, search, and transformation for general text work. Covers length and character-class predicates, case conversion, find/contains/split/join, trim, replace, pad, runtime `format` templates, and escape helpers for HTML, shell, JSON, and regex. CX strings are UTF-8 and most operations are Unicode-aware: indexing, length, and slicing are codepoint-positioned, case folding follows Unicode tables, and predicates use Unicode categories. For byte-level work see cx-stdlib/bytes; for regex see cx-stdlib/re."""]]
 [fn-doc name=length scope=public purity=pure
@@ -400,4 +405,22 @@
   [summary """Escape regex metacharacters so a string matches literally."""]
   [example [code """[?lib 'cx-stdlib/strings']
 [$strings:escape-regex "a.b*c"]"""] [expect """'a\.b\*c'"""]]
+]
+[fn-doc name=to-number scope=public purity=pure
+  [sig """-> [or number absence]"""]
+  [summary """Parse a locale-free numeric string into a number — int for pure-integer syntax, float for fractional / exponent syntax. Surrounding whitespace is trimmed; a non-numeric input (trailing junk, grouping separators, empty) yields the absence channel () rather than a silent string passthrough, so callers branch with [?else]. For grouping / Unicode digits use cx-stdlib/locale."""]
+  [example [code """[?lib 'cx-stdlib/strings']
+[$strings:to-number "3.07"]"""] [expect """3.07"""]]
+]
+[fn-doc name=to-int scope=public purity=pure
+  [sig """-> [or int absence]"""]
+  [summary """Parse a locale-free integer string (optional sign, ASCII digits) into an int; fractional or exponent syntax ("3.07", "1e3") and non-numeric input yield the absence channel ()."""]
+  [example [code """[?lib 'cx-stdlib/strings']
+[$strings:to-int "42"]"""] [expect """42"""]]
+]
+[fn-doc name=to-float scope=public purity=pure
+  [sig """-> [or float absence]"""]
+  [summary """Parse any locale-free numeric string into a float ("5" -> 5.0); a non-numeric input yields the absence channel ()."""]
+  [example [code """[?lib 'cx-stdlib/strings']
+[$strings:to-float "5"]"""] [expect """5.0"""]]
 ]

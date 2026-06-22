@@ -1,8 +1,8 @@
-// Q5 v0.8.0 / Phase 5.5: `cx lsp` — [?match] arm diagnostics + CXPath
+// Q5 / Phase 5.5: `cx lsp` — [?match] arm diagnostics + CXPath
 // focus hover.
 //
 // Implements the four diagnostic / hover affordances reserved by
-// tooling/lsp/v0_8_0_diagnostics.md (CXLS001 / CXLS002 / CXLS003) plus
+// tooling/lsp/diagnostics.md (CXLS001 / CXLS002 / CXLS003) plus
 // the CXPath focus-hover surface.
 //
 // Approach: full-AST. The LSP server calls `cx.parse_program(source)` (the
@@ -32,15 +32,15 @@
 //   Severity hint. Trigger: 2+ `[when …]` arms whose predicate source-
 //   text is byte-identical. The recogniser is intentionally narrow
 //   (no semantic equivalence); the hint cites the duplicates so the
-//   author can refactor manually. Auto-fix is out-of-scope for v0.8.0
-//   per v0_8_0_diagnostics.md "Out-of-scope".
+//   author can refactor manually. Auto-fix is out of scope
+//   per diagnostics.md "Out-of-scope".
 //
-// CXPath focus hover (reservation; v0.8.0 deliverable)
+// CXPath focus hover (reservation)
 //   When the cursor is over any byte range covered by a
 //   ProgramPathExpr node, the hover provider returns a markdown
 //   tooltip describing the path: leading-axis ('//' / '/' / 'relative'),
-//   step count, and a focus-type placeholder ('any' until full
-//   CXPath type-inference lands post-v0.8.0). This is the "hover
+//   step count, and a focus-type placeholder ('any' currently, until full
+//   CXPath type-inference lands). This is the "hover
 //   affordance ships today, type-inference fills in later" deliverable.
 
 module main
@@ -198,7 +198,7 @@ fn analyse_match_directive(m cx.ProgramDirective, source string, mut diags []jso
 			arm_pos, key_pos_end_estimate(arm_pos, 4),
 			'unreachable [?match] arm — preceding arm is a catch-all ([else …]) or duplicates an earlier [case …] pattern'))
 	}
-	_ = else_pos // currently unused beyond seen_else gate; reserved for v0.8.x refinement
+	_ = else_pos // currently unused beyond seen_else gate; reserved for a future refinement
 
 	// CXLS002 — missing [else …]. Suppressed when a catch-all `[case …]`
 	// already gives total coverage (a bare `$v` / `_` bind).
@@ -276,7 +276,7 @@ fn slot_value_pos(node cx.ProgramNode, fallback cx.Position) cx.Position {
 //
 // This is a heuristic (not semantically perfect) but matches the
 // "byte-identical source text" contract documented in
-// v0_8_0_diagnostics.md for CXLS003 and the same-pattern-reuse half
+// diagnostics.md for CXLS003 and the same-pattern-reuse half
 // of CXLS001.
 fn source_slice_around(source string, pos cx.Position) string {
 	if pos.offset < 0 || pos.offset >= source.len {
@@ -476,7 +476,7 @@ fn find_pathexpr_at(node cx.ProgramNode, source string, offset int) ?cx.ProgramP
 // pathexpr_end_offset estimates the source-end offset for a path
 // expression. Paths terminate at the next top-level whitespace, `]`,
 // `)`, `}`, or `:` at depth 0. We never cross a newline (paths are
-// single-line at v0.8.0; multi-line path-expression layout is not in
+// single-line currently; multi-line path-expression layout is not in
 // the grammar).
 fn pathexpr_end_offset(p cx.ProgramPathExpr, source string) int {
 	start := p.pos.offset
@@ -510,8 +510,8 @@ fn pathexpr_end_offset(p cx.ProgramPathExpr, source string) int {
 //   1. The path source text (header)
 //   2. Anchor kind ('//', '/', or 'relative')
 //   3. Step count
-//   4. Static focus type — 'any' at v0.8.0 (full inference is post-
-// v0.8.0 follow-up; the hover affordance itself
+//   4. Static focus type — currently 'any' (full inference is a
+//      follow-up; the hover affordance itself
 //      ships today so editors can wire UI ahead of inference).
 fn render_pathexpr_hover(p cx.ProgramPathExpr) string {
 	anchor := match p.leading {
@@ -528,5 +528,5 @@ fn render_pathexpr_hover(p cx.ProgramPathExpr) string {
 		}
 		step_summary = '\n\n**Steps:** `${bits.join('/')}`'
 	}
-	return '**CXPath expression**\n\n**Anchor:** ${anchor}\n\n**Step count:** ${step_count}${step_summary}\n\n**Focus type (static):** `any`\n\n*Type inference for CXPath focus is reserved for a post-v0.8.0 LSP iteration; this hover ships the affordance and the structural breakdown today.*'
+	return '**CXPath expression**\n\n**Anchor:** ${anchor}\n\n**Step count:** ${step_count}${step_summary}\n\n**Focus type (static):** `any`\n\n*Type inference for CXPath focus is reserved for a future LSP iteration; this hover ships the affordance and the structural breakdown today.*'
 }

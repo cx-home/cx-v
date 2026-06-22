@@ -117,32 +117,37 @@ fn (mut l Lexer) skip_ws_and_comments() ! {
 			}
 			`[` {
 				next := l.peek(1)
-				// `[--`-form block comment: [-- … --]. The DOUBLE dash
-				// distinguishes the comment opener from the single-dash
-				// subtraction directive `[- $a $b]`. Closes at the next
-				// `--]` sequence (two or more trailing dashes also OK
-				// since they collapse — the scanner stops at first `--]`).
+				// `[; … ]` block comment — the single CX block-comment form.
+				// `;` is unambiguous: `[- $a $b]` is the subtraction operator
+				// (never a comment), so no dash-counting is needed. The body
+				// runs to the MATCHING `]`, balancing nested `[`…`]` — so a
+				// comment body may contain brackets (`[; A [bus] owns … ]`).
+				// This mirrors the data reader's read_until_close (parser.v),
+				// keeping `[; … ]` identical under both readings (data ⊂ program);
+				// the prior first-`]` scan closed early on any bracketed prose.
 				//
-				// `[#…#]` is NO LONGER eaten here. Per code.md §1.3 + lexicon
+				// `[#…#]` is NOT eaten here. Per code.md §1.3 + lexicon
 				// [L2]/[L3] it is RAW TEXT (not a comment); next_token captures
 				// it as a `data_span` token (DATA↔PROGRAM seam). A prior version
 				// wrongly skipped it as a block comment and DISCARDED the raw
 				// text, so `cx file.cx` (eval) lost it vs the data reading.
-				is_dash_block := next == `-` && l.peek(2) == `-`
-				if is_dash_block {
+				if next == `;` {
 					start := l.snapshot_position()
 					l.advance() // consume '['
-					l.advance() // consume first '-'
-					l.advance() // consume the second '-'
+					l.advance() // consume ';'
 					mut closed := false
-					// Scan until `--]`.
+					mut depth := 0
 					for l.pos < l.src.len {
-						if l.src[l.pos] == `-` && l.peek(1) == `-` && l.peek(2) == `]` {
-							l.advance()
-							l.advance()
-							l.advance()
-							closed = true
-							break
+						bc := l.src[l.pos]
+						if bc == `[` {
+							depth++
+						} else if bc == `]` {
+							if depth == 0 {
+								l.advance()
+								closed = true
+								break
+							}
+							depth--
 						}
 						l.advance()
 					}

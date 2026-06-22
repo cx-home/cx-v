@@ -1,17 +1,17 @@
-[- cx-stdlib/path — filesystem path manipulation. Distinct from the
+[; cx-stdlib/path — filesystem path manipulation. Distinct from the
    CXPath value kind (spec/cxpath.md) — this is OS-path territory.
 
-   Full v0.8.0 surface per spec/stdlib_path.md §3. Bodies call native
+   Full surface per spec/stdlib_path.md §3. Bodies call native
    primitives (vcx/code/stdlib_path.v) since path logic (normalize,
-   relative, glob, containment) is not expressible in pure CX. -]
+   relative, glob, containment) is not expressible in pure CX. ]
 
-[- Co-located documentation per spec/02-inprogress/stdlib_colocated_docs.md.
+[; Co-located documentation per spec/02-inprogress/stdlib_colocated_docs.md.
    [module-doc] + [fn-doc] are plain (non-directive) elements; the loader
-   ignores them and the doc projection reads them via [$cx:parse] + CXPath. -]
+   ignores them and the doc projection reads them via [$cx:parse] + CXPath. ]
 [module-doc name=path
   [scope """Filesystem path manipulation — splitting, joining, normalizing, and comparing OS paths. Distinct from the CXPath value kind (spec/cxpath.md): this is OS-path territory. Most operations are lexical and pure; the few that touch the filesystem (`absolute`, `canonical`) are marked impure. Path logic such as normalization, relative-path computation, globbing, and containment is implemented in native primitives since it is not expressible in pure CX."""]]
 
-[- §3.1 component extraction -]
+[; §3.1 component extraction ]
 [?def dirname   scope=public pure [returns string] ($p::string)              [$path-dirname $p]]
 [fn-doc name=dirname scope=public purity=pure
   [sig """($p::string) -> string"""]
@@ -49,7 +49,7 @@
   [example [code """[?lib 'cx-stdlib/path']
 [$path:parts "/a/b/c.txt"]"""] [expect """('a', 'b', 'c.txt')"""]]]
 
-[- §3.2 composition -]
+[; §3.2 composition ]
 [?def join      scope=public pure [returns string] (*$parts::string)    [$path-join $parts]]
 [fn-doc name=join scope=public purity=pure
   [sig """(*$parts::string) -> string"""]
@@ -63,7 +63,7 @@
   [example [code """[?lib 'cx-stdlib/path']
 [$path:join-seq ("a/", "/b/", "/c")]"""] [expect """'a/b/c'"""]]]
 
-[- §3.3 normalization -]
+[; §3.3 normalization ]
 [?def normalize scope=public pure   [returns string] ($p::string)            [$path-normalize $p]]
 [fn-doc name=normalize scope=public purity=pure
   [sig """($p::string) -> string"""]
@@ -89,7 +89,7 @@
   [example [code """[?lib 'cx-stdlib/path']
 [$path:canonical "/no/such/path/abcxyz-does-not-exist-12345"]"""] [expect """cx-err:CXER2600"""]]]
 
-[- §3.4 predicates -]
+[; §3.4 predicates ]
 [?def is-absolute      scope=public pure [returns bool] ($p::string)         [$path-is-absolute $p]]
 [fn-doc name=is-absolute scope=public purity=pure
   [sig """($p::string) -> bool"""]
@@ -121,7 +121,7 @@
   [example [code """[?lib 'cx-stdlib/path']
 [$path:has-extension "a.txt"]"""] [expect """true"""]]]
 
-[- §3.5 manipulation -]
+[; §3.5 manipulation ]
 [?def with-extension scope=public pure [returns string] ($p::string $ext::string)  [$path-with-extension $p $ext]]
 [fn-doc name=with-extension scope=public purity=pure
   [sig """($p::string $ext::string) -> string"""]
@@ -147,7 +147,7 @@
   [example [code """[?lib 'cx-stdlib/path']
 [$path:append "a/b" "/c"]"""] [expect """'a/b/c'"""]]]
 
-[- §3.6 globbing -]
+[; §3.6 globbing ]
 [?def match-glob scope=public pure [returns bool] ($pattern::string $p::string) [$path-match-glob $pattern $p]]
 [fn-doc name=match-glob scope=public purity=pure
   [sig """($pattern::string $p::string) -> bool"""]
@@ -155,7 +155,7 @@
   [example [code """[?lib 'cx-stdlib/path']
 [$path:match-glob "**/*.cx" "a/b/c.cx"]"""] [expect """true"""]]]
 
-[- §3.7 cross-platform separator -]
+[; §3.7 cross-platform separator ]
 [?def separator      scope=public pure [returns string] () [$path-separator]]
 [fn-doc name=separator scope=public purity=pure
   [sig """() -> string"""]
@@ -169,7 +169,7 @@
   [example [code """[?lib 'cx-stdlib/path']
 [$path:list-separator]"""] [expect """':'"""]]]
 
-[- §3.8 path-safety -]
+[; §3.8 path-safety ]
 [?def is-within scope=public pure [returns bool]   ($dir::string $candidate::string)  [$path-is-within $dir $candidate]]
 [fn-doc name=is-within scope=public purity=pure
   [sig """($dir::string $candidate::string) -> bool"""]
@@ -183,7 +183,7 @@
   [example [code """[?lib 'cx-stdlib/path']
 [$path:safe-join "/srv/www" "a/b.txt"]"""] [expect """'/srv/www/a/b.txt'"""]]]
 
-[- §4.5 case-insensitive comparison -]
+[; §4.5 case-insensitive comparison ]
 [?def equals-case-insensitive scope=public pure [returns bool] ($a::string $b::string) [$path-equals-ci $a $b]]
 [fn-doc name=equals-case-insensitive scope=public purity=pure
   [sig """($a::string $b::string) -> bool"""]

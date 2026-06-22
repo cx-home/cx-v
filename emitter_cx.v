@@ -61,7 +61,7 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 			if n.is_line {
 				out << '${ind}# ${n.value}${nl}'
 			} else {
-				out << '${ind}[-${n.value}]${nl}'
+				out << '${ind}[;${n.value}]${nl}'
 			}
 		}
 		PINode           { cx_emit_pi(n, depth, compact, mut out) }
@@ -93,7 +93,7 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 			out << '${ind}${cx_emit_sequence_inline(seq, compact)}${nl}'
 		}
 		MatchNode         {
-			// v0.8.0 — first-class `[?match]` AST. The
+			// First-class `[?match]` AST. The
 			// terse-CX emit here uses the MatchNode `source` snippet
 			// when available (the parser populates it with the full
 			// verbatim `[?match …]` form); a structural pretty-printer
@@ -102,7 +102,7 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 			out << '${ind}${src}${nl}'
 		}
 		ModifyNode        {
-			// v0.8.0 — first-class `[?modify]` AST. Same
+			// First-class `[?modify]` AST. Same
 			// verbatim-source convention as MatchNode at this graft.
 			src := n.source or { '' }
 			out << '${ind}${src}${nl}'

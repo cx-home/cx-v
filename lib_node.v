@@ -2,7 +2,7 @@ module cx
 
 import crypto.sha256
 
-// lib_node.v — LibNode AST (v0.8.0).
+// lib_node.v — LibNode AST.
 //
 // LibNode is the spec-canonical first-class AST node for the
 // `[?lib RESOLVER (:as ALIAS)? (:only (NAMES...))?]` module-import
@@ -37,7 +37,7 @@ import crypto.sha256
 //     helpers".
 //   - SRI verification + HTTPS fetch — Phase 2.14.
 //   - `:in-memory` / `:version` / Bearer / Basic-auth modifier slots
-// reserved at v0.8.0 grammar but not
+// reserved at the grammar level but not
 //     parsed by this layer; surfaced via CXLIB_UNKNOWN_MODIFIER.
 //   - `cx-err:CXER0208` (insecure transport) raise — Phase 2.14
 //     (loader). Parser currently reports CXLIB_INSECURE_TRANSPORT at

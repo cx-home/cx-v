@@ -114,6 +114,19 @@ fn cap_net_is_all() bool {
 	return c.allow_all || c.net_hosts.len == 0
 }
 
+// cap_allow_all reports whether the FULL opt-out grant (--allow-all) is active
+// — distinct from a merely unscoped net grant (bare --allow-net). Only
+// --allow-all bypasses the §4.5 private-range deny set; bare --allow-net keeps
+// it (the deny set is the secure default for any net grant absent a literal-IP
+// scope — #47).
+fn cap_allow_all() bool {
+	if g_active_caps == unsafe { nil } {
+		return false
+	}
+	c := unsafe { &CapSet(g_active_caps) }
+	return c.allow_all
+}
+
 // caps_apply_spec installs the capability set described by a host grant
 // spec string (the ABI `cx_code_eval_caps` `caps` arg / the CLI's combined
 // `--allow-*` set). Deny-by-default: '' ⇒ empty (pure-only); 'all' / '*' ⇒

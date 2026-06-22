@@ -580,7 +580,7 @@ pub fn bin_to_doc(framed []u8) !Document {
 		pos: 0
 	}
 	version := r.read_u8()!
-	// v0.8.0 graft (/ 0030): v7 is reserved (no node-kind
+	// graft (/ 0030): v7 is reserved (no node-kind
 	// changes shipped at v7); v8 introduces MatchNode (0x14) +
 	// ModifyNode (0x15) — PathNode (0x13) wire payload exists but
 	// remains parallel-only at this graft (decoded at the standalone
@@ -729,7 +729,7 @@ fn (mut r AstReader) decode_node() !Node {
 		0x11 { r.decode_map_node()! }
 		0x14 { r.decode_match_node_dispatch()! }   // v8
 		0x15 { r.decode_modify_node_dispatch()! }  // v8
-		0x16 { r.decode_iterator_node()! }         // v0.8.0
+		0x16 { r.decode_iterator_node()! }         // IteratorNode
 		0xFF { Node(TextNode{}) } // skip — unknown / DTD nodes
 		else { error('ast_bin: unknown node tag 0x${tag:02x} at offset ${r.pos - 1}') }
 	}
@@ -809,7 +809,7 @@ fn (mut r AstReader) decode_scalar() !Node {
 		'bigint'   { ScalarType.bigint_type }
 		'duration' { ScalarType.duration_type }
 		'period'   { ScalarType.period_type }
-		'atom'     { ScalarType.atom_type } // v0.8.0
+		'atom'     { ScalarType.atom_type }
 		else       { ScalarType.string_type }
 	}
 	return Node(ScalarNode{
@@ -905,7 +905,7 @@ fn (mut r AstReader) decode_iterator_node() !Node {
 	kind_byte := r.read_u8()!
 	// IteratorSourceKind ordinals 0..16 are allocated
 	// (iter_none..iter_reduce); future kinds (iter_file / iter_channel)
-	// extend the table additively. v0.8.0 decoders
+	// extend the table additively. Decoders
 	// reject any ordinal above the current enum range.
 	if kind_byte > u8(IteratorSourceKind.iter_reduce) {
 		return error('ast_bin: unknown IteratorSourceKind ordinal ${kind_byte}')

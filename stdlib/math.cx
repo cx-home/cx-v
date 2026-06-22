@@ -1,7 +1,7 @@
-[- cx-stdlib/math — numeric utilities aligned with CXDM int / float
+[; cx-stdlib/math — numeric utilities aligned with CXDM int / float
    (and :decimal per cap bit 11; sized int / float per CXDM extended).
 
-   Full v0.8.0 public surface per spec/std-lib/math.md §3 (80 [?def]s).
+   Full public surface per spec/std-lib/math.md §3 (80 [?def]s).
    All functions are PURE — no capability gating. Most bodies forward to
    native primitives (vcx/code/stdlib_math.v): trig / hyperbolic, exact
    banker's rounding, statistical estimators, deterministic Miller-Rabin,
@@ -12,9 +12,9 @@
    real-valued functions return NaN per IEEE-754 (never raise). Errors are
    values (CXER3000..CXER3003, §5).
 
-   NOTE: this const and stdlib/math.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/math.cx are the same source — edit both. ]
 
-[- §3.1 basic -]
+[; §3.1 basic ]
 [?def abs             scope=public pure [returns any]   ($x::any)                  [$abs $x]]
 [?def sign            scope=public pure [returns int]   ($x::any)                  [$math-sign $x]]
 [?def floor           scope=public pure [returns int]   ($x::float)                [$floor $x]]
@@ -28,7 +28,7 @@
 [?def min             scope=public pure [returns any]   ($xs::[sequence any])      [$min $xs]]
 [?def clamp           scope=public pure [returns any]   ($x::any $lo::any $hi::any) [$math-clamp $x $lo $hi]]
 
-[- §3.2 powers, logs, roots -]
+[; §3.2 powers, logs, roots ]
 [?def pow      scope=public pure [returns float] ($base::float $exp::float) [$pow $base $exp]]
 [?def sqrt     scope=public pure [returns float] ($x::float)                [$sqrt $x]]
 [?def cbrt     scope=public pure [returns float] ($x::float)                [$cbrt $x]]
@@ -38,7 +38,7 @@
 [?def log10    scope=public pure [returns float] ($x::float)                [$log10 $x]]
 [?def log-base scope=public pure [returns float] ($x::float $base::float)  [$math-log-base $x $base]]
 
-[- §3.3 trigonometry -]
+[; §3.3 trigonometry ]
 [?def sin        scope=public pure [returns float] ($x::float)              [$math-sin $x]]
 [?def cos        scope=public pure [returns float] ($x::float)              [$math-cos $x]]
 [?def tan        scope=public pure [returns float] ($x::float)              [$math-tan $x]]
@@ -55,7 +55,7 @@
 [?def deg-to-rad scope=public pure [returns float] ($deg::float)            [$math-deg-to-rad $deg]]
 [?def rad-to-deg scope=public pure [returns float] ($rad::float)            [$math-rad-to-deg $rad]]
 
-[- §3.4 statistical -]
+[; §3.4 statistical ]
 [?def sum          scope=public pure [returns any]            ($xs::[sequence any])             [$math-sum $xs]]
 [?def product      scope=public pure [returns any]            ($xs::[sequence any])             [$math-product $xs]]
 [?def mean         scope=public pure [returns float]          ($xs::[sequence any])             [$math-mean $xs]]
@@ -71,7 +71,7 @@
 [?def correlation  scope=public pure [returns float]          ($xs::[sequence float] $ys::[sequence float]) [$math-correlation $xs $ys]]
 [?def covariance   scope=public pure [returns float]          ($xs::[sequence float] $ys::[sequence float]) [$math-covariance $xs $ys]]
 
-[- §3.5 bit operations -]
+[; §3.5 bit operations ]
 [?def bit-and         scope=public pure [returns int] ($a::int $b::int) [$math-bit-and $a $b]]
 [?def bit-or          scope=public pure [returns int] ($a::int $b::int) [$math-bit-or $a $b]]
 [?def bit-xor         scope=public pure [returns int] ($a::int $b::int) [$math-bit-xor $a $b]]
@@ -82,7 +82,7 @@
 [?def leading-zeros   scope=public pure [returns int] ($x::int)          [$math-leading-zeros $x]]
 [?def trailing-zeros  scope=public pure [returns int] ($x::int)          [$math-trailing-zeros $x]]
 
-[- §3.6 predicates -]
+[; §3.6 predicates ]
 [?def is-nan      scope=public pure [returns bool] ($x::any) [$math-is-nan $x]]
 [?def is-infinite scope=public pure [returns bool] ($x::any) [$math-is-infinite $x]]
 [?def is-finite   scope=public pure [returns bool] ($x::any) [$math-is-finite $x]]
@@ -91,13 +91,13 @@
 [?def is-negative scope=public pure [returns bool] ($x::any) [$math-is-negative $x]]
 [?def is-zero     scope=public pure [returns bool] ($x::any) [$math-is-zero $x]]
 
-[- §3.7 number theory -]
+[; §3.7 number theory ]
 [?def gcd       scope=public pure [returns int]  ($a::int $b::int) [$math-gcd $a $b]]
 [?def lcm       scope=public pure [returns int]  ($a::int $b::int) [$math-lcm $a $b]]
 [?def is-prime  scope=public pure [returns bool] ($n::int)          [$math-is-prime $n]]
 [?def factorial scope=public pure [returns int]  ($n::int)          [$math-factorial $n]]
 
-[- §3.8 constants -]
+[; §3.8 constants ]
 [?def pi       scope=public pure [returns float] () [$math-pi]]
 [?def e        scope=public pure [returns float] () [$math-e]]
 [?def tau      scope=public pure [returns float] () [$math-tau]]
@@ -106,13 +106,13 @@
 [?def nan      scope=public pure [returns float] () [$math-nan]]
 [?def epsilon  scope=public pure [returns float] () [$math-epsilon]]
 
-[- §3.9 explicit modular arithmetic -]
+[; §3.9 explicit modular arithmetic ]
 [?def wrapping-add scope=public pure [returns int] ($a::int $b::int)       [$math-wrapping-add $a $b]]
 [?def wrapping-sub scope=public pure [returns int] ($a::int $b::int)       [$math-wrapping-sub $a $b]]
 [?def wrapping-mul scope=public pure [returns int] ($a::int $b::int)       [$math-wrapping-mul $a $b]]
 [?def wrapping-pow scope=public pure [returns int] ($base::int $exp::int)  [$math-wrapping-pow $base $exp]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=math
   [scope """Numeric utilities over CX int and float scalar kinds. Covers basic arithmetic and rounding, powers/logs/roots, trigonometry and hyperbolics, statistics, bit operations, numeric predicates, number theory, special constants, and explicit modular arithmetic. Every function is pure. Real-valued functions return NaN on domain errors per IEEE 754 rather than raising, while int64 arithmetic is checked by default with `wrapping-*` as the opt-in modular escape hatch."""]]
 [fn-doc name=abs scope=public purity=pure

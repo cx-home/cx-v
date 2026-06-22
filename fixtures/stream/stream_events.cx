@@ -1,5 +1,5 @@
 [doc
-  [-a comment node]
+  [;a comment node]
   [?pi pi data here]
   [text-node plain text with &amp; entity ref]
   [scalar-int::int 42]

@@ -195,9 +195,10 @@ pub fn parse_yaml(src string) !Document {
 	}
 	if r.pos >= r.lines.len { return Document{} }
 	val := r.parse_block(0)
-	mut doc := jv_to_cx_doc(val)
-	resolve_namespaces(mut doc)
-	return doc
+	// #4: import losslessly to the native value model (Map/Array/scalars),
+	// matching the JSON codec — not synthesized elements. No XML namespaces in
+	// YAML, so resolve_namespaces is not run on the value-model doc.
+	return jv_to_value_doc(val)
 }
 
 pub fn parse_yaml_cx(src string) !ParseResult {

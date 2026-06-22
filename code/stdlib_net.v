@@ -5,6 +5,7 @@ import cx
 import net
 import net.unix
 import net.mbedtls
+import time
 
 // stdlib_net.v — native primitives backing the `cx-stdlib/net` module
 // (spec/02-inprogress/stdlib_net.md). L4 networking: TCP/UDP/Unix/TLS/DTLS
@@ -53,6 +54,7 @@ const net_err_scheme_unsupported = 'cx-err:CXER4501' // E_NET_SCHEME_UNSUPPORTED
 const net_err_resolve_nxdomain = 'cx-err:CXER4502' // E_NET_RESOLVE_NXDOMAIN
 const net_err_connect_refused = 'cx-err:CXER4505' // E_NET_CONNECT_REFUSED
 const net_err_unreachable = 'cx-err:CXER4506' // E_NET_UNREACHABLE
+const net_err_timeout = 'cx-err:CXER4507' // E_NET_TIMEOUT (socket deadline lapsed)
 const net_err_reset = 'cx-err:CXER4508' // E_NET_RESET
 const net_err_tls_handshake = 'cx-err:CXER4512' // E_NET_TLS_HANDSHAKE_FAILED
 const net_err_tls_config = 'cx-err:CXER4514' // E_NET_TLS_CONFIG
@@ -86,6 +88,14 @@ mut:
 	unix_listener &unix.StreamListener = unsafe { nil } // Unix-domain listener (listen-unix)
 	rbuf         []u8 // buffered bytes for read-line / read-all framing
 	eof          bool // peer half-closed (read side at EOF)
+	// §3.7 read deadline (#56). >0 = a configured per-read-operation budget in
+	// ms, applied to the TCP conn as an absolute deadline armed at the start of
+	// each read op (net_arm_read_deadline); 0 = none (block per transport
+	// default). Set from dial opts `{read-deadline}` and/or set-deadline. A
+	// lapse surfaces CXER4507 on the read-until-EOF forms (read-all / read-line /
+	// line-iter); the bounded read-bytes / read-exact return a short read.
+	read_deadline_ms i64
+	timed_out        bool // transient: the last read-until-EOF pull lapsed the deadline (line-iter signal)
 	consumed     bool // single-use stream walked once (http SSE sse-events → CXER0105 on a second walk)
 	is_sse_stream bool // this connection backs a server-side http SSE stream (counts against http_open_sse_streams)
 }
@@ -638,7 +648,7 @@ fn net_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			mut h := net_mut_handle(args[0]) or {
 				return mk_err(net_err_handle_closed, 'E_NET_HANDLE_CLOSED: unknown handle')
 			}
-			return net_read_bytes_real(mut h, int(n))
+			return net_read_bytes_real(mut h, int(n), false)
 		}
 		'net-read-line' {
 			mut h := net_mut_handle(args[0]) or {
@@ -656,7 +666,7 @@ fn net_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			mut h := net_mut_handle(args[0]) or {
 				return mk_err(net_err_handle_closed, 'E_NET_HANDLE_CLOSED: unknown handle')
 			}
-			return net_read_bytes_real(mut h, 64 * 1024 * 1024)
+			return net_read_bytes_real(mut h, 64 * 1024 * 1024, true)
 		}
 		'net-write-bytes', 'net-write-string', 'net-write-line', 'net-flush' {
 			mut h := net_mut_handle(args[0]) or {
@@ -752,6 +762,51 @@ fn net_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			return net_handle_op_null(args[0])
 		}
 		'net-set-deadline', 'net-set-opt' {
+			// Fail loud on a std-stream handle (#29): set-deadline / set-opt
+			// are socket operations. A `[std-stream …]` (stdin/stdout/stderr
+			// from cx-stdlib/env) was SILENTLY accepted (returned ok) yet had
+			// no effect — the read still blocked past the "deadline". Reject so
+			// the caller learns it now instead of debugging a phantom timeout.
+			// (A timeout/non-blocking std-stream READ is a separate, not-yet-
+			// available surface — see #29's deferred half.)
+			if args.len > 0 {
+				if args[0] is cx.Element && (args[0] as cx.Element).name == 'std-stream' {
+					op := name['net-'.len..]
+					return mk_err(net_err_arg_invalid,
+						'E_NET_ARG_INVALID: ${op} is not supported on a std-stream handle (stdin/stdout/stderr have no socket deadline/options); a timeout/non-blocking std-stream read is not available')
+				}
+			}
+			if name == 'net-set-deadline' {
+				// §3.7 set-deadline (#56): wire the READ deadline so read-line /
+				// read-all / line-iter honor it (`read` / `both` relative ms, or
+				// `read-deadline` as a synonym of the dial opt; `:none` clears).
+				// The write deadline and absolute `read-at` / `write-at` forms are
+				// accepted (no error) but not yet applied to reads in this build.
+				mut h := net_mut_handle(args[0]) or {
+					return mk_err(net_err_handle_closed, 'E_NET_HANDLE_CLOSED: unknown handle')
+				}
+				opts := if args.len > 1 {
+					args[1]
+				} else {
+					cx.Node(cx.Element{ name: '__cx_map__' })
+				}
+				for key in ['read', 'both', 'read-deadline'] {
+					v := net_map_get(opts, key) or { continue }
+					if net_is_none_atom(v) {
+						h.read_deadline_ms = 0
+						if h.conn != unsafe { nil } {
+							h.conn.set_read_deadline(time.unix(0))
+							h.conn.set_read_timeout(net.tcp_default_read_timeout)
+						}
+					} else if ms := net_node_ms(v) {
+						// A zero / past relative deadline lapses immediately
+						// (net.md §3.7) — store a minimal positive budget so the
+						// next read surfaces CXER4507 rather than blocking.
+						h.read_deadline_ms = if ms > 0 { ms } else { i64(1) }
+					}
+				}
+				return net_null()
+			}
 			return net_handle_op_null(args[0])
 		}
 		'net-is-open' {
@@ -846,13 +901,13 @@ fn net_dial_impl(name string, args []cx.Node) cx.Node {
 	}
 	mut pa := a
 	pa.host = pinned
+	opts := if args.len > 1 { args[1] } else { cx.Node(cx.Element{ name: '__cx_map__' }) }
 	if eff == 'tcp' {
-		return net_dial_tcp_real(pa)
+		return net_dial_tcp_real(pa, opts)
 	}
 	if eff == 'udp' {
 		return net_dial_udp_real(pa)
 	}
-	opts := if args.len > 1 { args[1] } else { cx.Node(cx.Element{ name: '__cx_map__' }) }
 	if eff == 'dtls' {
 		return net_dial_dtls_real(pinned, a.host, a.port, opts, a)
 	}
@@ -972,9 +1027,19 @@ fn net_ssrf_check(host string, port int) (string, ?cx.Node) {
 		return '', mk_err(net_err_resolve_nxdomain, 'E_NET_RESOLVE_NXDOMAIN: resolve ${host}: ${err.msg()}')
 	}
 	mut saw_denied := false
+	allow_all := cap_allow_all()
 	for ad in addrs {
 		cand := net_canonicalize_ip(net_strip_port(ad.str()))
+		if allow_all {
+			// --allow-all is the explicit grant-EVERYTHING opt-out: it bypasses
+			// the §4.5 deny-set entirely, so outbound to loopback / private
+			// ranges is permitted (#47 — "--allow-all" must mean all). A merely
+			// unscoped bare --allow-net does NOT bypass it (below): the deny-set
+			// is the secure default for any net grant absent a literal-IP scope.
+			return cand, none // pinned
+		}
 		if !bare {
+			// scoped grant — step-1 host match (program host or resolved IP)
 			mut ok := false
 			for spec in specs {
 				if net_spec_matches(spec, host, port) || net_spec_matches(spec, cand, port) {
@@ -986,6 +1051,9 @@ fn net_ssrf_check(host string, port int) (string, ?cx.Node) {
 				continue
 			}
 		}
+		// §4.5 deny-set + literal-IP/localhost override. Applies to bare
+		// --allow-net (no override spec → private/loopback denied) AND to
+		// scoped grants (a public-host scope cannot be rebound to a private IP).
 		if net_ip_in_deny_set(cand) {
 			if !net_override_allows(specs, cand) {
 				saw_denied = true
@@ -1000,7 +1068,7 @@ fn net_ssrf_check(host string, port int) (string, ?cx.Node) {
 	return '', cap_deny('net', '${host}:${port}')
 }
 
-fn net_dial_tcp_real(a NetAddr) cx.Node {
+fn net_dial_tcp_real(a NetAddr, opts cx.Node) cx.Node {
 	addr := net_join_host_port(a.host, a.port)
 	conn := net.dial_tcp(addr) or {
 		msg := err.msg()
@@ -1011,13 +1079,18 @@ fn net_dial_tcp_real(a NetAddr) cx.Node {
 		}
 		return mk_err(ecode, 'E_NET: connect ${addr}: ${msg}')
 	}
+	// §3.2 dial opt `read-deadline` (#56): a per-read-operation budget (ms),
+	// honored by read-line / read-all / line-iter. Stored on the handle and
+	// armed per read; set-deadline can later update or clear it.
+	rd_ms := net_map_get_ms(opts, 'read-deadline') or { i64(0) }
 	mut h := &NetHandle{
-		kind:      'socket'
-		transport: 'tcp'
-		state:     'open'
-		is_open:   true
-		local:     [a]
-		conn:      conn
+		kind:             'socket'
+		transport:        'tcp'
+		state:            'open'
+		is_open:          true
+		local:            [a]
+		conn:             conn
+		read_deadline_ms: rd_ms
 	}
 	id := net_register(h)
 	return net_socket_element(id, h)
@@ -1385,10 +1458,14 @@ fn net_close_id(id int) {
 }
 
 // net_read_line_buf reads one CRLF/LF-terminated line off the handle's buffered
-// stream, returning the line WITHOUT the terminator. Returns none only when the
-// stream is at EOF with no buffered bytes left (clean end). Shared by the http
-// server's request-line/header reader so it reuses net's single buffer.
+// stream, returning the line WITHOUT the terminator. Returns none either at a
+// clean EOF (no buffered bytes left) OR when a configured read deadline lapsed
+// before a full line — the two are distinguished by `h.timed_out`, which the
+// line-iter walk reads to raise CXER4507 (#56). Shared by the http server's
+// request-line/header reader (no deadline → never flags timed_out).
 fn net_read_line_buf(mut h NetHandle) ?string {
+	h.timed_out = false
+	net_arm_read_deadline(mut h)
 	for {
 		for i in 0 .. h.rbuf.len {
 			if h.rbuf[i] == `\n` {
@@ -1410,11 +1487,15 @@ fn net_read_line_buf(mut h NetHandle) ?string {
 			return s
 		}
 		mut tmp := []u8{len: 4096}
-		n := net_h_read(mut h, mut tmp) or {
-			h.eof = true
-			continue
+		kind, n := net_h_read_step(mut h, mut tmp)
+		if kind == .timeout {
+			// Deadline lapsed before a full line — flag it (the caller surfaces
+			// CXER4507) and stop. Buffered bytes, if any, remain for a later read;
+			// the connection is NOT marked eof (the peer hasn't closed).
+			h.timed_out = true
+			return none
 		}
-		if n <= 0 {
+		if kind == .eof {
 			h.eof = true
 			continue
 		}
@@ -1458,6 +1539,60 @@ fn net_h_read(mut h NetHandle, mut buf []u8) !int {
 		return h.conn.read(mut buf)!
 	}
 	return error('no connection')
+}
+
+// net_err_is_timeout reports whether a transport read error is a socket
+// read-deadline lapse (V's net.err_timed_out, code errors_base+9) rather than
+// a clean EOF / reset. Used to distinguish CXER4507 from EOF in the read loops.
+fn net_err_is_timeout(e IError) bool {
+	if e.code() == net.err_timed_out_code {
+		return true
+	}
+	return e.msg().contains('timed out')
+}
+
+// net_arm_read_deadline applies the handle's configured read deadline (#56) to
+// the underlying TCP conn as an ABSOLUTE deadline for the read operation about
+// to run: `set_read_timeout(0)` makes V's wait_for_read honor the absolute
+// `read_deadline`, which we set to now + read_deadline_ms. Called at the start
+// of each read primitive so every operation gets a fresh budget. A no-op when
+// no deadline is configured (the conn keeps its transport default) or for a
+// non-TCP transport (TLS/UDP deadline support is a separate sub-layer).
+fn net_arm_read_deadline(mut h NetHandle) {
+	if h.read_deadline_ms <= 0 {
+		return
+	}
+	if h.conn == unsafe { nil } {
+		return
+	}
+	h.conn.set_read_timeout(0)
+	h.conn.set_read_deadline(time.now().add(h.read_deadline_ms * time.millisecond))
+}
+
+// NetReadKind classifies a single transport read (net_h_read_step).
+enum NetReadKind {
+	data    // n > 0 bytes read
+	eof     // clean EOF / peer half-close (or a non-timeout read error)
+	timeout // armed read deadline lapsed (only when read_deadline_ms > 0)
+}
+
+// net_h_read_step performs one transport read into `tmp` and classifies the
+// outcome. A read-deadline lapse is reported as `.timeout` ONLY when the handle
+// carries a configured deadline (read_deadline_ms > 0) — otherwise every error
+// (including the transport's own default timeout) maps to `.eof`, preserving
+// the prior behavior for deadline-free reads and the http server's shared use
+// of net_read_line_buf.
+fn net_h_read_step(mut h NetHandle, mut tmp []u8) (NetReadKind, int) {
+	n := net_h_read(mut h, mut tmp) or {
+		if h.read_deadline_ms > 0 && net_err_is_timeout(err) {
+			return NetReadKind.timeout, 0
+		}
+		return NetReadKind.eof, 0
+	}
+	if n <= 0 {
+		return NetReadKind.eof, 0
+	}
+	return NetReadKind.data, n
 }
 
 fn net_h_write(mut h NetHandle, data []u8) !int {
@@ -1628,12 +1763,52 @@ fn net_opts_submap(opts cx.Node, key string) ?cx.Node {
 	return net_map_get(opts, key)
 }
 
+// net_node_ms reads a deadline / timeout VALUE as MILLISECONDS. Accepts a
+// `::duration` scalar (stored as i64 nanoseconds → ms) or a bare numeric scalar
+// (int/float, interpreted as ms — the form `{read-deadline: 2000}` in #56).
+// Returns none for a non-numeric value.
+fn net_node_ms(v cx.Node) ?i64 {
+	if v is cx.ScalarNode {
+		sv := v.value
+		if v.data_type == cx.ScalarType.duration_type {
+			if sv is i64 {
+				return sv / 1_000_000 // ns → ms
+			}
+		}
+		match sv {
+			i64 { return sv }
+			f64 { return i64(sv) }
+			else {}
+		}
+	}
+	return none
+}
+
+// net_map_get_ms reads a deadline / timeout option (by key) as milliseconds.
+fn net_map_get_ms(m cx.Node, key string) ?i64 {
+	v := net_map_get(m, key) or { return none }
+	return net_node_ms(v)
+}
+
+// net_is_none_atom reports whether a value is the `:none` atom (set-deadline's
+// "clear the deadline" sentinel, net.md §3.7).
+fn net_is_none_atom(v cx.Node) bool {
+	if v is cx.ScalarNode {
+		return v.data_type == cx.ScalarType.atom_type && v.value is string
+			&& (v.value as string) == 'none'
+	}
+	return false
+}
+
 // net_read_line_real buffers from the conn until LF; strips a trailing CRLF/LF
-// (§3.4). At EOF it returns the remaining buffered bytes as the final line.
+// (§3.4). At EOF it returns the remaining buffered bytes as the final line. If a
+// configured read deadline lapses before a complete line, it raises CXER4507
+// (#56) — the handle stays usable, so a retry can read more.
 fn net_read_line_real(mut h NetHandle) cx.Node {
 	if !net_h_connected(h) {
 		return mk_err(net_err_handle_closed, 'E_NET_HANDLE_CLOSED: not a connected stream socket')
 	}
+	net_arm_read_deadline(mut h)
 	for {
 		for i in 0 .. h.rbuf.len {
 			if h.rbuf[i] == `\n` {
@@ -1652,11 +1827,11 @@ fn net_read_line_real(mut h NetHandle) cx.Node {
 			return net_str(s)
 		}
 		mut tmp := []u8{len: 4096}
-		n := net_h_read(mut h, mut tmp) or {
-			h.eof = true
-			continue
+		kind, n := net_h_read_step(mut h, mut tmp)
+		if kind == .timeout {
+			return mk_err(net_err_timeout, 'E_NET_TIMEOUT: read-line exceeded the ${h.read_deadline_ms}ms read deadline')
 		}
-		if n <= 0 {
+		if kind == .eof {
 			h.eof = true
 			continue
 		}
@@ -1666,19 +1841,23 @@ fn net_read_line_real(mut h NetHandle) cx.Node {
 }
 
 // net_read_all_real drains the stream to EOF (bounded by max-bytes per §3.4 —
-// the default cap is applied by the caller's opts; this build uses 64 MiB).
+// the default cap is applied by the caller's opts; this build uses 64 MiB). If a
+// configured read deadline lapses before EOF, it raises CXER4507 (#56) rather
+// than blocking forever (the stream never closes) or silently returning a
+// partial result that looks complete — the handle stays usable.
 fn net_read_all_real(mut h NetHandle) cx.Node {
 	if !net_h_connected(h) {
 		return mk_err(net_err_handle_closed, 'E_NET_HANDLE_CLOSED: not a connected stream socket')
 	}
+	net_arm_read_deadline(mut h)
 	max_bytes := 64 * 1024 * 1024
 	for !h.eof {
 		mut tmp := []u8{len: 4096}
-		n := net_h_read(mut h, mut tmp) or {
-			h.eof = true
-			break
+		kind, n := net_h_read_step(mut h, mut tmp)
+		if kind == .timeout {
+			return mk_err(net_err_timeout, 'E_NET_TIMEOUT: read-all exceeded the ${h.read_deadline_ms}ms read deadline')
 		}
-		if n <= 0 {
+		if kind == .eof {
 			h.eof = true
 			break
 		}
@@ -1692,20 +1871,28 @@ fn net_read_all_real(mut h NetHandle) cx.Node {
 	return net_str(s)
 }
 
-// net_read_bytes_real reads up to n bytes (one read; may be short, §4.3 surfaces
-// the actual count — never silently padded).
-fn net_read_bytes_real(mut h NetHandle, n int) cx.Node {
+// net_read_bytes_real reads up to n bytes (may be short, §4.3 surfaces the
+// actual count — never silently padded). `raise_on_deadline` distinguishes the
+// two callers: read-all-bytes (true) drains toward `n`=64 MiB and raises
+// CXER4507 if a configured deadline lapses first (the unbounded form, #56);
+// read-bytes (false) returns the bytes read so far on a deadline lapse — a short
+// read, which is the documented bounded-read contract, not a hang.
+fn net_read_bytes_real(mut h NetHandle, n int, raise_on_deadline bool) cx.Node {
 	if !net_h_connected(h) {
 		return mk_err(net_err_handle_closed, 'E_NET_HANDLE_CLOSED: not a connected stream socket')
 	}
+	net_arm_read_deadline(mut h)
 	// serve from buffer first, then the socket
 	for h.rbuf.len < n && !h.eof {
 		mut tmp := []u8{len: 4096}
-		rd := net_h_read(mut h, mut tmp) or {
-			h.eof = true
-			break
+		kind, rd := net_h_read_step(mut h, mut tmp)
+		if kind == .timeout {
+			if raise_on_deadline {
+				return mk_err(net_err_timeout, 'E_NET_TIMEOUT: read-all-bytes exceeded the ${h.read_deadline_ms}ms read deadline')
+			}
+			break // bounded read: return what we have so far (short read)
 		}
-		if rd <= 0 {
+		if kind == .eof {
 			h.eof = true
 			break
 		}

@@ -40,7 +40,7 @@ import crypto.sha256
 //   - `element_name`  — capitalized element name (`Person`, `Token`, …)
 //   - `union_`        — bracketed `[or T1 T2 …]` (≥ 2 members)
 //   - `sequence_`     — bracketed `[sequence T]` (exactly 1 member)
-//   - `any_`          — wildcard sentinel (reserved; not parsed at v0.8.0)
+//   - `any_`          — wildcard sentinel (reserved; not currently parsed)
 //   - `unknown_`      — fallback sentinel reserved for evaluator-side
 //                       inference; never produced by `parse_type_expr`
 //
@@ -96,7 +96,7 @@ pub mut:
 
 // kind_names lists the lowercase reserved kind names admitted at
 // `kind_name` position per spec/code.md §12.7.1, plus
-// the v0.8.0 extension set noted in the Phase 2.16 brief
+// the extension set noted in the Phase 2.16 brief
 // (`date`, `datetime`, `bytes`, `array`).
 //
 // The set is closed: any other bareword lowercase identifier at a
@@ -406,7 +406,7 @@ fn parse_type_expr_inner(mut c TypeParseCursor) !TypeExpr {
 			source: name
 		}
 	}
-	// Underscore-leading — reject as malformed at v0.8.0.
+	// Underscore-leading — reject as malformed.
 	return error('CXTYPE_PARSE: malformed identifier `${name}` — kind names start lowercase, element names start uppercase')
 }
 

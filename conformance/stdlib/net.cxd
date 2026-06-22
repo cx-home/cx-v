@@ -41,7 +41,7 @@ conformance fixtures for cx-stdlib/net (spec/02-inprogress/stdlib_net.md §10).
    scenarios; they belong in the granted harness (gate=pending).
 #]]
 
- [- §3.1 resolution & addresses — parse-addr / addr-to-string PURE -]
+ [; §3.1 resolution & addresses — parse-addr / addr-to-string PURE ]
 
  [case id=net-001-parse-addr-tcp level=core
   [tags net parse-addr address pure]
@@ -169,7 +169,7 @@ conformance fixtures for cx-stdlib/net (spec/02-inprogress/stdlib_net.md §10).
 #]]
  ]
 
- [- §2.2 restricted-transport-URL violations — PURE parse, ahead of any cap -]
+ [; §2.2 restricted-transport-URL violations — PURE parse, ahead of any cap ]
 
  [case id=net-010-parse-addr-missing-port level=core
   [tags net parse-addr CXER4500 error]
@@ -269,7 +269,7 @@ cx-err:CXER4501
 #]]
  ]
 
- [- §3.1 resolve — gated on `net` → CXER0271 under the empty set -]
+ [; §3.1 resolve — gated on `net` → CXER0271 under the empty set ]
 
  [case id=net-017-resolve-cap-denied level=core
   [tags net resolve capability CXER0271]
@@ -285,7 +285,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §3.2 dial (client) — every dial is gated → CXER0271 -]
+ [; §3.2 dial (client) — every dial is gated → CXER0271 ]
 
  [case id=net-018-dial-cap-denied level=core
   [tags net dial capability CXER0271]
@@ -371,7 +371,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §3.3 listen / accept (server) — gated → CXER0271 -]
+ [; §3.3 listen / accept (server) — gated → CXER0271 ]
 
  [case id=net-024-listen-cap-denied level=core
   [tags net listen capability CXER0271]
@@ -485,7 +485,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §3.4 stream I/O — gated → CXER0271 -]
+ [; §3.4 stream I/O — gated → CXER0271 ]
 
  [case id=net-032-read-bytes-cap-denied level=core
   [tags net read-bytes capability CXER0271]
@@ -656,7 +656,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §3.5 datagram I/O — gated → CXER0271 -]
+ [; §3.5 datagram I/O — gated → CXER0271 ]
 
  [case id=net-044-send-to-cap-denied level=core
   [tags net send-to capability CXER0271]
@@ -714,7 +714,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §3.6 TLS — gated → CXER0271 -]
+ [; §3.6 TLS — gated → CXER0271 ]
 
  [case id=net-048-tls-wrap-cap-denied level=core
   [tags net tls-wrap capability CXER0271]
@@ -772,7 +772,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §3.7 lifecycle — gated effect points → CXER0271 -]
+ [; §3.7 lifecycle — gated effect points → CXER0271 ]
 
  [case id=net-052-shutdown-cap-denied level=core
   [tags net shutdown capability CXER0271]
@@ -816,7 +816,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [- §5/§3.7 capability-FREE introspection — real output under the empty set -]
+ [; §5/§3.7 capability-FREE introspection — real output under the empty set ]
 
  [case id=net-055-close-no-cap level=core
   [tags net close capability-free null]

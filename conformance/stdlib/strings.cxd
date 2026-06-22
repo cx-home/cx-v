@@ -1147,4 +1147,174 @@ cx-err:CXER2902
 #]]
  ]
 
+ [; §3.11 Locale-free numeric parsing (#54) — number for valid input, absence () otherwise ]
+
+ [case id=strings-083-to-number-float level=core gate=enforced
+  [tags strings to-number parse float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-number "3.07"]
+#]]
+  [out-text [#
+3.07
+#]]
+ ]
+
+ [case id=strings-084-to-number-negative-int level=core gate=enforced
+  [tags strings to-number parse int sign]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-number "-5"]
+#]]
+  [out-text [#
+-5
+#]]
+ ]
+
+ [case id=strings-085-to-number-exponent level=core gate=enforced
+  [tags strings to-number parse exponent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-number "1e3"]
+#]]
+  [out-text [#
+1000.0
+#]]
+ ]
+
+ [case id=strings-086-to-number-trims-whitespace level=core gate=enforced
+  [tags strings to-number parse whitespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-number "  4.2  "]
+#]]
+  [out-text [#
+4.2
+#]]
+ ]
+
+ [case id=strings-087-to-number-trailing-junk-absent level=core gate=enforced
+  [tags strings to-number absence trailing-junk]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-number "3.07abc"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=strings-088-to-number-grouping-absent level=core gate=enforced
+  [tags strings to-number absence grouping]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-number "1,234"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=strings-089-to-number-empty-absent level=core gate=enforced
+  [tags strings to-number absence empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-number ""]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=strings-090-to-number-non-numeric-absent level=core gate=enforced
+  [tags strings to-number absence non-numeric]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-number "abc"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=strings-091-to-int level=core gate=enforced
+  [tags strings to-int parse int]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-int "42"]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=strings-092-to-int-rejects-float level=core gate=enforced
+  [tags strings to-int absence float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-int "3.07"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=strings-093-to-float level=core gate=enforced
+  [tags strings to-float parse float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:to-float "5"]
+#]]
+  [out-text [#
+5.0
+#]]
+ ]
+
+ [case id=strings-094-to-number-else-coalesce level=core gate=enforced
+  [tags strings to-number else absence coalesce]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[?else [$strings:to-number "3.07abc"] "not-a-number"]
+#]]
+  [out-text [#
+'not-a-number'
+#]]
+ ]
+
 ]

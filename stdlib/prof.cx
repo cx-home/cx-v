@@ -1,6 +1,6 @@
-[- cx-stdlib/prof — in-program profiling (spec/std-lib/prof.md).
+[; cx-stdlib/prof — in-program profiling (spec/std-lib/prof.md).
 
-   Full v0.8.0 public surface per §3. Bodies forward to native primitives
+   Full public surface per §3. Bodies forward to native primitives
    (vcx/code/stdlib_prof.v): timing reads, memory snapshots, named counters,
    HDR histograms, structured trace events, and flamegraph emission cannot be
    pure CX (they observe / mutate process state). All are :impure.
@@ -15,41 +15,41 @@
    evaluator env in scope (prof_stdlib_builtin_env). Errors are values
    (CXER2100..CXER2103, §5).
 
-   NOTE: this const and stdlib/prof.cx are the same source — edit both. -]
+   NOTE: this const and stdlib/prof.cx are the same source — edit both. ]
 
-[- §3.1 timing -]
+[; §3.1 timing ]
 [?def time-fn     scope=public impure [returns element] ($label::string $thunk::any $opts={}) [$prof-time-fn $label $thunk $opts]]
 [?def now-ns      scope=public impure [returns int]     ()                                          [$prof-now-ns]]
 [?def now-cpu-ns  scope=public impure [returns int]     ()                                          [$prof-now-cpu-ns]]
 
-[- §3.2 memory -]
+[; §3.2 memory ]
 [?def mem-snapshot scope=public impure [returns element] () [$prof-mem-snapshot]]
 [?def gc-trigger   scope=public impure [returns null]    () [$prof-gc-trigger]]
 
-[- §3.3 counters -]
+[; §3.3 counters ]
 [?def counter-inc   scope=public impure [returns null] ($name::string)               [$prof-counter-inc $name]]
 [?def counter-add   scope=public impure [returns null] ($name::string $delta::int)  [$prof-counter-add $name $delta]]
 [?def counter-get   scope=public impure [returns int]  ($name::string)               [$prof-counter-get $name]]
 [?def counter-reset scope=public impure [returns null] ($name::string)               [$prof-counter-reset $name]]
 [?def counter-all   scope=public impure [returns map]  ()                             [$prof-counter-all]]
 
-[- §3.4 histograms -]
+[; §3.4 histograms ]
 [?def histogram-observe scope=public impure [returns null]    ($name::string $value::float) [$prof-histogram-observe $name $value]]
 [?def histogram-stats   scope=public impure [returns element] ($name::string)                [$prof-histogram-stats $name]]
 [?def histogram-reset   scope=public impure [returns null]    ($name::string)                [$prof-histogram-reset $name]]
 
-[- §3.5 trace events -]
+[; §3.5 trace events ]
 [?def trace          scope=public impure [returns null] ($event::string $fields::map) [$prof-trace $event $fields]]
 [?def trace-flush    scope=public impure [returns null] ()                              [$prof-trace-flush]]
 [?def prof-configure scope=public impure [returns null] ($config::map)                 [$prof-prof-configure $config]]
 
-[- §3.6 time-and-trace -]
+[; §3.6 time-and-trace ]
 [?def time-and-trace scope=public impure [returns element] ($event::string $thunk::any) [$prof-time-and-trace $event $thunk]]
 
-[- §3.7 flamegraph -]
+[; §3.7 flamegraph ]
 [?def flamegraph-emit scope=public impure [returns string] ($path='') [$prof-flamegraph-emit $path]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=prof
   [scope """In-program profiling, callable directly from CX code. Provides timing measurement, memory snapshots, named counters, HDR histograms, structured trace events, and flamegraph emission — for the cases where a program measures itself and acts on the result. Timer, counter, histogram, and trace are the four primitives; all are impure because they observe or mutate process state."""]]
 [fn-doc name=time-fn scope=public purity=impure

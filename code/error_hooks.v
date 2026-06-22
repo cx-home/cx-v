@@ -30,7 +30,7 @@ import cx
 //
 // Concurrency note: hook frames are not synchronised across `[?map :par]`
 // workers; hooks observing errs raised inside parallel workers are
-// best-effort at v0.8.0 (same stance as the prof counters).
+// best-effort (same stance as the prof counters).
 
 @[heap]
 pub struct ErrorHookFrame {

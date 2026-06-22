@@ -1,4 +1,4 @@
-[- cx-stdlib/process — subprocess spawn / capture / pipelines / signals /
+[; cx-stdlib/process — subprocess spawn / capture / pipelines / signals /
    process-groups / pseudo-terminal control (spec/std-lib/process.md).
 
    COMMAND MODEL — argv-array ONLY (§1.1): there is no shell-string form.
@@ -11,9 +11,9 @@
    single subprocess capability (§7). Under the deny-by-default empty set
    each raises cx-err:CXER0271. Bodies forward to native primitives
    (vcx/code/stdlib_process.v) since process effects are not expressible
-   in pure CX. -]
+   in pure CX. ]
 
-[- §3.1 one-shot run -]
+[; §3.1 one-shot run ]
 [?def run scope=public impure [returns element]
   ($argv::[sequence string]
    $env=null $env-clear=false $cwd=null $stdin=null
@@ -22,7 +22,7 @@
    $check=false)
   [$process-run $argv $env $env-clear $cwd $stdin $timeout-ms $kill-on-timeout $capture $encoding $search-path $new-process-group $check]]
 
-[- §3.2 streaming spawn + handle lifecycle -]
+[; §3.2 streaming spawn + handle lifecycle ]
 [?def spawn scope=public impure [returns element]
   ($argv::[sequence string]
    $env=null $env-clear=false $cwd=null
@@ -38,7 +38,7 @@
 [?def poll         scope=public impure [returns [or int [sequence int]]] ($handle::element) [$process-poll $handle]]
 [?def close        scope=public impure [returns null]          ($handle::element) [$process-close $handle]]
 
-[- §3.3 pipelines -]
+[; §3.3 pipelines ]
 [?def pipeline scope=public impure [returns element]
   ($stages::[sequence element]
    $stdin=null $timeout-ms=null $kill-on-timeout=true
@@ -46,15 +46,15 @@
    $check=false)
   [$process-pipeline $stages $stdin $timeout-ms $kill-on-timeout $encoding $env $env-clear $cwd $check]]
 
-[- §3.4 signals -]
+[; §3.4 signals ]
 [?def send-signal scope=public impure [returns null] ($handle::element $sig::atom) [$process-send-signal $handle $sig]]
 [?def terminate   scope=public impure [returns null] ($handle::element)            [$process-terminate $handle]]
 [?def kill        scope=public impure [returns null] ($handle::element)            [$process-kill $handle]]
 
-[- §3.5 process groups -]
+[; §3.5 process groups ]
 [?def kill-group  scope=public impure [returns null] ($handle::element $sig::atom) [$process-kill-group $handle $sig]]
 
-[- §3.6 pseudo-terminal -]
+[; §3.6 pseudo-terminal ]
 [?def spawn-pty scope=public impure [returns element]
   ($argv::[sequence string]
    $env=null $env-clear=false $cwd=null
@@ -66,7 +66,7 @@
 [?def window-size     scope=public impure [returns element] ($handle::element) [$process-window-size $handle]]
 [?def set-window-size scope=public impure [returns null]    ($handle::element $rows::int $cols::int) [$process-set-window-size $handle $rows $cols]]
 
-[- co-located docs (seeded — refine in place). -]
+[; co-located docs (seeded — refine in place). ]
 [module-doc name=process
   [scope """Run child processes: spawn them, capture their output, stream their stdio, connect them into pipelines, deliver signals, manage process groups, and drive pseudo-terminals. Every command is an argv array of strings — there is no shell-string form anywhere, which structurally rules out command injection. Child stdio reuses the io handle model, and a child's environment is set per-call rather than globally."""]]
 [fn-doc name=run scope=public purity=impure

@@ -34,6 +34,31 @@
   bob 25 false
 ]
 #]]
+  [out-json [#
+{
+  "users": [
+    {
+      "name": "alice",
+      "age": 30,
+      "active": true
+    },
+    {
+      "name": "bob",
+      "age": 25,
+      "active": false
+    }
+  ]
+}
+#]]
+  [out-yaml [#
+"users":
+  - "name": "alice"
+    "age": 30
+    "active": true
+  - "name": bob
+    "age": 25
+    "active": false
+#]]
  ]
 
  [case id=tab-002-untyped-columns level=core

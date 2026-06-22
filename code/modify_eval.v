@@ -2,7 +2,7 @@ module code
 
 import cx
 
-// modify_eval.v — STANDALONE `[?modify]` evaluator (v0.8.0)
+// modify_eval.v — STANDALONE `[?modify]` evaluator
 // Phase 2.8. Mirrors the Phase 2.7-standalone shape of `match_eval.v` —
 // a self-contained surface that does NOT yet integrate with the
 // directive-evaluator dispatch path in `eval.v` (which still operates on
@@ -66,7 +66,7 @@ import cx
 //
 // Strict scope NON-goals at Phase 2.8-standalone (deferred):
 //   - Integration with `eval.v` directive-evaluator dispatch.
-//   - Structural sharing — full-copy at Phase 2.8; spine-copy in v0.8.x.
+//   - Structural sharing — full-copy at Phase 2.8; spine-copy is a follow-up.
 //   - Full cx.ProgramExpr evaluation in action arg slots (Phase 2.x).
 //   - `:using` lambda evaluation — placeholder degraded form only.
 // Multi-match focus ("applies to every node") — Phase 2.x
@@ -700,7 +700,7 @@ pub fn eval_modify_node_structural(node cx.ModifyNode, doc_root &cx.Node,
 		// Apply the action structurally to every match in document order
 		// (D3 "applies to every node"). The structural rewriter returns
 		// a freshly-allocated Node tree (full-copy
-		// v0.8.0 ships full-copy first).
+		// full-copy first).
 		new_root := apply_action_structural(current, target_name, action)!
 		current = new_root
 		matches += matched_this_action

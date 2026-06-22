@@ -76,20 +76,42 @@ fn main() {
 		}
 	}
 
-	// Determine input
+	// Determine input. The default action mirrors `cx eval`'s program sources so
+	// no `cx eval`-free gap remains (the never-`cx eval` rule):
+	//   cx FILE        — program from FILE
+	//   cx -           — program from stdin (explicit)
+	//   cx -e EXPR      — inline program EXPR (also --expression)
+	//   echo P | cx     — program from stdin (pipe; handled by the empty fall-through)
 	mut input := ''
 	mut input_file := ''
-	for arg in args {
+	mut got_input := false
+	for i := 0; i < args.len; i++ {
+		arg := args[i]
+		if arg == '-e' || arg == '--expression' {
+			if i + 1 >= args.len {
+				eprintln('cx -e: missing expression argument')
+				exit(2)
+			}
+			input = args[i + 1]
+			got_input = true
+			break
+		}
+		if arg == '-' {
+			input = os.get_raw_lines_joined()
+			got_input = true
+			break
+		}
 		if !arg.starts_with('--') {
 			input_file = arg
 			input = os.read_file(arg) or {
 				eprintln('error reading file ${arg}: ${err}')
 				exit(1)
 			}
+			got_input = true
 			break
 		}
 	}
-	if input.len == 0 {
+	if !got_input {
 		input = os.get_raw_lines_joined()
 	}
 
@@ -575,7 +597,7 @@ fn print_usage_and_exit(exit_code int) {
 	eprintln(' info FILE — column/row counts, types, byte size.')
 	eprintln(' dump FILE --to=cx — round-trip via Table API.')
 	eprintln(' load FILE --to=cx — symmetric inverse.')
-	eprintln(' --to=parquet|arrow defers to libcx_arrow Phase C (post-v0.6.0).')
+	eprintln(' --to=parquet|arrow defers to libcx_arrow Phase C.')
 	eprintln(' demo Self-contained showcase: typed round-trip,')
 	eprintln(' :table → CSV, CX program, comparison.')
 	eprintln(' No file I/O, no network. < 1s wall-clock.')
