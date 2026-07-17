@@ -7,6 +7,10 @@
 [; construct: encode an Ed25519 public key as a did:key string ]
 [?def key-create  scope=public pure   [returns string]  ($public-key::bytes)         [$did-key-create $public-key]]
 
+[; construct a did:peer numalgo-0 (pairwise, never published; same ed25519
+   multibase as did:key with a `0` numalgo prefix — xap_identity_model §1) ]
+[?def peer-create scope=public pure   [returns string]  ($public-key::bytes)         [$did-peer-create $public-key]]
+
 [; inspect ]
 [?def parse       scope=public pure   [returns element] ($did::string)               [$did-parse $did]]
 [?def method      scope=public pure   [returns string]  ($did::string)               [$did-method $did]]
@@ -26,6 +30,10 @@
 [fn-doc name=key-create scope=public purity=pure
   [sig """-> string"""]
   [summary """Encode an Ed25519 public key as a self-describing did:key string."""]
+]
+[fn-doc name=peer-create scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Encode an Ed25519 public key as a did:peer numalgo-0 string — a pairwise identity resolved by the same offline synthesis as did:key but never published."""]
 ]
 [fn-doc name=parse scope=public purity=pure
   [sig """-> element"""]

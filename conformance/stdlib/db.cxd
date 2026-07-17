@@ -1,0 +1,150 @@
+[test-suite name=db
+  [doc [#
+conformance fixtures for the database-access layer ($sql-* / $redis-* verbs;
+   spec/02-working/db_access.md).
+
+   SCOPE — build-independent surface ONLY. The engine-neutral SQL verbs
+   (sql-open / sql-exec / sql-query / sql-close) are compiled into EVERY
+   build; the engines behind them are opt-in build gates (-d cx_db_sqlite /
+   -d cx_db_pg / -d cx_db_mysql) and -d cx_db_redis gates the redis verbs
+   entirely. The fixture runner's gate toggle (gates.cxd gate=) is static —
+   it cannot condition a case on the flags the binary under test was built
+   with — so any case whose outcome depends on an engine gate (engine-built
+   success lanes, the open-time capability denial CXER0271 vs the no-engine
+   CXER1100, every redis verb) would be always-red on some build and is
+   deliberately NOT fixtured here. Those lanes live in $if-gated V tests
+   (vcx/code/sql_test.v pattern) plus the live-verified evidence recorded
+   in the spec's testing section.
+
+   What IS asserted here holds on every build, engines or not: operand-kind
+   validation (CXER0100) fires before any engine/gate/capability logic, an
+   unknown [sql-db] handle is the uniform E_SQL runtime error (CXER1120),
+   and sql-close of an unknown handle is idempotent null. None of these
+   need a capability grant: the open-time gate is the ONLY capability point
+   of the surface, and no case here reaches a successful open.
+  #]]
+
+ [case id=db-001-sql-open-bad-operand level=core
+  [tags db sql sql-open operand-kind error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-open 42]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='E_OPERAND_KIND: sql-open expects a url string']
+#]]
+ ]
+
+ [case id=db-002-sql-query-unknown-handle level=core
+  [tags db sql sql-query handle error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-query [sql-db handle=999999 url='x'] 'SELECT 1']
+#]]
+  [out-text [#
+[err code=cx-err:CXER1120 message='E_SQL: unknown sql handle 999999']
+#]]
+ ]
+
+ [case id=db-003-sql-exec-unknown-handle level=core
+  [tags db sql sql-exec handle error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-exec [sql-db handle=999999 url='x'] 'CREATE TABLE t (a)']
+#]]
+  [out-text [#
+[err code=cx-err:CXER1120 message='E_SQL: unknown sql handle 999999']
+#]]
+ ]
+
+ [case id=db-004-sql-close-unknown-handle-null level=core
+  [tags db sql sql-close idempotent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-close [sql-db handle=999999 url='x']]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=db-005-sql-close-bad-operand level=core
+  [tags db sql sql-close operand-kind error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-close 'nope']
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='E_OPERAND_KIND: sql-close expects a [sql-db] handle']
+#]]
+ ]
+
+ [; #305 arity lane — missing operands raise CXER0108 E_ARG (they V-panicked
+    before the guard). The guard sits ahead of engine/capability logic, so
+    these are build-independent like the operand-kind cases above. The redis
+    arity guards are implemented identically but cannot be fixtured (verb
+    existence itself is -d cx_db_redis gated); they are covered by the same
+    sweep and the spec's live-verification record. ;]
+
+ [case id=db-006-sql-open-arity level=core
+  [tags db sql sql-open arity error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-open]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0108 message='E_ARG: sql-open expects ($url)']
+#]]
+ ]
+
+ [case id=db-007-sql-exec-arity level=core
+  [tags db sql sql-exec arity error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-exec [sql-db handle=999999 url='x']]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0108 message='E_ARG: sql-exec expects ($db, $sql, $params…)']
+#]]
+ ]
+
+ [case id=db-008-sql-query-arity level=core
+  [tags db sql sql-query arity error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-query]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0108 message='E_ARG: sql-query expects ($db, $sql, $params…)']
+#]]
+ ]
+
+ [case id=db-009-sql-close-arity level=core
+  [tags db sql sql-close arity error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-close]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0108 message='E_ARG: sql-close expects ($db)']
+#]]
+ ]
+]

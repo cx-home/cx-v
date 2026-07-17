@@ -129,7 +129,7 @@ fn test_convert_sugar() {
 		assert false, 'eval failed: ${err}'
 		return
 	}
-	assert out.contains('<cx:map><entry key="a">1</entry></cx:map>'), 'convert json→xml failed: ${out}'
+	assert out.contains('<cx:map><cx:entry cx:key="a">1</cx:entry></cx:map>'), 'convert json→xml failed: ${out}'
 	out2 := code.eval_code('', "[\$convert '{\"a\":1}' :from :json :to :cx]", 'text') or {
 		assert false, 'eval failed: ${err}'
 		return

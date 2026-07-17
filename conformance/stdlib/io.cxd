@@ -101,6 +101,20 @@ cx-err:CXER0271
 #]]
  ]
 
+ [case id=io-004b-edit-file-cap-denied level=core
+  [tags io edit-file capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:edit-file "/tmp/out.txt" "old" "new"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
  [case id=io-005-write-file-bytes-cap-denied level=core
   [tags io write-file-bytes capability CXER0271]
   [in-cx [#
@@ -773,7 +787,7 @@ cx-err:CXER0271
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hello"]] [= [$io:read-file $p] "hello"]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "hello"]] [= [$io:read-file $p] "hello"]]
 #]]
   [out-text [#
 true
@@ -788,7 +802,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "x"]] [$io:exists $p]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "x"]] [$io:exists $p]]
 #]]
   [out-text [#
 true
@@ -804,7 +818,7 @@ true
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/bytes']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [$bytes:length [$io:read-file-bytes $p]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [$bytes:length [$io:read-file-bytes $p]]]
 #]]
   [out-text [#
 2
@@ -820,7 +834,7 @@ true
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/bytes']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "abc"]]] [$bytes:length [$io:read-file-bytes $p]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "abc"]]] [$bytes:length [$io:read-file-bytes $p]]]
 #]]
   [out-text [#
 3
@@ -835,7 +849,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-lines $p ("a", "b", "c")]] [$count [$io:read-file-lines $p]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file-lines $p ("a", "b", "c")]] [$count [$io:read-file-lines $p]]]
 #]]
   [out-text [#
 3
@@ -850,7 +864,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-lines $p ("x", "y")]] [$count [$io:read-file-lines $p]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file-lines $p ("x", "y")]] [$count [$io:read-file-lines $p]]]
 #]]
   [out-text [#
 2
@@ -865,7 +879,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $a [$io:append-file $p "a"]] [?let [= $b [$io:append-file $p "b"]] [$io:read-file $p]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $a [$io:append-file $p "a"]] [= $b [$io:append-file $p "b"]] [$io:read-file $p]]
 #]]
   [out-text [#
 'ab'
@@ -881,7 +895,7 @@ true
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/bytes']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $a [$io:append-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [$bytes:length [$io:read-file-bytes $p]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $a [$io:append-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [$bytes:length [$io:read-file-bytes $p]]]
 #]]
   [out-text [#
 2
@@ -896,7 +910,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hi"]] [?let [= $h [$io:open $p "r"]] [?let [= $r [$io:read-all $h]] [?let [= $c [$io:close $h]] [= $r "hi"]]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "hi"]] [= $h [$io:open $p "r"]] [= $r [$io:read-all $h]] [= $c [$io:close $h]] [= $r "hi"]]
 #]]
   [out-text [#
 true
@@ -911,7 +925,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hi"]] [?let [= $h [$io:open-with-opts $p {mode: "r"}]] [$io:close $h]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "hi"]] [= $h [$io:open-with-opts $p {mode: "r"}]] [$io:close $h]]
 #]]
   [out-text [#
 null
@@ -926,7 +940,7 @@ null
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hi"]] [?let [= $h [$io:open $p "r"]] [$io:close $h]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "hi"]] [= $h [$io:open $p "r"]] [$io:close $h]]
 #]]
   [out-text [#
 null
@@ -942,7 +956,7 @@ null
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/bytes']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "xy"]]] [?let [= $h [$io:open $p "r"]] [$bytes:length [$io:read-bytes $h 2]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "xy"]]] [= $h [$io:open $p "r"]] [$bytes:length [$io:read-bytes $h 2]]]
 #]]
   [out-text [#
 2
@@ -957,7 +971,7 @@ null
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "L1\nL2"]] [?let [= $h [$io:open $p "r"]] [$io:read-line $h]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "L1\nL2"]] [= $h [$io:open $p "r"]] [$io:read-line $h]]
 #]]
   [out-text [#
 'L1'
@@ -971,7 +985,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "abcdef"]] [?let [= $fl [$io:flush $h]] [?let [= $sk [$io:seek $h 0 :start]] [$io:read-all $h]]]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $w [$io:write-string $h "abcdef"]] [= $fl [$io:flush $h]] [= $sk [$io:seek $h 0 :start]] [$io:read-all $h]]
 #]]
   [out-text [#
 'abcdef'
@@ -987,7 +1001,7 @@ null
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/bytes']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [?let [= $h [$io:open $p "r"]] [$bytes:length [$io:read-all-bytes $h]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file-bytes $p [$bytes:from-string-utf8 "hi"]]] [= $h [$io:open $p "r"]] [$bytes:length [$io:read-all-bytes $h]]]
 #]]
   [out-text [#
 2
@@ -1002,7 +1016,7 @@ null
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/bytes']
-[?let [= $h [$io:temp-file "cxc" ".bin"]] [?let [= $w [$io:write-bytes $h [$bytes:from-string-utf8 "xy"]]] [?let [= $sk [$io:seek $h 0 :start]] [$bytes:length [$io:read-all-bytes $h]]]]]
+[?let [= $h [$io:temp-file "cxc" ".bin"]] [= $w [$io:write-bytes $h [$bytes:from-string-utf8 "xy"]]] [= $sk [$io:seek $h 0 :start]] [$bytes:length [$io:read-all-bytes $h]]]
 #]]
   [out-text [#
 2
@@ -1016,7 +1030,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "zz"]] [?let [= $sk [$io:seek $h 0 :start]] [= [$io:read-all $h] "zz"]]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $w [$io:write-string $h "zz"]] [= $sk [$io:seek $h 0 :start]] [= [$io:read-all $h] "zz"]]
 #]]
   [out-text [#
 true
@@ -1030,7 +1044,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-line $h "x"]] [?let [= $sk [$io:seek $h 0 :start]] [$io:is-eof $h]]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $w [$io:write-line $h "x"]] [= $sk [$io:seek $h 0 :start]] [$io:is-eof $h]]
 #]]
   [out-text [#
 false
@@ -1044,7 +1058,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "x"]] [$io:flush $h]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $w [$io:write-string $h "x"]] [$io:flush $h]]
 #]]
   [out-text [#
 null
@@ -1058,7 +1072,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "abc"]] [?let [= $sk [$io:seek $h 0 :start]] [$io:tell $h]]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $w [$io:write-string $h "abc"]] [= $sk [$io:seek $h 0 :start]] [$io:tell $h]]
 #]]
   [out-text [#
 0
@@ -1072,7 +1086,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "abc"]] [$io:tell $h]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $w [$io:write-string $h "abc"]] [$io:tell $h]]
 #]]
   [out-text [#
 3
@@ -1086,7 +1100,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $w [$io:write-string $h "abc"]] [?let [= $sk [$io:seek $h 0 :start]] [$io:is-eof $h]]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $w [$io:write-string $h "abc"]] [= $sk [$io:seek $h 0 :start]] [$io:is-eof $h]]
 #]]
   [out-text [#
 false
@@ -1101,7 +1115,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "a\nb\nc"]] [?let [= $h [$io:open $p "r"]] [$count [$io:line-iter $h]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "a\nb\nc"]] [= $h [$io:open $p "r"]] [$count [$io:line-iter $h]]]
 #]]
   [out-text [#
 3
@@ -1116,7 +1130,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "s"]] [?let [= $m [$io:make-dir $p]] [$io:exists $p]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "s"]] [= $m [$io:make-dir $p]] [$io:exists $p]]
 #]]
   [out-text [#
 true
@@ -1131,7 +1145,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [$io:is-file $p]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "1"]] [$io:is-file $p]]
 #]]
   [out-text [#
 true
@@ -1160,7 +1174,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $t [$path:join $d "t"]] [?let [= $w [$io:write-file $t "1"]] [?let [= $l [$path:join $d "ln"]] [?let [= $s [$io:symlink $t $l]] [$io:is-symlink $l]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $t [$path:join $d "t"]] [= $w [$io:write-file $t "1"]] [= $l [$path:join $d "ln"]] [= $s [$io:symlink $t $l]] [$io:is-symlink $l]]
 #]]
   [out-text [#
 true
@@ -1175,7 +1189,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "hi"]] [?let [= $st [$io:stat $p]] $st@size]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "hi"]] [?let [= $st [$io:stat $p]] $st@size]]
 #]]
   [out-text [#
 2
@@ -1190,7 +1204,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "abc"]] [$io:size $p]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "abc"]] [$io:size $p]]
 #]]
   [out-text [#
 3
@@ -1206,7 +1220,7 @@ true
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/time']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [>= [$time:year [$io:modified-time $p]] 2026]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "1"]] [>= [$time:year [$io:modified-time $p]] 2026]]
 #]]
   [out-text [#
 true
@@ -1222,7 +1236,7 @@ true
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/time']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [>= [$time:year [$io:created-time $p]] 2026]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "1"]] [>= [$time:year [$io:created-time $p]] 2026]]
 #]]
   [out-text [#
 true
@@ -1237,7 +1251,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [$count [$io:list-dir $d]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "1"]] [$count [$io:list-dir $d]]]
 #]]
   [out-text [#
 1
@@ -1252,7 +1266,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "s"]] [?let [= $m [$io:make-dir $p]] [$io:is-directory $p]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "s"]] [= $m [$io:make-dir $p]] [$io:is-directory $p]]
 #]]
   [out-text [#
 true
@@ -1267,7 +1281,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "x/y/z"]] [?let [= $m [$io:make-dirs $p]] [$io:is-directory $p]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "x/y/z"]] [= $m [$io:make-dirs $p]] [$io:is-directory $p]]
 #]]
   [out-text [#
 true
@@ -1282,7 +1296,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [?let [= $r [$io:remove $p]] [$io:exists $p]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "1"]] [= $r [$io:remove $p]] [$io:exists $p]]
 #]]
   [out-text [#
 false
@@ -1297,7 +1311,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "s"]] [?let [= $m [$io:make-dir $p]] [?let [= $r [$io:remove-dir $p]] [$io:exists $p]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "s"]] [= $m [$io:make-dir $p]] [= $r [$io:remove-dir $p]] [$io:exists $p]]
 #]]
   [out-text [#
 false
@@ -1312,7 +1326,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $s [$path:join $d "s"]] [?let [= $m [$io:make-dirs [$path:join $s "x"]]] [?let [= $r [$io:remove-tree $s]] [$io:exists $s]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $s [$path:join $d "s"]] [= $m [$io:make-dirs [$path:join $s "x"]]] [= $r [$io:remove-tree $s]] [$io:exists $s]]
 #]]
   [out-text [#
 false
@@ -1327,7 +1341,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $a [$path:join $d "a"]] [?let [= $w [$io:write-file $a "1"]] [?let [= $b [$path:join $d "b"]] [?let [= $r [$io:rename $a $b]] [$io:exists $b]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $a [$path:join $d "a"]] [= $w [$io:write-file $a "1"]] [= $b [$path:join $d "b"]] [= $r [$io:rename $a $b]] [$io:exists $b]]
 #]]
   [out-text [#
 true
@@ -1342,7 +1356,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $a [$path:join $d "a"]] [?let [= $w [$io:write-file $a "1"]] [?let [= $b [$path:join $d "b"]] [?let [= $c [$io:copy $a $b]] [$io:exists $b]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $a [$path:join $d "a"]] [= $w [$io:write-file $a "1"]] [= $b [$path:join $d "b"]] [= $c [$io:copy $a $b]] [$io:exists $b]]
 #]]
   [out-text [#
 true
@@ -1357,7 +1371,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $s [$path:join $d "s"]] [?let [= $m [$io:make-dir $s]] [?let [= $f [$path:join $s "x"]] [?let [= $w [$io:write-file $f "1"]] [?let [= $dst [$path:join $d "dd"]] [?let [= $c [$io:copy-tree $s $dst]] [$io:is-directory $dst]]]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $s [$path:join $d "s"]] [= $m [$io:make-dir $s]] [= $f [$path:join $s "x"]] [= $w [$io:write-file $f "1"]] [= $dst [$path:join $d "dd"]] [= $c [$io:copy-tree $s $dst]] [$io:is-directory $dst]]
 #]]
   [out-text [#
 true
@@ -1372,7 +1386,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $t [$path:join $d "t"]] [?let [= $w [$io:write-file $t "1"]] [?let [= $l [$path:join $d "ln"]] [?let [= $s [$io:symlink $t $l]] [$io:is-symlink $l]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $t [$path:join $d "t"]] [= $w [$io:write-file $t "1"]] [= $l [$path:join $d "ln"]] [= $s [$io:symlink $t $l]] [$io:is-symlink $l]]
 #]]
   [out-text [#
 true
@@ -1388,7 +1402,7 @@ true
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/strings']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $t [$path:join $d "t"]] [?let [= $w [$io:write-file $t "1"]] [?let [= $l [$path:join $d "ln"]] [?let [= $s [$io:symlink $t $l]] [$strings:is-empty [$io:readlink $l]]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $t [$path:join $d "t"]] [= $w [$io:write-file $t "1"]] [= $l [$path:join $d "ln"]] [= $s [$io:symlink $t $l]] [$strings:is-empty [$io:readlink $l]]]
 #]]
   [out-text [#
 false
@@ -1403,7 +1417,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "a.txt"]] [?let [= $w [$io:write-file $p "1"]] [$count [$io:glob [$path:join $d "*.txt"]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "a.txt"]] [= $w [$io:write-file $p "1"]] [$count [$io:glob [$path:join $d "*.txt"]]]]
 #]]
   [out-text [#
 1
@@ -1418,7 +1432,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "a.txt"]] [?let [= $w [$io:write-file $p "1"]] [$count [$io:glob-iter [$path:join $d "*.txt"]]]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "a.txt"]] [= $w [$io:write-file $p "1"]] [$count [$io:glob-iter [$path:join $d "*.txt"]]]]
 #]]
   [out-text [#
 1
@@ -1433,7 +1447,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
-[?let [= $d [$io:temp-dir "cxc"]] [?let [= $p [$path:join $d "f"]] [?let [= $w [$io:write-file $p "1"]] [> [$count [$io:walk $d]] 0]]]]
+[?let [= $d [$io:temp-dir "cxc"]] [= $p [$path:join $d "f"]] [= $w [$io:write-file $p "1"]] [> [$count [$io:walk $d]] 0]]
 #]]
   [out-text [#
 true
@@ -1493,7 +1507,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $l [$io:lock $h :exclusive]] [$io:unlock $h]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $l [$io:lock $h :exclusive]] [$io:unlock $h]]
 #]]
   [out-text [#
 null
@@ -1507,7 +1521,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/io']
-[?let [= $h [$io:temp-file "cxc" ".txt"]] [?let [= $l [$io:lock $h :shared]] [$io:unlock $h]]]
+[?let [= $h [$io:temp-file "cxc" ".txt"]] [= $l [$io:lock $h :shared]] [$io:unlock $h]]
 #]]
   [out-text [#
 null
@@ -1565,6 +1579,52 @@ null
 #]]
   [out-text [#
 null
+#]]
+ ]
+
+ [case id=io-105-watch-cap-denied level=core
+  [tags io watch capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:watch "/tmp/project"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=io-106-watch-next-cap-denied level=core
+  [tags io watch-next capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:watch-next [$io:watch "/tmp/project"] 1000]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ # watch-close requires NO capability (like close); the only reason this program
+ # raises CXER0271 is the nested `watch`, which is read-cap-gated. The
+ # close-unblocks-a-parked-next behavior needs a granted handle and lives in the
+ # behavioral test (vcx/tests/io_watch_test.v).
+ [case id=io-107-watch-close-cap-denied level=core
+  [tags io watch-close capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[$io:watch-close [$io:watch "/tmp/project"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
 #]]
  ]
 

@@ -15,7 +15,7 @@ fn test_program_ast_json_empty() {
 }
 
 fn test_program_ast_json_let_arith() {
-	json := code.program_ast_json('[?let [= \$a 10] [?let [= \$b 32] [+ \$a \$b]]]') or { panic(err) }
+	json := code.program_ast_json('[?let [= \$a 10] [= \$b 32] [+ \$a \$b]]') or { panic(err) }
 	assert json.contains('"?let"')
 	assert json.contains('":in"') || json.contains('"\$a"')
 }

@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 
 // net_set_deadline_test.v — #29 (fail-loud slice): net:set-deadline /
 // net:set-opt are socket operations. Called on a `[std-stream …]` handle
@@ -10,7 +11,7 @@ import os
 // blocking std-stream READ is a separate, not-yet-available surface.)
 
 fn cx_bin_dl() string {
-	return os.join_path(@VMODROOT, 'target', 'cx')
+	return testenv.cx_bin()
 }
 
 fn run_dl(prog_body string) os.Result {

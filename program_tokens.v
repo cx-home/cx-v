@@ -45,6 +45,7 @@ pub enum ProgramTokenKind {
 	le                // '<='
 	gt                // '>'
 	ge                // '>='
+	tilde             // '~' — graded-similarity operator head (similar.md §3.1)
 	// Postfix call markers
 	bang              // '!' postfix-or-standalone (parser disambiguates)
 	qmark             // '?' postfix-or-standalone (parser disambiguates)

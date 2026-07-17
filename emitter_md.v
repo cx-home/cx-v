@@ -48,6 +48,17 @@ fn emit_md_block(n Node, mut out []string) {
 	match n {
 		Element {
 			e := n as Element
+			// `[table]` block (#443, conversions.md §7): the table payload
+			// lives in the pooled `table` field, NOT in `items` — without
+			// this arm a table-bearing element fell through to the
+			// unknown-element comment and every column and row was dropped.
+			// Renders as a GFM pipe table; markdown is typed-lossy, so the
+			// column types and the wrapper element name are dropped (same
+			// convention as the collection-literal wrapper below).
+			if td := e.table_opt() {
+				emit_md_pipe_table(td, mut out)
+				return
+			}
 			match e.name {
 				'h1' { out << '# ${emit_md_children_inline(e.items)}\n\n' }
 				'h2' { out << '## ${emit_md_children_inline(e.items)}\n\n' }
@@ -206,6 +217,52 @@ fn emit_md_block(n Node, mut out []string) {
 	}
 }
 
+// emit_md_pipe_table renders a TableData payload as a GFM pipe table
+// (#443, conversions.md §7): header row from the declared column names,
+// `---` separator row, then one row per data row with cells in column
+// order. Null cells render empty (typed-lossy: null and the empty string
+// coincide in MD); collection cells use the inline collection rendering.
+fn emit_md_pipe_table(td TableData, mut out []string) {
+	if td.cols.len == 0 {
+		return
+	}
+	header := td.cols.map(md_table_cell_escape(it.name))
+	out << '| ${header.join(' | ')} |\n'
+	seps := td.cols.map(fn (_ TableColumn) string {
+		return '---'
+	})
+	out << '| ${seps.join(' | ')} |\n'
+	for row in td.rows {
+		mut cells := []string{cap: row.len}
+		for cell in row {
+			cells << md_table_cell(cell)
+		}
+		out << '| ${cells.join(' | ')} |\n'
+	}
+	out << '\n'
+}
+
+// md_table_cell renders one table cell for the pipe-table body.
+fn md_table_cell(v TableCellValue) string {
+	return match v {
+		NullValue    { '' }
+		bool         { if v { 'true' } else { 'false' } }
+		i64          { v.str() }
+		f64          { format_float(v) }
+		string       { md_table_cell_escape(v) }
+		ArrayNode    { md_table_cell_escape(md_render_inline_list(v.items)) }
+		SequenceNode { md_table_cell_escape(md_render_inline_list(v.items)) }
+		MapNode      { md_table_cell_escape(md_render_inline_map(v.entries)) }
+	}
+}
+
+// md_table_cell_escape makes arbitrary text safe inside a pipe-table
+// cell: `|` delimits cells and a newline ends the row, so both must be
+// neutralized (backslash first so the escapes themselves survive).
+fn md_table_cell_escape(s string) string {
+	return s.replace('\\', '\\\\').replace('|', '\\|').replace('\n', '<br>')
+}
+
 fn emit_md_collection_list(items []Node, mut out []string) {
 	for item in items {
 		out << '- ${md_render_collection_value(item)}\n'
@@ -252,6 +309,14 @@ fn md_render_inline_map(entries []MapEntry) string {
 }
 
 fn md_render_scalar(s ScalarNode) string {
+	// bytes → base64 text (conversions.md §0.2 MD column, #458). MD has no
+	// type protocol, so this is one-way: the base64 text re-imports as a
+	// plain string (documented import gap).
+	if s.data_type == .bytes_type {
+		if s.value is string {
+			return bytes_hex_to_base64(s.value as string)
+		}
+	}
 	return match s.value {
 		i64       { s.value.str() }
 		f64       { format_float(s.value as f64) }
@@ -300,14 +365,7 @@ fn emit_md_inline(n Node) string {
 			}
 		}
 		ScalarNode {
-			s := n as ScalarNode
-			return match s.value {
-				i64       { s.value.str() }
-				f64       { format_float(s.value as f64) }
-				bool      { if s.value as bool { 'true' } else { 'false' } }
-				NullValue { 'null' }
-				string    { s.value as string }
-			}
+			return md_render_scalar(n as ScalarNode)
 		}
 		else {
 			return ''

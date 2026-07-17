@@ -1,6 +1,7 @@
 module code
 
 import cx
+import sync
 
 // stdlib_codec.v — registry-driven in-program codec surface (design D2/D6).
 //
@@ -177,6 +178,18 @@ fn init() {
 		name:  'json'
 		parse: json_codec_parse
 	})
+	// #234.2: init the CSRP discovery cache mutex + map (module-global; init runs
+	// once before any thread, so the cache is race-free to lock thereafter).
+	g_csrp_disco_mu = sync.new_mutex()
+	g_csrp_disco = map[string]string{}
+	// #234: init the client connection pool (stdlib_http.v) — same discipline.
+	g_http_pool_mu = sync.new_mutex()
+	g_http_pool = map[string][]&HttpPoolConn{}
+	// The listener/dispatch/SSE globals live in services_listener_
+	// notd_wasm32_emcc.v — their init crosses into the per-variant fn so the
+	// wasm build (which excludes that file and its globals) compiles (#329
+	// wasm-revival blocker; the wasm variant is a no-op).
+	services_listener_init_globals()
 }
 
 // json_codec_parse adapts json_do_parse to the registry's parse signature.
@@ -184,17 +197,25 @@ fn init() {
 // report them rather than emitting a bogus tree. On success the value node's
 // collection markers (__cx_map__/__cx_arr__/__cx_seq__) are rewritten to
 // cx-native MapNode / ArrayNode / SequenceNode (flatten_node) so the cx-tree
-// emitters render the lossless value model. A `$tag`-encoded element decodes
-// back to its CX element (json_maybe_named, already applied inside the parser).
+// emitters render the lossless value model. A simple `$tag`-encoded element
+// decodes back to its CX element (json_maybe_named, already applied inside
+// the parser, per json.md §2). The conversions.md §0.2 `cx:type` sidecar
+// (#444) is then consumed — unconditionally, like the XML importer's reserved
+// cx:type attributes — and the named fields re-type to their CX scalars.
+// Finally the #475 lossless-structure walk reconstructs the full reserved
+// protocol (conversions.md §4.1): extended `$tag` envelopes, `$doc`
+// multi-root wrappers, the per-item `cx:T` carriers, `cx:seq` / `cx:raw` /
+// `cx:entity`, the `cx:key-type` sidecar, and `cx:k:` key escapes.
 fn json_codec_parse(src string) !cx.ParseResult {
 	node := json_do_parse(src, map[string]cx.Node{})
 	if emsg := codec_node_err(node) {
 		return error(emsg)
 	}
+	root := cx.apply_lossless_structure(cx.apply_cx_type_sidecar(flatten_node(node)))
 	return cx.ParseResult{
 		is_multi: false
 		single:   cx.Document{
-			elements: [flatten_node(node)]
+			elements: cx.lossless_root_to_elements(root)
 		}
 	}
 }

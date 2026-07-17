@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import net
 import time
 
@@ -13,11 +14,7 @@ import time
 // Drives a real cx server (denied --allow-env) over a loopback socket.
 
 fn cx_bin_h23() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 fn pick_port_h23() int {

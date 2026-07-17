@@ -1,0 +1,1336 @@
+[test-suite name=xap-dist
+  [doc [#
+Conformance fixtures for XAP feature distribution — the §6.1 P0 function
+surface of spec/02-working/xap_feature_distribution_market.md (P0 subset of the
+§11 list): pkg-tree (canonical content document), pkg-seal / pkg-sign
+(publisher side), pkg-publish / pkg-fetch (alias = name for a manifest hash,
+immutable once released), pkg-verify (the §3 fail-closed chain), pkg-install
+(fetch → verify → per-kind gate → consent=grants → enable), and
+pkg-requires-closure (the code plane, hash-pinned).
+
+Keypairs/DIDs are generated fresh per case (entropy), so assertions project
+STABLE fields (status, names, counts, aliases, error codes) — never random
+hashes/DIDs. Content-tree hashes ARE deterministic (canonical form) and two
+puts of the same set must agree (001).
+
+CXER4881 (present-but-divergent content) is deliberately not fixtured: an
+honest content-addressed store cannot produce it (get-doc(H) re-renders to H
+by construction) — it guards dishonest mirrors and is defense-in-depth behind
+the store's own CXER1120. The absent-content stage is 4886 (010).
+
+The nmea0183 case (016) reads the REAL packaged codec source from
+packages/nmea0183/nmea0183.cx (repo-root-relative, the runner's process CWD
+contract) — the distribution pipeline is dogfooded on the actual first
+kind=library package, not a toy.
+
+Case 025 (§11.15, stage-1 half) consumes the COMMITTED registry/ store — a
+git-repo-as-registry (§4.1): full hash + publisher-DID signature verification
+against committed bytes, no service running. Its pinned hashes are the §7
+supply-chain witness: they are stable forever because a released artifact is
+immutable (a codec change is a NEW version; nmea0183@0.1.0 never moves).
+#]]
+
+  [case id=xap-dist-001-tree-canonical-order level=core
+   [tags xap-dist pkg-tree canonical determinism]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?let [= $s [$store:open "mem://"]]
+ [= $t1 [$xap:pkg-tree ([entry path='b.cx' 'bee'], [entry path='a.cx' 'ay'])]]
+ [= $t2 [$xap:pkg-tree ([entry path='a.cx' 'ay'], [entry path='b.cx' 'bee'])]]
+ [= [$store:put-doc $s $t1] [$store:put-doc $s $t2]]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=xap-dist-002-tree-traversal-path-rejected level=core
+   [tags xap-dist pkg-tree path fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[$xap:pkg-tree ([entry path='../evil.cx' 'x'])]
+#]]
+   [out-err [#
+cx-err:CXER4880
+#]]
+  ]
+
+  [case id=xap-dist-003-tree-duplicate-path-rejected level=core
+   [tags xap-dist pkg-tree path fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[$xap:pkg-tree ([entry path='a.cx' 'one'], [entry path='a.cx' 'two'])]
+#]]
+   [out-err [#
+cx-err:CXER4880
+#]]
+  ]
+
+  [case id=xap-dist-004-seal-pins-tree-hash level=core
+   [tags xap-dist pkg-seal tier1]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'], [entry path='package.cxd' 'm'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $th [$store:put-doc $s $tree]]
+ [= $sealed@hash $th]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=xap-dist-005-seal-library-needs-rejected level=core
+   [tags xap-dist pkg-seal n-dist-2 fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]
+                  [?element "needs" [?element "reads" [?attr "noun" "traffic/vessel"]]]]]
+ [$xap:pkg-seal $s $tree $draft]]
+#]]
+   [out-err [#
+cx-err:CXER4880
+#]]
+  ]
+
+  [case id=xap-dist-006-seal-library-without-exports-rejected level=core
+   [tags xap-dist pkg-seal exports fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]]]
+ [$xap:pkg-seal $s $tree $draft]]
+#]]
+   [out-err [#
+cx-err:CXER4880
+#]]
+  ]
+
+  [case id=xap-dist-007-sign-then-verify-ok level=core
+   [tags xap-dist pkg-verify trust-chain]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [?let [= $v [$xap:pkg-verify $s $mh]]
+  $v@status]]
+#]]
+   [out-text [#
+'ok'
+#]]
+  ]
+
+  [case id=xap-dist-008-verify-unsigned-rejected level=core
+   [tags xap-dist pkg-verify signature fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [$xap:pkg-verify $s $sealed@manifest]]
+#]]
+   [out-err [#
+cx-err:CXER4882
+#]]
+  ]
+
+  [case id=xap-dist-009-verify-wrong-signer-rejected level=core
+   [tags xap-dist pkg-verify signature fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $kp2 [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'])]]
+ [= $draft [?element "package"
+                       [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp2@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [$xap:pkg-verify $s $mh]]
+#]]
+   [out-err [#
+cx-err:CXER4882
+#]]
+  ]
+
+  [case id=xap-dist-010-verify-absent-content-rejected level=core
+   [tags xap-dist pkg-verify content fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $m [?element "package"
+                 [?attr "name" "ghost"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+              [?attr "hash" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"]
+              [?element "publisher" [?attr "did" $pub]]
+              [?element "exports" [?element "def" [?attr "name" "ghost/id"]]]]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [$xap:pkg-verify $s $mh]]
+#]]
+   [out-err [#
+cx-err:CXER4886
+#]]
+  ]
+
+  [case id=xap-dist-011-verify-bad-attestation-rejected level=core
+   [tags xap-dist pkg-verify vc fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [$xap:pkg-verify $s $mh {attestations: ([not-a-vc bogus=true]) now: 2026-07-06T00:00:00Z}]]
+#]]
+   [out-err [#
+cx-err:CXER4883
+#]]
+  ]
+
+  [case id=xap-dist-012-publish-fetch-roundtrip level=core
+   [tags xap-dist pkg-publish pkg-fetch alias]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [= $p [$xap:pkg-publish $s "toylib" "0.1.0" $mh]]
+ [= $f [$xap:pkg-fetch $s "toylib@0.1.0"]]
+ ($p@alias, $f@name, $f@version)]
+#]]
+   [out-text [#
+('toylib@0.1.0', 'toylib', '0.1.0')
+#]]
+  ]
+
+  [case id=xap-dist-013-fetch-unknown-alias level=core
+   [tags xap-dist pkg-fetch fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?let [= $s [$store:open "mem://"]]
+ [$xap:pkg-fetch $s "nope@9.9.9"]]
+#]]
+   [out-err [#
+cx-err:CXER4886
+#]]
+  ]
+
+  [case id=xap-dist-014-publish-released-alias-immutable level=core
+   [tags xap-dist pkg-publish immutability fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'one'])]]
+ [= $tree2 [$xap:pkg-tree ([entry path='lib.cx' 'two'])]]
+ [= $draft [?element "package"
+                       [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $s1 [$xap:pkg-seal $s $tree $draft]]
+ [= $s2 [$xap:pkg-seal $s $tree2 $draft]]
+ [= $m1 [$xap:pkg-sign [$store:get-doc $s $s1@manifest] $kp@private]]
+ [= $m2 [$xap:pkg-sign [$store:get-doc $s $s2@manifest] $kp@private]]
+ [= $mh1 [$store:put-doc $s $m1]]
+ [= $mh2 [$store:put-doc $s $m2]]
+ [= $p1 [$xap:pkg-publish $s "toylib" "0.1.0" $mh1]]
+ [$xap:pkg-publish $s "toylib" "0.1.0" $mh2]]
+#]]
+   [out-err [#
+cx-err:CXER4887
+#]]
+  ]
+
+  [case id=xap-dist-015-publish-unsigned-rejected level=core
+   [tags xap-dist pkg-publish signature fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' 'code'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [$xap:pkg-publish $s "toylib" "0.1.0" $sealed@manifest]]
+#]]
+   [out-err [#
+cx-err:CXER4880
+#]]
+  ]
+
+  [case id=xap-dist-016-install-nmea-library-dogfood level=core
+   [tags xap-dist pkg-install library nmea0183 dogfood n-dist-2]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?lib 'cx-stdlib/io' :as io]
+[?let [= $src [$io:read-file "packages/nmea0183/nmea0183.cx"]]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "nmea0183.cx"] $src])]]
+ [= $draft [?element "package"
+                       [?attr "name" "nmea0183"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports"
+                         [?element "def" [?attr "name" "nmea0183/checksum"]]
+                    [?element "def" [?attr "name" "nmea0183/parse"]]
+                    [?element "def" [?attr "name" "nmea0183/render"]]
+                    [?element "def" [?attr "name" "nmea0183/valid"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [= $p [$xap:pkg-publish $s "nmea0183" "0.1.0" $mh]]
+ [= $rt [$xap:run {tenant: "demo"}]]
+ [= $inst [$xap:pkg-install [xap name=demo] $s "nmea0183@0.1.0" {runtime: $rt grantee: "agent:helper-1"}]]
+ ($inst@name, $inst@kind, [$count $inst/granted/grant])]
+#]]
+   [out-text [#
+('nmea0183', 'library', 0)
+#]]
+  ]
+
+  [case id=xap-dist-017-install-exports-mismatch-rejected level=core
+   [tags xap-dist pkg-install exports gate fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?lib 'cx-stdlib/io' :as io]
+[?let [= $src [$io:read-file "packages/nmea0183/nmea0183.cx"]]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "nmea0183.cx"] $src])]]
+ [= $draft [?element "package"
+                       [?attr "name" "nmea0183"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports"
+                         [?element "def" [?attr "name" "nmea0183/teleport"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [$xap:pkg-install [xap name=demo] $s $mh]]
+#]]
+   [out-err [#
+cx-err:CXER4884
+#]]
+  ]
+
+  [case id=xap-dist-018-install-feature-consent-is-exactly-needs level=core
+   [tags xap-dist pkg-install feature consent grants]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $spec "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec], [?element "entry" [?attr "path" "assets/door.md"] "x"])]]
+ [= $draft [?element "package"
+                       [?attr "name" "door"] [?attr "version" "1.0.0"] [?attr "kind" "feature"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "needs"
+                         [?element "reads" [?attr "noun" "traffic/vessel"]]
+                    [?element "gateways" [?attr "kind" "nmea-serial"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [= $p [$xap:pkg-publish $s "door" "1.0.0" $mh]]
+ [= $rt [$xap:run {tenant: "demo"}]]
+ [?let [= $inst [$xap:pkg-install [xap name=demo] $s "door@1.0.0" {runtime: $rt grantee: "agent:porter-1"}]]
+  $inst/granted]]
+#]]
+   [out-text [#
+[granted [grant capability='traffic/vessel'] [grant capability=nmea-serial]]
+#]]
+  ]
+
+  [case id=xap-dist-019-install-feature-compose-conflict-rejected level=core
+   [tags xap-dist pkg-install feature compose-gate w1 fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $spec1 "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $spec2 "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int] [field name=alarm type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $t1 [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec1], [?element "entry" [?attr "path" "assets/door.md"] "x"])]]
+ [= $t2 [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec2], [?element "entry" [?attr "path" "assets/door.md"] "y"])]]
+ [= $draft [?element "package"
+                         [?attr "name" "door"] [?attr "version" "1.0.0"] [?attr "kind" "feature"]
+                  [?element "publisher" [?attr "did" $pub]]]]
+ [= $draft2 [?element "package"
+                           [?attr "name" "door"] [?attr "version" "2.0.0"] [?attr "kind" "feature"]
+                   [?element "publisher" [?attr "did" $pub]]]]
+ [= $s1 [$xap:pkg-seal $s $t1 $draft]]
+ [= $s2 [$xap:pkg-seal $s $t2 $draft2]]
+ [= $m1 [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $s1@manifest] $kp@private]]]
+ [= $m2 [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $s2@manifest] $kp@private]]]
+ [= $i1 [$xap:pkg-install [xap name=demo] $s $m1]]
+ [$xap:pkg-install $i1 $s $m2]]
+#]]
+   [out-err [#
+cx-err:CXER4884
+#]]
+  ]
+
+  [case id=xap-dist-020-pin-rollback-hash-identity level=core
+   [tags xap-dist pkg-install pin rollback]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $spec1 "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $spec2 "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs
+  [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]
+  [verb name=chime effect=observe [intent [do :chime]] [reads door]]]
+ [requirements
+  [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]
+  [requirement kind=functional as=resident traces=chime [want 'to sound the chime'] [so 'arrival is announced']]]]"]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $t1 [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec1], [?element "entry" [?attr "path" "assets/door.md"] "x"])]]
+ [= $t2 [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec2], [?element "entry" [?attr "path" "assets/door.md"] "x"])]]
+ [= $d1 [?element "package" [?attr "name" "door"] [?attr "version" "1.0.0"] [?attr "kind" "feature"] [?element "publisher" [?attr "did" $pub]]]]
+ [= $d2 [?element "package" [?attr "name" "door"] [?attr "version" "2.0.0"] [?attr "kind" "feature"] [?element "publisher" [?attr "did" $pub]]]]
+ [= $s1 [$xap:pkg-seal $s $t1 $d1]]
+ [= $s2 [$xap:pkg-seal $s $t2 $d2]]
+ [= $m1 [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $s1@manifest] $kp@private]]]
+ [= $m2 [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $s2@manifest] $kp@private]]]
+ [= $i1 [$xap:pkg-install [xap name=demo] $s $m1]]
+ [= $i2 [$xap:pkg-install [xap name=demo2] $s $m2]]
+ [= $i3 [$xap:pkg-install [xap name=demo3] $s $m1]]
+ ([= $i1@hash $i3@hash], [= $i1@hash $i2@hash])]
+#]]
+   [out-text [#
+(true, false)
+#]]
+  ]
+
+  [case id=xap-dist-021-requires-closure-transitive level=core
+   [tags xap-dist pkg-requires-closure code-plane]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tc [$xap:pkg-tree ([entry path='c.cx' 'c'])]]
+ [= $dc [?element "package" [?attr "name" "libc"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "libc/c"]]]]]
+ [= $sc [$xap:pkg-seal $s $tc $dc]]
+ [= $mc [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sc@manifest] $kp@private]]]
+ [= $pc [$xap:pkg-publish $s "libc" "1.0.0" $mc]]
+ [= $tb [$xap:pkg-tree ([entry path='b.cx' 'b'])]]
+ [= $db [?element "package" [?attr "name" "libb"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "libb/b"]]]
+               [?element "requires" [?element "require" [?attr "library" "libc"]]]]]
+ [= $sb [$xap:pkg-seal $s $tb $db]]
+ [= $mb [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sb@manifest] $kp@private]]]
+ [= $pb [$xap:pkg-publish $s "libb" "1.0.0" $mb]]
+ [= $da [?element "package" [?attr "name" "liba"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "liba/a"]]]
+               [?element "requires" [?element "require" [?attr "library" "libb"]]]]]
+ [= $ta [$xap:pkg-tree ([entry path='a.cx' 'a'])]]
+ [= $sa [$xap:pkg-seal $s $ta $da]]
+ [= $ma [$store:get-doc $s $sa@manifest]]
+ [= $c [$xap:pkg-requires-closure $s $ma]]
+ [$count $c/pin]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [case id=xap-dist-022-requires-closure-cycle-rejected level=core
+   [tags xap-dist pkg-requires-closure cycle fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tb [$xap:pkg-tree ([entry path='b.cx' 'b'])]]
+ [= $db [?element "package" [?attr "name" "libb"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "libb/b"]]]
+               [?element "requires" [?element "require" [?attr "library" "liba"]]]]]
+ [= $sb [$xap:pkg-seal $s $tb $db]]
+ [= $mb [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sb@manifest] $kp@private]]]
+ [= $pb [$xap:pkg-publish $s "libb" "1.0.0" $mb]]
+ [= $ta [$xap:pkg-tree ([entry path='a.cx' 'a'])]]
+ [= $da [?element "package" [?attr "name" "liba"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "liba/a"]]]
+               [?element "requires" [?element "require" [?attr "library" "libb"]]]]]
+ [= $sa [$xap:pkg-seal $s $ta $da]]
+ [= $ma [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sa@manifest] $kp@private]]]
+ [= $pa [$xap:pkg-publish $s "liba" "1.0.0" $ma]]
+ [$xap:pkg-requires-closure $s [$store:get-doc $s $ma]]]
+#]]
+   [out-err [#
+cx-err:CXER4880
+#]]
+  ]
+
+  [case id=xap-dist-023-requires-closure-missing-rejected level=core
+   [tags xap-dist pkg-requires-closure fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $da [?element "package" [?attr "name" "liba"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "liba/a"]]]
+               [?element "requires" [?element "require" [?attr "library" "ghost-lib"]]]]]
+ [= $ta [$xap:pkg-tree ([entry path='a.cx' 'a'])]]
+ [= $sa [$xap:pkg-seal $s $ta $da]]
+ [$xap:pkg-requires-closure $s [$store:get-doc $s $sa@manifest]]]
+#]]
+   [out-err [#
+cx-err:CXER4886
+#]]
+  ]
+
+  [case id=xap-dist-024-offline-vendored-install level=core
+   [tags xap-dist pkg-install offline vendoring]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([entry path='lib.cx' '[?def id scope=public pure ($x) $x]'])]]
+ [= $draft [?element "package"
+                      [?attr "name" "toylib"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "toylib/id"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $mh [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sealed@manifest] $kp@private]]]
+ [= $mirror [$store:open "mem://"]]
+ [= $cl [$store:clone $s $mirror]]
+ [= $inst [$xap:pkg-install [xap name=boat] $mirror $mh]]
+ ($inst@name, $inst@kind)]
+#]]
+   [out-text [#
+('toylib', 'library')
+#]]
+  ]
+
+  [case id=xap-dist-025-git-registry-consume level=core
+   [tags xap-dist registry git-registry stage-1 dogfood supply-chain]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/path' :as path]
+[?let [= $s [$store:open [$concat "file://" [$path:absolute "registry/store"]]]]
+ [= $inst [$xap:pkg-install [xap name=consumer] $s "nmea0183@0.1.0"]]
+ ($inst@name, $inst@version, $inst@hash)]
+#]]
+   [out-text [#
+('nmea0183', '0.1.0', '9420de8aa767372ec3afe4def2a78723abb3cd76c78818a4a76cf9e77aae6b7c')
+#]]
+  ]
+
+  [case id=xap-dist-026-catalog-lists-published level=core
+   [tags xap-dist pkg-catalog discovery]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $ta [$xap:pkg-tree ([entry path='a.cx' '[?def alpha scope=public pure ($x) $x]'])]]
+ [= $tb [$xap:pkg-tree ([entry path='b.cx' '[?def beta scope=public pure ($x) $x]'])]]
+ [= $da [?element "package" [?attr "name" "liba"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "liba/alpha"]]]]]
+ [= $db [?element "package" [?attr "name" "libb"] [?attr "version" "2.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "libb/beta"]]]]]
+ [= $sa [$xap:pkg-seal $s $ta $da]]
+ [= $sb [$xap:pkg-seal $s $tb $db]]
+ [= $ma [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sa@manifest] $kp@private]]]
+ [= $mb [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sb@manifest] $kp@private]]]
+ [= $pa [$xap:pkg-publish $s "liba" "1.0.0" $ma]]
+ [= $pb [$xap:pkg-publish $s "libb" "2.0.0" $mb]]
+ [= $c [$xap:pkg-catalog $s]]
+ [= $names [?for [in $p $c/*] [yield $p/@name]]]
+ ([$count $c/package], $names)]
+#]]
+   [; #438: a multi-item comprehension result inside a sequence renders as
+      its paren sequence form — the pre-fix expectation carried a raw
+      newline mid-sequence, which is not parseable CX. ]
+   [out-text [#
+(2, ('liba', 'libb'))
+#]]
+  ]
+
+  [case id=xap-dist-027-catalog-search-by-term level=core
+   [tags xap-dist pkg-catalog discovery search]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $ta [$xap:pkg-tree ([entry path='a.cx' '[?def checksum scope=public pure ($x) $x]'])]]
+ [= $tb [$xap:pkg-tree ([entry path='b.cx' '[?def beta scope=public pure ($x) $x]'])]]
+ [= $da [?element "package" [?attr "name" "liba"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "liba/checksum"]]]]]
+ [= $db [?element "package" [?attr "name" "libb"] [?attr "version" "2.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "libb/beta"]]]]]
+ [= $sa [$xap:pkg-seal $s $ta $da]]
+ [= $sb [$xap:pkg-seal $s $tb $db]]
+ [= $ma [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sa@manifest] $kp@private]]]
+ [= $mb [$store:put-doc $s [$xap:pkg-sign [$store:get-doc $s $sb@manifest] $kp@private]]]
+ [= $pa [$xap:pkg-publish $s "liba" "1.0.0" $ma]]
+ [= $pb [$xap:pkg-publish $s "libb" "2.0.0" $mb]]
+ [= $c [$xap:pkg-catalog $s {term: "checksum"}]]
+ [= $hit $c//package]
+ ([$count $c/package], $hit@name)]
+#]]
+   [out-text [#
+(1, 'liba')
+#]]
+  ]
+
+  [case id=xap-dist-028-catalog-resolves-name-version level=core
+   [tags xap-dist pkg-catalog discovery resolve]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/path' :as path]
+[?let [= $s [$store:open [$concat "file://" [$path:absolute "registry/store"]]]]
+ [= $c [$xap:pkg-catalog $s {name: "nmea0183" version: "0.1.0"}]]
+ [= $e $c//package]
+ ($e@manifest, $e@hash, $e@kind)]
+#]]
+   [out-text [#
+('dfc7a847dfe0748e4491ee9d9cfc7854bb4fa8fbf9ed53b74ec9f50b9dd0eed6', '9420de8aa767372ec3afe4def2a78723abb3cd76c78818a4a76cf9e77aae6b7c', 'library')
+#]]
+  ]
+
+  [case id=xap-dist-029-license-perpetual-covers-range level=core
+   [tags xap-dist license entitlement perpetual]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "1.x" kind: "perpetual"}]]
+ [?let [= $v [$xap:license-verify $vc "nmea0183" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
+  $v@status]]
+#]]
+   [out-text [#
+'ok'
+#]]
+  ]
+
+  [case id=xap-dist-030-license-version-outside-range level=core
+   [tags xap-dist license entitlement attenuation fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "1.x" kind: "perpetual"}]]
+ [$xap:license-verify $vc "nmea0183" "2.0.0" {now: "2026-07-06T00:00:00Z"}]]
+#]]
+   [out-err [#
+cx-err:CXER4883
+#]]
+  ]
+
+  [case id=xap-dist-031-license-subscription-grace-window level=core
+   [tags xap-dist license entitlement subscription grace offline]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "*" kind: "subscription" expires: "2026-06-30T00:00:00Z" grace-until: "2026-07-15T00:00:00Z"}]]
+ [?let [= $v [$xap:license-verify $vc "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
+  $v@status]]
+#]]
+   [out-text [#
+'grace'
+#]]
+  ]
+
+  [case id=xap-dist-032-license-subscription-lapsed level=core
+   [tags xap-dist license entitlement subscription lapse n-dist-1 fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "*" kind: "subscription" expires: "2026-06-30T00:00:00Z" grace-until: "2026-07-15T00:00:00Z"}]]
+ [$xap:license-verify $vc "nmea0183" "0.1.0" {now: "2026-08-01T00:00:00Z"}]]
+#]]
+   [out-err [#
+cx-err:CXER4883
+#]]
+  ]
+
+  [case id=xap-dist-033-license-per-seat-chain-verifies level=core
+   [tags xap-dist license entitlement per-seat delegation-chain]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $okp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $org [$did:key-create $okp@public]]
+ [= $orgvc [$xap:license-issue $pub $kp@private $org {package: "nmea0183" versions: "*" kind: "per-seat" seats: "2"}]]
+ [= $seat [$xap:license-issue $org $okp@private "principal:alice" {package: "nmea0183" versions: "*" seat: "2" parent: $orgvc}]]
+ [?let [= $v [$xap:license-verify $seat "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
+  $v@status]]
+#]]
+   [out-text [#
+'ok'
+#]]
+  ]
+
+  [case id=xap-dist-034-license-per-seat-over-allocation-rejected level=core
+   [tags xap-dist license entitlement per-seat attenuation fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $okp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $org [$did:key-create $okp@public]]
+ [= $orgvc [$xap:license-issue $pub $kp@private $org {package: "nmea0183" versions: "*" kind: "per-seat" seats: "2"}]]
+ [= $seat [$xap:license-issue $org $okp@private "principal:carol" {package: "nmea0183" versions: "*" seat: "3" parent: $orgvc}]]
+ [$xap:license-verify $seat "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
+#]]
+   [out-err [#
+cx-err:CXER4883
+#]]
+  ]
+
+  [case id=xap-dist-035-license-bundle-member-covered level=core
+   [tags xap-dist license entitlement bundle]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "marine-suite" members: ([member package=nmea0183 versions='0.x'], [member package=collision-cpa versions='*'])}]]
+ [?let [= $v [$xap:license-verify $vc "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
+  $v@status]]
+#]]
+   [out-text [#
+'ok'
+#]]
+  ]
+
+  [case id=xap-dist-036-license-bundle-non-member-denied level=core
+   [tags xap-dist license entitlement bundle fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "marine-suite" members: ([member package=nmea0183 versions='0.x'])}]]
+ [$xap:license-verify $vc "radar-overlay" "1.0.0" {now: "2026-07-06T00:00:00Z"}]]
+#]]
+   [out-err [#
+cx-err:CXER4883
+#]]
+  ]
+
+  [case id=xap-dist-037-install-policy-requires-entitlement level=core
+   [tags xap-dist license entitlement policy price-is-market-property fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/path' :as path]
+[?let [= $s [$store:open [$concat "file://" [$path:absolute "registry/store"]]]]
+ [$xap:pkg-install [xap name=paid-market-consumer] $s "nmea0183@0.1.0" {require-entitlement: true}]]
+#]]
+   [out-err [#
+cx-err:CXER4883
+#]]
+  ]
+
+  [case id=xap-dist-038-install-with-entitlement-succeeds level=core
+   [tags xap-dist license entitlement policy price-is-market-property]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/path' :as path]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "0.x"}]]
+ [= $s [$store:open [$concat "file://" [$path:absolute "registry/store"]]]]
+ [= $inst [$xap:pkg-install [xap name=paid-market-consumer] $s "nmea0183@0.1.0" {require-entitlement: true entitlement: $vc now: "2026-07-06T00:00:00Z"}]]
+ ($inst@name, $inst@hash)]
+#]]
+   [out-text [#
+('nmea0183', '9420de8aa767372ec3afe4def2a78723abb3cd76c78818a4a76cf9e77aae6b7c')
+#]]
+  ]
+
+  [case id=xap-dist-039-market-grammar-composes level=core
+   [tags xap-dist market compose dogfood]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/io' :as io]
+[?let [= $catd [$cx-parse [$io:read-file "market/catalog.feature.cxd"]]]
+ [= $entd [$cx-parse [$io:read-file "market/entitlement.feature.cxd"]]]
+ [= $comd [$cx-parse [$io:read-file "market/commerce.feature.cxd"]]]
+ [= $cat $catd//feature]
+ [= $ent $entd//feature]
+ [= $com $comd//feature]
+ [= $g [$xap:compose $cat $ent $com]]
+ ([$count $g//verb], $g//verb[= $_@name 'commerce/fulfil']/@derived)]
+#]]
+   [out-text [#
+(10, [derived true])
+#]]
+  ]
+
+  [case id=xap-dist-040-market-choreography-journaled level=core
+   [tags xap-dist market commerce choreography n-compose-2]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/io' :as io]
+[?let [= $catd [$cx-parse [$io:read-file "market/catalog.feature.cxd"]]]
+ [= $entd [$cx-parse [$io:read-file "market/entitlement.feature.cxd"]]]
+ [= $comd [$cx-parse [$io:read-file "market/commerce.feature.cxd"]]]
+ [= $cat $catd//feature]
+ [= $ent $entd//feature]
+ [= $com $comd//feature]
+ [= $g [$xap:compose $cat $ent $com]]
+ [= $rt [$xap:run {tenant: "market" grammar: $g}]]
+ [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:stripe-gw"] [scope 'commerce/record-settlement']]]
+ [= $e1 [$xap:emit $rt [do :place-order] {actor: "principal:dana"}]]
+ [= $e2 [$xap:emit $rt [do :record-settlement] {actor: "agent:stripe-gw"}]]
+ [= $e3 [$xap:emit $rt [do :fulfil] {actor: "principal:dana"}]]
+ ($e1, $e2, $e3)]
+#]]
+   [out-text [#
+([event actor=principal:dana [do 'commerce/place-order']], [event actor=agent:stripe-gw [do 'commerce/record-settlement']], [event actor=principal:dana [do 'commerce/fulfil']])
+#]]
+  ]
+
+  [case id=xap-dist-041-market-fulfil-cannot-launder-authority level=core
+   [tags xap-dist market commerce n-compose-2 pep fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/io' :as io]
+[?let [= $catd [$cx-parse [$io:read-file "market/catalog.feature.cxd"]]]
+ [= $entd [$cx-parse [$io:read-file "market/entitlement.feature.cxd"]]]
+ [= $comd [$cx-parse [$io:read-file "market/commerce.feature.cxd"]]]
+ [= $cat $catd//feature]
+ [= $ent $entd//feature]
+ [= $com $comd//feature]
+ [= $g [$xap:compose $cat $ent $com]]
+ [= $rt [$xap:run {tenant: "market" grammar: $g}]]
+ [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:stripe-gw"] [scope 'commerce/record-settlement']]]
+ [= $d2 [$xap:dial $rt [from id="principal:dana"] [to id="agent:stripe-gw"] [scope 'commerce/fulfil']]]
+ [$xap:emit $rt [do :fulfil] {actor: "agent:stripe-gw"}]]
+#]]
+   [out-err [#
+cx-err:CXER4850
+#]]
+  ]
+
+  [case id=xap-dist-042-bundle-catalog-object-and-reference-entitlement level=core
+   [tags xap-dist market bundle catalog entitlement]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $bh [$store:put-doc $s [bundle name=marine-suite version=1 [member package=nmea0183 versions='0.x']]]]
+ [= $al [$store:set-alias $s "marine-suite@1" $bh]]
+ [= $c [$xap:pkg-catalog $s]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "marine-suite" bundle-version: "1"}]]
+ [= $v [$xap:license-verify $vc "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z" store: $s}]]
+ [= $be $c//bundle]
+ ($be@name, $be@version, $v@status)]
+#]]
+   [out-text [#
+('marine-suite', '1', 'ok')
+#]]
+  ]
+
+  [case id=xap-dist-043-bundle-reference-is-version-bound level=core
+   [tags xap-dist market bundle entitlement fail-closed]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://"]]
+ [= $b1 [$store:put-doc $s [bundle name=marine-suite version=1 [member package=nmea0183 versions='0.x']]]]
+ [= $a1 [$store:set-alias $s "marine-suite@1" $b1]]
+ [= $b2 [$store:put-doc $s [bundle name=marine-suite version=2 [member package=nmea0183 versions='0.x'] [member package=radar-overlay versions='*']]]]
+ [= $a2 [$store:set-alias $s "marine-suite@2" $b2]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "marine-suite" bundle-version: "1"}]]
+ [$xap:license-verify $vc "radar-overlay" "1.0.0" {now: "2026-07-06T00:00:00Z" store: $s}]]
+#]]
+   [out-err [#
+cx-err:CXER4883
+#]]
+  ]
+
+  [case id=xap-dist-044-markets-federate-as-data level=core
+   [tags xap-dist market federation discovery]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $m1 [$store:open "mem://"]]
+ [= $m2 [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $ta [$xap:pkg-tree ([entry path='a.cx' '[?def alpha scope=public pure ($x) $x]'])]]
+ [= $tb [$xap:pkg-tree ([entry path='b.cx' '[?def beta scope=public pure ($x) $x]'])]]
+ [= $da [?element "package" [?attr "name" "liba"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "liba/alpha"]]]]]
+ [= $db [?element "package" [?attr "name" "libb"] [?attr "version" "1.0.0"] [?attr "kind" "library"]
+               [?element "publisher" [?attr "did" $pub]]
+               [?element "exports" [?element "def" [?attr "name" "libb/beta"]]]]]
+ [= $sa [$xap:pkg-seal $m1 $ta $da]]
+ [= $sb [$xap:pkg-seal $m2 $tb $db]]
+ [= $ma [$store:put-doc $m1 [$xap:pkg-sign [$store:get-doc $m1 $sa@manifest] $kp@private]]]
+ [= $mb [$store:put-doc $m2 [$xap:pkg-sign [$store:get-doc $m2 $sb@manifest] $kp@private]]]
+ [= $pa [$xap:pkg-publish $m1 "liba" "1.0.0" $ma]]
+ [= $pb [$xap:pkg-publish $m2 "libb" "1.0.0" $mb]]
+ [= $c1 [$xap:pkg-catalog $m1]]
+ [= $c2 [$xap:pkg-catalog $m2]]
+ [= $blend [?element "federated-catalog" [?splice $c1/*] [?splice $c2/*]]]
+ [= $i1 [$xap:pkg-install [xap name=one-surface] $m1 "liba@1.0.0"]]
+ [= $i2 [$xap:pkg-install $i1 $m2 "libb@1.0.0"]]
+ ([$count $blend/package], [$count $i2/xap/libraries/library])]
+#]]
+   [out-text [#
+(2, 2)
+#]]
+  ]
+
+  [; §6.1 pkg-install enable: installing a package the deployment doc ALREADY
+     names (a stage-0 path-ref row) UPDATES that row in place — one row per
+     name, its unrecognized attrs (package=, status=) preserved, the pin
+     attrs (version/manifest/hash) and the resolved requires closure written
+     onto it. Appending a second same-name row would leave the doc ill-formed
+     (two rows claiming one feature). Found converting xap-marine stage 0 → 1. ]
+  [case id=xap-dist-045-install-merges-existing-feature-row level=core
+   [tags xap-dist pkg-install enable lockfile stage-1]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $spec "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec], [?element "entry" [?attr "path" "assets/door.md"] "x"])]]
+ [= $draft [?element "package"
+                       [?attr "name" "door"] [?attr "version" "1.0.0"] [?attr "kind" "feature"]
+                  [?element "publisher" [?attr "did" $pub]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [= $p [$xap:pkg-publish $s "door" "1.0.0" $mh]]
+ [= $inst [$xap:pkg-install [xap name=demo [features [feature name=door package='./features/door' status=ready]]] $s "door@1.0.0"]]
+ [= $rows [?for [in $f $inst/xap/features/feature] [yield $f]]]
+ [= $row [$first $rows]]
+ ([$count $rows],
+  [$concat "" $row@package],
+  [$concat "" $row@status],
+  [= [$concat "" $row@hash] [$concat "" $sealed@hash]])]
+#]]
+   [out-text [#
+(1, './features/door', 'ready', true)
+#]]
+  ]
+
+  [; §1.2 runtime contract, lane 1 (§11.16): a feature tree carrying its
+     <name>.cx code entry whose manifest declares NO [exports] fails the
+     install gate — behavior must be declared to be consented to. ]
+  [case id=xap-dist-046-contract-code-without-exports-rejected level=core
+   [tags xap-dist pkg-install runtime-contract exports gate]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $spec "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $code "[?def open-door scope=public ($x) $x]"]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec], [?element "entry" [?attr "path" "door.cx"] $code])]]
+ [= $draft [?element "package"
+                        [?attr "name" "door"] [?attr "version" "1.0.0"] [?attr "kind" "feature"]
+                  [?element "publisher" [?attr "did" $pub]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [= $p [$xap:pkg-publish $s "door" "1.0.0" $mh]]
+ [$xap:pkg-install [xap name=demo] $s "door@1.0.0"]]
+#]]
+   [out-err [#
+cx-err:CXER4884
+#]]
+  ]
+
+  [; §1.2 runtime contract, lane 2 (§11.16): [exports] declared but the tree
+     carries no <name>.cx — a listing with nothing behind it fails the gate. ]
+  [case id=xap-dist-047-contract-exports-without-code-rejected level=core
+   [tags xap-dist pkg-install runtime-contract exports gate]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $spec "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec])]]
+ [= $draft [?element "package"
+                       [?attr "name" "door"] [?attr "version" "1.0.0"] [?attr "kind" "feature"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports" [?element "def" [?attr "name" "door/open-door"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [= $p [$xap:pkg-publish $s "door" "1.0.0" $mh]]
+ [$xap:pkg-install [xap name=demo] $s "door@1.0.0"]]
+#]]
+   [out-err [#
+cx-err:CXER4884
+#]]
+  ]
+
+  [; §1.2 runtime contract, positive lane (§11.16): code entry + matching
+     [exports] installs; the spec-only feature (no code, no exports) installs
+     unchanged — both halves of the two-way rule. ]
+  [case id=xap-dist-048-contract-declared-surface-installs level=core
+   [tags xap-dist pkg-install runtime-contract exports gate]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $spec "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $code "[?def readout scope=public ($store $t) [?element 'readout']]
+[?def apply scope=public ($verb $intent $store) $verb]"]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec], [?element "entry" [?attr "path" "door.cx"] $code])]]
+ [= $draft [?element "package"
+                        [?attr "name" "door"] [?attr "version" "1.0.0"] [?attr "kind" "feature"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports"
+                          [?element "def" [?attr "name" "door/readout"]]
+                    [?element "def" [?attr "name" "door/apply"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [= $p [$xap:pkg-publish $s "door" "1.0.0" $mh]]
+ [= $inst [$xap:pkg-install [xap name=demo] $s "door@1.0.0"]]
+ ($inst@name, $inst@kind)]
+#]]
+   [out-text [#
+('door', 'feature')
+#]]
+  ]
+
+  [; §1.2 runtime contract, absent-def lane (§11.16): the manifest exports a
+     def the packaged code does not define — rejected naming the def. ]
+  [case id=xap-dist-049-contract-exported-def-absent-rejected level=core
+   [tags xap-dist pkg-install runtime-contract exports gate]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $spec "[feature name=door
+ [nouns [noun name=door singular=true [field name=locked type=int]]]
+ [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+ [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"]
+ [= $code "[?def readout scope=public ($store $t) [?element 'readout']]"]
+ [= $s [$store:open "mem://"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "door.feature.cxd"] $spec], [?element "entry" [?attr "path" "door.cx"] $code])]]
+ [= $draft [?element "package"
+                        [?attr "name" "door"] [?attr "version" "1.0.0"] [?attr "kind" "feature"]
+                  [?element "publisher" [?attr "did" $pub]]
+                  [?element "exports"
+                          [?element "def" [?attr "name" "door/readout"]]
+                    [?element "def" [?attr "name" "door/apply"]]]]]
+ [= $sealed [$xap:pkg-seal $s $tree $draft]]
+ [= $m [$store:get-doc $s $sealed@manifest]]
+ [= $signed [$xap:pkg-sign $m $kp@private]]
+ [= $mh [$store:put-doc $s $signed]]
+ [= $p [$xap:pkg-publish $s "door" "1.0.0" $mh]]
+ [$xap:pkg-install [xap name=demo] $s "door@1.0.0"]]
+#]]
+   [out-err [#
+cx-err:CXER4884
+#]]
+  ]
+
+  [case id=xap-dist-050-license-verifies-after-emit-parse-roundtrip level=core
+   [tags xap-dist license entitlement offline air-gap roundtrip]
+   [; §5.1: "VCs verify offline by construction" — an entitlement VC written
+      to a registry file and re-parsed by the consumer MUST verify exactly as
+      the in-memory original does (the air-gapped fleet imports packages + VCs
+      through its own registry). Guards the text-extraction/canonical-form
+      path against constructed-vs-parsed node-type drift. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "1.x" kind: "perpetual"}]]
+ [= $rt [$cx-parse [$cx:emit $vc]]]
+ [= $vc2 [$first [?for [in $x ($rt)] [yield $x]]]]
+ [= $v1 [$xap:license-verify $vc "nmea0183" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
+ [= $v2 [$xap:license-verify $vc2 "nmea0183" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
+ ([$concat "" $v1@status], [$concat "" $v2@status])]
+#]]
+   [out-text [#
+('ok', 'ok')
+#]]
+  ]
+]

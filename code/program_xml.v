@@ -184,7 +184,14 @@ fn emit_px_element(mut b strings.Builder, n cx.ProgramLiteral) {
 	// (XML attributes would lose the value's cx.ProgramNode type; the child
 	// form keeps the round-trip bijective for any attr value.)
 	for a in n.attrs {
-		b.write_string('<cx:attr name="${px_escape_attr(a.name)}">')
+		b.write_string('<cx:attr name="${px_escape_attr(a.name)}"')
+		if a.data_type != '' {
+			// D3 attribute ascription `name::T=value` ([L50]; #466) —
+			// carried as a `type` XML attribute so the round-trip stays
+			// bijective.
+			b.write_string(' type="${px_escape_attr(a.data_type)}"')
+		}
+		b.write_string('>')
 		emit_px_node(mut b, a.value)
 		b.write_string('</cx:attr>')
 	}
@@ -795,7 +802,12 @@ fn raw_to_program(r RawXml) !cx.ProgramNode {
 				if ch.children.len != 1 {
 					return error('program_xml: <cx:attr> must wrap exactly one value node')
 				}
-				attrs << cx.ProgramAttr{ name: aname, value: raw_to_program(ch.children[0])! }
+				adt := ch.attrs['type'] or { '' }
+				attrs << cx.ProgramAttr{
+					name:      aname
+					value:     raw_to_program(ch.children[0])!
+					data_type: adt
+				}
 			} else if ch.tag == 'cx:slot' {
 				label := ch.attrs['label'] or {
 					return error('program_xml: <cx:slot> missing label attribute')

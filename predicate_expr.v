@@ -515,11 +515,27 @@ pub fn predicate_expr_parse(source string) !&PredicateExpr {
 	mut c := PredicateParseCursor{ src: source.bytes(), pos: 0 }
 	c.skip_ws()
 
-	// Reject obvious multi-clause / boolean bodies up front — keeping
-	// the atomic-template parser tight makes the fallback semantics in
-	// path_parser.v predictable. The follow-up phase will lift these.
-	if predicate_body_has_bool_keyword(source) {
-		return error('PREDICATE_EXPR_PARSE: boolean expression not yet implemented (Phase 2.19 covers atomic templates only)')
+	// Infix boolean connectives are RETIRED (grammar [132]–[134]): a body
+	// like `@a=1 and @b=2` is a hard parse error, never a source-only
+	// fallback. Prefix forms (`and […] […]`) don't trip the scan — the
+	// leading token is the connective itself, checked before this scan.
+	if !predicate_body_leads_with_word_operator(source)
+	   && predicate_body_has_bool_keyword(source) {
+		return error('RETIRED_PREDICATE_SURFACE: infix `and`/`or` in a CXPath predicate is retired — write the prefix form `[and P Q]` (code.md §5.5.2)')
+	}
+
+	// Canonical prefix templates ([159b] fused-form interiors) — the
+	// atomic subset the standalone evaluator supports:
+	//   `OP $_@name RHS`   → attr_compare   (OP ∈ = != < <= > >=)
+	//   `= $_position N`   → int_position
+	//   `and|or BODY BODY` → bool_expr      (children are `[…]` sub-bodies)
+	//   `not BODY`         → bool_expr
+	if !c.at_end() && (c.peek() == `=` || c.peek() == `!` || c.peek() == `<` || c.peek() == `>`) {
+		return parse_prefix_compare(mut c, source)!
+	}
+	if body_leads_word(source, 'and') || body_leads_word(source, 'or')
+	   || body_leads_word(source, 'not') {
+		return parse_prefix_connective(mut c, source)!
 	}
 
 	// `$_` family: `$_`, `$_position`, `$_last`, or `$_@name`.
@@ -543,6 +559,168 @@ pub fn predicate_expr_parse(source string) !&PredicateExpr {
 	}
 
 	return error('PREDICATE_EXPR_PARSE: unrecognised body shape: ${source}')
+}
+
+// body_leads_word reports whether the trimmed body starts with `word`
+// followed by whitespace or `[` (a fused connective interior).
+fn body_leads_word(source string, word string) bool {
+	t := source.trim_space()
+	if !t.starts_with(word) || t.len <= word.len {
+		return false
+	}
+	nxt := t[word.len]
+	return nxt == ` ` || nxt == `\t` || nxt == `\n` || nxt == `[`
+}
+
+// parse_prefix_compare parses `OP LHS RHS` where OP is a comparison
+// operator, LHS is `$_@name` / `$_position`, and RHS is a literal.
+// Cursor is on the operator.
+fn parse_prefix_compare(mut c PredicateParseCursor, source string) !&PredicateExpr {
+	op := c.read_op() or {
+		return error('PREDICATE_EXPR_PARSE: expected comparison operator')
+	}
+	c.skip_ws()
+	// LHS must be a `$_`-anchored reference for the standalone surface.
+	if c.at_end() || c.peek() != `$` || c.peek_at(1) != `_` {
+		return error('PREDICATE_EXPR_PARSE: prefix compare needs a `\$_`-anchored LHS (general bodies promote via the program engine)')
+	}
+	c.advance() // $
+	c.advance() // _
+	if !c.at_end() && c.peek() == `@` {
+		c.advance() // @
+		name := c.read_name()
+		if name.len == 0 {
+			return error('PREDICATE_EXPR_PARSE: expected attribute name after \$_@')
+		}
+		c.skip_ws()
+		value := c.read_rhs_value() or {
+			return error('PREDICATE_EXPR_PARSE: expected RHS value in prefix compare')
+		}
+		c.skip_ws()
+		if !c.at_end() {
+			return error('PREDICATE_EXPR_PARSE: unexpected trailing input in prefix compare: ${source}')
+		}
+		return &PredicateExpr{
+			kind:   .attr_compare
+			name:   name
+			op:     op
+			value:  value
+			source: source
+		}
+	}
+	suffix := c.read_name()
+	if suffix == 'position' && op == '=' {
+		c.skip_ws()
+		n := c.read_int() or {
+			return error('PREDICATE_EXPR_PARSE: expected integer after `= \$_position`')
+		}
+		c.skip_ws()
+		if !c.at_end() {
+			return error('PREDICATE_EXPR_PARSE: unexpected trailing input after positional compare: ${source}')
+		}
+		if n < 1 {
+			return error('PREDICATE_EXPR_PARSE: position must be ≥ 1 (got ${n})')
+		}
+		return &PredicateExpr{
+			kind:     .int_position
+			position: n
+			source:   source
+		}
+	}
+	return error('PREDICATE_EXPR_PARSE: prefix compare over `\$_${suffix}` outside the atomic surface (promotes via the program engine)')
+}
+
+// parse_prefix_connective parses `and BODY BODY…` / `or BODY BODY…` /
+// `not BODY` where each BODY is a bracketed sub-body `[…]` recursively
+// parsed through predicate_expr_parse.
+fn parse_prefix_connective(mut c PredicateParseCursor, source string) !&PredicateExpr {
+	word := c.read_name()
+	if word != 'and' && word != 'or' && word != 'not' {
+		return error('PREDICATE_EXPR_PARSE: expected connective, got `${word}`')
+	}
+	mut children := []&PredicateExpr{}
+	for {
+		c.skip_ws()
+		if c.at_end() {
+			break
+		}
+		if c.peek() != `[` {
+			return error('PREDICATE_EXPR_PARSE: connective operand must be a bracketed sub-body, got `${c.peek().ascii_str()}`')
+		}
+		sub := read_bracket_body(mut c) or {
+			return error('PREDICATE_EXPR_PARSE: unbalanced bracket in connective operand')
+		}
+		children << predicate_expr_parse(sub)!
+	}
+	if word == 'not' && children.len != 1 {
+		return error('PREDICATE_EXPR_PARSE: `not` takes exactly one operand (got ${children.len})')
+	}
+	if word != 'not' && children.len < 2 {
+		return error('PREDICATE_EXPR_PARSE: `${word}` takes two or more operands (got ${children.len})')
+	}
+	return &PredicateExpr{
+		kind:     .bool_expr
+		op:       word
+		children: children
+		source:   source
+	}
+}
+
+// read_bracket_body consumes a bracketed `[…]` span at the cursor and
+// returns its interior, respecting nesting and quoted strings.
+fn read_bracket_body(mut c PredicateParseCursor) ?string {
+	if c.peek() != `[` {
+		return none
+	}
+	start := c.pos + 1
+	mut depth := 0
+	for !c.at_end() {
+		b := c.peek()
+		if b == `"` || b == `'` {
+			q := b
+			c.advance()
+			for !c.at_end() && c.peek() != q {
+				if c.peek() == `\\` {
+					c.advance()
+				}
+				c.advance()
+			}
+			c.advance()
+			continue
+		}
+		if b == `[` {
+			depth++
+		} else if b == `]` {
+			depth--
+			if depth == 0 {
+				body := c.src[start..c.pos].bytestr()
+				c.advance() // ']'
+				return body
+			}
+		}
+		c.advance()
+	}
+	return none
+}
+
+// predicate_body_leads_with_word_operator reports whether the body's
+// first token is a reserved word-operator head (`and …`, `or …`,
+// `not …`, `union …`, …) — a FUSED prefix form, which legitimately
+// contains connective words and must not trip the infix pre-scan.
+fn predicate_body_leads_with_word_operator(source string) bool {
+	t := source.trim_space()
+	for w in ['and', 'or', 'not', 'cast', 'union', 'intersect', 'except'] {
+		if t == w {
+			return false // a lone connective word is not a form
+		}
+		if t.starts_with(w) && t.len > w.len {
+			nxt := t[w.len]
+			if nxt == ` ` || nxt == `\t` || nxt == `\n` || nxt == `[` {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // predicate_body_has_bool_keyword performs a coarse pre-scan for `and`
@@ -636,24 +814,12 @@ fn parse_attr(mut c PredicateParseCursor, source string) !&PredicateExpr {
 			source: source
 		}
 	}
-	op := c.read_op() or {
-		return error('PREDICATE_EXPR_PARSE: expected comparison operator or end after @${name}, got ${c.peek().ascii_str()}')
+	// The infix attribute comparison `@name OP value` is RETIRED
+	// (grammar [132]–[134]): hard error, never a source-only fallback.
+	if op := c.read_op() {
+		return error('RETIRED_PREDICATE_SURFACE: infix attribute comparison `[@${name}${op}…]` is retired — write the prefix operator form `[${op} \$_@${name} …]` (code.md §5.5.2)')
 	}
-	c.skip_ws()
-	value := c.read_rhs_value() or {
-		return error('PREDICATE_EXPR_PARSE: expected RHS value after @${name} ${op}')
-	}
-	c.skip_ws()
-	if !c.at_end() {
-		return error('PREDICATE_EXPR_PARSE: unexpected trailing input in attr_compare: ${source}')
-	}
-	return &PredicateExpr{
-		kind:   .attr_compare
-		name:   name
-		op:     op
-		value:  value
-		source: source
-	}
+	return error('PREDICATE_EXPR_PARSE: unexpected trailing input after @${name}: ${source}')
 }
 
 // parse_int_position handles a bare integer literal body → desugars to
@@ -679,55 +845,24 @@ fn parse_int_position(mut c PredicateParseCursor, source string) !&PredicateExpr
 	}
 }
 
-// parse_function_call handles `count(*)` and `count(*) OP N` — the
-// atomic count-vs-int form.
+// parse_function_call — the paren-call templates (`count(*)`,
+// `count(*) OP N`, `last()`) are RETIRED (grammar [132]–[134] / code.md
+// §6.3: there is no paren-call anywhere in the language). A bare
+// identifier body is the step-existence notation atom, promoted by the
+// caller's fallback path; an identifier followed by `(` is a hard error.
 fn parse_function_call(mut c PredicateParseCursor, source string) !&PredicateExpr {
 	fn_name := c.read_name()
 	if fn_name.len == 0 {
-		return error('PREDICATE_EXPR_PARSE: expected function name')
+		return error('PREDICATE_EXPR_PARSE: expected identifier')
 	}
 	c.skip_ws()
-	if c.at_end() || c.peek() != `(` {
-		return error('PREDICATE_EXPR_PARSE: bare identifier `${fn_name}` not a recognised atomic template')
-	}
-	c.advance() // (
-	c.skip_ws()
-	// Currently only `count(*)` is recognised — single `*` arg.
-	if c.at_end() || c.peek() != `*` {
-		return error('PREDICATE_EXPR_PARSE: only `${fn_name}(*)` is recognised')
-	}
-	c.advance() // *
-	c.skip_ws()
-	if c.at_end() || c.peek() != `)` {
-		return error('PREDICATE_EXPR_PARSE: expected `)` after `*` in ${fn_name}(*)')
-	}
-	c.advance() // )
-	c.skip_ws()
-	if c.at_end() {
-		return &PredicateExpr{
-			kind:   .function_call
-			name:   fn_name
-			value:  '*'
-			source: source
+	if !c.at_end() && c.peek() == `(` {
+		hint := if fn_name == 'last' {
+			'write `[= \$_position \$_last]`'
+		} else {
+			'use the head-dispatch builtin with the context binding, e.g. `[> [\$count \$_/*] 1]`'
 		}
+		return error('RETIRED_PREDICATE_SURFACE: paren-call `${fn_name}(…)` in a CXPath predicate is retired — ${hint} (code.md §6.3)')
 	}
-	op := c.read_op() or {
-		return error('PREDICATE_EXPR_PARSE: expected comparison operator after ${fn_name}(*)')
-	}
-	c.skip_ws()
-	n := c.read_int() or {
-		return error('PREDICATE_EXPR_PARSE: expected integer RHS after ${fn_name}(*) ${op}')
-	}
-	c.skip_ws()
-	if !c.at_end() {
-		return error('PREDICATE_EXPR_PARSE: unexpected trailing input after function call: ${source}')
-	}
-	return &PredicateExpr{
-		kind:     .function_call
-		name:     fn_name
-		value:    '*'
-		op:       op
-		position: n
-		source:   source
-	}
+	return error('PREDICATE_EXPR_PARSE: bare identifier `${fn_name}` not an atomic template (step existence promotes via the general parser)')
 }

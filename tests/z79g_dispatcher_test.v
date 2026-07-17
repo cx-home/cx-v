@@ -168,11 +168,11 @@ fn test_z79g_modify_multistep_focus_set() {
 // ── [?modify] — predicate focus (Gap 1 verification) ─────────────────────────
 
 fn test_z79g_modify_predicate_focus_delete() {
-	// `//user[@active=false] :delete` — predicate filters to only
+	// `//user[= $_@active false] :delete` — predicate filters to only
 	// active=false users, deleted. The path-aware bridge honours the
 	// predicate.
 	in_cx := '[users [user active=true [name Alice]] [user active=false [name Bob]]]'
-	program := '[?modify \$doc //user[@active=false] [delete]]'
+	program := '[?modify \$doc //user[= \$_@active false] [delete]]'
 	out := run_eval(in_cx, program) or {
 		assert false, 'eval failed: ${err}'
 		return

@@ -226,6 +226,15 @@ fn (mut p Parser) read_top_text_run() (string, u8) {
 			terminator = b
 			break
 		}
+		if b == `]` {
+			// A depth-0 `]` can never be text: BareValue [L70] excludes it,
+			// so it is a structural stray close (grammar GR-STRAY-CLOSE).
+			// Stop the run; the caller raises. (#289 — absorbing it here let
+			// `cx fmt`'s data fallback silently accept, and mangle, program
+			// files the program reader rejects.)
+			terminator = b
+			break
+		}
 		if line_start && end + 3 <= p.src.len
 			&& p.src[end] == `-` && p.src[end+1] == `-` && p.src[end+2] == `-` {
 			terminator = `-`
@@ -557,6 +566,14 @@ fn (mut p Parser) parse_document() !Document {
 			// Mixed-mode node introducer: a `[`-opener or `&` entity starts a
 			// node (parse_node sub-dispatches); anything else is a top-level text
 			// run. kind.is_bracket_open() || .amp == the former `c == \`[\` || \`&\``.
+			if p.src[p.pos] == `]` {
+				// Depth-0 `]` in mixed mode is the same structural stray close
+				// as at doc-top (GR-STRAY-CLOSE): BareValue [L70] excludes `]`,
+				// so it can never be prose. Absorbing it as text made the data
+				// reading accept — and `cx fmt` mangle — program files whose
+				// program reading is rejected (#289).
+				return error(p.make_error('stray `]` with no matching `[` (cx-err:CXER0100)'))
+			}
 			k := p.tok_peek_kind()
 			if k.is_bracket_open() || k == .amp {
 				n := p.parse_node()!
@@ -579,6 +596,12 @@ fn (mut p Parser) parse_document() !Document {
 		if p.pos + 3 <= p.src.len && p.src[p.pos] == `-` && p.src[p.pos+1] == `-` && p.src[p.pos+2] == `-` {
 			break
 		}
+		if p.src[p.pos] == `]` {
+			// Same structural stray close as doc-top / mixed mode
+			// (GR-STRAY-CLOSE) — raise it with the code, not the generic
+			// `expected node` (#289 witness GR-STRAY-CLOSE-2).
+			return error(p.make_error('stray `]` with no matching `[` (cx-err:CXER0100)'))
+		}
 		n := p.parse_node()!
 		elements << n
 		// A `[?=…]` interpolation or `[?Name …]` eval-directive at top
@@ -597,11 +620,14 @@ fn (mut p Parser) parse_document() !Document {
 
 // peek_table_block_open returns true if the parser is positioned at the
 // TableBlock clause-child opener `[table[` (TABLE_OPEN per
-// spec/grammar.ebnf [29] + lexer note lines 1660-1662): a `[`, the
-// reserved name `table`, optional whitespace, then a header `[` whose
-// next byte is not `]` (so `[table[]` is not a TableBlock). `[table foo]`
-// (table followed by anything other than `[`) is a regular element named
-// `table`, not a TableBlock. Does not consume input.
+// spec/grammar.ebnf [29] + its lexer note): a `[`, the reserved name
+// `table`, then the header `[` GLUED to it — TABLE_OPEN is a single
+// token (#484). `[table …]` with whitespace before the bracket is an
+// ordinary element named `table` (plain composition — the whitespace-
+// tolerant claim broke `[furniture [table [legs 4]]]` and silently
+// diverged from the program reading, which was already glued-only).
+// `[table[]` (immediately closed header) is not a TableBlock either.
+// Does not consume input.
 fn (p &Parser) peek_table_block_open() bool {
 	// Need at least: '[' 't' 'a' 'b' 'l' 'e' '[' x — 8 bytes minimum
 	if p.pos + 8 > p.src.len { return false }
@@ -611,15 +637,10 @@ fn (p &Parser) peek_table_block_open() bool {
 	if p.src[p.pos + 3] != `b` { return false }
 	if p.src[p.pos + 4] != `l` { return false }
 	if p.src[p.pos + 5] != `e` { return false }
-	// after 'table': optional whitespace, then the header '['
-	mut i := p.pos + 6
-	for i < p.src.len && (p.src[i] == ` ` || p.src[i] == `\t`
-		|| p.src[i] == `\n` || p.src[i] == `\r`) {
-		i++
-	}
-	if i >= p.src.len || p.src[i] != `[` { return false }
+	// the header '[' must be byte-adjacent — TABLE_OPEN is one glued token
+	if p.src[p.pos + 6] != `[` { return false }
 	// `[table[]` (immediately closed header) is not a TableBlock; fall back.
-	if i + 1 < p.src.len && p.src[i + 1] == `]` { return false }
+	if p.src[p.pos + 7] == `]` { return false }
 	return true
 }
 
@@ -995,6 +1016,20 @@ fn (mut p Parser) parse_bracket_node() !Node {
 		p.advance() // consume ']'
 		return Node(ArrayNode{ items: []Node{} })
 	}
+	// #484 (fail-closed): the reserved glued `[table[` opener (TABLE_OPEN)
+	// is ElementMeta — it closes a NAMED element's head (grammar [29]
+	// "ElementMeta position"; [50]'s tabular alternative requires a Name).
+	// parse_element short-circuits the head-position case before parse_body,
+	// so any occurrence reaching this dispatch — document level, or body
+	// position after content has begun — can belong to no element head. It
+	// previously fell through the typed-list/array-literal routes and
+	// produced silent Array/Sequence garbage (no-silent-loss contract).
+	if b == `t` && p.pos + 7 <= p.src.len
+		&& p.src[p.pos + 1] == `a` && p.src[p.pos + 2] == `b`
+		&& p.src[p.pos + 3] == `l` && p.src[p.pos + 4] == `e`
+		&& p.src[p.pos + 5] == `[` && p.src[p.pos + 6] != `]` {
+		return error(p.make_error('`[table[` clause-child outside ElementMeta position — the TableBlock closes a NAMED element\'s head: [users [table[…]] rows] (grammar [29]/[50]) (cx-err:CXER0100)'))
+	}
 	// v3.6: comma-marker disambiguation wins over the
 	// non-`?` sigil dispatch — e.g. `[*, None]` is an Array literal
 	// with the CXPath-wildcard sentinel `*` as its first slot, not an
@@ -1347,46 +1382,11 @@ fn node_leading_token(n Node) string {
 	}
 }
 
-// read_attr_with_optional_body reads an attribute value at the
-// post-`=` position. If the value begins with `[`, the production is
-// BracketBody (grammar [55c]): a parsed body sequence stored in
-// `Attribute.body`. Otherwise the existing BareValue/QuotedText
-// auto-typed scalar path applies via read_attr_value_typed.
-fn (mut p Parser) read_attr_with_optional_body(name string) !Attribute {
-	if p.at_end() { return error(p.make_error('expected attr value')) }
-	if p.peek() == `[` {
-		// Dispatch `[#` → hash-raw and `[|` → pipe-block to their
-		// dedicated parsers BEFORE the generic BracketBody path. Without
-		// this, `val=[| ... |]` would parse as BracketBody with text
-		// content containing literal `|` chars, losing the BlockContent
-		// AST shape; `val=[# ... #]` would loop forever because the inner
-		// `#` would be read as a line comment.
-		if p.pos + 1 < p.src.len {
-			next := p.src[p.pos+1]
-			if next == `#` {
-				node := p.parse_raw_text_value()!
-				return new_attribute(name, ScalarValue(''), AttributeMeta{
-					body: ?[]Node([node])
-				})
-			}
-			if next == `|` {
-				p.advance() // consume '['
-				node := p.parse_block_content()!
-				return new_attribute(name, ScalarValue(''), AttributeMeta{
-					body: ?[]Node([node])
-				})
-			}
-		}
-		p.advance() // consume '['
-		body_items := p.parse_body(none)!
-		p.expect(`]`)!
-		return new_attribute(name, ScalarValue(''), AttributeMeta{
-			body: ?[]Node(body_items)
-		})
-	}
-	val, dt := p.read_attr_value_typed()!
-	return new_attribute(name, val, AttributeMeta{ data_type: dt })
-}
+// (read_attr_with_optional_body — the grammar-[55c] BracketBody reader —
+// was DELETED here (#391): D2 (lexicon §10) removed node-valued attributes
+// from the spec on 2026-06-03 and the graduation sweep removed every call
+// site, leaving the function dead. The scalar readers above now REJECT
+// `(`/`{`/non-raw-`[` openers per D2 instead of mangling them.)
 
 // parse_raw_text_value parses a `[# … #]` raw-text literal from the
 // current position (at the opening `[`) and returns it as a RawTextNode.
@@ -1480,21 +1480,14 @@ fn (mut p Parser) read_directive_attr_list_until(stop u8) ![]Attribute {
 		// positional tokens from the next directive arg.
 		if !p.at_end() && p.peek() == `=` {
 			p.advance()
-			if !p.at_end() && p.peek() == `[` {
-				// v3.5: BracketBody attribute value
-				// `name=[BodyItem*]`. Grammar [55c]. Permitted on
-				// any attribute (including CXDirective attrs) for
-				// uniform parsing; inert outside CX code contexts.
-				p.advance() // consume '['
-				body_items := p.parse_body(none)!
-				p.expect(`]`)!
-				attrs << new_attribute(name, ScalarValue(''), AttributeMeta{
-					body: ?[]Node(body_items)
-				})
-			} else {
-				value := p.read_attr_value()!
-				attrs << Attribute{ name: name, value: ScalarValue(value) }
-			}
+			// D2 applies to directive attrs too (#396 owner ruling 1b,
+			// 2026-07-13): the retired grammar-[55c] BracketBody form
+			// `name=[BodyItem*]` — the last surviving producer of the
+			// node-valued Attribute.body channel — is gone; read_attr_value
+			// admits the scalar spellings (incl. the `[#…#]` raw string)
+			// and E211-rejects the bracket openers.
+			value := p.read_attr_value()!
+			attrs << Attribute{ name: name, value: ScalarValue(value) }
 		} else {
 			attrs << Attribute{ name: name, value: ScalarValue('') }
 		}
@@ -1869,6 +1862,14 @@ fn (mut p Parser) parse_element() !Node {
 	// array_ensure_cap_noscan + array_push_noscan together were ~14% of
 	// parse self-time at 1 MB.
 	mut attrs := []Attribute{cap: 4}
+	// #455: `[; … ]` block comments encountered inside the element head.
+	// Comments are lexical trivia (lexicon.ebnf §1 [L2]/[L3]: "skipped;
+	// never reach the parser") and MUST NOT terminate the attribute run —
+	// `[config [; c ] env=dev]` means exactly `[config env=dev]`. They are
+	// retained here (not discarded) so lossless fmt round-trips them: they
+	// re-emit as leading body items, mirroring how `# …` line comments are
+	// already consumed without ending the run (below).
+	mut head_comments := []Node{}
 
 	for {
 		// ElementMeta position: skip plain whitespace only. `#` is the
@@ -1886,6 +1887,13 @@ fn (mut p Parser) parse_element() !Node {
 		// `"` break via the trailing else — same outcome, earlier here).
 		b := p.peek()
 		kind := p.tok_peek_kind()
+		if kind == .lbrack && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `;` {
+			// `[; … ]` block comment: trivia — consume, keep for lossless
+			// re-emit, and CONTINUE the ElementMeta run (#455).
+			p.advance() // consume '['
+			head_comments << p.parse_comment()!
+			continue
+		}
 		if kind == .rbrack || kind == .lbrack || kind == .ldirective
 			|| kind == .raw_span || kind == .block_span { break }
 		if kind == .quote_run || kind == .triple_span { break } // quoted text starts body
@@ -1939,7 +1947,12 @@ fn (mut p Parser) parse_element() !Node {
 		if kind == .hash {
 			next := if p.pos + 1 < p.src.len { p.src[p.pos + 1] } else { u8(0) }
 			if next == ` ` || next == `\t` || next == `\n` || next == `\r` || next == 0 {
-				p.skip_line_comment()
+				// #469: retained (not discarded) so lossless fmt round-trips
+				// the line-comment form in ElementMeta position, exactly as
+				// #455 retains the `[; … ]` block form above. Trivia still:
+				// it does not end the meta run and strict canonical strips it.
+				lval := p.read_line_comment_value()
+				head_comments << CommentNode{ value: lval, is_line: true }
 				continue
 			}
 			saved_pos3 := p.pos
@@ -2046,8 +2059,14 @@ fn (mut p Parser) parse_element() !Node {
 					}
 					p.advance() // '='
 					val_str := p.read_attr_value()!
-					val := scalar_value_from_str(val_str, tname)
-					attrs << new_attribute(tok, val, AttributeMeta{ data_type: tname })
+					// The explicit ascription is coercion-CHECKED, exactly
+					// like an ascribed body scalar (grammar [55]; M-ERR-2 /
+					// D-H, #465/#466): a token that cannot coerce to T is
+					// CXER0109 and an out-of-range sized integer is
+					// CXERLEX-RANGE — never a silent 0 / clamp (the old
+					// scalar_value_from_str path read `n::int=abc` as 0).
+					sn := p.coerce_scalar_checked(tname, val_str)!
+					attrs << new_attribute(tok, sn.value, AttributeMeta{ data_type: tname })
 					continue
 				}
 				// `name::T` with no `=` → not a scalar attribute. Rewind.
@@ -2079,38 +2098,27 @@ fn (mut p Parser) parse_element() !Node {
 					val, dt := p.read_attr_value_typed()!
 					attrs << new_attribute(tok, val, AttributeMeta{ data_type: dt })
 				} else if !p.at_end() && p.peek() == `[` && p.pos + 1 < p.src.len && p.src[p.pos+1] == `#` {
-					// `attr=[# … #]` — hash-raw
-					// direct as attribute value. The byte content lives
-					// in a single RawTextNode in the attribute body so
-					// emitters round-trip it as `[# … #]`. Without this
-					// peek, the generic BracketBody path below consumes
-					// `[`, then reads `#` as a line comment, then EOF.
-					node := p.parse_raw_text_value()!
-					attrs << new_attribute(tok, ScalarValue(''), AttributeMeta{
-						body: ?[]Node([node])
-					})
-				} else if !p.at_end() && p.peek() == `[` && p.pos + 1 < p.src.len && p.src[p.pos+1] == `|` {
-					// `attr=[| … |]` — pipe-block
-					// direct as attribute value. Produces a real
-					// BlockContentNode (with newline preservation) rather
-					// than BracketBody-wrapping the pipe-and-content as
-					// literal text.
-					p.advance() // consume '['
-					node := p.parse_block_content()!
-					attrs << new_attribute(tok, ScalarValue(''), AttributeMeta{
-						body: ?[]Node([node])
-					})
+					// `attr=[# … #]` — hash-raw direct as attribute value:
+					// the ONE bracket-opened form D2 admits, yielding the
+					// raw content as a STRING SCALAR (lexicon §10; #396
+					// owner ruling 1b, 2026-07-13 — previously this parked
+					// a RawTextNode in the now-retired node-valued
+					// Attribute.body channel). Without this peek, the
+					// scalar reader below would read `#` as a line comment
+					// and run to EOF.
+					s := p.read_raw_text_str()!
+					attrs << new_attribute(tok, ScalarValue(s), AttributeMeta{})
 				} else if !p.at_end() && p.peek() == `[` {
 					// Node-valued attribute reject (D2: attributes are scalar-only;
-					// GR-NODE-ATTR). The retired grammar [55c] BracketBody
-					// attribute-value form `name=[BodyItem*]` put an element node in
-					// attribute position — forbidden by D2. Only the scalar forms
-					// (`[#…#]` raw, `[|…|]` block, `[?=…]` interpolation) handled
-					// above are admitted; a bare `[…]` node value is cx-err:E211
-					// (a data-layer code per cxdm.md §11; NOT the program CXER0240 =
-					// AWAIT_ALL_FAILED). (DECISION-NA, user ruling 1a 2026-06-05:
-					// [55c]'s attribute form is retired.)
-					return error(p.make_error('node-valued attribute `${tok}=[…]` — attributes are scalar-only (D2); a `[…]` node may not be an attribute value (cx-err:E211)'))
+					// GR-NODE-ATTR): the retired grammar-[55c] BracketBody form
+					// `name=[BodyItem*]` AND — per the #396 owner ruling 1b
+					// (2026-07-13, superseding the broad reading of ruling 1a
+					// 2026-06-05) — the `[|…|]` pipe-block form. Attributes have
+					// ONE value channel, a scalar; the multiline/verbatim escape
+					// hatch is `[#…#]` above, and `[?=…]` interpolation is already
+					// string-valued. cx-err:E211 (a data-layer code per cxdm.md
+					// §11; NOT the program CXER0240 = AWAIT_ALL_FAILED).
+					return error(p.make_error('node-valued attribute `${tok}=[…]` — attributes are scalar-only (D2); a `[…]` node may not be an attribute value; use the `[# … #]` raw-string form or a child element (cx-err:E211)'))
 				} else {
 					val, dt := p.read_attr_value_typed()!
 					attrs << new_attribute(tok, val, AttributeMeta{ data_type: dt })
@@ -2141,6 +2149,32 @@ fn (mut p Parser) parse_element() !Node {
 	// columns, the remaining body items are the rows, and no other Body
 	// items apply. (The earlier `:table[ … ]` meta-slot form is
 	// handled above and is being cut over to this clause-child form.)
+	//
+	// #478: the TableBlock occupies the TypeAnnotation slot of ElementMeta
+	// ([29] "in place of TypeAnnotation [26]"), so every OTHER head meta
+	// collected above — anchor, merge, id, attributes — belongs to the
+	// table element and MUST be attached (this branch previously passed an
+	// empty attrs list, silently dropping `region=west` in
+	// `[users region=west [table[…]] …]`). An explicit glued `::T`
+	// annotation is the one meta that CANNOT coexist: the table clause IS
+	// the element's type, and the implied `table` would silently overwrite
+	// the annotation — reject it loudly instead (no-silent-loss contract).
+	// (The annotated head path breaks out of the meta loop with the cursor
+	// still on the whitespace before the body, so the conflict check needs
+	// its own ws-tolerant lookahead — the reserved TABLE_OPEN token would
+	// otherwise fall through and misparse as a nested element named `table`.)
+	if dt := data_type {
+		saved_tb_pos := p.pos
+		saved_tb_line := p.line
+		saved_tb_col := p.col
+		p.skip_ws()
+		if p.peek_table_block_open() {
+			return error(p.make_error('explicit type annotation `::${dt}` conflicts with the `[table[…]]` clause — the table block is the element\'s type (grammar [29]/[50], #478) (cx-err:CXER0100)'))
+		}
+		p.pos = saved_tb_pos
+		p.line = saved_tb_line
+		p.col = saved_tb_col
+	}
 	if p.peek_table_block_open() {
 		p.expect(`[`)!                  // outer '[' of the `[table` opener
 		p.read_name()!                  // 'table'
@@ -2153,12 +2187,14 @@ fn (mut p Parser) parse_element() !Node {
 		rows := p.parse_table_rows(cols)!
 		p.skip_ws_and_line_comments()
 		p.expect(`]`)!                  // outer element ']'
+		// Head comments ride along as items (trivia — table emitters render
+		// rows from the pooled table data; the nodes are retained, not lost).
 		return new_element(name, ElementMeta{
 			anchor:    anchor
 			merge:     merge
 			id:        id
 			data_type: ?string('table')
-		}, [], []Node{}).with_table(&TableData{ cols: cols, rows: rows })
+		}, attrs, head_comments).with_table(&TableData{ cols: cols, rows: rows })
 	}
 
 	mut is_annotated := false
@@ -2198,6 +2234,10 @@ fn (mut p Parser) parse_element() !Node {
 		// NOTE: the old whitespace auto-array (try_auto_array → a single `T[]`
 		// element) is RETIRED — a whitespace scalar run is now a typed list of
 		// discrete children, classified above by body_is_typed_list (@CHOICE-1).
+	}
+	// #455: head comments precede every parsed body item in source order.
+	if head_comments.len > 0 {
+		items.prepend(head_comments)
 	}
 
 	// recognize `[ref @id]` body-position node form.
@@ -2338,24 +2378,27 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 	mut text_buf := []u8{cap: 64}
 	mut has_child_element := false
 	mut after_non_text := false
+	// #469: set when a mid-run `[; … ]` comment had whitespace on its left;
+	// the join space is applied by the NEXT consuming branch (erasure
+	// semantics — `a [; c ] b` ≡ `a b`) and never trails the run.
+	mut pending_join_ws := false
 
 	for {
 		if p.at_end() { break }
 		had_ws := is_ws(p.peek())
 		// Skip whitespace but PRESERVE line comments — they should round-trip
 		// through `cx fmt` per spec/cheatsheet, not be silently dropped.
+		// #469: a line comment is lexical trivia (lexicon.ebnf §1 [L2]/[L3])
+		// and must NOT flush/split a bare text run — the run continues across
+		// it exactly as it would across the whitespace the comment sits in
+		// (the CommentNode is retained positionally for lossless fmt).
 		for !p.at_end() {
 			c := p.peek()
 			if c == ` ` || c == `\t` || c == `\r` || c == `\n` {
 				p.advance()
 			} else if c == `#` {
-				if text_buf.len > 0 {
-					items << TextNode{ value: text_buf.bytestr() }
-					text_buf = []u8{}
-				}
 				val := p.read_line_comment_value()
 				items << CommentNode{ value: val, is_line: true }
-				after_non_text = true
 			} else {
 				break
 			}
@@ -2376,9 +2419,29 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 		b := p.peek()
 		if kind == .rbrack { break }
 
+		// #469: a `[; … ]` block comment inside a bare text run is lexical
+		// trivia (lexicon.ebnf §1 [L2]/[L3]) — it must NOT flush/split the
+		// run into separate text nodes (that moved the strict-canonical
+		// hash). The CommentNode is retained for lossless fmt; the run
+		// continues across it with erasure semantics: only REAL whitespace
+		// around the comment contributes the join space (`a [; c ] b` ≡
+		// `a b`, `a[; c ]b` ≡ `ab`). The last-byte guard keeps ws on both
+		// sides of the comment from doubling into two join spaces.
+		if kind == .lbrack && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `;` {
+			// The join space is PENDING, not appended: a comment at the END
+			// of the body (`[config a b [; c ]]`) must not leave a trailing
+			// space on the run. The next consuming branch applies it.
+			pending_join_ws = pending_join_ws || (had_ws && text_buf.len > 0)
+			p.advance() // consume '['
+			items << p.parse_comment()!
+			continue
+		}
+		join_ws := had_ws || pending_join_ws
+		pending_join_ws = false
+
 		if kind == .lbrack || kind == .ldirective || kind == .raw_span || kind == .block_span {
 			has_child_element = true
-			if had_ws && text_buf.len > 0 { text_buf << ` ` }
+			if join_ws && text_buf.len > 0 && text_buf.last() != ` ` { text_buf << ` ` }
 			if text_buf.len > 0 {
 				items << TextNode{ value: text_buf.bytestr() }
 				text_buf = []u8{}
@@ -2416,9 +2479,9 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 		}
 
 		if kind == .amp {
-			if had_ws {
+			if join_ws {
 				if text_buf.len > 0 {
-					text_buf << ` `
+					if text_buf.last() != ` ` { text_buf << ` ` }
 				} else if after_non_text {
 					text_buf << ` `
 				}
@@ -2476,8 +2539,10 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 			// ~6.6 M tokens; the round-trip was dominating self-time
 			// in parse_body.
 			if text_buf.len > 0 {
-				if had_ws { text_buf << ` ` }
-			} else if after_non_text && had_ws {
+				// (join_ws carries the ws a mid-run comment sat in —
+				// #469 erasure semantics.)
+				if join_ws && text_buf.last() != ` ` { text_buf << ` ` }
+			} else if after_non_text && join_ws {
 				text_buf << ` `
 			}
 			p.read_token_into(mut text_buf)!
@@ -3048,7 +3113,7 @@ fn try_autotype(tok string) ?ScalarNode {
 	// rejected here to prevent shadowing existing scalar literals
 	// they fall through to none and round-trip as
 	// plain strings.
-	if tok.len >= 2 && tok[0] == `:` && is_atom_name(tok[1..]) {
+	if tok.len >= 2 && tok[0] == `:` && is_atom_pattern_name(tok[1..]) {
 		name := tok[1..]
 		if name == 'true' || name == 'false' || name == 'null' {
 			return none
@@ -3098,23 +3163,46 @@ fn try_autotype(tok string) ?ScalarNode {
 }
 
 // is_atom_name reports whether `s` is a valid atom-literal name per
-// spec/code.md §3.6 (the ident production `[A-Za-z_][A-Za-z0-9_-]*`,
-// matching spec/code.md §3.4 and spec/grammar.ebnf [122b]).
+// lexicon.ebnf [L40] `Atom ::= ':' Ident ('.' Ident)*` — ident segments
+// (`[A-Za-z_][A-Za-z0-9_-]*`, spec/code.md §3.4 / grammar [122b]) joined by
+// single interior dots (#397 owner ruling 2026-07-13: hierarchical topic /
+// tag namespaces, `:order.placed`). No leading/trailing dot, no `..`, and
+// every segment starts like an Ident.
 pub fn is_atom_name(s string) bool {
 	if s.len == 0 { return false }
-	c0 := s[0]
-	if !((c0 >= `a` && c0 <= `z`) || (c0 >= `A` && c0 <= `Z`) || c0 == `_`) {
-		return false
-	}
-	for i in 1 .. s.len {
+	mut seg_start := true
+	for i in 0 .. s.len {
 		c := s[i]
+		if seg_start {
+			if !((c >= `a` && c <= `z`) || (c >= `A` && c <= `Z`) || c == `_`) {
+				return false
+			}
+			seg_start = false
+			continue
+		}
 		if (c >= `a` && c <= `z`) || (c >= `A` && c <= `Z`) ||
 		   (c >= `0` && c <= `9`) || c == `_` || c == `-` {
 			continue
 		}
+		if c == `.` {
+			seg_start = true
+			continue
+		}
 		return false
 	}
-	return true
+	return !seg_start // a trailing '.' leaves an empty final segment
+}
+
+// is_atom_pattern_name admits everything is_atom_name does PLUS a single
+// terminal `.*` glob segment (`:order.*`) — the bus.md §2.2 prefix-glob
+// spelling ([L40] `('.' '*')?`, #397). The star is legal ONLY as the entire
+// final segment; it has no meaning at the atom level (one opaque name) —
+// pattern consumers (bus) assign the glob semantics.
+pub fn is_atom_pattern_name(s string) bool {
+	if s.ends_with('.*') {
+		return s.len > 2 && is_atom_name(s[..s.len - 2])
+	}
+	return is_atom_name(s)
 }
 
 fn coerce_scalar(et string, tok string) ScalarNode {
@@ -3191,6 +3279,22 @@ fn coerce_scalar(et string, tok string) ScalarNode {
 		'period' {
 			ScalarNode{ data_type: .period_type, value: ScalarValue(tok) }
 		}
+		// An explicit `::atom` ascription yields an ATOM-typed scalar
+		// (lexicon §7 [L50]: the annotation OVERRIDES auto-typing), not a
+		// string riding an atom-typed carrier — the pre-#466 else-arm
+		// fallthrough left `[x::atom busy]` items string-typed while the
+		// program reading typed them as atoms (issue #466 item 2). A
+		// leading `:` spelling (`::atom=:busy`) collapses to the bare
+		// name, so the canonical render `:busy` round-trips. Name
+		// VALIDITY ([L40]) is enforced only on the checked (ascribed)
+		// path — coerce_scalar stays infallible for the codec importers.
+		'atom' {
+			mut name := tok
+			if name.starts_with(':') {
+				name = name[1..]
+			}
+			ScalarNode{ data_type: .atom_type, value: ScalarValue(name) }
+		}
 		else {
 			ScalarNode{ data_type: .string_type, value: ScalarValue(tok) }
 		}
@@ -3226,23 +3330,95 @@ fn (p &Parser) coerce_scalar_checked(et string, tok string) !ScalarNode {
 			return ScalarNode{ data_type: .int_type, value: ScalarValue(v) }
 		}
 		'float', 'f16', 'f32', 'f64' {
-			cleaned := strip_underscores(tok) or {
-				return error(p.make_error('cannot coerce `${tok}` to ${et} (cx-err:CXER0109)'))
-			}
-			// atof64 leniently returns 0.0 for a digit-less token; a real float
-			// needs a digit mantissa (matches try_autotype's guard).
-			if !has_ascii_digit(cleaned) {
-				return error(p.make_error('cannot coerce `${tok}` to ${et} (cx-err:CXER0109)'))
-			}
-			fv := strconv.atof64(cleaned) or {
+			fv := try_coerce_float_token(tok) or {
 				return error(p.make_error('cannot coerce `${tok}` to ${et} (cx-err:CXER0109)'))
 			}
 			return ScalarNode{ data_type: .float_type, value: ScalarValue(fv) }
+		}
+		'atom' {
+			// M-ERR-2 composition with [L40] (#466 item 2): an explicit
+			// `::atom` demands a token that IS a denotable atom name —
+			// ident-start segments joined by single dots, and never the
+			// reserved :true/:false/:null. `[x::atom 0x2a]` fails loud
+			// instead of minting an atom the atom grammar cannot spell
+			// (its render `:0x2a` would not re-parse — a bijection break).
+			name := try_coerce_atom_token(tok) or {
+				return error(p.make_error('cannot coerce `${tok}` to atom — not a valid atom name (lexicon [L40]) (cx-err:CXER0109)'))
+			}
+			return ScalarNode{ data_type: .atom_type, value: ScalarValue(name) }
+		}
+		'decimal', 'bigint' {
+			// OWNER RULING (#466 item 3): decimal / bigint are BASE-10
+			// value types — a hex token under the ascription is a mistake
+			// and REJECTS loudly (M-ERR-2), never stored verbatim.
+			// try_coerce_base10_verbatim_token is the single home shared
+			// with the program evaluator's ascription path.
+			sn := try_coerce_base10_verbatim_token(et, tok) or {
+				return error(p.make_error('cannot coerce hex literal `${tok}` to ${et} — ${et} is a base-10 value type (cx-err:CXER0109)'))
+			}
+			return sn
 		}
 		else {
 			return coerce_scalar(et, tok)
 		}
 	}
+}
+
+// try_coerce_base10_verbatim_token coerces a token under an explicit
+// `::decimal` / `::bigint` ascription, returning none for a hex (`0x…`)
+// token — decimal and bigint are BASE-10 value types, so hex there is a
+// mistake that must fail loud (OWNER RULING, #466 item 3; M-ERR-2),
+// never be stored verbatim. Any other token delegates to the infallible
+// verbatim-carrier coercion (underscores stripped, type-tagged). The
+// single home shared by coerce_scalar_checked and the program
+// evaluator's coerce_typed_scalar_text, so both readings agree.
+pub fn try_coerce_base10_verbatim_token(et string, tok string) ?ScalarNode {
+	if is_hex_int_token(tok) {
+		return none
+	}
+	return coerce_scalar(et, tok)
+}
+
+// is_hex_int_token reports whether the token is a (possibly signed,
+// possibly underscore-grouped) `0x`/`0X`-prefixed hex literal.
+fn is_hex_int_token(tok string) bool {
+	cleaned := strip_underscores(tok) or { tok }
+	mut s := cleaned
+	if s.starts_with('-') || s.starts_with('+') {
+		s = s[1..]
+	}
+	return s.starts_with('0x') || s.starts_with('0X')
+}
+
+// try_coerce_atom_token validates a token under an explicit `::atom`
+// ascription, returning the bare atom NAME (leading `:` spelling
+// stripped) or none when the token is not a valid atom name per lexicon
+// [L40] — ident-start dotted segments, excluding the reserved
+// :true/:false/:null. The single home shared by coerce_scalar_checked and
+// the program evaluator's ascription path, so both readings agree (#466).
+pub fn try_coerce_atom_token(tok string) ?string {
+	mut name := tok
+	if name.starts_with(':') {
+		name = name[1..]
+	}
+	if !is_atom_name(name) {
+		return none
+	}
+	if name in ['true', 'false', 'null'] {
+		return none
+	}
+	return name
+}
+
+// coerce_scalar_public exposes the infallible data-reading coercion for
+// the verbatim string-carrier types (decimal / bigint / duration /
+// period, …) to the program evaluator's ascription path — the single home
+// for underscore-stripping and type-tagging, so `[x::decimal 1_000.50]`
+// stores '1000.50' with a decimal-typed scalar in BOTH readings (#466
+// items 3/4). Never used for the checked numeric arms (those go through
+// try_coerce_int_token / try_coerce_float_token).
+pub fn coerce_scalar_public(et string, tok string) ScalarNode {
+	return coerce_scalar(et, tok)
 }
 
 // parse_i64_checked parses a sign-prefixed decimal integer string to i64,
@@ -3337,6 +3513,21 @@ pub fn try_coerce_int_token(tok string, et string) ?i64 {
 		return none
 	}
 	return v
+}
+
+// try_coerce_float_token parses a CX float token under an explicit `::float`
+// (or sized-float) ascription, returning none when the token cannot coerce
+// (M-ERR-2 / CXER0109). The SINGLE home of the ascribed-float guards —
+// coerce_scalar_checked's float arm and the program evaluator's annotated-
+// element coercion both delegate here, so a token like `0x2a` fails
+// identically in both engines (atof64 leniently returns 0.0 for a digit-less
+// token; a real float needs a digit mantissa, matching try_autotype's guard).
+pub fn try_coerce_float_token(tok string) ?f64 {
+	cleaned := strip_underscores(tok) or { return none }
+	if !has_ascii_digit(cleaned) {
+		return none
+	}
+	return strconv.atof64(cleaned) or { return none }
 }
 
 // int_in_range reports whether `v` fits the ascribed sized-integer type `et`
@@ -3701,6 +3892,16 @@ fn (mut p Parser) read_attr_value() !string {
 	if b == `[` && p.pos + 1 < p.src.len && p.src[p.pos+1] == `#` {
 		return p.read_raw_text_str()!
 	}
+	// D2 (lexicon.ebnf §10; #391): an attribute value is ALWAYS a single
+	// scalar. A `(`/`{`-opened value, or a `[`-opened one that is not a
+	// scalar form handled above, is the REMOVED node-valued-attribute
+	// feature — a hard parse error (cx-err:E211, the same data-layer code
+	// as the main element-attr path's bare-`[…]` reject, GR-NODE-ATTR).
+	// Before this the token scan silently MANGLED such values (half
+	// string, half stray child), which fmt -w would then write back.
+	if b == `(` || b == `{` || b == `[` {
+		return error(p.make_error('node-valued attribute value — attributes are scalar-only (D2); a `${b.ascii_str()}`-opened value may not be an attribute value; put rich/list data in a child element (cx-err:E211)'))
+	}
 	return p.read_token_for_attr()!
 }
 
@@ -3743,6 +3944,11 @@ fn (mut p Parser) read_attr_value_typed() !(ScalarValue, ?string) {
 	if b == `[` && p.pos + 1 < p.src.len && p.src[p.pos+1] == `#` {
 		s := p.read_raw_text_str()!
 		return ScalarValue(s), ?string(none)
+	}
+	// D2 (lexicon.ebnf §10; #391): scalar-only attribute values — see
+	// read_attr_value for the full note. Same rejection on the typed path.
+	if b == `(` || b == `{` || b == `[` {
+		return error(p.make_error('node-valued attribute value — attributes are scalar-only (D2); a `${b.ascii_str()}`-opened value may not be an attribute value; put rich/list data in a child element (cx-err:E211)')), none
 	}
 	// Hot path (§11.6 gate-15): write the token bytes into the parser-
 	// owned scratch buffer rather than allocating a fresh string.

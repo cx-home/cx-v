@@ -19,6 +19,17 @@ pub fn emit_ast_json_docs(docs []Document) string {
 	return '[${parts.join(',')}]'
 }
 
+// emit_ast_json_node returns the AST-JSON encoding of a single Node of
+// any kind. Used by the program-result renderer (code/render.v
+// node_to_ast_json) for non-Element node values that cross the
+// DATA↔PROGRAM `node_lit` seam — e.g. a top-level `[?cx …]`
+// CXDirectiveNode preserved verbatim per code.md §13 (#421) — so the
+// eval `--json` shape matches the nested-child encoding json_element
+// already produces instead of degrading to `null`.
+pub fn emit_ast_json_node(n Node) string {
+	return json_node(n)
+}
+
 fn json_document(doc Document) string {
 	mut pairs := []string{}
 	pairs << '"type":"Document"'
@@ -140,11 +151,64 @@ fn json_element(e Element) string {
 	if br := e.body_ref() { pairs << '"bodyRef":${json_str(br)}' }
 	if dt := e.data_type() { pairs << '"dataType":${json_str(dt)}' }
 	if e.attrs.len > 0  { pairs << '"attrs":${json_attrs(e.attrs)}' }
-	if e.items.len > 0 || e.data_type() != none {
+	// `[table]` block (#443, ast.md Element §"table" / conversions.md §2.1
+	// XML analogue): the table payload lives in the pooled `table` field,
+	// NOT in `items` — without this arm the projection emitted a rowless
+	// `"items":[]` and every column and row was silently dropped. The
+	// payload projects as a "table" object (cols + rows); the redundant
+	// empty "items" is suppressed for table elements. Inverse:
+	// parser_ast_json.v ajv_to_table.
+	mut has_table := false
+	if td := e.table_opt() {
+		has_table = true
+		pairs << '"table":${json_table(td)}'
+	}
+	if e.items.len > 0 || (e.data_type() != none && !has_table) {
 		nodes := e.items.map(json_node(it))
 		pairs << '"items":[${nodes.join(',')}]'
 	}
 	return '{${pairs.join(',')}}'
+}
+
+// json_table projects the pooled TableData payload (#443, ast.md Element
+// §"table"): declared columns as `{"name": …, "dataType": …}` objects
+// (`dataType` omitted for undeclared / string-default columns, mirroring
+// the canonical CX header where an untyped column is the bare name), and
+// each row as a JSON array of cells in column order.
+fn json_table(td TableData) string {
+	mut cols := []string{cap: td.cols.len}
+	for c in td.cols {
+		if c.type_name == '' {
+			cols << '{"name":${json_str(c.name)}}'
+		} else {
+			cols << '{"name":${json_str(c.name)},"dataType":${json_str(c.type_name)}}'
+		}
+	}
+	mut rows := []string{cap: td.rows.len}
+	for row in td.rows {
+		cells := row.map(json_table_cell(it))
+		rows << '[${cells.join(',')}]'
+	}
+	return '{"cols":[${cols.join(',')}],"rows":[${rows.join(',')}]}'
+}
+
+// json_table_cell encodes one table cell. Scalar cells use JSON-native
+// values (JSON is typed, so the i64/f64/bool/string/null distinction
+// round-trips without a carrier — the analogue of the XML lane's
+// bare-where-recoverable rule); collection cells use the standard AST-JSON
+// node encodings ({"type":"Array"|"Map"|"Sequence", …}). A cell is a JSON
+// object exactly when it is a collection, so the two stay unambiguous.
+fn json_table_cell(v TableCellValue) string {
+	return match v {
+		bool         { if v { 'true' } else { 'false' } }
+		i64          { v.str() }
+		f64          { json_float(v) }
+		string       { json_str(v) }
+		NullValue    { 'null' }
+		ArrayNode    { json_node(Node(v)) }
+		MapNode      { json_node(Node(v)) }
+		SequenceNode { json_node(Node(v)) }
+	}
 }
 
 fn json_scalar(s ScalarNode) string {
@@ -194,15 +258,9 @@ fn json_attrs(attrs []Attribute) string {
 fn json_attr(a Attribute) string {
 	mut pairs := []string{}
 	pairs << '"name":${json_str(a.name)}'
-	if body_items := a.body() {
-		// v3.5: BracketBody attribute value.
-		items := body_items.map(json_node(it))
-		pairs << '"body":[${items.join(',')}]'
-	} else {
-		pairs << '"value":${json_scalar_value(a.value)}'
-		if dt := a.data_type() {
-			pairs << '"dataType":"${dt}"'
-		}
+	pairs << '"value":${json_scalar_value(a.value)}'
+	if dt := a.data_type() {
+		pairs << '"dataType":"${dt}"'
 	}
 	if a.is_ref {
 		pairs << '"isRef":true'

@@ -187,7 +187,7 @@ fn test_eval_set_attribute() {
 	// `:set` on /@attr replaces the attribute value.
 	result := eval_with_doc(
 		'[users [user id=1 name="Alice"] [user id=2 name="Bob"]]',
-		'[?modify $doc //user[@id=1]/@name [set "Alicia"]]',
+		'[?modify \$doc //user[= \$_@id 1]/@name [set "Alicia"]]',
 	) or {
 		assert false, '${err}'
 		return
@@ -202,7 +202,7 @@ fn test_eval_set_attribute() {
 fn test_eval_delete_node() {
 	result := eval_with_doc(
 		'[users [user active=true [name Alice]] [user active=false [name Bob]]]',
-		'[?modify $doc //user[@active=false] [delete]]',
+		'[?modify \$doc //user[= \$_@active false] [delete]]',
 	) or {
 		assert false, '${err}'
 		return

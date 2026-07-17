@@ -50,72 +50,46 @@ fn main() {
 			print_usage_and_exit(0)
 		}
 
-		// ── Subcommand dispatch (Phase 6 / spec/canonical.md) ─────────────────
-		// `cx fmt FILE` — lossless canonical text
-		// `cx canonical FILE` — strict canonical text
-		// `cx hash FILE` — SHA-256 hex of strict canonical bytes
-		// `cx eq A.cx B.cx` — exit 0 iff canonical(A) == canonical(B)
-		match args[0] {
-			'fmt' { run_fmt(args[1..]); return }
-			'canonical' { run_canonical(args[1..]); return }
-			'hash' { run_hash(args[1..]); return }
-			'eq' { run_eq(args[1..]); return }
-			'diff' { run_diff(args[1..]); return }
-			'lint' { run_lint(args[1..]); return }
-			'validate' { run_validate(args[1..]); return }
-			'table' { run_table(args[1..]); return }
-			'demo' { run_demo(args[1..]); return }
-			'scaffold' { run_scaffold(args[1..]); return }
-			'eval' { run_eval(args[1..]); return }
-			'diagram' { run_diagram(args[1..]); return }
-			'code-diagram' { run_code_diagram(args[1..]); return }
-			'code-tree' { run_code_tree(args[1..]); return }
-			'lock' { run_cx_lock(args[1..]); return }
-			'lsp' { run_lsp(args[1..]); return }
-			else {} // fall through to legacy --flag form
+		// ── Subcommand dispatch — driven by the ONE registry (#417) ───────────
+		// `subcommands` below is the single source of truth: the same table
+		// drives this dispatch, the `cx --help` catalogue, and every
+		// per-subcommand `cx <name> --help`. A subcommand cannot exist
+		// without being documented, and help can never drift from dispatch.
+		for sc in subcommands {
+			if args[0] == sc.name {
+				rest := args[1..]
+				// Uniform -h/--help for EVERY subcommand: print the
+				// registered usage on stdout and exit 0 — no handler
+				// treats `--help` as a filename or unknown flag again.
+				if '--help' in rest || '-h' in rest {
+					print_subcommand_help(sc)
+					exit(0)
+				}
+				sc.run(rest)
+				return
+			}
 		}
+		// No subcommand matched: fall through to the default program /
+		// convert readings below (legacy --flag form).
 	}
 
-	// Determine input. The default action mirrors `cx eval`'s program sources so
-	// no `cx eval`-free gap remains (the never-`cx eval` rule):
+	// ── Bare run / convert surface: ONE strict argv pass (#415) ─────────────
+	// Every argument is either a recognised flag, a recognised
+	// flag-with-value, `-e EXPR`, `-` (program from stdin), or the single
+	// positional input FILE. Anything else is a hard usage error (exit 2)
+	// per spec/misc/cli.md §3.7 — the pre-#415 surface silently swallowed
+	// unknown flags (`--data=…` no-op'd with rc=0), which is how four
+	// flagship example tours ran empty for a whole release.
+	//
+	// Program sources mirror `cx eval`'s (the never-`cx eval` rule):
 	//   cx FILE        — program from FILE
 	//   cx -           — program from stdin (explicit)
-	//   cx -e EXPR      — inline program EXPR (also --expression)
-	//   echo P | cx     — program from stdin (pipe; handled by the empty fall-through)
+	//   cx -e EXPR     — inline program EXPR (also --expression)
+	//   echo P | cx    — program from stdin (pipe; the no-input fall-through)
 	mut input := ''
 	mut input_file := ''
 	mut got_input := false
-	for i := 0; i < args.len; i++ {
-		arg := args[i]
-		if arg == '-e' || arg == '--expression' {
-			if i + 1 >= args.len {
-				eprintln('cx -e: missing expression argument')
-				exit(2)
-			}
-			input = args[i + 1]
-			got_input = true
-			break
-		}
-		if arg == '-' {
-			input = os.get_raw_lines_joined()
-			got_input = true
-			break
-		}
-		if !arg.starts_with('--') {
-			input_file = arg
-			input = os.read_file(arg) or {
-				eprintln('error reading file ${arg}: ${err}')
-				exit(1)
-			}
-			got_input = true
-			break
-		}
-	}
-	if !got_input {
-		input = os.get_raw_lines_joined()
-	}
-
-	// Parse flags
+	mut stdin_program := false
 	mut mode := ''
 	mut compact := false
 	mut lossless := false
@@ -123,13 +97,62 @@ fn main() {
 	mut from_fmt := 'cx'
 	mut to_fmt := 'cx'
 	mut include_root := ''
+	// Separate data input (spec/code.md §1.3): `--data=FILE|-` is loaded via
+	// the DATA reading and bound as $doc / $input before evaluation; the
+	// caller-supplied input WINS over the program's own data roots.
+	mut data_file := ''
+	mut data_given := false
 	// Capability grants for the default program reading (deny-by-default,
 	// matching `cx eval` — spec/security.md §3). `--allow-all` opts out;
 	// `--allow-<cap>` grants one capability.
 	mut allow_all := false
 	mut allow_caps := []string{}
 	mut net_specs := []string{}
-	for arg in args {
+	mut i := 0
+	for i < args.len {
+		arg := args[i]
+		if arg == '-e' || arg == '--expression' {
+			if got_input {
+				eprintln('cx: unexpected ${arg} — a program input was already given')
+				exit(2)
+			}
+			if i + 1 >= args.len {
+				eprintln('cx ${arg}: missing expression argument')
+				exit(2)
+			}
+			input = args[i + 1]
+			got_input = true
+			i += 2
+			continue
+		}
+		if arg == '-' {
+			if got_input {
+				eprintln('cx: unexpected `-` — a program input was already given')
+				exit(2)
+			}
+			stdin_program = true
+			got_input = true
+			i++
+			continue
+		}
+		if arg == '-h' || arg == '--help' {
+			print_usage_and_exit(0)
+		}
+		if arg == '-v' || arg == '--version' {
+			print_version()
+			exit(0)
+		}
+		if !arg.starts_with('-') {
+			if got_input {
+				eprintln('cx: unexpected extra argument ${arg} — the run surface takes one input FILE')
+				exit(2)
+			}
+			input_file = arg
+			got_input = true
+			i++
+			continue
+		}
+		// Flag namespace — a closed set; unknown names are hard errors.
 		if arg == '--ast' { mode = 'ast' }
 		else if arg == '--cx' { mode = 'cx' }
 		else if arg == '--xml' { mode = 'xml' }
@@ -147,14 +170,61 @@ fn main() {
 		else if arg.starts_with('--allow-') {
 			rest_cap := arg['--allow-'.len..]
 			cap_name := rest_cap.all_before('=')
-			if cap_name != '' {
-				allow_caps << cap_name
-				if cap_name == 'net' && rest_cap.contains('=') { net_specs << rest_cap.all_after('=') }
+			// A misspelled grant is an unknown flag, never a silent
+			// no-grant (spec/misc/cli.md §3.7).
+			if cap_name == '' || cap_name !in code.capability_names() {
+				mut grant_flags := code.capability_names().map('--allow-' + it)
+				grant_flags << '--allow-all'
+				eprintln('cx: unknown flag ${arg}')
+				eprintln('accepted capability grants: ${grant_flags.join(' ')}')
+				eprintln('run `cx --help` for the full flag set')
+				exit(2)
 			}
+			allow_caps << cap_name
+			if cap_name == 'net' && rest_cap.contains('=') { net_specs << rest_cap.all_after('=') }
 		}
 		else if arg.starts_with('--from=') { from_fmt = arg[7..]; explicit_from = true }
 		else if arg.starts_with('--to=') { to_fmt = arg[5..] }
 		else if arg.starts_with('--include-root=') { include_root = arg[15..] }
+		else if arg.starts_with('--data=') {
+			data_file = arg[7..]
+			data_given = true
+			if data_file == '' {
+				eprintln('cx: --data requires a value (use --data=FILE, or --data=- for stdin)')
+				exit(2)
+			}
+		}
+		else if arg in ['--data', '--from', '--to', '--include-root'] {
+			eprintln('cx: ${arg} requires a value (use ${arg}=…)')
+			exit(2)
+		}
+		else {
+			eprintln('cx: unknown flag ${arg}')
+			eprintln('run `cx --help` for the accepted run / convert flag set')
+			exit(2)
+		}
+		i++
+	}
+
+	// Resolve the program source. Stdin is read at most once here; the
+	// `--data=-` lane below guards against a double-read.
+	mut program_reads_stdin := false
+	if stdin_program {
+		input = os.get_raw_lines_joined()
+		program_reads_stdin = true
+	} else if input_file != '' {
+		input = os.read_file(input_file) or {
+			eprintln('error reading file ${input_file}: ${err}')
+			exit(1)
+		}
+	} else if !got_input {
+		// Pipe fall-through: `echo P | cx [flags]`. A flags-only TTY
+		// invocation gets the usage nudge instead of hanging on stdin.
+		if os.is_atty(0) != 0 {
+			print_usage_and_exit(1)
+		}
+		input = os.get_raw_lines_joined()
+		program_reads_stdin = true
 	}
 
 	// When --include-root is supplied, resolve `[?cx include=…]`
@@ -181,6 +251,22 @@ fn main() {
 
 	if mode.len == 0 { mode = to_fmt }
 
+	// #416/#444: --lossless is honored only by lanes whose emitter implements
+	// a lossless image (conversions.md §0.2): cx, xml (`<cx:T>` carriers),
+	// json (`cx:type` sidecar) and yaml (`!!cx:T` tags) — read from the codec
+	// registry's capability flag, the single source of truth. TOML/MD
+	// lossless is spec'd as unsupported; every non-lossless lane REJECTS the
+	// flag loudly (the pre-#416 CLI accepted it as a silent no-op). Checked
+	// here (not only in convert_by_name) because csv/tsv/psv/ast/cxcol
+	// dispatch bypasses the codec-registry compose.
+	if lossless {
+		mode_lossless := (cx.codec_lookup(mode) or { cx.Codec{} }).lossless
+		if !mode_lossless {
+			eprintln('error: --lossless is not supported for --to=${mode}; supported: ${cx.lossless_codec_names().join(', ')}')
+			exit(2)
+		}
+	}
+
 	// ── CLI DEFAULT = the program reading (spec/code.md §1.3, D-A1) ──────────
 	// A bare CX resource EVALUATES: `cx <file|->` ≡ `cx eval <file|->`. The
 	// result is rendered per the requested target; the default is canonical
@@ -195,7 +281,43 @@ fn main() {
 	// Structural/inspection modes the result-renderer doesn't cover
 	// (ast/cxcol/toml/psv, and --compact) also stay on the data path.
 	eval_targets := ['cx', 'xml', 'json', 'yaml', 'csv', 'tsv']
-	if from_fmt == 'cx' && !explicit_from && !compact && !lossless && mode in eval_targets {
+	run_surface := from_fmt == 'cx' && !explicit_from && !compact && !lossless
+		&& mode in eval_targets
+
+	// ── Separate data input, `--data=FILE|-` (#415; spec/misc/cli.md §3.7) ──
+	// Run-surface only: on the convert pipeline there is no evaluation and
+	// hence no $doc to bind, so the combination is a usage error rather than
+	// a silent no-op. The input is loaded via the DATA reading (respecting
+	// --include-root) and handed to the same eval_code seam `cx eval` uses:
+	// it binds $doc / $input, and per spec/code.md §1.3 the caller-supplied
+	// input WINS — the program's own data roots never rebind it.
+	mut data_input := ''
+	if data_given {
+		if !run_surface {
+			eprintln('cx: --data applies to the run surface only; it cannot combine with --from/--compact/--lossless or the structural projections (--ast/--toml/--md/--psv/--cxcol)')
+			exit(2)
+		}
+		if data_file == '-' {
+			if program_reads_stdin {
+				eprintln('cx: the program and --data=- cannot both read stdin')
+				exit(2)
+			}
+			data_input = os.get_raw_lines_joined()
+		} else {
+			data_input = os.read_file(data_file) or {
+				eprintln('cx: error reading --data file ${data_file}: ${err}')
+				exit(1)
+			}
+		}
+		if include_root != '' {
+			data_input = resolve_includes_text(data_input, include_root) or {
+				eprintln('error resolving includes in --data input: ${err}')
+				exit(1)
+			}
+		}
+	}
+
+	if run_surface {
 		// Install the capability set before eval (deny-by-default).
 		if allow_all {
 			code.caps_set_all()
@@ -205,8 +327,7 @@ fn main() {
 				code.caps_set_net_hosts(net_specs)
 			}
 		}
-		// The resource IS the program; there is no separate data input.
-		out := code.eval_code('', input, mode) or { eprintln('error: ${err}'); exit(1) }
+		out := code.eval_code(data_input, input, mode) or { eprintln('error: ${err}'); exit(1) }
 		print(out)
 		return
 	}
@@ -243,8 +364,134 @@ fn main() {
 // ── Subcommand handlers ──────────────────────────────────────────────────────
 
 fn run_fmt(args []string) {
+	// `--migrate-predicates` (#110): the predicate-surface cutover sweep.
+	// Character-anchored parser-based rewrite (never regex), fail-closed per
+	// file via the program-parse oracle in code.migrate_predicates. Same
+	// file-kind routing as --collapse-lets: .cxd fixtures and .md fences are
+	// island-aware. `-w` writes changed files in place.
+	if '--migrate-predicates' in args {
+		mut write := false
+		mut files := []string{}
+		for a in args {
+			if a == '--migrate-predicates' {
+				continue
+			} else if a == '-w' {
+				write = true
+			} else {
+				files << a
+			}
+		}
+		if files.len == 0 || (!write && files.len != 1) {
+			eprintln('Usage: cx fmt --migrate-predicates [-w] FILE...   (-w required for multiple files)')
+			exit(2)
+		}
+		mut changed := 0
+		for f in files {
+			src := os.read_file(f) or {
+				eprintln('cx fmt: ${f}: ${err}')
+				exit(1)
+			}
+			out := if f.ends_with('.cxd') {
+				code.migrate_predicates_cxd(src) or {
+					eprintln('cx fmt: ${f}: ${err}')
+					exit(1)
+				}
+			} else if f.ends_with('.md') {
+				code.migrate_predicates_md(src) or {
+					eprintln('cx fmt: ${f}: ${err}')
+					exit(1)
+				}
+			} else {
+				code.migrate_predicates(src) or {
+					eprintln('cx fmt: ${f}: ${err}')
+					exit(1)
+				}
+			}
+			if write {
+				if out != src {
+					os.write_file(f, out) or {
+						eprintln('cx fmt: ${f}: ${err}')
+						exit(1)
+					}
+					changed++
+					println('migrated: ${f}')
+				}
+			} else {
+				print(out)
+			}
+		}
+		if write {
+			println('${changed}/${files.len} file(s) changed')
+		}
+		return
+	}
+	// `--collapse-lets` (#361): the cascading-let idiom sweep. Token-anchored
+	// parser-based rewrite (never regex), fail-closed per file via the
+	// canonical-form oracle in code.collapse_nested_lets. `.cxd` fixture
+	// documents are handled raw-block-aware: only `[in-cx [#…#]]` program
+	// islands are rewritten, expected outputs stay byte-identical. `-w`
+	// writes changed files in place; without it the result prints to stdout
+	// (single file only).
+	if '--collapse-lets' in args {
+		mut write := false
+		mut files := []string{}
+		for a in args {
+			if a == '--collapse-lets' {
+				continue
+			} else if a == '-w' {
+				write = true
+			} else {
+				files << a
+			}
+		}
+		if files.len == 0 || (!write && files.len != 1) {
+			eprintln('Usage: cx fmt --collapse-lets [-w] FILE...   (-w required for multiple files)')
+			exit(2)
+		}
+		mut changed := 0
+		for f in files {
+			src := os.read_file(f) or {
+				eprintln('cx fmt: ${f}: ${err}')
+				exit(1)
+			}
+			out := if f.ends_with('.cxd') {
+				code.collapse_nested_lets_cxd(src) or {
+					eprintln('cx fmt: ${f}: ${err}')
+					exit(1)
+				}
+			} else if f.ends_with('.md') {
+				code.collapse_nested_lets_md(src) or {
+					eprintln('cx fmt: ${f}: ${err}')
+					exit(1)
+				}
+			} else {
+				code.collapse_nested_lets(src) or {
+					eprintln('cx fmt: ${f}: ${err}')
+					exit(1)
+				}
+			}
+			if write {
+				if out != src {
+					os.write_file(f, out) or {
+						eprintln('cx fmt: ${f}: ${err}')
+						exit(1)
+					}
+					changed++
+					println('collapsed: ${f}')
+				}
+			} else {
+				print(out)
+			}
+		}
+		if write {
+			println('${changed}/${files.len} file(s) changed')
+		}
+		return
+	}
 	src := read_one_input(args, 'fmt')
-	out := cx.cx_text_fmt(src) or { eprintln('cx fmt: ${err}'); exit(1) }
+	// code.fmt_source is program-faithful + fail-closed: it never rewrites a
+	// program file through the data emitter (#118 — data loss on save).
+	out := code.fmt_source(src) or { eprintln('cx fmt: ${err}'); exit(1) }
 	println(out)
 }
 
@@ -563,45 +810,441 @@ fn read_one_input(args []string, cmd string) string {
 	return os.get_raw_lines_joined()
 }
 
+// ── CLI subcommand registry (#417) ───────────────────────────────────────────
+//
+// ONE table drives BOTH the dispatch in main() and every help surface: the
+// `cx --help` catalogue is generated from `name` + `summary`, and
+// `cx <name> --help` prints `help` verbatim. Adding a subcommand here is the
+// only way to make it dispatchable, so the help can never drift from the
+// real surface again. ALL subcommands are documented — none are internal
+// (`eval` is a documented alias of the default run action; the docs-src
+// 08-tooling catalogue mirrors this list).
+
+struct SubcommandSpec {
+	name    string
+	summary string   // one-liner for the `cx --help` catalogue
+	help    []string // `cx <name> --help` body; first line is `Usage: cx <name> …`
+	run     fn ([]string) @[required]
+}
+
+const subcommands = build_subcommands()
+
+fn build_subcommands() []SubcommandSpec {
+	return [
+		SubcommandSpec{
+			name:    'fmt'
+			summary: 'Lossless canonical formatter (preserves comments/anchors).'
+			help:    [
+				'Usage: cx fmt [FILE]',
+				'       cx fmt --migrate-predicates [-w] FILE...',
+				'       cx fmt --collapse-lets [-w] FILE...',
+				'',
+				'Lossless canonical formatter: preserves comments, anchors, and authorial',
+				'structure; normalizes whitespace and quoting. Reads FILE, or stdin if absent.',
+				'',
+				'Migration sweeps (parser-based, fail-closed per file):',
+				'  --migrate-predicates   rewrite legacy predicate surface to prefix form',
+				'  --collapse-lets        collapse cascading [?let] nests to the flat form',
+				'  -w                     write changed files in place (required for multiple FILEs)',
+			]
+			run:     run_fmt
+		},
+		SubcommandSpec{
+			name:    'canonical'
+			summary: 'Strict canonical text (strips presentation; data-equivalent).'
+			help:    [
+				'Usage: cx canonical [FILE]',
+				'',
+				'Strict canonical text: strips comments and other presentation; the output',
+				'is data-equivalent to the input. Reads FILE, or stdin if absent.',
+			]
+			run:     run_canonical
+		},
+		SubcommandSpec{
+			name:    'hash'
+			summary: 'SHA-256 hex of the strict-canonical bytes.'
+			help:    [
+				'Usage: cx hash [FILE]',
+				'',
+				'SHA-256 hex digest of the strict-canonical bytes — the content address of',
+				'the document. Reads FILE, or stdin if absent.',
+			]
+			run:     run_hash
+		},
+		SubcommandSpec{
+			name:    'eq'
+			summary: 'Exit 0 iff strict-canonical(A) == strict-canonical(B).'
+			help:    [
+				'Usage: cx eq A.cx B.cx',
+				'',
+				'Compares the strict-canonical forms of two documents.',
+				'Exit 0 if equal, 1 if they differ, 2 on error.',
+			]
+			run:     run_eq
+		},
+		SubcommandSpec{
+			name:    'diff'
+			summary: 'Semantic diff (walks the strict-canonical forms).'
+			help:    [
+				'Usage: cx diff [--format=unified|json|summary] [--no-color] A.cx B.cx',
+				'',
+				'Semantic diff over the strict-canonical forms.',
+				'  --format=unified|json|summary   (default unified)',
+				'  --no-color                      disable ANSI color in unified output',
+				'  --color[=always|never|auto]     color policy (default auto: TTY only)',
+				'Exit 0 if data-equivalent, 1 if the documents differ, 2 on error.',
+			]
+			run:     run_diff
+		},
+		SubcommandSpec{
+			name:    'lint'
+			summary: 'Style + correctness warnings.'
+			help:    [
+				'Usage: cx lint [opts] [FILE]',
+				'',
+				'Style + correctness warnings. Reads FILE, or stdin if absent.',
+				'  --format=text|json|summary      (default text)',
+				'  --fail-on=info|warn|error|none  exit-1 threshold (default error)',
+				'  --disable=ID1,ID2               suppress specific checks',
+				'  --only=ID                       run a single check',
+				'  --config=PATH | --no-config     lint config (nearest .cxlint.cx is',
+				'                                  auto-discovered when neither is given)',
+				'Exit 0 if no findings at/above --fail-on, 1 if any, 2 on error.',
+			]
+			run:     run_lint
+		},
+		SubcommandSpec{
+			name:    'validate'
+			summary: 'Validate a document against a CX schema (.cxs).'
+			help:    [
+				'Usage: cx validate FILE --schema=SCHEMA.cxs [opts]',
+				'',
+				'Validates FILE against the schema.',
+				'  --fail-on=info|warn|error|none  exit-1 threshold (default error)',
+				'  --mode=open|strict|closed       override the schema-mode directive',
+				'  --apply-defaults                insert schema-default attribute values',
+				'Exit 0 if no diagnostics at/above --fail-on, 1 if any,',
+				'2 on I/O / schema-load failure.',
+			]
+			run:     run_validate
+		},
+		SubcommandSpec{
+			name:    'eval'
+			summary: 'Evaluate a CX program (alias of the default run action; prefer `cx FILE`).'
+			help:    [
+				'Usage: cx eval PROGRAM.cx [--data=INPUT.cx] [--target=FMT] [--allow-*]',
+				'',
+				'Evaluates a CX program — an alias of the default run action; prefer the',
+				'plain `cx PROGRAM.cx` spelling.',
+				"  -e 'PROGRAM' | --expression     inline program",
+				"  -d 'INPUT' | --data-text        inline input document",
+				'  --data=FILE|-                   input document from a file (or stdin: -)',
+				'  --target=text|cx|json|yaml|xml|csv|tsv   output rendering (default text)',
+				'  --allow-<cap>[=SCOPE] / --allow-all       capability grants (see cx --help)',
+			]
+			run:     run_eval
+		},
+		SubcommandSpec{
+			name:    'version'
+			summary: 'Version / build info (same output as -v / --version).'
+			help:    [
+				'Usage: cx version',
+				'',
+				'Prints expanded version / build info — version, commit, build date,',
+				'GC model, V-fork gitlink — exactly as `cx -v` / `cx --version` do.',
+				'Exists as a verb so `cx version` can never fall through to the run',
+				'surface: on a case-insensitive filesystem at the repo root the bare',
+				'word used to resolve to ./VERSION and evaluate it as a program (#426).',
+			]
+			run:     run_version
+		},
+		SubcommandSpec{
+			name:    'select'
+			summary: 'CXPath query over a document (matches in canonical CX).'
+			help:    [
+				"Usage: cx select 'PATH' [FILE]",
+				'',
+				'Evaluates the CXPath expression PATH against the document read from',
+				'FILE (or stdin if `-` / absent), which is bound as $doc (and $input).',
+				"PATH is a CXPath value expression (spec/code.md §5.5): '\$doc/…'-anchored,",
+				"document-rooted '/…', or descendant '//…'; predicates apply.",
+				'',
+				'Matches print one per line, in document order, in canonical CX.',
+				'Attribute-axis matches materialize as [name value] fields; a single',
+				'plain child-chain attribute read prints its typed scalar value.',
+				'A pure read — needs (and accepts) no capability grants.',
+				'Exit 0 if at least one node matched, 1 if the match set is empty,',
+				'2 on error (usage, unreadable FILE, document/path parse error).',
+			]
+			run:     run_select
+		},
+		SubcommandSpec{
+			name:    'diagram'
+			summary: 'Render a CX program as a diagram (mermaid/svg/png).'
+			help:    [
+				'Usage: cx diagram PROGRAM.cx [--format=mermaid|svg|png] [-o OUT]',
+				'',
+				'Renders a CX program as a diagram. Output goes to stdout by default;',
+				'-o PATH writes a file (recommended for svg/png). Every format embeds the',
+				'original source bytes, so the diagram reverse-parses to the same AST.',
+			]
+			run:     run_diagram
+		},
+		SubcommandSpec{
+			name:    'code-diagram'
+			summary: 'Mermaid diagram of a CX source (flowchart / erDiagram).'
+			help:    [
+				'Usage: cx code-diagram [FILE|-] [--level=min|compact|full]',
+				'',
+				'Auto-detecting Mermaid emitter: flowchart TD for code sources, erDiagram',
+				'for data sources. Reads FILE, or stdin if `-` / absent.',
+				'  --level=min|compact|full   detail level (default compact)',
+			]
+			run:     run_code_diagram
+		},
+		SubcommandSpec{
+			name:    'code-tree'
+			summary: 'Tree View JSON of a CX source.'
+			help:    [
+				'Usage: cx code-tree [FILE|-]',
+				'',
+				'Prints the Tree View JSON rendering of a CX source.',
+				'Reads FILE, or stdin if `-` / absent.',
+			]
+			run:     run_code_tree
+		},
+		SubcommandSpec{
+			name:    'table'
+			summary: 'Table API over [table[...]] blocks (info / dump / load).'
+			help:    [
+				'Usage: cx table <verb> [args...]',
+				'',
+				'Public Table API surface over [table[...]] blocks.',
+				'  cx table info FILE          column/row counts, types, byte size',
+				'  cx table dump FILE [--to=cx|parquet|arrow] [--output=FILE]',
+				'  cx table load FILE [--from=cx|parquet|arrow] [--to=cx] [--output=FILE]',
+				'FILE may be omitted to read stdin. Parquet/Arrow I/O needs libcx_arrow',
+				'built with -d cx_arrow_files.',
+			]
+			run:     run_table
+		},
+		SubcommandSpec{
+			name:    'scaffold'
+			summary: 'Typed, commented skeleton on stdout (config/data/doc/log/table).'
+			help:    [
+				'Usage: cx scaffold <kind>',
+				'',
+				'Drops a typed, commented skeleton on stdout.',
+				'kind: config | data | doc | log | table',
+				'',
+				'Examples:',
+				'  cx scaffold config > my_config.cx',
+				'  cx scaffold table | cx --json',
+			]
+			run:     run_scaffold
+		},
+		SubcommandSpec{
+			name:    'demo'
+			summary: 'Self-contained showcase (no file I/O, no network, < 1s).'
+			help:    [
+				'Usage: cx demo',
+				'',
+				'Self-contained showcase: typed round-trip, a [table[...]] block to CSV,',
+				'a CX program, and the format comparison. No file I/O, no network; runs',
+				'in under a second. Takes no arguments.',
+			]
+			run:     run_demo
+		},
+		SubcommandSpec{
+			name:    'lock'
+			summary: 'Generate / verify cx.lock from [?lib] directives.'
+			help:    [
+				'Usage: cx lock [opts] [FILE...]',
+				'',
+				"Generates / verifies cx.lock from a project's [?lib] directives.",
+				'FILE may be one or more .cx sources; defaults to every *.cx in cwd.',
+				'  --check          verify the existing cx.lock matches; exit 1 on drift',
+				'  --update NAME    refresh a single module entry, keep the rest verbatim',
+				'  --output PATH    write to PATH instead of ./cx.lock',
+			]
+			run:     run_cx_lock
+		},
+		SubcommandSpec{
+			name:    'lsp'
+			summary: 'Language server (LSP) on stdio.'
+			help:    [
+				'Usage: cx lsp [--verbose]',
+				'',
+				'Runs the CX language server on stdio — the entry point the editor',
+				'integrations (VS Code, Neovim) spawn.',
+				'  --verbose   trace protocol messages on stderr (silent by default)',
+			]
+			run:     run_lsp
+		},
+		SubcommandSpec{
+			name:    'store-serve'
+			summary: 'Run the CX store service daemon from a config.'
+			help:    [
+				'Usage: cx store-serve --config PATH [--allow-net[=host:port]] [--allow-*]',
+				'',
+				'Runs the single-node CX store service daemon: loads + validates the',
+				'cxstore.service.cx config, opens the store mount, and serves until',
+				'SIGTERM/SIGINT, then drains gracefully.',
+			]
+			run:     run_store_serve
+		},
+		SubcommandSpec{
+			name:    'store-health'
+			summary: 'Store readiness probe (exit 0 iff accepting).'
+			help:    [
+				'Usage: cx store-health --url READY_URL',
+				'',
+				'Readiness probe for the store daemon (Docker HEALTHCHECK / systemd / LB):',
+				'exit 0 iff the daemon at READY_URL reports accepting, else non-zero.',
+			]
+			run:     run_store_health
+		},
+		SubcommandSpec{
+			name:    'store-token'
+			summary: 'Mint a store bearer token + ready-to-paste config stanza.'
+			help:    [
+				'Usage: cx store-token --id NAME [--roles r1,r2] [--tenant SPEC]',
+				'',
+				'Generates a cryptographically-random bearer token: the [static [token ...]]',
+				'config stanza goes to stdout (pipeable), the secret to stderr — shown once,',
+				'never stored (the config carries only the hash).',
+				'  --roles    reader|writer|admin|metrics, comma-separated (default admin)',
+				"  --tenant   tenant scope (default \"*\")",
+			]
+			run:     run_store_token
+		},
+		SubcommandSpec{
+			name:    'store-rotate-kek'
+			summary: 'Rotate a store key-encryption key (re-wrap envelopes).'
+			help:    [
+				'Usage: cx store-rotate-kek --url STORE_URL --encrypt-key-id OLD --new-key-id NEW',
+				'',
+				"Re-wraps every at-rest envelope's data key under the new tenant KEK",
+				'(payloads and content addresses untouched; atomic per object, resumable,',
+				'fail-closed) and prints the [rotation-report ...].',
+				'Requires env CX_STORE_KEK_<OLD> and CX_STORE_KEK_<NEW> (64 hex chars each).',
+			]
+			run:     run_store_rotate_kek
+		},
+	]
+}
+
+// run_version implements the `cx version` verb — identical output to
+// `cx -v` / `cx --version`. A verb (not only a flag) so the bare word can
+// never fall through to the run surface and evaluate a ./VERSION file on a
+// case-insensitive filesystem (#426 item b).
+fn run_version(args []string) {
+	if args.len > 0 {
+		eprintln('cx version: takes no arguments')
+		exit(2)
+	}
+	print_version()
+	exit(0)
+}
+
+// print_subcommand_help prints the registered `cx <name> --help` body on
+// stdout — the uniform -h/--help handler for every subcommand.
+fn print_subcommand_help(sc SubcommandSpec) {
+	for line in sc.help {
+		println(line)
+	}
+}
+
+// convert_text_format_names lists the codec-registry names usable as
+// `--from` (kind 'from': codecs with a text parser) or `--to` (kind 'to':
+// codecs with a text emitter). Derived from the live registry so the help
+// matches the accepted set by construction; a preferred display order is
+// applied, any future codec lands sorted at the end.
+fn convert_text_format_names(kind string) []string {
+	preferred := ['cx', 'xml', 'json', 'yaml', 'toml', 'md', 'csv', 'tsv', 'psv']
+	mut avail := []string{}
+	for n in cx.codec_names() {
+		c := cx.codec_lookup(n) or { continue }
+		if kind == 'from' {
+			if _ := c.parse {
+				avail << n
+			}
+		} else {
+			if _ := c.emit {
+				avail << n
+			}
+		}
+	}
+	mut out := []string{}
+	for p in preferred {
+		if p in avail {
+			out << p
+		}
+	}
+	mut rest := avail.filter(it !in preferred)
+	rest.sort()
+	out << rest
+	return out
+}
+
+fn usage_text() string {
+	// Capability flags derive from the accepted set (code.capability_names),
+	// the --from/--to lists from the codec registry, and the subcommand
+	// catalogue from the dispatch table — no hand-maintained copies.
+	mut allow_flags := code.capability_names().map('--allow-' + it)
+	allow_flags << '--allow-all'
+	mut b := []string{}
+	b << 'Usage:'
+	b << '  cx FILE.cx [flags]        Run a CX resource (the default action): parse and'
+	b << '                            evaluate. A pure-data document evaluates to itself.'
+	b << '  cx - [flags]              Run a program from stdin (a pipe into bare `cx`'
+	b << '                            with no FILE also evaluates stdin).'
+	b << "  cx -e 'PROGRAM' [flags]   Run an inline program (also --expression)."
+	b << '  cx <subcommand> [args]    One of the subcommands below.'
+	b << '  cx -v | --version         Version / build info.'
+	b << '  cx -h | --help            This help.'
+	b << ''
+	b << 'Run flags (the default action):'
+	b << '  --cx (default) | --xml | --json | --yaml | --csv | --tsv   render the RESULT'
+	b << '  --data=FILE|-             separate data input: loaded via the data reading'
+	b << '                            and bound as $doc/$input before evaluation; the'
+	b << '                            caller input WINS over the program\'s data roots.'
+	b << '  Unknown flags are hard usage errors (exit 2) — nothing is ignored.'
+	b << '  Capabilities are deny-by-default (spec/core/security.md); grant explicitly:'
+	b << '    ' + allow_flags[..5].join(' ')
+	b << '    ' + allow_flags[5..].join(' ')
+	b << '    (--allow-net takes an optional scope: --allow-net=host[:port])'
+	b << ''
+	b << 'Convert flags (the data reading; an explicit --from selects it):'
+	b << '  cx --from=FMT [--to=FMT] [--compact] [--lossless] [--include-root=DIR] [FILE]'
+	b << '    --from: ' + convert_text_format_names('from').join('|')
+	b << '            (.xml/.json/.yaml/.toml/.md files auto-detect their format)'
+	b << '    --to:   ' + convert_text_format_names('to').join('|')
+	b << '  Projection shorthands: --ast --cx --xml --json --yaml --toml --md --csv'
+	b << '                         --tsv --psv --cxcol'
+	b << '  --compact              minimised output'
+	b << '  --lossless             emit round-trip-preserving output (conversions.md'
+	b << '                         0.2/2.2.1): xml carries cx: markers; json/yaml'
+	b << '                         carry the \$tag structure envelope plus a `cx:type`'
+	b << '                         sidecar / `!!cx:T` tags — element docs re-import'
+	b << '                         byte-identically (cx/xml/json/yaml targets; other'
+	b << '                         lanes reject the flag)'
+	b << '  --include-root=DIR     resolve [?cx include=...] against DIR first'
+	b << ''
+	b << 'Subcommands (`cx <subcommand> --help` for details):'
+	for sc in subcommands {
+		b << '  ${sc.name:-17} ${sc.summary}'
+	}
+	return b.join('\n') + '\n'
+}
+
 fn print_usage_and_exit(exit_code int) {
-	eprintln('Usage: cx <subcommand> [args...]')
-	eprintln(' cx --ast|--cx|--xml|--json|--yaml|--toml|--md|--csv|--tsv|--psv [--compact] [input_file]')
-	eprintln(' cx --from=cx|xml|md --to=cx|xml|json|yaml|toml|md|csv|tsv|psv [--compact] [--lossless] [input_file]')
-	eprintln('   --lossless: XML carries per-value types (`<cx:T>`) for an exact CX round-trip')
-	eprintln(' cx -v|--version')
-	eprintln('')
-	eprintln('Subcommands:')
-	eprintln(' fmt [FILE] Lossless canonical formatter (preserves comments,')
-	eprintln(' anchors, etc.; normalizes whitespace and quoting).')
-	eprintln(' canonical [FILE] Strict canonical text (strips comments and other')
-	eprintln(' presentation; output is data-equivalent).')
-	eprintln(' hash [FILE] SHA-256 hex of the strict canonical bytes.')
-	eprintln(' eq A.cx B.cx Exit 0 iff strict-canonical(A) == strict-canonical(B);')
-	eprintln(' exit 1 if they differ; exit 2 on error.')
-	eprintln(' diff [opts] A.cx B.cx Semantic diff (walks strict-canonical forms).')
-	eprintln(' --format=unified|json|summary (default unified).')
-	eprintln(' --no-color disables ANSI color in unified output.')
-	eprintln(' Exit 0 if data-equivalent, 1 if differs, 2 on error.')
-	eprintln(' lint [opts] FILE Style + correctness warnings.')
-	eprintln(' --format=text|json|summary (default text).')
-	eprintln(' --fail-on=info|warn|error|none (default error).')
-	eprintln(' --disable=ID1,ID2 to suppress checks; --only=ID to run one.')
-	eprintln(' validate FILE --schema=SCHEMA.cxs')
-	eprintln(' Validate FILE against the schema.')
-	eprintln(' --fail-on=info|warn|error|none (default error).')
-	eprintln(' --mode=open|strict|closed overrides the schema-mode directive.')
-	eprintln(' --apply-defaults inserts schema-default attribute values.')
-	eprintln(' Exit 0 if no diagnostics at/above --fail-on,')
-	eprintln(' 1 if any, 2 on I/O / schema failure.')
-	eprintln(' table <verb> [args...] Public Table API surface ().')
-	eprintln(' info FILE — column/row counts, types, byte size.')
-	eprintln(' dump FILE --to=cx — round-trip via Table API.')
-	eprintln(' load FILE --to=cx — symmetric inverse.')
-	eprintln(' --to=parquet|arrow defers to libcx_arrow Phase C.')
-	eprintln(' demo Self-contained showcase: typed round-trip,')
-	eprintln(' :table → CSV, CX program, comparison.')
-	eprintln(' No file I/O, no network. < 1s wall-clock.')
-	eprintln(' scaffold <kind> Drop a typed, commented skeleton on stdout.')
-	eprintln(' kind ∈ {config, data, doc, log, table}.')
+	// --help goes to stdout (exit 0); the no-input usage nudge goes to stderr.
+	text := usage_text()
+	if exit_code == 0 {
+		print(text)
+	} else {
+		eprint(text)
+	}
 	exit(exit_code)
 }

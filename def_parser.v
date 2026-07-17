@@ -664,11 +664,29 @@ fn def_read_type_expr(mut c DefParseCursor) !string {
 //   - `[` / `]` track depth; depth-0 `]` is unexpected (paramlist
 //     hasn't closed) but we let the cursor proceed naturally.
 //   - `'` / `"` open a quoted span that shields whitespace + `:`.
+//   - comments / raw text are opaque spans, as in
+//     def_read_expr_until_close (#289).
 fn def_read_param_default(mut c DefParseCursor) !string {
 	start := c.pos
 	mut depth := 0
 	for !c.at_end() {
 		b := c.peek()
+		if hash_line_comment_at(c.src, c.pos) {
+			c.pos = line_comment_end(c.src, c.pos)
+			continue
+		}
+		if block_comment_open_at(c.src, c.pos) {
+			c.pos = block_comment_end(c.src, c.pos) or {
+				return error('CXDEF_PARSE: unterminated `[; … ]` comment in parameter default')
+			}
+			continue
+		}
+		if raw_span_open_at(c.src, c.pos) {
+			c.pos = raw_span_end(c.src, c.pos) or {
+				return error('CXDEF_PARSE: unterminated `[#…#]` raw text in parameter default')
+			}
+			continue
+		}
 		if b == `'` || b == `"` {
 			quote := b
 			c.advance()
@@ -735,12 +753,31 @@ fn def_read_param_default(mut c DefParseCursor) !string {
 // read_expr_until_keyword:
 //   - `[` / `]` track depth.
 //   - `'` / `"` open a quoted span that shields brackets + escapes.
+//   - `#` line comments, `[; … ]` block comments, and `[#…#]` raw text are
+//     OPAQUE spans (#289): quotes inside them must not open string spans and
+//     their bytes never shift bracket depth (shared recognizers, lexical.v).
 //   - top-level `]` breaks the scan (without consuming).
 fn def_read_expr_until_close(mut c DefParseCursor) !string {
 	start := c.pos
 	mut depth := 0
 	for !c.at_end() {
 		b := c.peek()
+		if hash_line_comment_at(c.src, c.pos) {
+			c.pos = line_comment_end(c.src, c.pos)
+			continue
+		}
+		if block_comment_open_at(c.src, c.pos) {
+			c.pos = block_comment_end(c.src, c.pos) or {
+				return error('CXDEF_PARSE: unterminated `[; … ]` comment in body')
+			}
+			continue
+		}
+		if raw_span_open_at(c.src, c.pos) {
+			c.pos = raw_span_end(c.src, c.pos) or {
+				return error('CXDEF_PARSE: unterminated `[#…#]` raw text in body')
+			}
+			continue
+		}
 		if b == `'` || b == `"` {
 			quote := b
 			c.advance()

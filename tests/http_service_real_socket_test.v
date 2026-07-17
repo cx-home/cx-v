@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 
 // Tests for the real-socket HTTP listener attached to
@@ -25,11 +26,7 @@ fn cx_binary() string {
 	// Resolves from the test cwd (repo root when running v -enable-globals
 	// test on the file). The Makefile guarantees this is built before
 	// any test run.
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make -C vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 fn curl_available() bool {

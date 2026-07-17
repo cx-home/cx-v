@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 import net
 
@@ -14,11 +15,7 @@ import net
 // (no real POST round-trip), so it pins the composition, not a name.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // pick_port: mcp owns the disjoint band 21000-21799, salted with PID + the

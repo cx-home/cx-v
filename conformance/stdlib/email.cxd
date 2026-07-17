@@ -52,8 +52,8 @@ false
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $crlf [$email:parse [$bytes:from-string-utf8 "Subject: Hi\r\n\r\nbody"]]]
-  [?let [= $lf [$email:parse [$bytes:from-string-utf8 "Subject: Hi\n\nbody"]]]
-    [$eq [$email:subject $crlf] [$email:subject $lf]]]]
+  [= $lf [$email:parse [$bytes:from-string-utf8 "Subject: Hi\n\nbody"]]]
+  [$eq [$email:subject $crlf] [$email:subject $lf]]]
 #]]
   [out-text [#
 true
@@ -845,8 +845,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nMessage-ID: <abc123@example.com>\r\nSubject: Question\r\n\r\nbody"]]]
-  [?let [= $r [$email:reply $orig {"body": "Answer."}]]
-    [$email:in-reply-to $r]]]
+  [= $r [$email:reply $orig {"body": "Answer."}]]
+  [$email:in-reply-to $r]]
 #]]
   [out-text [#
 'abc123@example.com'
@@ -863,8 +863,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nSubject: Question\r\n\r\nbody"]]]
-  [?let [= $r [$email:reply $orig {"body": "Answer."}]]
-    [$email:subject $r]]]
+  [= $r [$email:reply $orig {"body": "Answer."}]]
+  [$email:subject $r]]
 #]]
   [out-text [#
 'Re: Question'
@@ -882,8 +882,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nSubject: Question\r\n\r\nbody"]]]
-  [?let [= $r [$email:reply $orig {"body": "Answer."}]]
-    [$email:format-address [$first [$email:to-addrs $r]]]]]
+  [= $r [$email:reply $orig {"body": "Answer."}]]
+  [$email:format-address [$first [$email:to-addrs $r]]]]
 #]]
   [out-text [#
 'sender@x.com'
@@ -900,8 +900,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nSubject: Report\r\n\r\nbody"]]]
-  [?let [= $f [$email:forward $orig {"to": "dest@x.com", "body": "FYI"}]]
-    [$email:subject $f]]]
+  [= $f [$email:forward $orig {"to": "dest@x.com", "body": "FYI"}]]
+  [$email:subject $f]]
 #]]
   [out-text [#
 'Fwd: Report'
@@ -918,8 +918,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $orig [$email:parse [$bytes:from-string-utf8 "From: sender@x.com\r\nSubject: Report\r\n\r\nbody"]]]
-  [?let [= $f [$email:forward $orig {"to": "dest@x.com", "body": "FYI"}]]
-    [$count [$email:attachments $f]]]]
+  [= $f [$email:forward $orig {"to": "dest@x.com", "body": "FYI"}]]
+  [$count [$email:attachments $f]]]
 #]]
   # §3.7: the wrapping message/rfc822 part carries Content-Disposition: attachment,
   # so it is surfaced by [attachments] (§3.3) — expected count 1 is grounded.
@@ -940,8 +940,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nfailed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; user@example.com\r\nAction: failed\r\nStatus: 5.1.1\r\nDiagnostic-Code: smtp; 550 no such user\r\n--B--\r\n"]]]
-  [?let [= $dsn [$email:parse-dsn $msg]]
-    [$email:is-bounce $dsn]]]
+  [= $dsn [$email:parse-dsn $msg]]
+  [$email:is-bounce $dsn]]
 #]]
   [out-text [#
 true
@@ -958,8 +958,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nfailed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; user@example.com\r\nAction: failed\r\nStatus: 5.1.1\r\nDiagnostic-Code: smtp; 550 no such user\r\n--B--\r\n"]]]
-  [?let [= $dsn [$email:parse-dsn $msg]]
-    [$email:is-hard-bounce $dsn]]]
+  [= $dsn [$email:parse-dsn $msg]]
+  [$email:is-hard-bounce $dsn]]
 #]]
   [out-text [#
 true
@@ -976,8 +976,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\ndelayed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; queue@example.com\r\nAction: delayed\r\nStatus: 4.4.1\r\nDiagnostic-Code: smtp; 421 connection timed out\r\n--B--\r\n"]]]
-  [?let [= $dsn [$email:parse-dsn $msg]]
-    [$email:is-bounce $dsn]]]
+  [= $dsn [$email:parse-dsn $msg]]
+  [$email:is-bounce $dsn]]
 #]]
   [out-text [#
 true
@@ -993,8 +993,8 @@ true
 [?lib 'cx-stdlib/email']
 [?lib 'cx-stdlib/bytes']
 [?let [= $msg [$email:parse [$bytes:from-string-utf8 "From: MAILER-DAEMON@mx\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\ndelayed\r\n--B\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mail.example.com\r\n\r\nFinal-Recipient: rfc822; queue@example.com\r\nAction: delayed\r\nStatus: 4.4.1\r\nDiagnostic-Code: smtp; 421 connection timed out\r\n--B--\r\n"]]]
-  [?let [= $dsn [$email:parse-dsn $msg]]
-    [$email:is-hard-bounce $dsn]]]
+  [= $dsn [$email:parse-dsn $msg]]
+  [$email:is-hard-bounce $dsn]]
 #]]
   [out-text [#
 false

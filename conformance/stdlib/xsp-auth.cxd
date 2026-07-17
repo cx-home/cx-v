@@ -1,0 +1,783 @@
+[test-suite name=xsp-auth
+  [doc [#
+conformance fixtures for the XSP-AUTH handshake calculus
+(spec/02-working/xap_identity_model.md §4, fixture plan §9.8–§9.15 — the
+pure P0 lanes).
+
+   Every case is a standalone pure program: randomness is INJECTED as
+   fixed vectors (RFC 7748 §6.1 X25519 ephemerals; RFC 8032 Ed25519 TEST
+   seeds for the static identity keys), so the corpus runs offline and
+   deterministic — the marine/at-sea property asserted by construction.
+   Vectors:
+     initiator eph  priv 7707…2c2a  pub 8520…4e6a   (RFC 7748 alice)
+     responder eph  priv 5dab…e0eb  pub de9e…2b4f   (RFC 7748 bob)
+     initiator id   seed 9d61…7f60  pub d75a…511a   (RFC 8032 TEST 1)
+     responder id   seed 4ccd…a6fb  pub 3d40…660c   (RFC 8032 TEST 2)
+   DIDs are did:key over the Ed25519 pubs (offline resolution — did.md §2).
+
+   Error lanes assert the exact symbolic CXER-XSP-AUTH-* code (§4.10).
+   Failure is always fail-closed: the failing call yields the err value
+   and nothing attaches.
+#]]
+
+ [case id=xsp-auth-001-happy-mutual-phases level=core gate=enforced
+  [tags xsp-auth handshake mutual golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "tcps://helm.local/xsp"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [tenant "acme"] [session mirror] [client [channel tui]]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv,
+           session: [session id="s-1" [principal $i-did] [tenant "acme"]]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [seq [$text $m1/@phase] [$text $m2/@phase] [$text $m3/@phase] [$text $m4/@phase]
+       [= $done/@responder $r-did]]]
+#]]
+  [out-text [#
+[seq 'hello' 'challenge' 'prove' 'confirm' true]
+#]]
+ ]
+
+ [case id=xsp-auth-002-established-session-propagates level=core gate=enforced
+  [tags xsp-auth handshake session attach]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "tcps://helm.local/xsp"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [tenant "acme"] [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv,
+           session: [session id="s-42" [principal $i-did] [tenant "acme"]]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [seq [$text $done/session/@id] [> [$length [$text $done/@chan-id]] 0]]]
+#]]
+  [out-text [#
+[seq 's-42' true]
+#]]
+ ]
+
+ [case id=xsp-auth-003-keys-equal-both-sides level=core gate=enforced
+  [tags xsp-auth keys hkdf symmetric]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $ki [$xsp:auth-keys $i-eph-priv $r-eph-pub $n-i $n-r]]
+  [= $kr [$xsp:auth-keys $r-eph-priv $i-eph-pub $n-i $n-r]]
+  [= [$text $ki] [$text $kr]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=xsp-auth-004-replay-m2-fails-sig level=core gate=enforced
+  [tags xsp-auth replay nonce sig]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $n-x [$bytes:from-hex "0303030303030303030303030303030303030303030303030303030303030303"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "tcps://helm.local/xsp"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m1-fresh [$xsp:auth-hello {did: $i-did, nonce: $n-x, eph: $i-eph-pub, endpoint: "tcps://helm.local/xsp"}]]
+  [$xsp:auth-prove $m1-fresh $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+    attach: [attach [tenant "acme"] [session mirror]]}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-SIG
+#]]
+ ]
+
+ [case id=xsp-auth-005-wrong-key-fails-verify level=core gate=enforced
+  [tags xsp-auth sig wrong-key]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $t [$xsp:auth-transcript $m1 $m2]]
+  [; verify the genuine responder signature against the WRONG public key ]
+  [$xsp:auth-verify "responder" $t [$text [$first $m2/sig]] $i-pub]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=xsp-auth-006-role-reflection-rejected level=core gate=enforced
+  [tags xsp-auth sig reflection role]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $t [$xsp:auth-transcript $m1 $m2]]
+  [; a responder-role signature must NEVER verify under the initiator role
+     (role labels are inside the signed wrapper — §4.4) ]
+  [$xsp:auth-verify "initiator" $t [$text [$first $m2/sig]] $r-pub "zAAA"]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=xsp-auth-007-unknown-child-rejected level=core gate=enforced
+  [tags xsp-auth downgrade state extras]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [; hand-forged M2 smuggling an extra child — v1 rejects unknowns (§4.3) ]
+  [= $m2-evil [xsp-auth phase=challenge [version 1] [responder $r-did]
+    [nonce $n-r] [eph $r-eph-pub] [cb [$bytes:from-hex ""]] [sig "zAAA"] [evil 1]]]
+  [$xsp:auth-prove $m1 $m2-evil {eph-priv: $i-eph-priv,
+    attach: [attach [session mirror]]}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+
+ [case id=xsp-auth-008-version-not-offered level=core gate=enforced
+  [tags xsp-auth downgrade version]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [; hand-forged M2 selecting a version the initiator never offered ]
+  [= $m2-v2 [xsp-auth phase=challenge [version 2] [responder $r-did]
+    [nonce $n-r] [eph $r-eph-pub] [cb [$bytes:from-hex ""]] [sig "zAAA"]]]
+  [$xsp:auth-prove $m1 $m2-v2 {eph-priv: $i-eph-priv,
+    attach: [attach [session mirror]]}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-VERSION
+#]]
+ ]
+
+ [case id=xsp-auth-009-channel-binding-mismatch level=core gate=enforced
+  [tags xsp-auth channel-binding cb]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: "tcps://helm.local/xsp"}]]
+  [; responder bound to one channel view, initiator computed another ]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           cb: [$bytes:from-hex "aa"]}]]
+  [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, cb: [$bytes:from-hex "bb"],
+    attach: [attach [session mirror]]}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-BINDING
+#]]
+ ]
+
+ [case id=xsp-auth-010-anonymous-accepted level=core gate=enforced
+  [tags xsp-auth anonymous floor]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv,
+           attach: [attach [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv,
+           session: [session id="s-floor" [principal "did:key:dev-floor"]]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [; the anonymous initiator still authenticated the RESPONDER (N-IDENT-2)
+     and the session is the deployment's floor principal (§4.7) ]
+  [seq [= $done/@responder $r-did] [$text $done/session/@id]]]
+#]]
+  [out-text [#
+[seq true 's-floor']
+#]]
+ ]
+
+ [case id=xsp-auth-011-anonymous-refused-require-mutual level=core gate=enforced
+  [tags xsp-auth anonymous policy require-mutual]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv,
+           attach: [attach [session mirror]]}]]
+  [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv, require-mutual: true}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-ANONYMOUS-REFUSED
+#]]
+ ]
+
+ [case id=xsp-auth-012-claimed-did-must-prove level=core gate=enforced
+  [tags xsp-auth n-ident-1 claim proof]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [; M1 claims a DID but no signing key is supplied — the calculus refuses to
+     build an unproven claim (N-IDENT-1: proof before principal) ]
+  [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv,
+    attach: [attach [session mirror]]}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+
+ [case id=xsp-auth-013-initiator-tag-corrupt level=core gate=enforced
+  [tags xsp-auth confirm tag key-confirmation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [; hand-forged M3 with a wrong key-confirmation tag ]
+  [= $m3-bad [xsp-auth phase=prove
+    [tag [$bytes:from-hex "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]]
+    [attach [session mirror]]]]
+  [$xsp:auth-confirm $m1 $m2 $m3-bad {eph-priv: $r-eph-priv}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-CONFIRM
+#]]
+ ]
+
+ [case id=xsp-auth-014-responder-tag-corrupt level=core gate=enforced
+  [tags xsp-auth finish tag key-confirmation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m4-bad [xsp-auth phase=confirm
+    [tag [$bytes:from-hex "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]]
+    [session [session id="s-evil"]]]]
+  [$xsp:auth-finish $m1 $m2 $m4-bad {eph-priv: $i-eph-priv}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-CONFIRM
+#]]
+ ]
+
+ [case id=xsp-auth-015-proof-roundtrip level=core gate=enforced
+  [tags xsp-auth proof possession sse-post]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $ks [$xsp:auth-keys $i-eph-priv $r-eph-pub $n-i $n-r]]
+  [= $k [$first $ks/proof-i]]
+  [= $frame [$bytes:from-hex "deadbeefcafe"]]
+  [= $p [$xsp:auth-proof $k 7 $frame]]
+  [seq [$xsp:auth-proof-verify $k 7 $frame $p]
+       [$xsp:auth-proof-verify $k 8 $frame $p]
+       [$xsp:auth-proof-verify $k 7 [$bytes:from-hex "deadbeefcaff"] $p]]]
+#]]
+  [out-text [#
+[seq true false false]
+#]]
+ ]
+
+ [case id=xsp-auth-016-proof-counter-floor level=core gate=enforced
+  [tags xsp-auth proof counter]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[$xsp:auth-proof [$bytes:from-hex "00"] 0 [$bytes:from-hex "aa"]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+
+ [case id=xsp-auth-017-frame-roundtrip-transcript-stable level=core gate=enforced
+  [tags xsp-auth frame data-bin stream-0 lossless]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "tcps://helm.local/xsp"}]]
+  [; carry M1 as a real XSP v1 frame on stream 0 (§4.3), decode it back,
+     and run the handshake over the ROUND-TRIPPED element — the data-bin
+     losslessness the transcript signature depends on ]
+  [= $wire [$xsp:encode [frame type=request stream=0 principal=$i-did [payload $m1]]]]
+  [= $decoded [$xsp:decode $wire]]
+  [= $m1-rt [$first $decoded/payload]]
+  [= $m2 [$xsp:auth-challenge $m1-rt {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m3 [$xsp:auth-prove $m1-rt $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [session mirror]]}]]
+  [$text $m3/@phase]]
+#]]
+  [out-text [#
+'prove'
+#]]
+ ]
+
+ [case id=xsp-auth-018-degenerate-shared-secret level=core gate=enforced
+  [tags xsp-auth x25519 low-order rfc7748]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[; an all-zero peer point yields the degenerate shared secret — rejected ]
+[$xsp:auth-keys
+  [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]
+  [$bytes:from-hex "0000000000000000000000000000000000000000000000000000000000000000"]
+  [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]
+  [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+
+ [case id=xsp-auth-019-anonymous-m3-with-sig-rejected level=core gate=enforced
+  [tags xsp-auth anonymous state sig]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv,
+           attach: [attach [session mirror]]}]]
+  [; graft a stray [sig] onto the anonymous M3 — an anonymous channel must
+     not carry a signature (§4.7) ]
+  [= $m3-evil [xsp-auth phase=prove [sig "zAAA"]
+    [tag [$first $m3/tag]] [attach [session mirror]]]]
+  [$xsp:auth-confirm $m1 $m2 $m3-evil {eph-priv: $r-eph-priv}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+
+ [case id=xsp-auth-020-transcript-endpoint-signed level=core gate=enforced
+  [tags xsp-auth endpoint unknown-key-share binding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "tcps://helm.local/xsp"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [; a hostile relay rewrites the dialed endpoint in M1 — the responder's
+     signature no longer verifies over the doctored transcript (§8.4) ]
+  [= $m1-doctored [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "tcps://evil.example/xsp"}]]
+  [$xsp:auth-prove $m1-doctored $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+    attach: [attach [session mirror]]}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-SIG
+#]]
+ ]
+
+ [case id=xsp-auth-021-did-peer-mutual level=core gate=enforced
+  [tags xsp-auth did-peer numalgo-0 pairwise mutual]
+  [doc [#
+§1: a did:peer numalgo-0 pairwise DID completes the full mutual handshake by the
+same offline synthesis as did:key — the method flows through auth-* unchanged.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:peer-create $i-pub]]
+  [= $r-did [$did:peer-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed, attach: [attach [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [seq [$text [$did:method $i-did]] [= $done/@responder $r-did]]]
+#]]
+  [out-text [#
+[seq 'peer' true]
+#]]
+ ]
+
+ [case id=xsp-auth-022-rotate-continuity level=core gate=enforced
+  [tags xsp-auth rotate did-web continuity lifecycle]
+  [doc [#
+§6.3: the outgoing key signs the incoming DID bound to the prior channel id; the
+proof verifies against the old key and FAILS against the wrong key — the
+continuity that lets a live session survive a mid-session did:web rotation.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $old-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $old-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $new-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $old-did [$did:key-create $old-pub]]
+  [= $new-did [$did:key-create $new-pub]]
+  [= $rot [$xsp:auth-rotate $old-seed $new-did "840848621c3c2c92b7934fafc6e0adca"]]
+  [seq [$xsp:auth-rotate-verify $rot $old-did [$bytes:from-hex ""]]
+       [$xsp:auth-rotate-verify $rot $new-did [$bytes:from-hex ""]]]]
+#]]
+  [out-text [#
+[seq true false]
+#]]
+ ]
+
+ [case id=xsp-auth-023-rotate-tampered-chan level=core gate=enforced
+  [tags xsp-auth rotate continuity negative]
+  [doc [#
+§6.3: a rotation proof is bound to the prior channel id — verifying a proof
+whose channel binding was altered fails (the sig no longer covers it). Modeled
+by re-deriving a proof for a different prior-chan and checking the two proofs
+differ.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $old-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $old-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $new-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $new-did [$did:key-create $new-pub]]
+  [= $rot-a [$xsp:auth-rotate $old-seed $new-did "chan-A"]]
+  [= $rot-b [$xsp:auth-rotate $old-seed $new-did "chan-B"]]
+  [= [$text [$first $rot-a/sig]] [$text [$first $rot-b/sig]]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=xsp-auth-024-initiator-frame-roundtrip level=core gate=enforced
+  [tags xsp-auth frame data-bin sse-post initiator]
+  [doc [#
+§4.12 (P2, issue #394): the INITIATOR consumes M2 and M4 off the wire —
+each rides an XSP v1 stream-0 frame, whose data-bin decode atomizes the
+single-scalar handshake fields (version/nonce/eph/cb/sig/tag) into
+attributes. auth-prove and auth-finish must read the attr-form messages
+exactly as the fresh child-form ones (fixture 017 proved the responder
+half over M1; this is the other direction — the SSE+POST web binding
+exercises both). The full handshake runs with EVERY message wire
+round-tripped, and finishes established with both sides deriving the
+same channel id.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "http://127.0.0.1:1"}]]
+  [= $w1 [$xsp:encode [frame type=request stream=0 [payload $m1]]]]
+  [= $d1 [$xsp:decode $w1]]
+  [= $m1-srv $d1/payload]
+  [= $m2 [$xsp:auth-challenge $m1-srv {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $w2 [$xsp:encode [frame type=reply stream=0 [payload $m2]]]]
+  [= $d2 [$xsp:decode $w2]]
+  [= $m2c $d2/payload]
+  [= $m3 [$xsp:auth-prove $m1 $m2c {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [tenant "acme"] [session mirror]]}]]
+  [= $w3 [$xsp:encode [frame type=request stream=0 [payload $m3]]]]
+  [= $d3 [$xsp:decode $w3]]
+  [= $m3-srv $d3/payload]
+  [= $m4 [$xsp:auth-confirm $m1-srv $m2 $m3-srv {eph-priv: $r-eph-priv,
+           session: [session id="s-1"]}]]
+  [= $w4 [$xsp:encode [frame type=reply stream=0 [payload $m4]]]]
+  [= $d4 [$xsp:decode $w4]]
+  [= $m4c $d4/payload]
+  [= $done [$xsp:auth-finish $m1 $m2c $m4c {eph-priv: $i-eph-priv}]]
+  [; both sides derive the same channel id: the client from the ATTR-form
+     M2, the server from its fresh child-form values ]
+  [= $ks-c [$xsp:auth-keys $i-eph-priv $m2c/@eph $n-i $m2c/@nonce]]
+  [seq [$text $done/@responder]
+       [= [$text $done/@chan-id] [$bytes:to-hex [$first $ks-c/chan-id]]]]]
+#]]
+  [out-text [#
+[seq 'did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT' true]
+#]]
+ ]
+]

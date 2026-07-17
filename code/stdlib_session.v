@@ -78,6 +78,10 @@ mut:
 	state        string // attached / detached / expired (§2.1)
 	principal_id string
 	tenant_id    string
+	// Session name — the optional label an independent session carries (#24 /
+	// xap_identity_model §4.9 `new [name=…]`). Empty for the default (mirror)
+	// session. Unique per (principal, tenant); the by_name index enforces it.
+	name string
 	established  string // RFC-3339 established-at marker
 	exp_secs     i64    // verified token `exp` (0 = no exp claim)
 	now_secs     i64    // attach-time reference clock (Unix secs)
@@ -90,7 +94,8 @@ mut:
 struct SessionRegistry {
 mut:
 	sessions   map[string]&SessionRecord // by session id
-	by_subject map[string]string         // "principal\x00tenant" → session id (mirrored attach, §2.7)
+	by_subject map[string]string         // "principal\x00tenant" → DEFAULT session id (mirrored attach, §2.7)
+	by_name    map[string]string         // "principal\x00tenant\x00name" → session id (independent named sessions, #24 §4.9)
 	client_idx map[string]string         // client id → session id (by-client, §3.3)
 	token_idx  map[string]string         // bearer-token FINGERPRINT (sha256 hex) → session id (of-resolve, §3.3)
 	counter    int                       // monotonic for client-id minting
@@ -111,6 +116,7 @@ pub fn session_reset_state() {
 	mut reg := unsafe { &SessionRegistry(g_session_reg) }
 	reg.sessions = map[string]&SessionRecord{}
 	reg.by_subject = map[string]string{}
+	reg.by_name = map[string]string{}
 	reg.client_idx = map[string]string{}
 	reg.token_idx = map[string]string{}
 	reg.counter = 0
@@ -121,6 +127,7 @@ fn session_reg() &SessionRegistry {
 		r := &SessionRegistry{
 			sessions:   map[string]&SessionRecord{}
 			by_subject: map[string]string{}
+			by_name:    map[string]string{}
 			client_idx: map[string]string{}
 			token_idx:  map[string]string{}
 		}
@@ -338,6 +345,11 @@ fn session_materialize(rec &SessionRecord) cx.Node {
 		session_str_attr('state', rec.state),
 		session_str_attr('on-close', 'session/detach'),
 	]
+	// An independent named session (#24 §4.9) surfaces its name so a client can
+	// re-select it via `name=`; the default (mirror) session has none.
+	if rec.name != '' {
+		attrs << session_str_attr('name', rec.name)
+	}
 	mut items := []cx.Node{}
 	items << session_principal_element(rec.principal_id, rec.tenant_id)
 	items << cx.Node(cx.Element{
@@ -525,6 +537,117 @@ fn session_establish_from_verified(verified cx.Node, cfg map[string]cx.Node, via
 		reg.token_idx[session_token_fp(token)] = sid
 	}
 	return session_materialize(rec)
+}
+
+// session_establish_selected extends establishment with the #24 / §4.9 attach
+// selector. `mirror` (the default) is verbatim session_establish_from_verified
+// — resolve-or-mint the subject's DEFAULT session and add a client, the §2.7
+// behavior. `new` mints an INDEPENDENT session (own client set, surface,
+// authority — N-IDENT-4), optionally named. `id`/`name` mirror a SPECIFIC
+// existing session, which MUST belong to the same (principal, tenant) — else
+// the CXER4805 rebind refusal (§4.2). This is the one place multiplicity lives;
+// every other attach path (bearer/cookie/did) keeps the mirror default.
+fn session_establish_selected(verified cx.Node, cfg map[string]cx.Node, via string, channel string, client_id string, sel string, sel_name string) cx.Node {
+	if sel == '' || sel == 'mirror' {
+		return session_establish_from_verified(verified, cfg, via, channel, client_id,
+			false, '')
+	}
+	binding := session_map_claims(verified, cfg)
+	if is_err_value(binding) {
+		return binding
+	}
+	bel := binding as cx.Element
+	principal_id := bel.attr('id')
+	mut tenant_id := ''
+	for it in bel.items {
+		if it is cx.Element && it.name == 'tenant' {
+			tenant_id = it.attr('id')
+		}
+	}
+	now_marker := session_opt_str(cfg, 'now', '')
+	mut reg := session_reg()
+	subj := session_subject_key(principal_id, tenant_id)
+
+	match sel {
+		'new' {
+			// Independent session; a name (if given) must be unique per subject.
+			name_key := subj + '\x00' + sel_name
+			if sel_name != '' {
+				if _ := reg.by_name[name_key] {
+					return mk_err(session_err_rebind_refused, 'E_SESSION_REBIND_REFUSED: a session named "${sel_name}" already exists for this (principal, tenant)')
+				}
+			}
+			sid := session_mint_id()
+			cid := if client_id != '' { client_id } else { session_next_client_id(mut reg) }
+			mut rec := &SessionRecord{
+				id:           sid
+				state:        'attached'
+				principal_id: principal_id
+				tenant_id:    tenant_id
+				name:         sel_name
+				established:  now_marker
+				exp_secs:     session_claims_exp(verified)
+				now_secs:     session_cfg_now_secs(cfg)
+				claims:       verified
+				clients:      [
+					SessionClient{
+						id:          cid
+						channel:     channel
+						via:         via
+						attached_at: now_marker
+						last_seen:   now_marker
+					},
+				]
+			}
+			reg.sessions[sid] = rec
+			reg.client_idx[cid] = sid
+			if sel_name != '' {
+				reg.by_name[name_key] = sid
+			}
+			// The FIRST session for a subject also becomes the mirror default,
+			// so a later selector-less attach mirrors it (§2.7 continuity).
+			if _ := reg.by_subject[subj] {
+			} else {
+				reg.by_subject[subj] = sid
+			}
+			return session_materialize(rec)
+		}
+		'id', 'name' {
+			target := if sel == 'id' {
+				sel_name
+			} else {
+				reg.by_name[subj + '\x00' + sel_name] or {
+					return mk_err(session_err_rebind_refused, 'E_SESSION_REBIND_REFUSED: no session named "${sel_name}" for this (principal, tenant)')
+				}
+			}
+			if mut rec := reg.sessions[target] {
+				// The selected session MUST belong to the same (principal,
+				// tenant) — cross-subject mirror without a delegation is the
+				// CXER4805 refusal (§4.9; delegated mirror is a later, grant-
+				// gated path).
+				if rec.principal_id != principal_id || rec.tenant_id != tenant_id {
+					return mk_err(session_err_rebind_refused, 'E_SESSION_REBIND_REFUSED: session ${target} belongs to a different (principal, tenant)')
+				}
+				if rec.state != 'attached' {
+					return mk_err(session_err_rebind_refused, 'E_SESSION_REBIND_REFUSED: session ${target} is ${rec.state}')
+				}
+				cid := if client_id != '' { client_id } else { session_next_client_id(mut reg) }
+				rec.clients << SessionClient{
+					id:          cid
+					channel:     channel
+					via:         via
+					attached_at: now_marker
+					last_seen:   now_marker
+				}
+				reg.client_idx[cid] = target
+				return session_materialize(rec)
+			}
+			return mk_err(session_err_rebind_refused, 'E_SESSION_REBIND_REFUSED: no live session ${target}')
+		}
+		else {
+			return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: unknown attach selector "${sel}" (mirror | new | id | name)')
+		}
+	}
 }
 
 // session_token_fp is the one-way fingerprint (lowercase sha256 hex) of a raw
@@ -780,6 +903,18 @@ fn session_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		'session-attach-did' {
 			return session_attach_did_impl(args)
+		}
+		'session-attach-xsp' {
+			return session_attach_xsp_impl(args)
+		}
+		'session-list' {
+			return session_list_impl(args)
+		}
+		'session-by-name' {
+			return session_by_name_impl(args)
+		}
+		'session-present-vc' {
+			return session_present_vc_impl(args)
 		}
 		'session-detach' {
 			return session_detach_impl(args)
@@ -1052,6 +1187,261 @@ fn session_attach_did_impl(args []cx.Node) cx.Node {
 		false, '')
 }
 
+// attach-xsp $m1 $m2 $m3 $cfg $client? — establish a (principal, tenant)
+// session from a COMPLETED XSP-AUTH handshake (xap_identity_model §4). The
+// responder holds M1/M2 and has received M3; this verifies the handshake
+// (delegating every crypto check to the xsp-auth calculus — the SAME
+// verification auth-confirm runs, no second implementation), extracts the
+// PROVEN principal (the authenticated initiator DID, or the deployment's
+// anonymous-floor principal for an anonymous peer, §4.7), honors the M3 attach
+// selector (§4.9), establishes the session, and returns
+// [xsp-attached [session …] [confirm <M4>]] — the caller sends `confirm` as
+// M4 and holds `session` locally. N-IDENT-1: no session binds without proof.
+fn session_attach_xsp_impl(args []cx.Node) cx.Node {
+	if args.len < 4 {
+		return mk_err(session_err_principal_unresolved, 'E_SESSION_NO_PRINCIPAL: attach-xsp expects (m1, m2, m3, cfg)')
+	}
+	m1 := args[0]
+	m2 := args[1]
+	m3 := args[2]
+	cfg := session_opts(args[3])
+	mut channel := 'cx'
+	mut client_id := ''
+	if args.len > 4 {
+		cl := session_opts(args[4])
+		channel = session_opt_str(cl, 'channel', 'cx')
+		client_id = session_opt_str(cl, 'id', '')
+	}
+	// (verify) — run the full §4 verification via the xsp-auth calculus.
+	// auth-confirm returns M4 on success (empty session) or the exact
+	// CXER-XSP-AUTH-* failure value; either propagates verbatim (fail-closed).
+	mut confirm_opts := []cx.Node{}
+	if n := cfg['eph-priv'] {
+		confirm_opts << session_kv_attr_map('eph-priv', n)
+	}
+	if n := cfg['initiator-key'] {
+		confirm_opts << session_kv_attr_map('initiator-key', n)
+	}
+	if n := cfg['require-mutual'] {
+		confirm_opts << session_kv_attr_map('require-mutual', n)
+	}
+	opts_map := cx.Node(cx.Element{
+		name:  '__cx_map__'
+		items: confirm_opts
+	})
+	m4 := xsp_auth_stdlib_builtin('xsp-auth-confirm', [m1, m2, m3, opts_map]) or {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-xsp handshake did not verify')
+	}
+	if is_err_value(m4) {
+		return m4 // the CXER-XSP-AUTH-* value, verbatim
+	}
+	if m1 !is cx.Element || m3 !is cx.Element {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-xsp M1/M3 must be elements')
+	}
+	m1e := m1 as cx.Element
+	m3e := m3 as cx.Element
+	// (principal) — the AUTHENTICATED initiator DID, or the anonymous floor.
+	mut principal := xsp_auth_child_text(m1e, 'initiator') or { '' }
+	if principal == '' {
+		principal = session_opt_str(cfg, 'anonymous-floor', '')
+		if principal == '' {
+			return mk_err(session_err_principal_unresolved, 'E_SESSION_NO_PRINCIPAL: anonymous peer and no `anonymous-floor` principal in cfg (§4.7)')
+		}
+	}
+	// (tenant + selector) — from the M3 attach payload, cfg tenant overrides.
+	attach := xsp_auth_child(m3e, 'attach') or {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: attach-xsp M3 has no [attach …]')
+	}
+	mut tenant := session_opt_str(cfg, 'tenant', '')
+	if tenant == '' {
+		tenant = xsp_auth_child_text(attach, 'tenant') or { '' }
+	}
+	if tenant == '' {
+		return mk_err(session_err_tenant_unresolved, 'E_SESSION_NO_TENANT: attach-xsp has no tenant (cfg or M3 [attach [tenant …]])')
+	}
+	sel, sel_name := session_xsp_selector(attach)
+	// (map) — DID is the principal; build the verified claim-set the shared
+	// establishment consumes (§2.3), exactly as attach-did does.
+	claims := cx.Element{
+		name:  'claims'
+		attrs: [
+			cx.Attribute{
+				name:  'sub'
+				value: cx.ScalarValue(principal)
+			},
+			cx.Attribute{
+				name:  'tid'
+				value: cx.ScalarValue(tenant)
+			},
+		]
+	}
+	mut ecfg := cfg.clone()
+	ecfg['tenant'] = session_str(tenant)
+	established := session_establish_selected(cx.Node(claims), ecfg, 'xsp', channel,
+		client_id, sel, sel_name)
+	if is_err_value(established) {
+		return established
+	}
+	// (M4) — splice the established session into the confirm reply so the peer
+	// learns its bound session id/principal. M4 rides inside a [confirm …]
+	// wrapper (a hyphenless child name, so `$res/confirm` selects cleanly —
+	// the `xsp-auth` message name would read as subtraction in a path step).
+	confirm := session_splice_session(m4, established)
+	return cx.Element{
+		name:  'xsp-attached'
+		items: [
+			established,
+			cx.Node(cx.Element{
+				name:  'confirm'
+				items: [confirm]
+			}),
+		]
+	}
+}
+
+// session_xsp_selector reads the §4.9 selector from an M3 [attach [session …]].
+// mirror (default) | new [name=…] | id=… | name=… — expressed as a leading
+// bareword (mirror|new) plus optional id/name fields.
+fn session_xsp_selector(attach cx.Element) (string, string) {
+	sess := xsp_auth_child(attach, 'session') or { return 'mirror', '' }
+	mut word := ''
+	for it in sess.items {
+		if it is cx.TextNode {
+			word = it.value.trim_space()
+			break
+		} else if it is cx.ScalarNode {
+			word = cx.scalar_value_str_public(it.value).trim_space()
+			break
+		}
+	}
+	id_val := xsp_auth_child_text(sess, 'id') or { '' }
+	name_val := xsp_auth_child_text(sess, 'name') or { '' }
+	if id_val != '' {
+		return 'id', id_val
+	}
+	if word == 'new' {
+		return 'new', name_val
+	}
+	if name_val != '' {
+		return 'name', name_val
+	}
+	return 'mirror', ''
+}
+
+// session_kv_attr_map wraps a value as a single-key map child for opts assembly.
+fn session_kv_attr_map(name string, v cx.Node) cx.Node {
+	return session_kv(name, v)
+}
+
+// session_splice_session returns M4 with its [session] child replaced by `sess`.
+fn session_splice_session(m4 cx.Node, sess cx.Node) cx.Node {
+	if m4 !is cx.Element {
+		return m4
+	}
+	e := m4 as cx.Element
+	mut items := []cx.Node{}
+	mut replaced := false
+	for it in e.items {
+		if it is cx.Element && it.name == 'session' {
+			items << sess
+			replaced = true
+		} else {
+			items << it
+		}
+	}
+	if !replaced {
+		items << sess
+	}
+	return cx.Element{
+		name:  e.name
+		attrs: e.attrs
+		items: items
+	}
+}
+
+// present-vc $session $vc $opts? — the identity→authority bridge
+// (xap_identity_model §5): verify a presented VC and, if it binds to THIS
+// session, yield its §22.2 [delegation …] ready for authz:delegate — the PEP
+// (authz:check) stays unchanged (R9). Enforced here, in order:
+//   (1) the VC subject (its holder) MUST be the session principal, byte-equal
+//       — the handshake (§4) IS the proof of possession, so no separate holder
+//       challenge is needed and there are NO bearer credentials (§5.1). A VC
+//       whose subject is any other DID → CXER-XSP-AUTH-SUBJECT.
+//   (2) the VC verifies valid at opts.now against opts.revoked (vc:verify —
+//       signature, validity window, non-revocation, §5.2/§5.4). Any non-valid
+//       status is a fault carrying that status.
+//   (3) the delegation's tenant MUST equal the session tenant — a cross-tenant
+//       grant is a fault (CXER4805), never silently inert (§5.3).
+// Returns the verified [delegation …] (unchanged, for authz:delegate). An
+// unresolvable capability inside it is NOT rejected here: it simply never
+// matches a PEP check (inert, §5.3) — the authz layer's natural behavior.
+const session_err_vc_subject = 'cx-err:CXER-XSP-AUTH-SUBJECT'
+
+fn session_present_vc_impl(args []cx.Node) cx.Node {
+	if args.len < 2 {
+		return mk_err(session_err_invalid, 'E_SESSION_INVALID: present-vc expects (session, vc, opts?)')
+	}
+	sess := session_session_element(args[0]) or {
+		return mk_err(session_err_invalid, 'E_SESSION_INVALID: present-vc expects a [session] value')
+	}
+	vc_node := args[1]
+	if vc_node !is cx.Element {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: present-vc expects a [vc …] element')
+	}
+	vc_el := vc_node as cx.Element
+	opts := if args.len > 2 { session_opts(args[2]) } else { map[string]cx.Node{} }
+	// session principal + tenant from the materialized [principal id=… [tenant id=…]].
+	mut principal := ''
+	mut tenant := ''
+	for it in sess.items {
+		if it is cx.Element && it.name == 'principal' {
+			principal = it.attr('id')
+			for t in it.items {
+				if t is cx.Element && t.name == 'tenant' {
+					tenant = t.attr('id')
+				}
+			}
+		}
+	}
+	if principal == '' {
+		return mk_err(session_err_principal_unresolved, 'E_SESSION_NO_PRINCIPAL: present-vc session has no principal')
+	}
+	// (1) subject binding — the handshake is the proof of possession (§5.1).
+	subject := vc_child_text(vc_el, 'subject') or {
+		return mk_err(session_err_vc_subject, 'CXER-XSP-AUTH-SUBJECT: VC has no subject')
+	}
+	if subject != principal {
+		return mk_err(session_err_vc_subject, 'CXER-XSP-AUTH-SUBJECT: VC subject "${subject}" ≠ session principal "${principal}" (§5.1 — no bearer credentials)')
+	}
+	// (2) verify valid (signature + window + non-revocation, §5.2/§5.4).
+	now_node := opts['now'] or { session_str('') }
+	mut vargs := [vc_node, now_node]
+	if r := opts['revoked'] {
+		vargs << cx.Node(cx.Element{
+			name:  '__cx_map__'
+			items: [session_kv('revoked', r)]
+		})
+	}
+	verdict := vc_do_verify(vargs)
+	status := if verdict is cx.Element { (verdict as cx.Element).attr('status') } else { '' }
+	if status != 'valid' {
+		return session_err_with_cause(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: presented VC is not valid (status=${status})',
+			verdict)
+	}
+	// (3) extract the [delegation] claim; its tenant must match the session's.
+	claim := vc_find_child(vc_el, 'claim') or {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: VC has no [claim …]')
+	}
+	deleg := vc_find_child(claim, 'delegation') or {
+		return mk_err(session_err_token_rejected, 'E_SESSION_TOKEN_REJECTED: VC claim is not a [delegation …]')
+	}
+	deleg_tenant := vc_child_text(deleg, 'tenant') or { '' }
+	if deleg_tenant != '' && deleg_tenant != tenant {
+		return mk_err(session_err_rebind_refused, 'E_SESSION_REBIND_REFUSED: delegation tenant "${deleg_tenant}" ≠ session tenant "${tenant}" (cross-tenant grant, §5.3)')
+	}
+	return cx.Node(deleg)
+}
+
 // detach $session — tears the WHOLE session down (terminal "detached",
 // idempotent, §3.2). Releases server state; the clearing Set-Cookie is the
 // caller's via clear-cookie / set-cookie on the detached value.
@@ -1064,7 +1454,16 @@ fn session_detach_impl(args []cx.Node) cx.Node {
 	for c in rec.clients {
 		reg.client_idx.delete(c.id)
 	}
-	reg.by_subject.delete(subj)
+	// Only clear the default pointer if it still points at THIS session (a
+	// named/independent session need not be the subject default).
+	if did := reg.by_subject[subj] {
+		if did == rec.id {
+			reg.by_subject.delete(subj)
+		}
+	}
+	if rec.name != '' {
+		reg.by_name.delete(subj + '\x00' + rec.name)
+	}
 	rec.state = 'detached'
 	rec.clients = []SessionClient{}
 	reg.sessions.delete(rec.id)
@@ -1154,6 +1553,55 @@ fn session_by_id_impl(args []cx.Node) cx.Node {
 	id := session_arg_str(args[0]) or { return session_absence() }
 	rec := session_rec_by_id(id) or { return session_absence() }
 	return session_materialize(rec)
+}
+
+// list $principal $tenant — the #24 §4.9 multiplicity read: every live session
+// this (principal, tenant) holds on this XAP, in id order, as a [sessions …]
+// element (navigable via //session). Empty sequence if none. This is the
+// enumeration a client uses to pick which session to mirror or open beside.
+fn session_list_impl(args []cx.Node) cx.Node {
+	if args.len < 2 {
+		return session_absence()
+	}
+	principal := session_arg_str(args[0]) or { return session_absence() }
+	tenant := session_arg_str(args[1]) or { return session_absence() }
+	reg := session_reg()
+	mut ids := []string{}
+	for id, rec in reg.sessions {
+		if rec.principal_id == principal && rec.tenant_id == tenant && rec.state == 'attached' {
+			ids << id
+		}
+	}
+	ids.sort()
+	mut items := []cx.Node{}
+	for id in ids {
+		if rec := reg.sessions[id] {
+			items << session_materialize(rec)
+		}
+	}
+	return cx.Element{
+		name:  'sessions'
+		items: items
+	}
+}
+
+// by-name $principal $tenant $name — resolve a named independent session
+// (#24 §4.9). Absence if none.
+fn session_by_name_impl(args []cx.Node) cx.Node {
+	if args.len < 3 {
+		return session_absence()
+	}
+	principal := session_arg_str(args[0]) or { return session_absence() }
+	tenant := session_arg_str(args[1]) or { return session_absence() }
+	name := session_arg_str(args[2]) or { return session_absence() }
+	reg := session_reg()
+	sid := reg.by_name[session_subject_key(principal, tenant) + '\x00' + name] or {
+		return session_absence()
+	}
+	if rec := reg.sessions[sid] {
+		return session_materialize(rec)
+	}
+	return session_absence()
 }
 
 fn session_by_client_impl(args []cx.Node) cx.Node {

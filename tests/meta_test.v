@@ -80,7 +80,7 @@ fn test_meta_xml_emit_element_inner() {
 	got := xml('[?meta {pii: true} [user name=ann]]')
 	assert got.contains('<cx:meta>'), got
 	assert got.contains('<cx:map>'), got
-	assert got.contains('<entry key="pii">true</entry>'), got
+	assert got.contains('<cx:entry cx:key="pii">true</cx:entry>'), got
 	assert got.contains('<user name="ann"/>'), got
 }
 
@@ -90,7 +90,7 @@ fn test_meta_xml_emit_scalar_inner() {
 	// typed (non-string) scalar in a multi-item body serializes to its `<cx:TYPE>`
 	// carrier — `<cx:int>331</cx:int>` — so the int type round-trips losslessly
 	// (the old bare `331` re-parsed as text).
-	assert got == '<cx:meta><cx:map><entry key="unit">years</entry></cx:map><cx:int>331</cx:int></cx:meta>', got
+	assert got == '<cx:meta><cx:map><cx:entry cx:key="unit">years</cx:entry></cx:map><cx:int>331</cx:int></cx:meta>', got
 }
 
 fn test_no_meta_no_wrapper() {

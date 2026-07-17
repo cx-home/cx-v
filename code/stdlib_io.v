@@ -584,7 +584,7 @@ const io_read_caps = ['io-read-file', 'io-read-file-bytes', 'io-read-file-lines'
 	'io-stat', 'io-exists', 'io-is-file', 'io-is-directory', 'io-is-symlink', 'io-is-eof',
 	'io-list-dir', 'io-glob', 'io-glob-iter', 'io-walk', 'io-readlink', 'io-size',
 	'io-created-time', 'io-modified-time', 'io-tell', 'io-seek', 'io-system-temp-dir',
-	'io-temp-dir']
+	'io-temp-dir', 'io-watch', 'io-watch-next']
 
 const io_write_caps = ['io-open-with-opts', 'io-write-bytes', 'io-write-file',
 	'io-write-file-bytes', 'io-write-file-lines', 'io-write-line', 'io-write-string',
@@ -610,6 +610,14 @@ fn io_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		if d := cap_guard('write', name) {
 			return d
 		}
+	}
+
+	// ── §3.7 continuous filesystem watch (#128-B) ───────────────────────
+	// The watch verbs live in stdlib_iowatch.v (+ platform backends); their
+	// read-path caps are gated above (watch / watch-next), and watch-close
+	// — like close — needs none.
+	if r := iowatch_dispatch(name, args) {
+		return r
 	}
 
 	match name {
@@ -646,6 +654,39 @@ fn io_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			path := io_arg_str(args[0]) or { return none }
 			content := io_arg_str(args[1]) or { return none }
 			os.write_file(path, content) or { return io_os_err('write-file', path, err.msg()) }
+			return io_null()
+		}
+		'io-edit-file' {
+			// Surgical file edit (#93): read → replace-exactly → write. `from`
+			// MUST occur exactly once (else CXER2903, no write) — the in-CX
+			// equivalent of the harness Edit tool, so you don't drop to sed/awk.
+			// Needs BOTH read and write caps (gated here, not via the static
+			// lists, since it is the one primitive spanning both).
+			if d := cap_guard('read', 'edit-file') {
+				return d
+			}
+			if d := cap_guard('write', 'edit-file') {
+				return d
+			}
+			path := io_arg_str(args[0]) or { return none }
+			from := io_arg_str(args[1]) or { return none }
+			to := io_arg_str(args[2]) or { return none }
+			if !os.exists(path) {
+				return mk_err('cx-err:CXER3401', 'E_IO_NOT_FOUND: edit-file ${path}')
+			}
+			content := os.read_file(path) or { return io_os_err('edit-file', path, err.msg()) }
+			if !utf8_validate(content.bytes()) {
+				return mk_err('cx-err:CXER3400', 'E_IO_ENCODING_INVALID: edit-file ${path}: invalid UTF-8')
+			}
+			if from == '' {
+				return mk_err('cx-err:CXER2903', 'E_STRINGS_REPLACE_NOT_UNIQUE: edit-file requires a non-empty "from"')
+			}
+			cnt := rune_find_all(content, from).len
+			if cnt != 1 {
+				return mk_err('cx-err:CXER2903', 'E_STRINGS_REPLACE_NOT_UNIQUE: edit-file "from" must occur exactly once in ${path}, found ${cnt}')
+			}
+			edited := str_replace_n(content, from, to, 1)
+			os.write_file(path, edited) or { return io_os_err('edit-file', path, err.msg()) }
 			return io_null()
 		}
 		'io-write-file-bytes' {

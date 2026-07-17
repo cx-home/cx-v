@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 
 // process_pty_test.v — BEHAVIORAL conformance for §3.6 pseudo-terminal:
 // spawn-pty allocates a real pty (openpty + posix_spawn), attaches the child's
@@ -11,11 +12,7 @@ import os
 // master. The round-trip only works over a real pty master fd.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 fn write_tmp(name string, content string) string {

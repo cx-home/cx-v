@@ -33,10 +33,10 @@ the result (sequences in paren form, bools bare).
 [?lib 'cx-x/a2a-xap' :as ax]
 [?lib 'cx-stdlib/journal' :as journal]
 [?let [= $jr [$journal:open "mem://a2a" "tenant"]]
- [?let [= $_1 [$ax:record $jr "t1" "submitted"]]
-  [?let [= $_2 [$ax:record $jr "t1" "working"]]
-   [?let [= $_3 [$ax:record $jr "t1" "completed"]]
-    [$ax:lifecycle [$ax:history $jr 1 3]]]]]]
+ [= $_1 [$ax:record $jr "t1" "submitted"]]
+ [= $_2 [$ax:record $jr "t1" "working"]]
+ [= $_3 [$ax:record $jr "t1" "completed"]]
+ [$ax:lifecycle [$ax:history $jr 1 3]]]
 #]]
    [out-text [#
 ('submitted', 'working', 'completed')
@@ -50,10 +50,10 @@ the result (sequences in paren form, bools bare).
 [?lib 'cx-x/a2a-xap' :as ax]
 [?lib 'cx-stdlib/journal' :as journal]
 [?let [= $jr [$journal:open "mem://a2a" "tenant"]]
- [?let [= $_1 [$ax:record $jr "t1" "submitted"]]
-  [?let [= $_2 [$ax:record $jr "t1" "completed"]]
-   [?let [= $v [$journal:verify $jr {}]]
-    $v/@valid]]]]
+ [= $_1 [$ax:record $jr "t1" "submitted"]]
+ [= $_2 [$ax:record $jr "t1" "completed"]]
+ [?let [= $v [$journal:verify $jr {}]]
+  $v/@valid]]
 #]]
    [out-text [#
 true
@@ -95,9 +95,9 @@ true
 [?lib 'cx-x/a2a-xap' :as ax]
 [?lib 'cx-stdlib/crypto' :as crypto]
 [?let [= $kp [$crypto:ed25519-keypair]]
- [?let [= $agent [$ax:agent-did $kp/@public]]
-  [?let [= $grant [$ax:grant-credential $agent $kp/@private $agent [delegation d1 [capabilities [read]]] {id: "urn:a2a:grant:1" issued-at: 2026-06-16T12:00:00Z expires: 2026-06-16T13:00:00Z}]]
-   [$ax:grant-status $grant 2026-06-16T12:30:00Z]]]]
+ [= $agent [$ax:agent-did $kp/@public]]
+ [= $grant [$ax:grant-credential $agent $kp/@private $agent [delegation d1 [capabilities [read]]] {id: "urn:a2a:grant:1" issued-at: 2026-06-16T12:00:00Z expires: 2026-06-16T13:00:00Z}]]
+ [$ax:grant-status $grant 2026-06-16T12:30:00Z]]
 #]]
    [out-text [#
 'valid'
@@ -111,9 +111,9 @@ true
 [?lib 'cx-x/a2a-xap' :as ax]
 [?lib 'cx-stdlib/crypto' :as crypto]
 [?let [= $kp [$crypto:ed25519-keypair]]
- [?let [= $agent [$ax:agent-did $kp/@public]]
-  [?let [= $grant [$ax:grant-credential $agent $kp/@private $agent [delegation d1 [capabilities [read]]] {id: "urn:a2a:grant:2" issued-at: 2026-06-16T12:00:00Z expires: 2026-06-16T13:00:00Z}]]
-   [$ax:grant-status $grant 2026-06-16T14:00:00Z]]]]
+ [= $agent [$ax:agent-did $kp/@public]]
+ [= $grant [$ax:grant-credential $agent $kp/@private $agent [delegation d1 [capabilities [read]]] {id: "urn:a2a:grant:2" issued-at: 2026-06-16T12:00:00Z expires: 2026-06-16T13:00:00Z}]]
+ [$ax:grant-status $grant 2026-06-16T14:00:00Z]]
 #]]
    [out-text [#
 'expired'

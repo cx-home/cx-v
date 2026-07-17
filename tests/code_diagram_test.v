@@ -260,7 +260,7 @@ fn test_cfg_def_recursion_links_back_to_entry() {
 fn test_cfg_basic_block_composes_three_sequential_directives() {
 	// Three `[?let]` directives → one basic block node with 3 label
 	// lines.
-	src := "[?let [= \$a 1] [?let [= \$b 2] [?let [= \$c 3] \$c]]]"
+	src := "[?let [= \$a 1] [= \$b 2] [= \$c 3] \$c]"
 	// Note: the let-in-let-in shape parses as a single chain; this
 	// covers the "non-branching directives compose into one block"
 	// rule indirectly. We assert only that the emit produces a

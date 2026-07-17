@@ -51,18 +51,23 @@ import crypto.sha256
 
 // ── Structs ───────────────────────────────────────────────────────────────────
 
-// ResolverKind discriminates the three resolver shapes admitted by
+// ResolverKind discriminates the resolver shapes admitted by
 // `[?lib]` / grammar [150]:
 //   - file_path        : resolver string begins with `./`, `../`, or `/`
 //   - registered_name  : everything else (looked up in cx.lock)
 //   - https_url        : resolver string begins with `https://`
+//   - pkg_url          : resolver string begins with `pkg:` — a package
+//                        reference resolved through the bound registry with
+//                        the full distribution-spec §3 verify chain
+//                        (feature-distribution spec §6.2)
 //
-// `http://` is NOT a fourth kind — it is rejected at parse time per
+// `http://` is NOT a kind — it is rejected at parse time per
 // (insecure transport — `CXER0208`).
 pub enum ResolverKind {
 	file_path
 	registered_name
 	https_url
+	pkg_url
 }
 
 // resolver_kind_str returns the lowercase canonical string spelling
@@ -74,6 +79,7 @@ pub fn resolver_kind_str(k ResolverKind) string {
 		.file_path { return 'file' }
 		.registered_name { return 'registered' }
 		.https_url { return 'https' }
+		.pkg_url { return 'pkg' }
 	}
 }
 

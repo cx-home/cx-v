@@ -1,0 +1,25 @@
+[; #57 field-shape stressor: multi-reactor HTTP (DEFAULT reactor count — no
+   CX_HTTP_N override) + a busy ALLOCATING MAIN thread. This is the shape the
+   xap-marine field workload runs with a stock environment: [$http:serve]
+   non-blocking spawns the reactor threads, then the main thread keeps
+   evaluating an allocation-heavy loop (the in-process NMEA poll loop in the
+   field). Multi-mutator with DEFAULT env — no fixture covered it before,
+   which let "the worker UAF is opt-in-only" stand unchallenged.
+
+   CONTRACT: the main loop must still be RUNNING when the gate's aliveness
+   check fires (bind-wait + 3s wrk + slack, ~13s worst case) — the gate reads
+   "process gone" as a crash. The loop is therefore effectively unbounded
+   (outer repetitions, each discarding its inner pass's list so memory stays
+   bounded under real sweep); the gate's kill -9 ends the round. A single
+   fixed-length pass held this contract only by eval slowness: the #272
+   let-frame fix made the same loop ~12x faster and it finished BEFORE the
+   check — 15/15 false "crashes" with exit status 0. ]
+[?lib 'cx-stdlib/http' :as http]
+[?lib 'cx-stdlib/strings' :as s]
+[?def handler impure ($req)
+  [?let [= $base [$concat "row-" "data-" "payload-"]]
+   [?let [= $big [$s:repeat $base 400]]
+    [response status=200 [headers [header name="content-type" value="text/plain"]] [body $big]]]]]
+[$http:serve "tcp://127.0.0.1:9031" handler]
+[?for [in $o [$range 0 100000]]
+  [yield [?let [= $pass [?for [in $i [$range 0 150000]] [yield [?let [= $ba $i] [?let [= $bb $i] $i]]]]] $o]]]

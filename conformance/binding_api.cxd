@@ -155,7 +155,7 @@ doc.select_all("//user")
 [users [user id=1 active=true] [user id=2 active=false] [user id=3 active=true]]
 #]]
   [call [#
-doc.select_all("//user[@active=true]")
+doc.select_all("//user[= $_@active true]")
 #]]
   [out-text [#
 [user id=1 active=true]
@@ -260,7 +260,7 @@ doc.select("//user")
 [users [user id=1 name="Alice"]]
 #]]
   [call [#
-doc.modify("//user[@id=1]/@name", cx.Set("Alpha")).bytes()
+doc.modify("//user[= $_@id 1]/@name", cx.Set("Alpha")).bytes()
 #]]
   [out-text [#
 [users
@@ -274,7 +274,7 @@ doc.modify("//user[@id=1]/@name", cx.Set("Alpha")).bytes()
 [users [user id=1] [user id=2 banned=true] [user id=3]]
 #]]
   [call [#
-doc.modify("//user[@banned=true]", cx.Delete()).bytes()
+doc.modify("//user[= $_@banned true]", cx.Delete()).bytes()
 #]]
   [out-text [#
 [users
@@ -366,7 +366,7 @@ doc.modify("//section", cx.Prepend('[para "Lead."]')).bytes()
 [doc [item n=1] [item n=2]]
 #]]
   [call [#
-doc.modify("//item[@n=2]", cx.InsertBefore('[item n="1.5"]')).bytes()
+doc.modify("//item[= $_@n 2]", cx.InsertBefore('[item n="1.5"]')).bytes()
 #]]
   [out-text [#
 [doc
@@ -382,7 +382,7 @@ doc.modify("//item[@n=2]", cx.InsertBefore('[item n="1.5"]')).bytes()
 [doc [item n=1] [item n=2]]
 #]]
   [call [#
-doc.modify("//item[@n=1]", cx.InsertAfter('[item n="1.5"]')).bytes()
+doc.modify("//item[= $_@n 1]", cx.InsertAfter('[item n="1.5"]')).bytes()
 #]]
   [out-text [#
 [doc
@@ -596,7 +596,7 @@ doc.select("//user/@id").kind()
 [users [user id=1 name="Alice"] [user id=2 name="Bob"]]
 #]]
   [call [#
-doc.select("//user[@id=2]").attr("name")
+doc.select("//user[= $_@id 2]").attr("name")
 #]]
   [out-text [#
 "Bob"

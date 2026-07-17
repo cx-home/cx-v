@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 
 // lsp_semantic_comment_test.v — regression guard for `[; … ]` block-comment
 // dimming (cx-private). The LSP semantic-token tokenizer must emit COMMENT
@@ -15,11 +16,7 @@ import os
 const tt_comment = 7
 
 fn cx_bin() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // frame wraps a JSON-RPC body in an LSP `Content-Length` header.

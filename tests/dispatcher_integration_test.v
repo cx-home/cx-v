@@ -113,10 +113,10 @@ fn test_bridge_modify_no_match_returns_unchanged() {
 
 fn test_bridge_modify_predicate_focus_filters() {
 	// Z79g — Gap 1 closed: the path-aware bridge respects the
-	// `[@active=false]` predicate filter so only Bob is dropped.
+	// `[= $_@active false]` predicate filter so only Bob is dropped.
 	// Parity with the legacy dispatcher.
 	in_cx := '[users [user active=true [name Alice]] [user active=false [name Bob]]]'
-	program := '[?modify \$doc //user[@active=false] [delete]]'
+	program := '[?modify \$doc //user[= \$_@active false] [delete]]'
 	bridge_out := run_bridge_modify(in_cx, program) or {
 		assert false, 'modify bridge failed: ${err}'
 		return
@@ -125,6 +125,37 @@ fn test_bridge_modify_predicate_focus_filters() {
 	// Predicate honoured: Alice retained, Bob dropped.
 	assert bridge_out.contains('Alice'), 'bridge should keep Alice; got ${bridge_out}'
 	assert !bridge_out.contains('Bob'), 'bridge should drop Bob; got ${bridge_out}'
+}
+
+// ── [?modify] bridge — #471 outer-binding predicate declines ─────────────────
+//
+// The bridge's predicate filter (cxpath_eval.v filter_step_predicate)
+// evaluates against an EMPTY binding env: a focus predicate referencing any
+// binding beyond the reserved $_ / $_position / $_last set would identity-
+// pass every candidate — the #434 silent-wrong-answer class, bind-free
+// sibling #471. The bridge must DECLINE (return none) so the legacy
+// evaluator runs the predicate with full program-env access (bound outer
+// bindings filter; unbound ones raise CXER0001).
+
+fn test_bridge_modify_outer_binding_predicate_declines() {
+	in_cx := '[teams [team name=alpha [member id=1]] [team name=beta [member id=2]]]'
+	program := '[?modify \$doc //team/member[= \$qqq@name "alpha"] [set-attr flagged true]]'
+	if out := run_bridge_modify(in_cx, program) {
+		assert false, 'bridge must decline an outer-binding focus predicate (would identity-pass); got ${out}'
+	}
+}
+
+fn test_bridge_modify_reserved_bindings_still_take_bridge() {
+	// Regression pin: the reserved predicate bindings the standalone engine
+	// itself supplies do NOT trigger the #471 decline — plain predicates
+	// keep the fast bridge (see also test_bridge_modify_predicate_focus_filters).
+	in_cx := '[users [user active=true [name Alice]] [user active=false [name Bob]]]'
+	program := '[?modify \$doc //user[= \$_@active false] [set-attr checked true]]'
+	out := run_bridge_modify(in_cx, program) or {
+		assert false, 'bridge must accept a reserved-binding-only predicate: ${err}'
+		return
+	}
+	assert out.contains('Alice'), 'bridge output lost Alice: ${out}'
 }
 
 // ── [?match] bridge — coverage ───────────────────────────────────────────────

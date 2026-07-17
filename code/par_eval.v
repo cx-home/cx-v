@@ -1,6 +1,9 @@
 module code
 
 import cx
+import os
+import sync
+import runtime
 
 // ── Parallel map / reduce execution ─────────────────────
 //
@@ -48,38 +51,187 @@ struct ParResult {
 	value       cx.Node
 	err_code    string
 	err_message string
+	// err_cause carries EvalError.cause across the worker channel VERBATIM
+	// (§9.2 cause chains + the #348 err-guard passthrough both ride here);
+	// without it a worker error's attached err-value was silently dropped
+	// at the channel boundary and only code+message survived.
+	err_cause     cx.Node
+	err_cause_set bool
 }
 
-// par_map_worker is the V `spawn`'d body that evaluates one
-// `:using` closure call for `[?map ... :par]`. The state pointer is
-// shared with the enclosing env; the bindings/closures maps are
-// clones so worker-local binding rebinds don't race the parent.
-fn par_map_worker(closure Closure, item cx.Node, idx int, state_ptr &ProgramState,
-                  enclosing_bindings map[string]cx.Node,
-                  enclosing_closures map[string]Closure, ch chan ParResult) {
-	mut env := MatchEnv{
-		bindings:     enclosing_bindings.clone()
-		closures:     enclosing_closures.clone()
-		state:        unsafe { state_ptr }
-		anon_counter: 0
-		frame_pool:   &FramePool{} // fresh per-worker frame pool (#36); thread-local, no sharing
+// ── [par] width (#94) ───────────────────────────────────────────────────────
+//
+// `[par]` owns its degree of concurrency: `[par]` (default), `[par N]`, or
+// `[par max]`. Width = the MAX number of concurrent workers (a bounded pool),
+// not one thread per item. Default = min(4, ncpu) (the HTTP fan-out formula);
+// `max` = ncpu. An explicit N > 64×ncpu is a fail-loud sanity error (CXER0153),
+// never a silent clamp.
+
+// par_default_width is the unspecified-`[par]` worker bound: min(4, ncpu).
+fn par_default_width() int {
+	ncpu := runtime.nr_cpus()
+	w := if ncpu < 4 { ncpu } else { 4 }
+	return if w < 1 { 1 } else { w }
+}
+
+// resolve_par_width turns the parsed (width, is_max) into the actual worker
+// bound. width == 0 means unspecified (default); is_max means ncpu. An explicit
+// width must be ≥ 1 and ≤ 64×ncpu, else a loud error (no clamp).
+fn resolve_par_width(width int, is_max bool) !int {
+	if is_max {
+		n := runtime.nr_cpus()
+		return if n < 1 { 1 } else { n }
 	}
-	val := invoke_closure(closure, [item], mut env) or {
-		if err is EvalError {
-			ch <- ParResult{idx: idx, err_code: err.code, err_message: err.message}
-		} else {
-			ch <- ParResult{idx: idx, err_code: 'cx-err:CXER0001', err_message: err.msg()}
+	if width == 0 {
+		return par_default_width()
+	}
+	if width < 1 {
+		return EvalError{
+			code:    'cx-err:CXER0100'
+			message: '[par] width must be ≥ 1, got ${width}'
 		}
-		return
 	}
-	ch <- ParResult{idx: idx, value: val}
+	ncpu := runtime.nr_cpus()
+	cap := 64 * (if ncpu < 1 { 1 } else { ncpu })
+	if width > cap {
+		return EvalError{
+			code:    'cx-err:CXER0153'
+			message: 'E_PAR_WIDTH_TOO_LARGE: [par ${width}] exceeds the fail-loud cap of 64×ncpu (${cap}) — shard the work or lower the width; [par] never silently clamps'
+		}
+	}
+	return width
 }
 
-// par_map runs `closure` over each item in `items` in parallel.
-// Returns results in completion order when `ordered == false`, in
-// source order when `ordered == true`. Propagates the earliest-index
-// worker error if any worker raises.
-fn par_map(closure Closure, items []cx.Node, ordered bool, mut env MatchEnv) ![]cx.Node {
+// par_width_from_items reads the `[par …]` width off the clause's body items
+// for the map/reduce directive forms (the for-comprehension form carries it on
+// the parsed ProgramForClause instead). Returns (0,false) for a bare `[par]`
+// (→ default), (0,true) for `[par max]`, (N,false) for `[par N]` with N≥1.
+// An explicit non-positive / non-integer / non-`max` width, or more than one
+// width token, is a CXER0100 — matching the for-clause parser's edges.
+fn par_width_from_items(items []cx.ProgramNode, mut env MatchEnv) !(int, bool) {
+	if items.len == 0 {
+		return 0, false
+	}
+	if items.len > 1 {
+		return EvalError{
+			code:    'cx-err:CXER0100'
+			message: '[par] takes at most one width token, got ${items.len}'
+		}
+	}
+	v := eval_node(items[0], mut env)!
+	if v is cx.ScalarNode {
+		val := v.value
+		if val is i64 {
+			w := int(val)
+			if w < 1 {
+				return EvalError{
+					code:    'cx-err:CXER0100'
+					message: '[par] width must be ≥ 1, got ${w}'
+				}
+			}
+			return w, false
+		}
+		if val is string {
+			if val == 'max' {
+				return 0, true
+			}
+		}
+	}
+	if v is cx.TextNode {
+		if v.value == 'max' {
+			return 0, true
+		}
+	}
+	return EvalError{
+		code:    'cx-err:CXER0100'
+		message: '[par] width must be a positive integer or `max`'
+	}
+}
+
+// ParPeak instruments the worker pool: the peak number of simultaneously
+// in-flight workers. This is the AUTHORITATIVE parallelism gate (#94 §5) —
+// deterministic, unlike wall-clock timing. Workers bracket their actual work
+// (the `:using` body) with enter()/leave(); the driver reads `peak` after
+// draining and, under CX_PAR_PEAK, reports it on stderr for the conformance/V
+// tests to assert `peak ≤ W` and `peak == min(W, n)`.
+@[heap]
+struct ParPeak {
+mut:
+	lock &sync.Mutex = unsafe { nil }
+	cur  int
+	peak int
+}
+
+fn new_par_peak() &ParPeak {
+	return &ParPeak{
+		lock: sync.new_mutex()
+	}
+}
+
+fn (mut pp ParPeak) enter() {
+	pp.lock.lock()
+	pp.cur++
+	if pp.cur > pp.peak {
+		pp.peak = pp.cur
+	}
+	pp.lock.unlock()
+}
+
+fn (mut pp ParPeak) leave() {
+	pp.lock.lock()
+	pp.cur--
+	pp.lock.unlock()
+}
+
+// par_peak_report emits the instrumented peak-worker count when CX_PAR_PEAK is
+// set, so tests can assert the bound deterministically (the primary #94 gate).
+fn par_peak_report(form string, pp &ParPeak, width int, n int) {
+	if os.getenv('CX_PAR_PEAK') != '' {
+		eprintln('cx-par-peak: form=${form} width=${width} n=${n} peak=${pp.peak}')
+	}
+}
+
+// par_map_pool_worker is one worker in the bounded pool (#94): it pulls item
+// indices off the shared `work` channel until the channel is closed and
+// drained, evaluating the `:using` closure for each. Each item gets a private
+// MatchEnv clone (worker-local rebinds don't race the parent / sibling items);
+// the program-global &ProgramState is shared so resilience-state directives see
+// one instance (§10.2.7). enter()/leave() bracket the actual work so ParPeak
+// measures the true concurrency bound.
+fn par_map_pool_worker(closure Closure, items []cx.Node, state_ptr &ProgramState,
+                       enclosing_bindings map[string]cx.Node,
+                       enclosing_closures map[string]Closure, work chan int,
+                       ch chan ParResult, mut pp ParPeak) {
+	for {
+		idx := <-work or { break } // channel closed + drained → worker exits
+		mut env := MatchEnv{
+			bindings:     enclosing_bindings.clone()
+			closures:     enclosing_closures.clone()
+			state:        unsafe { state_ptr }
+			anon_counter: 0
+			frame_pool:   &FramePool{} // fresh per-call frame pool (#36); thread-local
+		}
+		pp.enter()
+		val := invoke_closure(closure, [items[idx]], mut env) or {
+			pp.leave()
+			if err is EvalError {
+				ch <- ParResult{idx: idx, err_code: err.code, err_message: err.message, err_cause: err.cause, err_cause_set: err.cause_set}
+			} else {
+				ch <- ParResult{idx: idx, err_code: 'cx-err:CXER0001', err_message: err.msg()}
+			}
+			continue
+		}
+		pp.leave()
+		ch <- ParResult{idx: idx, value: val}
+	}
+}
+
+// par_map runs `closure` over each item in `items` through a BOUNDED pool of at
+// most `width` workers (#94 — replaces the prior one-thread-per-item spawn).
+// Returns results in completion order when `ordered == false`, in source order
+// when `ordered == true`. Propagates the earliest-index worker error if any
+// worker raises.
+fn par_map(closure Closure, items []cx.Node, ordered bool, width int, mut env MatchEnv) ![]cx.Node {
 	n := items.len
 	if n == 0 {
 		return []cx.Node{}
@@ -95,16 +247,30 @@ fn par_map(closure Closure, items []cx.Node, ordered bool, mut env MatchEnv) ![]
 			seq << invoke_closure(closure, [item], mut env)!
 		}
 		_ = ordered
+		_ = width
 		return seq
 	}
+	// Pool size = min(width, n): never more workers than items.
+	mut w := if width < n { width } else { n }
+	if w < 1 {
+		w = 1
+	}
+	mut pp := new_par_peak()
+	work := chan int{cap: n}
 	ch := chan ParResult{cap: n}
-	for i, item in items {
-		spawn par_map_worker(closure, item, i, env.state, env.bindings, env.closures, ch)
+	for i in 0 .. n {
+		work <- i
+	}
+	work.close()
+	for _ in 0 .. w {
+		spawn par_map_pool_worker(closure, items, env.state, env.bindings, env.closures,
+			work, ch, mut pp)
 	}
 	mut received := []ParResult{cap: n}
 	for _ in 0 .. n {
 		received << <-ch
 	}
+	par_peak_report('map', pp, w, n)
 	// Surface the lowest-index error if any worker failed.
 	mut first_err_idx := -1
 	for r in received {
@@ -117,7 +283,7 @@ fn par_map(closure Closure, items []cx.Node, ordered bool, mut env MatchEnv) ![]
 	if first_err_idx >= 0 {
 		for r in received {
 			if r.idx == first_err_idx {
-				return EvalError{ code: r.err_code, message: r.err_message }
+				return EvalError{ code: r.err_code, message: r.err_message, cause: r.err_cause, cause_set: r.err_cause_set }
 			}
 		}
 	}
@@ -136,6 +302,172 @@ fn par_map(closure Closure, items []cx.Node, ordered bool, mut env MatchEnv) ![]
 	return out
 }
 
+// ── for-par (#94 Stage 2) ────────────────────────────────────────────────────
+//
+// `[?for … [par]]` parallelizes the OUTERMOST generator: its items are
+// distributed across a bounded pool of `width` workers, and each worker runs the
+// DOWNSTREAM clause pipeline (where / let / nested generators / yield) for its
+// item, producing that item's yield list. The per-item lists are concatenated in
+// source order (`[ordered]`) or completion order (default). Inner generators run
+// sequentially within the worker — only the outermost loop is parallel, per
+// spec §7.3. The caller (eval_for_comp) post-applies take/drop/limit on the
+// assembled list and only takes this path when it is semantics-safe (no
+// order-by/group-by, no takewhile/dropwhile, a materialised sequence source, and
+// no `$_position` reference) — otherwise it falls back to the sequential walk.
+
+// ParListResult is the per-item outcome for for-par: a worker yields a LIST of
+// nodes (an item may yield zero, one, or many), not a single value.
+struct ParListResult {
+	idx         int
+	values      []cx.Node
+	err_code    string
+	err_message string
+	// err_cause: see ParResult — cause survives the channel verbatim.
+	err_cause     cx.Node
+	err_cause_set bool
+}
+
+fn par_for_worker(clauses []cx.ProgramForClause, gen cx.ProgramForClause, gen_idx int,
+                  spec YieldSpec, state_ptr &ProgramState,
+                  enclosing_bindings map[string]cx.Node,
+                  enclosing_closures map[string]Closure, work chan int, items []cx.Node,
+                  ch chan ParListResult, mut pp ParPeak) {
+	for {
+		i := <-work or { break }
+		mut env := MatchEnv{
+			bindings:     enclosing_bindings.clone()
+			closures:     enclosing_closures.clone()
+			state:        unsafe { state_ptr }
+			anon_counter: 0
+			frame_pool:   &FramePool{}
+		}
+		// Bind the outermost generator's item (pattern-destructure or simple).
+		mut skip := false
+		if expr_pat := gen.expr {
+			if expr_pat is cx.ProgramPattern {
+				if matched := match_pattern(expr_pat, items[i]) {
+					for k, v in matched.bindings {
+						env.bindings[k] = v
+					}
+				} else {
+					// pattern mismatch → this item contributes nothing
+					skip = true
+				}
+			}
+		} else {
+			env.bindings[gen.bind] = items[i]
+		}
+		if skip {
+			ch <- ParListResult{idx: i, values: []cx.Node{}}
+			continue
+		}
+		// Fresh UNLIMITED limit state: take/drop/while are post-applied on the
+		// assembled list, so per-worker pipelines never short-circuit.
+		mut ls := ForLimitState{
+			remaining:      -1
+			drop_remaining: 0
+		}
+		mut local := []cx.Node{}
+		pp.enter()
+		run_for_clauses(clauses, gen_idx + 1, spec, mut env, mut local, mut ls) or {
+			pp.leave()
+			if err is EvalError {
+				ch <- ParListResult{idx: i, err_code: err.code, err_message: err.message, err_cause: err.cause, err_cause_set: err.cause_set}
+			} else {
+				ch <- ParListResult{idx: i, err_code: 'cx-err:CXER0001', err_message: err.msg()}
+			}
+			continue
+		}
+		pp.leave()
+		ch <- ParListResult{idx: i, values: local}
+	}
+}
+
+// par_for_run distributes `items` (the outermost generator's items) across a
+// bounded pool of `width` workers and concatenates the per-item yield lists.
+fn par_for_run(clauses []cx.ProgramForClause, gen cx.ProgramForClause, gen_idx int,
+               spec YieldSpec, items []cx.Node, ordered bool, width int, mut env MatchEnv) ![]cx.Node {
+	n := items.len
+	if n == 0 {
+		return []cx.Node{}
+	}
+	$if wasm32_emcc ? {
+		// No pthreads: sequential, but still correct (source order).
+		mut seq := []cx.Node{}
+		for it in items {
+			mut wenv := env.clone_frame_sharing_closures()
+			if expr_pat := gen.expr {
+				if expr_pat is cx.ProgramPattern {
+					matched := match_pattern(expr_pat, it) or { continue }
+					for k, v in matched.bindings {
+						wenv.bindings[k] = v
+					}
+				}
+			} else {
+				wenv.bindings[gen.bind] = it
+			}
+			mut ls := ForLimitState{
+				remaining:      -1
+				drop_remaining: 0
+			}
+			run_for_clauses(clauses, gen_idx + 1, spec, mut wenv, mut seq, mut ls)!
+		}
+		_ = ordered
+		_ = width
+		return seq
+	}
+	mut w := if width < n { width } else { n }
+	if w < 1 {
+		w = 1
+	}
+	mut pp := new_par_peak()
+	work := chan int{cap: n}
+	ch := chan ParListResult{cap: n}
+	for i in 0 .. n {
+		work <- i
+	}
+	work.close()
+	for _ in 0 .. w {
+		spawn par_for_worker(clauses, gen, gen_idx, spec, env.state, env.bindings,
+			env.closures, work, items, ch, mut pp)
+	}
+	mut received := []ParListResult{cap: n}
+	for _ in 0 .. n {
+		received << <-ch
+	}
+	par_peak_report('for', pp, w, n)
+	// earliest-index error wins (matches sequential first-failure semantics).
+	mut first_err_idx := -1
+	for r in received {
+		if r.err_message != '' && (first_err_idx < 0 || r.idx < first_err_idx) {
+			first_err_idx = r.idx
+		}
+	}
+	if first_err_idx >= 0 {
+		for r in received {
+			if r.idx == first_err_idx {
+				return EvalError{ code: r.err_code, message: r.err_message, cause: r.err_cause, cause_set: r.err_cause_set }
+			}
+		}
+	}
+	mut out := []cx.Node{}
+	if ordered {
+		mut by_idx := [][]cx.Node{len: n, init: []cx.Node{}}
+		for r in received {
+			by_idx[r.idx] = r.values
+		}
+		for lst in by_idx {
+			out << lst
+		}
+	} else {
+		// completion order
+		for r in received {
+			out << r.values
+		}
+	}
+	return out
+}
+
 // par_reduce runs the associative two-argument `closure` over `items`
 // using `init` as the identity. The implementation splits the work into K chunks
 // where K is bounded by `max_workers`; each chunk is folded left-to-
@@ -149,7 +481,7 @@ fn par_map(closure Closure, items []cx.Node, ordered bool, mut env MatchEnv) ![]
 // `:init` MUST be the identity for `:using` per the §8.10.6
 // associative contract; we use it both as the per-chunk seed and as
 // the combine seed.
-fn par_reduce(closure Closure, items []cx.Node, init cx.Node, mut env MatchEnv) !cx.Node {
+fn par_reduce(closure Closure, items []cx.Node, init cx.Node, width int, mut env MatchEnv) !cx.Node {
 	n := items.len
 	if n == 0 {
 		return init
@@ -161,16 +493,17 @@ fn par_reduce(closure Closure, items []cx.Node, init cx.Node, mut env MatchEnv) 
 		for item in items {
 			acc = invoke_closure(closure, [acc, item], mut env)!
 		}
+		_ = width
 		return acc
 	}
-	// Pick chunk count: one chunk per item up to a small ceiling so
-	// we don't spawn 100k threads for a 100k-item input. The demo
-	// workloads are tiny; the cap is generous.
-	max_workers := 32
-	mut k := if n < max_workers { n } else { max_workers }
+	// Chunk count = min(n, width) (#94 — the bounded `[par]` worker count;
+	// was a magic 32). Each chunk is one worker; the partials combine on the
+	// caller. Associativity makes the result independent of the split (§8.10.6).
+	mut k := if n < width { n } else { width }
 	if k < 1 {
 		k = 1
 	}
+	mut pp := new_par_peak()
 	chunk_size := (n + k - 1) / k
 	ch := chan ParResult{cap: k}
 	mut spawned := 0
@@ -185,13 +518,14 @@ fn par_reduce(closure Closure, items []cx.Node, init cx.Node, mut env MatchEnv) 
 		}
 		chunk := items[start..end].clone()
 		spawn par_reduce_chunk_worker(closure, chunk, init, ci, env.state,
-			env.bindings, env.closures, ch)
+			env.bindings, env.closures, ch, mut pp)
 		spawned++
 	}
 	mut received := []ParResult{cap: spawned}
 	for _ in 0 .. spawned {
 		received << <-ch
 	}
+	par_peak_report('reduce', pp, k, n)
 	mut first_err_idx := -1
 	for r in received {
 		if r.err_message != '' && (first_err_idx < 0 || r.idx < first_err_idx) {
@@ -201,7 +535,7 @@ fn par_reduce(closure Closure, items []cx.Node, init cx.Node, mut env MatchEnv) 
 	if first_err_idx >= 0 {
 		for r in received {
 			if r.idx == first_err_idx {
-				return EvalError{ code: r.err_code, message: r.err_message }
+				return EvalError{ code: r.err_code, message: r.err_message, cause: r.err_cause, cause_set: r.err_cause_set }
 			}
 		}
 	}
@@ -228,7 +562,7 @@ fn par_reduce(closure Closure, items []cx.Node, init cx.Node, mut env MatchEnv) 
 // `:par` arm of the streaming reduce-over-range fast-path (lever 1): a
 // parallel reduce over a multi-million range never materialises the range,
 // unlike the items-array path par_reduce takes.
-fn par_reduce_range(closure Closure, start i64, end i64, step i64, init cx.Node, mut env MatchEnv) !cx.Node {
+fn par_reduce_range(closure Closure, start i64, end i64, step i64, init cx.Node, width int, mut env MatchEnv) !cx.Node {
 	mut count := i64(0)
 	if step > 0 {
 		if end >= start {
@@ -257,13 +591,15 @@ fn par_reduce_range(closure Closure, start i64, end i64, step i64, init cx.Node,
 			acc = invoke_closure(closure, argbuf, mut env)!
 			i += step
 		}
+		_ = width
 		return acc
 	}
-	max_workers := 32
-	mut k := if count < i64(max_workers) { int(count) } else { max_workers }
+	// Chunk count = min(count, width) (#94 bounded `[par]` workers; was 32).
+	mut k := if count < i64(width) { int(count) } else { width }
 	if k < 1 {
 		k = 1
 	}
+	mut pp := new_par_peak()
 	chunk := (count + i64(k) - 1) / i64(k) // indices per chunk
 	ch := chan ParResult{cap: k}
 	mut spawned := 0
@@ -276,13 +612,14 @@ fn par_reduce_range(closure Closure, start i64, end i64, step i64, init cx.Node,
 		c_start := start + idx_start * step
 		c_n := idx_end - idx_start
 		spawn par_reduce_range_worker(closure, c_start, step, c_n, init, ci, env.state,
-			env.bindings, env.closures, ch)
+			env.bindings, env.closures, ch, mut pp)
 		spawned++
 	}
 	mut received := []ParResult{cap: spawned}
 	for _ in 0 .. spawned {
 		received << <-ch
 	}
+	par_peak_report('reduce-range', pp, k, int(count))
 	mut first_err_idx := -1
 	for r in received {
 		if r.err_message != '' && (first_err_idx < 0 || r.idx < first_err_idx) {
@@ -292,7 +629,7 @@ fn par_reduce_range(closure Closure, start i64, end i64, step i64, init cx.Node,
 	if first_err_idx >= 0 {
 		for r in received {
 			if r.idx == first_err_idx {
-				return EvalError{ code: r.err_code, message: r.err_message }
+				return EvalError{ code: r.err_code, message: r.err_message, cause: r.err_cause, cause_set: r.err_cause_set }
 			}
 		}
 	}
@@ -313,13 +650,17 @@ fn par_reduce_range(closure Closure, start i64, end i64, step i64, init cx.Node,
 // but generates its inputs instead of receiving a materialised chunk.
 fn par_reduce_range_worker(closure Closure, c_start i64, step i64, c_n i64, init cx.Node, idx int,
 	state_ptr &ProgramState, enclosing_bindings map[string]cx.Node,
-	enclosing_closures map[string]Closure, ch chan ParResult) {
+	enclosing_closures map[string]Closure, ch chan ParResult, mut pp ParPeak) {
 	mut env := MatchEnv{
 		bindings:     enclosing_bindings.clone()
 		closures:     enclosing_closures.clone()
 		state:        unsafe { state_ptr }
 		anon_counter: 0
 		frame_pool:   &FramePool{} // fresh per-worker frame pool (#36); thread-local, no sharing
+	}
+	pp.enter()
+	defer {
+		pp.leave()
 	}
 	mut acc := init
 	mut argbuf := [init, init]
@@ -370,6 +711,8 @@ pub fn eval_map_directive_streamed(d cx.ProgramDirective, mut env MatchEnv, mut 
 	mut have_using := false
 	mut par_flag := false
 	mut ordered_flag := false
+	mut par_width := 0
+	mut par_max := false
 	mut have_source := false
 	for slot in d.slots {
 		if slot.kind == .labeled {
@@ -386,6 +729,27 @@ pub fn eval_map_directive_streamed(d cx.ProgramDirective, mut env MatchEnv, mut 
 				}
 			}
 			continue
+		}
+		v := slot.value
+		if v is cx.ProgramLiteral && v.kind == .cx_element {
+			match v.name {
+				'using' {
+					using_slot = if v.items.len == 1 {
+						v.items[0]
+					} else {
+						cx.ProgramNode(cx.ProgramLiteral{ kind: .block, items: v.items, pos: v.pos })
+					}
+					have_using = true
+					continue
+				}
+				'par' {
+					par_flag = true
+					par_width, par_max = par_width_from_items(v.items, mut env)!
+					continue
+				}
+				'ordered' { ordered_flag = true; continue }
+				else {}
+			}
 		}
 		if have_source {
 			return EvalError{ code: 'cx-err:CXER0100',
@@ -411,7 +775,8 @@ pub fn eval_map_directive_streamed(d cx.ProgramDirective, mut env MatchEnv, mut 
 	}
 	items := iterate(source_val)
 	if par_flag {
-		par_map_streamed(closure, items, ordered_flag, mut env, mut ctx)!
+		width := resolve_par_width(par_width, par_max)!
+		par_map_streamed(closure, items, ordered_flag, width, mut env, mut ctx)!
 		return
 	}
 	// Sequential: emit one per iteration; each completes before the
@@ -423,12 +788,11 @@ pub fn eval_map_directive_streamed(d cx.ProgramDirective, mut env MatchEnv, mut 
 	}
 }
 
-// par_map_streamed fans workers out via `par_map_worker` and emits
-// results as they arrive on the completion channel. Unordered: each
-// result emitted in completion order. Ordered: buffer until all
-// arrive, then emit in source order. Errors abort + propagate the
-// lowest-index failure.
-fn par_map_streamed(closure Closure, items []cx.Node, ordered bool,
+// par_map_streamed fans workers out through a BOUNDED pool of `width` workers
+// (#94) and emits results as they arrive on the completion channel. Unordered:
+// each result emitted in completion order. Ordered: buffer until all arrive,
+// then emit in source order. Errors abort + propagate the lowest-index failure.
+fn par_map_streamed(closure Closure, items []cx.Node, ordered bool, width int,
                     mut env MatchEnv, mut ctx StreamCtx) ! {
 	n := items.len
 	if n == 0 {
@@ -439,6 +803,7 @@ fn par_map_streamed(closure Closure, items []cx.Node, ordered bool,
 	// completes (visible cadence under [?sleep DUR] in the body).
 	$if wasm32_emcc ? {
 		_ = ordered
+		_ = width
 		for item in items {
 			v := invoke_closure(closure, [item], mut env)!
 			ctx.emit_node(v)!
@@ -446,15 +811,27 @@ fn par_map_streamed(closure Closure, items []cx.Node, ordered bool,
 		}
 		return
 	}
+	mut w := if width < n { width } else { n }
+	if w < 1 {
+		w = 1
+	}
+	mut pp := new_par_peak()
+	work := chan int{cap: n}
 	ch := chan ParResult{cap: n}
-	for i, item in items {
-		spawn par_map_worker(closure, item, i, env.state, env.bindings, env.closures, ch)
+	for i in 0 .. n {
+		work <- i
+	}
+	work.close()
+	for _ in 0 .. w {
+		spawn par_map_pool_worker(closure, items, env.state, env.bindings, env.closures,
+			work, ch, mut pp)
 	}
 	mut received := []ParResult{cap: n}
 	if ordered {
 		for _ in 0 .. n {
 			received << <-ch
 		}
+		par_peak_report('map-streamed', pp, w, n)
 		mut first_err_idx := -1
 		for r in received {
 			if r.err_message != '' && (first_err_idx < 0 || r.idx < first_err_idx) {
@@ -464,7 +841,7 @@ fn par_map_streamed(closure Closure, items []cx.Node, ordered bool,
 		if first_err_idx >= 0 {
 			for r in received {
 				if r.idx == first_err_idx {
-					return EvalError{ code: r.err_code, message: r.err_message }
+					return EvalError{ code: r.err_code, message: r.err_message, cause: r.err_cause, cause_set: r.err_cause_set }
 				}
 			}
 		}
@@ -479,26 +856,35 @@ fn par_map_streamed(closure Closure, items []cx.Node, ordered bool,
 		return
 	}
 	// Unordered: stream as each worker completes.
+	mut emitted := 0
 	for _ in 0 .. n {
 		r := <-ch
 		if r.err_message != '' {
-			return EvalError{ code: r.err_code, message: r.err_message }
+			return EvalError{ code: r.err_code, message: r.err_message, cause: r.err_cause, cause_set: r.err_cause_set }
 		}
 		ctx.emit_node(r.value)!
 		ctx.flush()!
+		emitted++
+		if emitted == n {
+			par_peak_report('map-streamed', pp, w, n)
+		}
 	}
 }
 
 fn par_reduce_chunk_worker(closure Closure, chunk []cx.Node, init cx.Node, idx int,
                            state_ptr &ProgramState,
                            enclosing_bindings map[string]cx.Node,
-                           enclosing_closures map[string]Closure, ch chan ParResult) {
+                           enclosing_closures map[string]Closure, ch chan ParResult, mut pp ParPeak) {
 	mut env := MatchEnv{
 		bindings:     enclosing_bindings.clone()
 		closures:     enclosing_closures.clone()
 		state:        unsafe { state_ptr }
 		anon_counter: 0
 		frame_pool:   &FramePool{} // fresh per-worker frame pool (#36); thread-local, no sharing
+	}
+	pp.enter()
+	defer {
+		pp.leave()
 	}
 	mut acc := init
 	for item in chunk {

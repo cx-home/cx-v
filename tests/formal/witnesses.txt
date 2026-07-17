@@ -89,6 +89,8 @@ GR-EMPTY-ITEM-2	data	err	[1,,2]	<cx:err code="CXER0100" offset="3"/>
 GR-EMPTY-ITEM-3	data	err	[,1]	<cx:err code="CXER0100" offset="1"/>
 GR-UNTERMINATED-1	data	err	[p hi	<cx:err code="CXER0100" offset="0"/>
 GR-STRAY-CLOSE-1	data	err	]	<cx:err code="CXER0100" offset="0"/>
+GR-STRAY-CLOSE-2	data	err	[a 1] ]	<cx:err code="CXER0100" offset="6"/>
+GR-STRAY-CLOSE-3	data	err	[?x 1] ]	<cx:err code="CXER0100" offset="7"/>
 GR-NODE-ATTR-1	data	err	[n a=[x]]	<cx:err code="E211" offset="5"/>
 GR-RESERVED-PREFIX-1	data	err	[cx:foo 1]	<cx:err code="E210" offset="1"/>
 GR-RESERVED-PREFIX-2	data	err	[cx:int 1]	<cx:err code="E210" offset="1"/>

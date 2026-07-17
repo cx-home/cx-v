@@ -188,27 +188,47 @@ fn test_unbound_variable_raises() {
 // ── Calls ───────────────────────────────────────────────────────────────────
 
 fn test_eval_count_builtin() {
-	assert s_int(run('count((1, 2, 3))'), 3)
+	assert s_int(run('[$count (1, 2, 3)]'), 3)
 }
 
 fn test_eval_empty_builtin_true() {
-	assert s_bool(run('empty(())'), true)
+	assert s_bool(run('[$empty ()]'), true)
 }
 
 fn test_eval_empty_builtin_false() {
-	assert s_bool(run('empty((1, 2))'), false)
+	assert s_bool(run('[$empty (1, 2)]'), false)
 }
 
 fn test_eval_upper_builtin() {
-	assert s_string(run("upper('hi')"), 'HI')
+	assert s_string(run("[\$upper 'hi']"), 'HI')
 }
 
 fn test_eval_eq_builtin_true() {
-	assert s_bool(run("eq('a', 'a')"), true)
+	assert s_bool(run("[\$eq 'a' 'a']"), true)
 }
 
 fn test_eval_eq_builtin_false() {
-	assert s_bool(run("eq('a', 'b')"), false)
+	assert s_bool(run("[\$eq 'a' 'b']"), false)
+}
+
+// ── Retired paren-call surface (#110) ───────────────────────────────────────
+// Paren-calls are retired EVERYWHERE — `name(args)` and `$f(x)` must fail at
+// parse with a targeted 'retired' diagnostic pointing at head-dispatch.
+
+fn test_paren_call_is_retired_at_parse() {
+	cx.parse_program('count((1, 2, 3))') or {
+		assert err.msg().contains('retired')
+		return
+	}
+	assert false, 'paren-call `count(...)` must no longer parse'
+}
+
+fn test_binding_paren_call_is_retired_at_parse() {
+	cx.parse_program('[?let [= $f [?fn $x $x]] $f(1)]') or {
+		assert err.msg().contains('retired')
+		return
+	}
+	assert false, 'binding paren-call `$f(...)` must no longer parse'
 }
 
 // ── Pipe ────────────────────────────────────────────────────────────────────
@@ -241,7 +261,7 @@ fn test_let_simple() {
 }
 
 fn test_let_chained() {
-	r := run('[?let [= $a 10] [?let [= $b 32] count(($a, $b))]]')
+	r := run('[?let [= $a 10] [?let [= $b 32] [$count ($a, $b)]]]')
 	assert s_int(r, 2)
 }
 
@@ -256,7 +276,7 @@ fn test_for_basic() {
 }
 
 fn test_for_with_where() {
-	r := run("[?for [in \$x (1, 2, 3)] [where eq(\$x, 2)] [yield \$x]]")
+	r := run("[?for [in \$x (1, 2, 3)] [where [\$eq \$x 2]] [yield \$x]]")
 	if r is cx.Element {
 		assert r.items.len == 1
 		assert s_int(r.items[0], 2)
@@ -292,7 +312,7 @@ fn test_find_with_attribute_predicate() {
 // `[?try]` is no longer in the §4.1 registry — handling unifies on
 // [?match]/[?else]/[?fallback]/[?with-error-hook] + ?/!. The unknown-
 // directive rejection is pinned here; the recovery semantics live in the
-// [?match] tests + conformance sap-try-01/02 negatives.
+// [?match] tests + conformance program-sap-try-01/02 negatives.
 
 fn test_try_is_retired_unknown_directive() {
 	cx.parse_program("[?try 'x' [catch \$e \$e]]") or {
@@ -304,7 +324,7 @@ fn test_try_is_retired_unknown_directive() {
 
 fn test_match_catches_err_value() {
 	// The migrated surface: an err-value scrutinee reaches the arms.
-	r := run('[?match notabuiltin() [case [err \$e] \$e] [else ok]]')
+	r := run('[?match [\$notabuiltin] [case [err \$e] \$e] [else ok]]')
 	if r is cx.Element {
 		assert r.name == 'err' // result envelope
 	} else { assert false }
@@ -315,12 +335,12 @@ fn test_match_catches_err_value() {
 fn test_fn_creates_callable() {
 	// [?fn] returns a closure sentinel; binding it via [?let] and
 	// invoking by binding-call should evaluate the body with the arg.
-	r := run('[?let [= $double [?fn $x count(($x, $x))]] $double(42)]')
+	r := run('[?let [= $double [?fn $x [$count ($x, $x)]]] [$double 42]]')
 	assert s_int(r, 2)
 }
 
 fn test_fn_paren_param_list() {
-	r := run('[?let [= $add [?fn ($a $b) count(($a, $b))]] $add(1, 2)]')
+	r := run('[?let [= $add [?fn ($a $b) [$count ($a, $b)]]] [$add 1 2]]')
 	assert s_int(r, 2)
 }
 
@@ -330,7 +350,7 @@ fn test_def_named_function() {
 	// Multi-statement programs evaluate each top-level expression in
 	// order, sharing the env (so [?def] registers `greeting` for
 	// subsequent calls), and return the LAST expression's value.
-	r := run("[?def greeting ($who) upper(\$who)] greeting('alice')")
+	r := run("[?def greeting ($who) [\$upper \$who]] [\$greeting 'alice']")
 	if !s_string(r, 'ALICE') {
 		eprintln('def call result was: ${r}')
 	}
@@ -338,7 +358,7 @@ fn test_def_named_function() {
 }
 
 fn test_fn_closure_captures_lexical_env() {
-	r := run("[?let [= \$base 10] [?let [= \$add-base [?fn \$x count((\$base, \$x))]] \$add-base(5)]]")
+	r := run("[?let [= \$base 10] [= \$add-base [?fn \$x [\$count (\$base, \$x)]]] [\$add-base 5]]")
 	assert s_int(r, 2)
 }
 
@@ -348,7 +368,7 @@ fn test_bang_postfix_panics_on_err_result() {
 	// no-such-builtin yields an [err] value; ! postfix should escalate
 	// to a hard EvalError.
 	mut env := code.new_env()
-	prog := cx.parse_program('notabuiltin()!') or { panic(err) }
+	prog := cx.parse_program('[$notabuiltin]!') or { panic(err) }
 	code.eval(prog.body, mut env) or {
 		assert err is code.EvalError
 		return
@@ -358,7 +378,7 @@ fn test_bang_postfix_panics_on_err_result() {
 
 fn test_qmark_postfix_propagates_err() {
 	// ? postfix is documentation-only — return value flows through.
-	r := run("notabuiltin()?")
+	r := run('[$notabuiltin]?')
 	if r is cx.Element {
 		assert r.name == 'err' // result envelope
 	} else { assert false }
@@ -366,7 +386,7 @@ fn test_qmark_postfix_propagates_err() {
 
 fn test_bang_postfix_passthrough_on_ok() {
 	// ! on a successful call returns the value verbatim.
-	r := run("upper('hi')!")
+	r := run("[\$upper 'hi']!")
 	assert s_string(r, 'HI')
 }
 
@@ -378,13 +398,13 @@ fn test_fallback_primary_success() {
 }
 
 fn test_fallback_primary_err_secondary_value() {
-	r := run("[?fallback notabuiltin() [recover-with 'recovered']]")
+	r := run("[?fallback [\$notabuiltin] [recover-with 'recovered']]")
 	assert s_string(r, 'recovered')
 }
 
 fn test_fallback_both_err_returns_secondary_err() {
 	// Both bodies err → fallback does NOT wrap the secondary err per spec §10.2.4.
-	r := run("[?fallback notabuiltin() [recover-with another-bad-name()]]")
+	r := run("[?fallback [\$notabuiltin] [recover-with [\$another-bad-name]]]")
 	if r is cx.Element {
 		assert r.name == 'err' // result envelope
 	} else { assert false }
@@ -396,7 +416,7 @@ fn test_retry_happy_path_first_attempt() {
 }
 
 fn test_retry_exhausts_to_cxer0140() {
-	r := run("[?retry max=3 notabuiltin()]")
+	r := run('[?retry max=3 [$notabuiltin]]')
 	if r is cx.Element {
 		assert r.name == 'err' // result envelope
 		// :code / :attempts now stored as __cx_slot:* children
@@ -447,7 +467,7 @@ fn test_cb_closed_passthrough() {
 
 fn test_cb_trips_open_after_failures() {
 	// Trigger trip with :min-samples=1, then second call returns CXER0150.
-	r := run("[?let [= \$a [?circuit-breaker threshold=0.0 window=60s reset=30s min-samples=1 name='cb-test' [?test-always-err]]] [?let [= \$b [?circuit-breaker threshold=0.0 window=60s reset=30s min-samples=1 name='cb-test' [?test-always-err]]] count((\$a, \$b))]]")
+	r := run("[?let [= \$a [?circuit-breaker threshold=0.0 window=60s reset=30s min-samples=1 name='cb-test' [?test-always-err]]] [= \$b [?circuit-breaker threshold=0.0 window=60s reset=30s min-samples=1 name='cb-test' [?test-always-err]]] [\$count (\$a, \$b)]]")
 	assert s_int(r, 2)
 }
 
@@ -467,7 +487,7 @@ fn test_rate_limit_under() {
 }
 
 fn test_rate_limit_over_returns_cxer0151() {
-	r := run("[?let [= \$a [?rate-limit max=1 per=1s name='rl-t' 'a']] [?let [= \$b [?rate-limit max=1 per=1s name='rl-t' 'b']] \$b]]")
+	r := run("[?let [= \$a [?rate-limit max=1 per=1s name='rl-t' 'a']] [= \$b [?rate-limit max=1 per=1s name='rl-t' 'b']] \$b]")
 	if r is cx.Element {
 		assert r.name == 'err' // result envelope
 		assert slot_string(r, 'code') == 'cx-err:CXER0151'
@@ -475,7 +495,7 @@ fn test_rate_limit_over_returns_cxer0151() {
 }
 
 fn test_rate_limit_replenishes_after_window() {
-	r := run("[?let [= \$a [?rate-limit max=1 per=1s name='rl-r' 'a']] [?let [= \$_ [?test-clock advance=1100ms]] [?let [= \$c [?rate-limit max=1 per=1s name='rl-r' 'c']] \$c]]]")
+	r := run("[?let [= \$a [?rate-limit max=1 per=1s name='rl-r' 'a']] [= \$_ [?test-clock advance=1100ms]] [= \$c [?rate-limit max=1 per=1s name='rl-r' 'c']] \$c]")
 	assert s_string(r, 'c')
 }
 
@@ -506,12 +526,12 @@ fn test_sleep_advances_mock_clock() {
 // ── Concurrency: channels + workers + select (Phase 3.9) ────────────────────
 
 fn test_channel_send_receive() {
-	r := run("[?let [= \$ch [?channel name='c1' buffer=1]] [?let [= \$_ [?send 'hello' to=\$ch]] [?receive from=\$ch]]]")
+	r := run("[?let [= \$ch [?channel name='c1' buffer=1]] [= \$_ [?send 'hello' to=\$ch]] [?receive from=\$ch]]")
 	assert s_string(r, 'hello')
 }
 
 fn test_channel_send_to_closed() {
-	r := run("[?let [= \$ch [?channel name='c2' buffer=1]] [?let [= \$_ [?close \$ch]] [?send 'x' to=\$ch]]]")
+	r := run("[?let [= \$ch [?channel name='c2' buffer=1]] [= \$_ [?close \$ch]] [?send 'x' to=\$ch]]")
 	if r is cx.Element {
 		// result envelope: errors are [result status=err …].
 		assert r.name == 'err'
@@ -520,7 +540,7 @@ fn test_channel_send_to_closed() {
 }
 
 fn test_channel_double_close() {
-	r := run("[?let [= \$ch [?channel name='c3' buffer=1]] [?let [= \$_ [?close \$ch]] [?close \$ch]]]")
+	r := run("[?let [= \$ch [?channel name='c3' buffer=1]] [= \$_ [?close \$ch]] [?close \$ch]]")
 	if r is cx.Element {
 		assert slot_string(r, 'code') == 'cx-err:CXER0203'
 	} else { assert false }
@@ -534,7 +554,7 @@ fn test_try_receive_empty_timeout() {
 }
 
 fn test_try_send_buffer_full() {
-	r := run("[?let [= \$ch [?channel name='c5' buffer=1]] [?let [= \$_ [?send 'first' to=\$ch]] [?try-send 'second' to=\$ch timeout=50ms]]]")
+	r := run("[?let [= \$ch [?channel name='c5' buffer=1]] [= \$_ [?send 'first' to=\$ch]] [?try-send 'second' to=\$ch timeout=50ms]]")
 	if r is cx.Element {
 		assert slot_string(r, 'code') == 'cx-err:CXER0201'
 	} else { assert false }
@@ -553,10 +573,26 @@ fn test_worker_handle_lookup_miss() {
 }
 
 fn test_worker_cancel() {
-	r := run("[?let [= \$w [?worker name='w-cancel' [body 'done']]] [?let [= \$_ [?cancel [worker \$w]]] [?wait-for [worker \$w]]]]")
+	// The body sleeps long enough that [?cancel] deterministically lands while
+	// the worker is still running (workers are concurrent by default,
+	// §10.4.6); [?wait-for] then surfaces WORKER_CANCELLED. The old fixture
+	// body completed instantly and relied on the retired synchronous
+	// substrate's cancel-after-done stamp — under §10.5.4 request semantics a
+	// completed worker keeps its terminal value.
+	r := run("[?let [= \$w [?worker name='w-cancel' [?sleep 2s]]] [= \$_ [?cancel [worker \$w]]] [?wait-for [worker \$w]]]")
 	if r is cx.Element {
 		assert slot_string(r, 'code') == 'cx-err:CXER0221'
 	} else { assert false }
+}
+
+// §10.5.4: cancelling an already-completed worker is a no-op — [?wait-for]
+// returns the terminal value, not WORKER_CANCELLED. (Sync escape hatch makes
+// completion-before-cancel deterministic.)
+fn test_worker_cancel_after_done_keeps_result() {
+	os.setenv('CX_WORKER_THREADS', '0', true)
+	r := run("[?let [= \$w [?worker name='w-late-cancel' [body 'done']]] [= \$_ [?cancel [worker \$w]]] [?wait-for [worker \$w]]]")
+	os.setenv('CX_WORKER_THREADS', '', true)
+	assert s_string(r, 'done')
 }
 
 // ── IteratorNode foundation (W3a + W3b) ────────────────────────────
@@ -575,7 +611,7 @@ fn mk_int(i i64) cx.Node {
 	})
 }
 
-fn test_adr0041_iterator_range_materializes_via_iterate() {
+fn test_iterator_range_materializes_via_iterate() {
 	// `range(1, 5)` iterator — first iterate() pulls items into memo
 	// and returns the freshly-pulled list.
 	iter := cx.new_iterator(cx.IteratorSourceKind.iter_range,
@@ -594,7 +630,7 @@ fn test_adr0041_iterator_range_materializes_via_iterate() {
 	}
 }
 
-fn test_adr0041_iterator_renders_paren_comma_form() {
+fn test_iterator_renders_paren_comma_form() {
 	// Host-boundary render — `range(1, 5)` iterator renders as
 	// `(1, 2, 3, 4, 5)` matching SequenceNode's paren-comma form.
 	iter := cx.new_iterator(cx.IteratorSourceKind.iter_range,
@@ -605,7 +641,7 @@ fn test_adr0041_iterator_renders_paren_comma_form() {
 	assert rendered == '(1, 2, 3, 4, 5)'
 }
 
-fn test_adr0041_iterator_identity_equality_oq4() {
+fn test_iterator_identity_equality_oq4() {
 	// Two freshly-constructed iterators with identical sources compare
 	// UNEQUAL per OQ4 — identity is the backing heap allocation.
 	a := cx.new_iterator(cx.IteratorSourceKind.iter_range,
@@ -618,7 +654,7 @@ fn test_adr0041_iterator_identity_equality_oq4() {
 	assert code.nodes_equal_pub(a, a)
 }
 
-fn test_adr0041_iterator_memoization_on_repull() {
+fn test_iterator_memoization_on_repull() {
 	// Once exhausted, iterate() returns the memo as-is. The second
 	// pull MUST produce the same items as the first (memoization).
 	iter := cx.new_iterator(cx.IteratorSourceKind.iter_range,
@@ -632,7 +668,7 @@ fn test_adr0041_iterator_memoization_on_repull() {
 	}
 }
 
-fn test_adr0041_iterator_empty_range() {
+fn test_iterator_empty_range() {
 	// direction-step disagreement yields empty.
 	iter := cx.new_iterator(cx.IteratorSourceKind.iter_range,
 		[mk_int(5), mk_int(1)])  // start > end, default step 1
@@ -640,7 +676,7 @@ fn test_adr0041_iterator_empty_range() {
 	assert items.len == 0
 }
 
-fn test_adr0041_iterator_strided() {
+fn test_iterator_strided() {
 	// `range(start, end, step)` ships items inclusively
 	// of `end` when stride aligns.
 	iter := cx.new_iterator(cx.IteratorSourceKind.iter_range,
@@ -694,19 +730,20 @@ fn test_tco_accumulator_loop_returns_correct_value() {
 }
 
 // ── Concurrent [?worker] (#58, CX_WORKER_THREADS) ────────────────────────────
-// With the flag on, a [?worker] body runs on its own spawned V thread (so it
+// DEFAULT (§10.4.6): a [?worker] body runs on its own spawned V thread (so it
 // coexists with a blocking serve sibling) and [?wait-for] joins it via the
 // done spin-loop. A finite body must still return the correct terminal value.
 fn test_concurrent_worker_returns_result() {
-	os.setenv('CX_WORKER_THREADS', '1', true)
+	os.setenv('CX_WORKER_THREADS', '', true) // default env = concurrent
 	r := run('[?let [= \$wh [?worker name=w [+ 1 2]]] [?wait-for worker=\$wh]]')
-	os.setenv('CX_WORKER_THREADS', '', true) // reset before asserting
 	assert s_int(r, 3)
 }
 
-// Default (flag off): worker runs synchronously to completion; same result.
+// Escape hatch (CX_WORKER_THREADS=0): worker runs synchronously to
+// completion on the calling thread; same terminal value.
 fn test_synchronous_worker_returns_result() {
-	os.setenv('CX_WORKER_THREADS', '', true)
+	os.setenv('CX_WORKER_THREADS', '0', true)
 	r := run('[?let [= \$wh [?worker name=w2 [+ 10 5]]] [?wait-for worker=\$wh]]')
+	os.setenv('CX_WORKER_THREADS', '', true) // reset before asserting
 	assert s_int(r, 15)
 }

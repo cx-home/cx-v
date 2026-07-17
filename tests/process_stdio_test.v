@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 
 // process_stdio_test.v — BEHAVIORAL conformance for §2.4 child-stdio: a
 // spawned child's stdin/stdout/stderr accessors return REAL io-style handles
@@ -12,11 +13,7 @@ import os
 // accessors expose the live child fds through cx-stdlib/io.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 fn write_tmp(name string, content string) string {

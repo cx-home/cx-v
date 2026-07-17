@@ -27,6 +27,26 @@ fn test_yaml_sequence_imports_as_array() {
 		'YAML sequence must import as an Array, got: ${out}'
 }
 
+// #412: a block sequence of mappings (`- k: v` with continuation keys on the
+// following lines) imports each item as a complete Map — not a one-line
+// scalar with the remaining keys hoisted onto the parent and later items
+// dropped.
+fn test_yaml_block_seq_of_mappings() {
+	src := 'books:\n  - title: A\n    year: 1\n  - title: B\n    year: 2\n'
+	doc := cx.parse_yaml(src) or { panic('parse_yaml: ${err}') }
+	out := cx.emit_cx(doc)
+	assert out.contains('{title: A, year: 1}'), 'item 1 must keep all keys, got: ${out}'
+	assert out.contains('{title: B, year: 2}'), 'item 2 must not be dropped, got: ${out}'
+	assert !out.contains("'title: A'"), 'compact mapping must not import as a scalar: ${out}'
+}
+
+// #412 adjacent shape: `- - x` — a block sequence of block sequences.
+fn test_yaml_block_seq_of_seqs() {
+	doc := cx.parse_yaml('- - a\n  - b\n- - c\n') or { panic('parse_yaml: ${err}') }
+	out := cx.emit_cx(doc)
+	assert out.contains("[['a', 'b'], ['c']]"), 'seq of seqs must nest, got: ${out}'
+}
+
 // Cross-format: a YAML mapping and the equivalent JSON import to the SAME
 // canonical CX (the shared lossless map model — resolves #4's divergence).
 fn test_yaml_json_import_agree() {

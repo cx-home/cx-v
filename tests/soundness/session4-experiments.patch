@@ -1,0 +1,216 @@
+diff --git a/vlib/builtin/map.v b/vlib/builtin/map.v
+index 378beff84a..e75867c42e 100644
+--- a/vlib/builtin/map.v
++++ b/vlib/builtin/map.v
+@@ -151,6 +151,16 @@ fn (mut d DenseArray) expand() int {
+ 		unsafe {
+ 			d.keys = realloc_data(d.keys, old_key_size, d.key_bytes * d.cap)
+ 			d.values = realloc_data(d.values, old_value_size, d.value_bytes * d.cap)
++			$if vgc_cloneroots ? {
++				// #145: a map GROW reallocates the backing arrays OUTSIDE map.clone(),
++				// producing NEW buffers the clone-site hook never sees. Register them so
++				// the live per-request env-clone maps that GAIN bindings after cloning
++				// (every [?let] add) keep their key/value backings rooted. String-keyed
++				// maps only (key_bytes == sizeof(string)); other maps' keys are noscan.
++				if d.key_bytes == int(sizeof(string)) {
++					vgc_cloneroot_register(usize(d.keys))
++				}
++			}
+ 			if d.deletes != 0 {
+ 				d.all_deleted = realloc_data(d.all_deleted, old_cap, d.cap)
+ 				vmemset(voidptr(d.all_deleted + d.len), 0, d.cap - d.len)
+@@ -925,6 +935,21 @@ pub fn (m &map) clone() map {
+ 		free_fn:         m.free_fn
+ 	}
+ 	unsafe { vmemcpy(res.metas, m.metas, metasize) }
++	$if vgc_cloneroots ? {
++		// #145: root the source AND destination backing arrays of this string-keyed
++		// map clone into this thread's non-resetting clone-root ring, BEFORE the key
++		// clone loop reads m's keys. This keeps the live per-request env-clone maps
++		// (renv + child envs + closures, all reached via env.clone -> map.clone)
++		// reachable across the GCs that fire mid-request, closing the multi-reactor
++		// sweep-while-live root miss (bf1 fires reading a swept SOURCE key here).
++		if m.has_string_keys {
++			// Root ONLY the KEYS backing arrays (the bf1 victim is key char buffers).
++			// Rooting the VALUES arrays retained whole cx.Node value subtrees ->
++			// over-retention -> heap growth -> ~2.4x throughput collapse (masking).
++			vgc_cloneroot_register(usize(m.key_values.keys))
++			vgc_cloneroot_register(usize(res.key_values.keys))
++		}
++	}
+ 	if !m.has_string_keys {
+ 		return res
+ 	}
+diff --git a/vlib/builtin/vgc_d_vgc.c.v b/vlib/builtin/vgc_d_vgc.c.v
+index d19e58604e..5f8da8470e 100644
+--- a/vlib/builtin/vgc_d_vgc.c.v
++++ b/vlib/builtin/vgc_d_vgc.c.v
+@@ -148,6 +148,14 @@ mut:
+ 	// alloc_bits / mark_bits point into these buffers; the span struct never moves.
+ 	alloc_buf [136]u8
+ 	mark_buf  [136]u8
++	// #145 deferred-sweep grace bitmap (-d vgc_sweepdrag only): bit N = object N was
++	// allocated-but-unmarked at the PREVIOUS sweep and given a one-cycle grace. An
++	// object is freed only when unmarked for TWO consecutive cycles, so a live object
++	// whose sole holder was transiently in a register the conservative scan missed
++	// (the multi-reactor root-miss race) survives — by the next cycle its holder is
++	// re-found and it is marked. Unused (always nil/zero) under the default build.
++	grace_bits &u8 = unsafe { nil }
++	grace_buf  [136]u8
+ }
+ 
+ // VGC_Cache is a per-thread allocation cache.
+@@ -971,6 +979,10 @@ fn vgc_span_init(mut span VGC_Span, class_idx u8, noscan bool) {
+ 		span.mark_bits = &span.mark_buf[0]
+ 		C.memset(span.alloc_bits, 0, bitmap_size)
+ 		C.memset(span.mark_bits, 0, bitmap_size)
++		$if vgc_sweepdrag ? {
++			span.grace_bits = &span.grace_buf[0]
++			C.memset(span.grace_bits, 0, bitmap_size)
++		}
+ 	}
+ 	// PUBLISH the span as live ONLY now that it is fully built (class/size/nelems +
+ 	// zeroed bitmaps). in_use is the "fully initialized" flag: the collector's
+@@ -1608,6 +1620,10 @@ fn vgc_alloc_large(n usize, noscan bool, zero_fill bool) voidptr {
+ 		span.mark_bits = &span.mark_buf[0]
+ 		span.alloc_bits[0] = 1
+ 		span.mark_bits[0] = 0
++		$if vgc_sweepdrag ? {
++			span.grace_bits = &span.grace_buf[0]
++			span.grace_buf[0] = 0
++		}
+ 		vgc_alloc_black_hook(span, 0) // concurrent mark: alloc-black this large object
+ 		// Fully initialized -> publish as live (see the in_use invariant in
+ 		// vgc_span_init; span_alloc/get_free_span leave in_use false until here).
+@@ -1831,6 +1847,83 @@ fn vgc_is_allocated(ptr voidptr) u64 {
+ 	return st
+ }
+ 
++// #145 CLONE-ROOT RING (multi-reactor sweep-while-live fix). A per-thread,
++// NON-resetting ring of recently-cloned map backing-array pointers (keys+values).
++// Every map.clone() registers the source AND destination key/value arrays of a
++// string-keyed map into the calling thread's ring; vgc_mark_roots shades every
++// ring entry under STW. This roots the live per-request env-clone maps (renv +
++// every [?let] child env + closures + dyn_context — all reached through map.clone)
++// INDEPENDENT of where their stack/register holder happens to live at the freeing
++// GC, which is the multi-reactor root miss (the env's only live pointer is in a
++// transient register the conservative scan does not cover; N=1 never collects
++// mid-clone so it is sound). The ring does NOT reset per request (the prior
++// envroots experiment did, so an env swept while held only as a LATER clone source
++// lost its root) — it is a fixed-size LRU per thread, so it is TCO-safe and bounded:
++// once a request completes its maps die and vgc_shade's alloc-bit check skips the
++// stale slots until they are overwritten. Sized to comfortably exceed one request's
++// live-map working set (renv + nested child envs + closures).
++const vgc_cloneroot_slots = 512
++__global vgc_clone_ring = [32768]usize{} // [cache_idx*vgc_cloneroot_slots + slot] -> array obj ptr (64*512)
++__global vgc_clone_cur  = [64]u32{}      // per-thread ring cursor (writes its own row only)
++
++// vgc_cloneroot_register adds one backing-array object pointer to the calling
++// thread's clone-root ring. Lock-free: only this thread writes its own row, and the
++// collector reads all rows only under STW (mutators frozen), so there is no
++// concurrent reader/writer of the same slot. A torn read is impossible for an
++// aligned usize on the target. p==0 / unregistered-thread / stale addrs are benign
++// (vgc_shade bounds- and alloc-checks every entry).
++@[inline]
++fn vgc_cloneroot_register(p usize) {
++	if p == 0 {
++		return
++	}
++	ci := C.vgc_get_cache_idx()
++	if ci < 0 || ci >= vgc_max_threads {
++		return
++	}
++	unsafe {
++		slot := vgc_clone_cur[ci] % u32(vgc_cloneroot_slots)
++		vgc_clone_ring[u32(ci) * u32(vgc_cloneroot_slots) + slot] = p
++		vgc_clone_cur[ci] = vgc_clone_cur[ci] + 1
++	}
++	$if vgc_cloneroots_diag ? {
++		vgc_clone_reg_count++
++	}
++}
++
++// vgc_cloneroot_mark shades every live entry in every thread's clone-root ring.
++// Called from vgc_mark_roots under STW. vgc_shade marks + (for the SCAN keys/values
++// arrays) enqueues for descent, so each rooted keys-array traces its string structs
++// -> .str char buffers, and each values-array traces its element pointers.
++__global vgc_clone_reg_count = u64(0)  // total registrations (diagnostic)
++__global vgc_clone_mark_gcs  = u64(0)  // GCs where the ring was scanned (diagnostic)
++
++fn vgc_cloneroot_mark() {
++	mut live := 0
++	mut nonzero := 0
++	for i in 0 .. (vgc_max_threads * vgc_cloneroot_slots) {
++		p := unsafe { vgc_clone_ring[i] }
++		if p != 0 {
++			nonzero++
++			if p >= vgc_arena_lo && p < vgc_arena_hi {
++				sp := vgc_find_span(voidptr(p))
++				if sp != unsafe { nil } && sp.in_use && sp.elem_size != 0 {
++					live++
++				}
++			}
++			vgc_shade(p)
++		}
++	}
++	$if vgc_cloneroots_diag ? {
++		vgc_clone_mark_gcs++
++		if vgc_clone_mark_gcs % u64(20) == 0 {
++			C.vgc_say(0x0c70, vgc_clone_reg_count) // total registrations
++			C.vgc_say(0x0c71, u64(nonzero)) // ring entries non-zero
++			C.vgc_say(0x0c72, u64(live)) // ring entries live (in-use span)
++		}
++	}
++}
++
+ // DIAGNOSTIC (residual live-object-reclamation probe): watch one heap address
+ // across GC cycles and record whether the collector treated it as a root, marked
+ // it, swept it, or decommitted its span. A test sets the watch per wave (e.g.
+diff --git a/vlib/builtin/vgc_gc_d_vgc.c.v b/vlib/builtin/vgc_gc_d_vgc.c.v
+index 993f496769..a6e946fa9f 100644
+--- a/vlib/builtin/vgc_gc_d_vgc.c.v
++++ b/vlib/builtin/vgc_gc_d_vgc.c.v
+@@ -766,6 +766,14 @@ fn vgc_mark_roots() {
+ 	for k in 0 .. np {
+ 		vgc_shade(usize(unsafe { vgc_pins[k] }))
+ 	}
++
++	$if vgc_cloneroots ? {
++		// #145: shade every live entry in the per-thread clone-root rings — the live
++		// per-request env-clone map backing arrays. Marks + enqueues (SCAN arrays) so
++		// each rooted keys-array traces its string structs -> .str buffers. Closes the
++		// multi-reactor root miss without depending on where the holder pointer lives.
++		vgc_cloneroot_mark()
++	}
+ }
+ 
+ // Scan a memory range conservatively, looking for pointers into the GC heap.
+@@ -1328,7 +1336,27 @@ fn vgc_sweep_span(span &VGC_Span) {
+ 		alloc_byte := unsafe { span.alloc_bits[b] }
+ 		mark_byte := unsafe { span.mark_bits[b] }
+ 		// allocated but not marked = garbage
+-		garbage := alloc_byte & ~mark_byte
++		mut garbage := alloc_byte & ~mark_byte
++		$if vgc_sweepdrag ? {
++			// #145 DEFERRED SWEEP (one-cycle grace). Free an object only when it has
++			// been allocated-but-unmarked for TWO consecutive cycles. The first
++			// unmarked cycle records a grace bit and KEEPS the object; the second
++			// frees it. This closes the multi-reactor root-miss race: a live env-clone
++			// key buffer whose only holder was transiently in a register the scan
++			// missed survives the missing cycle and is re-marked next cycle (its holder
++			// is back on the scanned stack). Marked objects clear their grace
++			// (recomputed below from this cycle's garbage), so genuinely dead objects
++			// are reclaimed with a bounded one-cycle delay.
++			if span.grace_bits != unsafe { nil } {
++				grace_byte := unsafe { span.grace_bits[b] }
++				to_free := garbage & grace_byte // unmarked now AND grace from last cycle
++				defer_byte := garbage & ~grace_byte // unmarked now, first time -> keep
++				unsafe {
++					span.grace_bits[b] = defer_byte
++				}
++				garbage = to_free
++			}
++		}
+ 		if b == watch_byte {
+ 			// DIAGNOSTIC (per-span, cheap): record this cycle's mark/sweep verdict
+ 			// for the watched object. marked = its mark bit is set at sweep time;

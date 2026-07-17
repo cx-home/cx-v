@@ -1449,7 +1449,7 @@ cx-err:CXER3300
 #]]
   [in-code [#
 [?lib 'cx-stdlib/time']
-[?let [= $a [$time:monotonic-now]] [?let [= $b [$time:monotonic-now]] [>= $b $a]]]
+[?let [= $a [$time:monotonic-now]] [= $b [$time:monotonic-now]] [>= $b $a]]
 #]]
   [out-err [#
 cx-err:CXER0271

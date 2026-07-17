@@ -51,7 +51,64 @@ fn ajv_to_node(v JV) !Node {
 		'PI'           { ajv_to_pi(obj)! }
 		'XMLDecl'      { ajv_to_xml_decl(obj) }
 		'CXDirective'  { ajv_to_cx_directive(obj)! }
+		// Collection-literal nodes (#443 — required so collection TABLE
+		// CELLS round-trip; also covers collection literals in ordinary
+		// body position, which emit_ast_json has always produced but the
+		// importer previously rejected as "unknown AST node type").
+		'Sequence'     { Node(SequenceNode{ items: ajv_items(obj)! }) }
+		'Array'        { Node(ArrayNode{ items: ajv_items(obj)! }) }
+		'Map'          { ajv_to_map_node(obj)! }
 		else           { return error('unknown AST node type: ${ajv_str(obj, "type")}') }
+	}
+}
+
+// ajv_items reads the `items` array shared by the Sequence / Array (and
+// BlockContent) encodings.
+fn ajv_items(obj map[string]JV) ![]Node {
+	mut items := []Node{}
+	if iv := obj['items'] {
+		if iv is []JV { for n in iv as []JV { items << ajv_to_node(n)! } }
+	}
+	return items
+}
+
+// ajv_to_map_node reads the MapNode encoding emit_ast_json produces:
+// {"type":"Map","entries":[{"key":<canonical string>,"keyType":<type name>,
+// "value":<node>}]}. The key's typed ScalarValue is reconstructed from the
+// canonical string per keyType (atomic-scalar keys only, ast.md MapNode).
+fn ajv_to_map_node(obj map[string]JV) !Node {
+	mut entries := []MapEntry{}
+	if ev := obj['entries'] {
+		if ev is []JV {
+			for e in ev as []JV {
+				if e !is map[string]JV {
+					return error('Map entry must be an object')
+				}
+				eo := e as map[string]JV
+				key_type := ajv_scalar_type(ajv_str(eo, 'keyType')) or { ScalarType.string_type }
+				key_str := ajv_str(eo, 'key')
+				val_jv := eo['value'] or { return error('Map entry missing value') }
+				entries << MapEntry{
+					key_type:  key_type
+					key_value: ajv_map_key_value(key_str, key_type)
+					value:     ajv_to_node(val_jv)!
+				}
+			}
+		}
+	}
+	return Node(MapNode{ entries: entries })
+}
+
+// ajv_map_key_value rebuilds a map key's typed ScalarValue from its
+// canonical string form + keyType. Non-numeric/bool key types (string,
+// date, datetime, bytes) keep the string payload, matching how MapEntry
+// stores them in the parse AST.
+fn ajv_map_key_value(s string, t ScalarType) ScalarValue {
+	return match t {
+		.int_type   { ScalarValue(s.i64()) }
+		.float_type { ScalarValue(s.f64()) }
+		.bool_type  { ScalarValue(s == 'true') }
+		else        { ScalarValue(s) }
 	}
 }
 
@@ -68,12 +125,92 @@ fn ajv_to_element(obj map[string]JV) !Node {
 	if iv := obj['items'] {
 		if iv is []JV { for n in iv as []JV { items << ajv_to_node(n)! } }
 	}
-	return Node(new_element(ajv_str(obj, 'name'), ElementMeta{
+	el := new_element(ajv_str(obj, 'name'), ElementMeta{
 		anchor:    ajv_opt_str(obj, 'anchor')
 		merge:     ajv_opt_str(obj, 'merge')
 		id:        ajv_opt_str(obj, 'id')
 		data_type: ajv_opt_str(obj, 'dataType')
-	}, attrs, items))
+	}, attrs, items)
+	// `[table]` payload (#443): the "table" object reconstructs the pooled
+	// TableData exactly (inverse of emitter_json.v json_table).
+	if tv := obj['table'] {
+		if tv !is map[string]JV {
+			return error('Element "table" must be an object')
+		}
+		return Node(el.with_table(ajv_to_table(tv as map[string]JV)!))
+	}
+	return Node(el)
+}
+
+// ajv_to_table reconstructs a TableData payload from its AST-JSON
+// projection (#443): cols[] of {"name", "dataType"?} (absent dataType =
+// undeclared / string-default column, type_name ''), rows[] of cell
+// arrays. Scalar cells arrive as JSON-native values; collection cells as
+// Array/Map/Sequence node objects (see json_table_cell).
+fn ajv_to_table(obj map[string]JV) !&TableData {
+	mut cols := []TableColumn{}
+	if cv := obj['cols'] {
+		if cv is []JV {
+			for c in cv as []JV {
+				if c !is map[string]JV {
+					return error('table col must be an object')
+				}
+				co := c as map[string]JV
+				cols << TableColumn{
+					name:      ajv_str(co, 'name')
+					type_name: ajv_str(co, 'dataType')
+				}
+			}
+		}
+	}
+	mut rows := [][]TableCellValue{}
+	if rv := obj['rows'] {
+		if rv is []JV {
+			for r in rv as []JV {
+				if r !is []JV {
+					return error('table row must be an array')
+				}
+				mut row := []TableCellValue{}
+				for cell in r as []JV {
+					row << ajv_to_table_cell(cell)!
+				}
+				rows << row
+			}
+		}
+	}
+	return &TableData{
+		cols: cols
+		rows: rows
+	}
+}
+
+fn ajv_to_table_cell(v JV) !TableCellValue {
+	match v {
+		JVNull { return TableCellValue(NullValue{}) }
+		// Unreachable from AST JSON: JVTyped is produced only by the YAML
+		// tag / auto-typing reader (#444), never by JReader.read_val — AST
+		// JSON carries types via `dataType` fields. Kept total: the payload
+		// text degrades to a string cell.
+		JVTyped { return TableCellValue(v.text) }
+		bool   { return TableCellValue(v as bool) }
+		i64    { return TableCellValue(v as i64) }
+		f64    { return TableCellValue(v as f64) }
+		string { return TableCellValue(v as string) }
+		map[string]JV {
+			n := ajv_to_node(JV(v))!
+			match n {
+				ArrayNode    { return TableCellValue(n) }
+				MapNode      { return TableCellValue(n) }
+				SequenceNode { return TableCellValue(n) }
+				else {
+					return error('table cell object must be an Array/Map/Sequence node')
+				}
+			}
+		}
+		[]JV {
+			return error('table cell cannot be a bare JSON array; collection cells use the node encoding')
+		}
+	}
 }
 
 fn ajv_to_attr(obj map[string]JV) !Attribute {

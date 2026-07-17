@@ -54,12 +54,34 @@ pub fn change_kind_str(k ChangeKind) string {
 // `path` uses CXPath syntax (spec/cxpath.md). `before` and `after`
 // carry the relevant value for the change kind; an absent side is
 // the empty string (kind disambiguates "missing" vs "empty").
+//
+// #437 (cx:patch — apply is the inverse of diff): `payload_kind` +
+// `before_payload` / `after_payload` carry apply-grade compact canonical
+// CX text so a change list can be APPLIED to the `a` document to obtain
+// `b`. The name-only / stringified `before`/`after` fields are lossy
+// (an added element's subtree, a typed attribute value, a typed scalar
+// body are not reconstructible from them); the payloads are not. The
+// renderers (unified/json/summary) are payload-blind — CLI output is
+// unchanged. Kinds:
+//   'subtree' — full-element payloads: patch replaces (rename /
+//               type-change) / appends (add) / removes the whole
+//               element at `path`.
+//   'attr'    — single-attribute carrier `[v name=value]` preserving
+//               the typed attribute value.
+//   'leaves'  — leaf-item carrier `[v <leaf …>]` holding the element's
+//               non-element body items (typed scalars survive).
+//   'table'   — full-element payloads for a `[table]`-bearing element;
+//               patch replaces the whole element once per path (the
+//               per-row records at that path are then satisfied).
 pub struct Change {
 pub:
 	kind ChangeKind
 	path string
 	before string
 	after string
+	payload_kind   string
+	before_payload string
+	after_payload  string
 }
 
 // cx_text_diff parses both inputs, reduces them to strict canonical,
@@ -112,10 +134,24 @@ fn diff_node_lists(parent_path string, a []Node, b []Node, mut changes []Change)
 		diff_element(a_paths[i], a_els[i], b_els[i], mut changes)
 	}
 	for i in common .. a_els.len {
-		changes << Change{ kind: .element_removed, path: a_paths[i], before: a_els[i].name, after: '' }
+		changes << Change{
+			kind:           .element_removed
+			path:           a_paths[i]
+			before:         a_els[i].name
+			after:          ''
+			payload_kind:   'subtree'
+			before_payload: cx_emit_node_str(Node(a_els[i]), true)
+		}
 	}
 	for i in common .. b_els.len {
-		changes << Change{ kind: .element_added, path: b_paths[i], before: '', after: b_els[i].name }
+		changes << Change{
+			kind:          .element_added
+			path:          b_paths[i]
+			before:        ''
+			after:         b_els[i].name
+			payload_kind:  'subtree'
+			after_payload: cx_emit_node_str(Node(b_els[i]), true)
+		}
 	}
 }
 
@@ -151,7 +187,18 @@ fn diff_element(path string, a Element, b Element, mut changes []Change) {
 	// surfaces as add+remove; explicit kind for the same-position
 	// case).
 	if a.name != b.name {
-		changes << Change{ kind: .element_renamed, path: path, before: a.name, after: b.name }
+		// Rename stops the walk (v0 positional compare) — the subtree
+		// payloads carry BOTH sides whole so patch replaces the element
+		// and any content difference comes along.
+		changes << Change{
+			kind:           .element_renamed
+			path:           path
+			before:         a.name
+			after:          b.name
+			payload_kind:   'subtree'
+			before_payload: cx_emit_node_str(Node(a), true)
+			after_payload:  cx_emit_node_str(Node(b), true)
+		}
 		return
 	}
 
@@ -159,7 +206,18 @@ fn diff_element(path string, a Element, b Element, mut changes []Change) {
 	a_dt := a.data_type() or { '' }
 	b_dt := b.data_type() or { '' }
 	if a_dt != b_dt {
-		changes << Change{ kind: .type_changed, path: path, before: a_dt, after: b_dt }
+		// Whole-subtree payloads: the annotation is element meta the
+		// leaf-level records cannot re-apply; patch replaces the element
+		// and later records at this path apply idempotently.
+		changes << Change{
+			kind:           .type_changed
+			path:           path
+			before:         a_dt
+			after:          b_dt
+			payload_kind:   'subtree'
+			before_payload: cx_emit_node_str(Node(a), true)
+			after_payload:  cx_emit_node_str(Node(b), true)
+		}
 	}
 
 	// Attributes — compare as ordered name->value maps. v0 normalizes
@@ -167,9 +225,123 @@ fn diff_element(path string, a Element, b Element, mut changes []Change) {
 	// each attribute name in both elements.
 	diff_attributes(path, a.attrs, b.attrs, mut changes)
 
+	// `[table]` payload (#414): TableData lives in the pooled `table`
+	// field, NOT in `items` — without this the walker compared two tables
+	// as empty bodies and reported "no changes" while cx eq / cx hash
+	// (whose canonical text includes the rows) disagreed.
+	diff_table(path, a, b, mut changes)
+
 	// Body: compare text/scalar leaves and recurse into element
 	// children.
 	diff_body_items(path, a.items, b.items, mut changes)
+}
+
+// diff_table compares the `[table]` payloads of two same-named elements.
+// A side without a payload reads as the empty table (no columns, no rows),
+// so a table degrading to a bare `::table` annotation — the exact shape the
+// pre-#413 XML round-trip produced — surfaces as a header change plus one
+// row removal per lost row. Header changes and per-row (positional) cell
+// changes are `.body_changed` records whose before/after carry the
+// canonical CX text of the header / row.
+fn diff_table(path string, a Element, b Element, mut changes []Change) {
+	mut a_td := &TableData{}
+	mut b_td := &TableData{}
+	mut a_has := false
+	mut b_has := false
+	if td := a.table_opt() {
+		a_td = td
+		a_has = true
+	}
+	if td := b.table_opt() {
+		b_td = td
+		b_has = true
+	}
+	if !a_has && !b_has {
+		return
+	}
+
+	// Table records carry whole-element payloads: patch replaces the
+	// element ONCE at this path (the b-side table comes along whole);
+	// the per-row records below are then satisfied (#437).
+	a_payload := cx_emit_node_str(Node(a), true)
+	b_payload := cx_emit_node_str(Node(b), true)
+
+	// Header — canonical CX column declaration text.
+	a_hdr := table_header_text(a_td)
+	b_hdr := table_header_text(b_td)
+	if a_hdr != b_hdr {
+		changes << Change{
+			kind:   .body_changed
+			path:   path
+			before: 'table[${a_hdr}]'
+			after:  'table[${b_hdr}]'
+			payload_kind:   'table'
+			before_payload: a_payload
+			after_payload:  b_payload
+		}
+	}
+
+	// Rows — positional walk (rows are ordered, document order per
+	// canonical.md); the tail is reported as removed/added rows.
+	common := if a_td.rows.len < b_td.rows.len { a_td.rows.len } else { b_td.rows.len }
+	for i in 0 .. common {
+		a_row := table_row_text(a_td, i)
+		b_row := table_row_text(b_td, i)
+		if a_row != b_row {
+			changes << Change{
+				kind: .body_changed
+				path: path
+				before: a_row
+				after: b_row
+				payload_kind:   'table'
+				before_payload: a_payload
+				after_payload:  b_payload
+			}
+		}
+	}
+	for i in common .. a_td.rows.len {
+		changes << Change{
+			kind: .body_changed
+			path: path
+			before: table_row_text(a_td, i)
+			after: ''
+			payload_kind:   'table'
+			before_payload: a_payload
+			after_payload:  b_payload
+		}
+	}
+	for i in common .. b_td.rows.len {
+		changes << Change{
+			kind: .body_changed
+			path: path
+			before: ''
+			after: table_row_text(b_td, i)
+			payload_kind:   'table'
+			before_payload: a_payload
+			after_payload:  b_payload
+		}
+	}
+}
+
+fn table_header_text(td &TableData) string {
+	mut parts := []string{}
+	for col in td.cols {
+		if col.type_name == '' {
+			parts << col.name
+		} else {
+			parts << '${col.name}::${col.type_name}'
+		}
+	}
+	return parts.join(' ')
+}
+
+fn table_row_text(td &TableData, i int) string {
+	mut cells := []string{}
+	for j, cell in td.rows[i] {
+		ct := if j < td.cols.len { td.cols[j].type_name } else { '' }
+		cells << cx_format_table_cell(cell, ct)
+	}
+	return cells.join(' ')
 }
 
 fn diff_attributes(path string, a []Attribute, b []Attribute, mut changes []Change) {
@@ -185,6 +357,8 @@ fn diff_attributes(path string, a []Attribute, b []Attribute, mut changes []Chan
 				path: path + '/@' + attr.name
 				before: scalar_value_str(attr.value)
 				after: ''
+				payload_kind:   'attr'
+				before_payload: diff_attr_payload(attr)
 			}
 			continue
 		}
@@ -197,6 +371,9 @@ fn diff_attributes(path string, a []Attribute, b []Attribute, mut changes []Chan
 				path: path + '/@' + attr.name
 				before: av_s
 				after: bv_s
+				payload_kind:   'attr'
+				before_payload: diff_attr_payload(attr)
+				after_payload:  diff_attr_payload(bv)
 			}
 		}
 	}
@@ -207,9 +384,32 @@ fn diff_attributes(path string, a []Attribute, b []Attribute, mut changes []Chan
 				path: path + '/@' + attr.name
 				before: ''
 				after: scalar_value_str(attr.value)
+				payload_kind:  'attr'
+				after_payload: diff_attr_payload(attr)
 			}
 		}
 	}
+}
+
+// diff_attr_payload renders the single-attribute carrier `[v name=value]`
+// — compact canonical text preserving the TYPED attribute value, so
+// patch can re-apply the attribute without guessing the scalar type
+// from a stringified form (#437).
+fn diff_attr_payload(attr Attribute) string {
+	return cx_emit_node_str(Node(Element{ name: 'v', attrs: [attr] }), true)
+}
+
+// diff_leaves_payload renders the leaf-item carrier `[v <leaf …>]` for a
+// body-changed record: every non-element body item (text, typed scalars,
+// collection literals) in document order (#437).
+fn diff_leaves_payload(nodes []Node) string {
+	mut leaves := []Node{}
+	for n in nodes {
+		if n !is Element {
+			leaves << n
+		}
+	}
+	return cx_emit_node_str(Node(Element{ name: 'v', items: leaves }), true)
 }
 
 fn diff_body_items(parent_path string, a []Node, b []Node, mut changes []Change) {
@@ -223,6 +423,9 @@ fn diff_body_items(parent_path string, a []Node, b []Node, mut changes []Change)
 			path: parent_path
 			before: a_text
 			after: b_text
+			payload_kind:   'leaves'
+			before_payload: diff_leaves_payload(a)
+			after_payload:  diff_leaves_payload(b)
 		}
 	}
 

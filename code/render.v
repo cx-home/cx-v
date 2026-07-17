@@ -182,16 +182,22 @@ fn render_node(n cx.Node) string {
 			items := iterate(n)
 			mut parts := []string{cap: items.len}
 			for it in items {
-				parts << render_node(it)
+				parts << render_seq_item(it)
 			}
 			return '(${parts.join(', ')})'
 		}
 		// DATA↔PROGRAM seam: an embedded pure-DATA node value (from a `node_lit`
 		// literal) renders through the data CX emitter so `cx file.cx` (eval)
 		// matches `cx --from=cx --to=cx file.cx` (data) byte-for-byte.
+		// CXDirectiveNode is the `[?cx …]` PI/config namespace (#421) —
+		// preserved verbatim per code.md §13.2 (include resolution is opt-in).
+		// EvalDirectiveNode is a directive carried as DATA (a `[$cx:parse]`
+		// of directive-bearing source, #436) — it renders as its CX surface
+		// form via the data emitter, never as a V struct repr.
 		cx.RawTextNode, cx.EntityRefNode, cx.DoctypeDecl, cx.EntityDeclNode,
 		cx.ElementDeclNode, cx.AttlistDeclNode, cx.NotationDeclNode,
-		cx.PEReferenceNode, cx.ConditionalSectNode, cx.DocumentNode {
+		cx.PEReferenceNode, cx.ConditionalSectNode, cx.DocumentNode,
+		cx.CXDirectiveNode, cx.EvalDirectiveNode {
 			return cx.cx_emit_node_str(n, true)
 		}
 		else {
@@ -230,15 +236,17 @@ pub fn render_node_to(mut b strings.Builder, n cx.Node) {
 			b.write_string('(')
 			for i, it in items {
 				if i > 0 { b.write_string(', ') }
-				render_node_to(mut b, it)
+				render_seq_item_to(mut b, it)
 			}
 			b.write_string(')')
 		}
 		// DATA↔PROGRAM seam: render embedded pure-DATA node values via the data
-		// CX emitter (see render_node above).
+		// CX emitter (see render_node above; CXDirectiveNode per #421,
+		// EvalDirectiveNode per #436).
 		cx.RawTextNode, cx.EntityRefNode, cx.DoctypeDecl, cx.EntityDeclNode,
 		cx.ElementDeclNode, cx.AttlistDeclNode, cx.NotationDeclNode,
-		cx.PEReferenceNode, cx.ConditionalSectNode, cx.DocumentNode {
+		cx.PEReferenceNode, cx.ConditionalSectNode, cx.DocumentNode,
+		cx.CXDirectiveNode, cx.EvalDirectiveNode {
 			b.write_string(cx.cx_emit_node_str(n, true))
 		}
 		else {
@@ -372,7 +380,7 @@ fn render_element_to(mut b strings.Builder, n cx.Element) {
 		b.write_string('(')
 		for i, it in n.items {
 			if i > 0 { b.write_string(', ') }
-			render_node_to(mut b, it)
+			render_seq_item_to(mut b, it)
 		}
 		b.write_string(')')
 		return
@@ -381,24 +389,26 @@ fn render_element_to(mut b strings.Builder, n cx.Element) {
 		b.write_string('[')
 		for i, it in n.items {
 			if i > 0 { b.write_string(', ') }
-			render_node_to(mut b, it)
+			render_seq_item_to(mut b, it)
 		}
 		b.write_string(']')
 		return
 	}
 	if n.name == cx_map_name {
 		// `__cx_map__` element: child items are entry elements with
-		// name=key, items=[value]. Emit as `{k: v, k: v}`.
+		// name=key, items=[value]. Emit as `{k: v, k: v}`. Keys go through
+		// the shared envelope-lane rule (cx.cx_emit_envelope_map_key, #495)
+		// so a $-leading / colon-bearing key quotes and re-parses as itself.
 		b.write_string('{')
 		mut first := true
 		for it in n.items {
 			if it is cx.Element {
 				if !first { b.write_string(', ') }
 				first = false
-				b.write_string(it.name)
+				b.write_string(cx.cx_emit_envelope_map_key(it.name))
 				b.write_string(': ')
 				if it.items.len > 0 {
-					render_node_to(mut b, it.items[0])
+					render_seq_item_to(mut b, it.items[0])
 				}
 			}
 		}
@@ -492,8 +502,14 @@ fn render_body_item_to(mut b strings.Builder, n cx.Node) {
 	// date on round-trip, whereas the generic render_scalar would quote it (a
 	// date's value is carried as a string), which would re-parse as a string and
 	// LOSE the date type. Matches render_array_scalar_item's drop-annotation form.
+	// A bytes scalar in body position likewise renders BARE (`0x3a7bd3e2` /
+	// `SGVsbG8=`), matching the data emitter's cx_scalar — the enclosing
+	// `::bytes` ascription re-types the token on round-trip, whereas quoting
+	// would churn the canonical surface (#457). Top-level bytes results
+	// (no ascription context) keep the generic quoted render.
 	if n is cx.ScalarNode {
-		if (n.data_type == .date_type || n.data_type == .datetime_type) && n.value is string {
+		if (n.data_type == .date_type || n.data_type == .datetime_type
+			|| n.data_type == .bytes_type) && n.value is string {
 			b.write_string(n.value as string)
 			return
 		}
@@ -627,7 +643,8 @@ fn needs_quote_string_item(s string) bool {
 // (`drop_ann` is retained in the signature for the shared array_render_plan
 // contract; the plan now always keeps the annotation.)
 fn render_array_scalar_item(s cx.ScalarNode, string_item bool, drop_ann bool) string {
-	if s.data_type == .date_type || s.data_type == .datetime_type {
+	if s.data_type == .date_type || s.data_type == .datetime_type
+		|| s.data_type == .bytes_type {
 		if s.value is string {
 			return s.value as string
 		}
@@ -710,7 +727,7 @@ fn render_element(n cx.Element) string {
 	if n.name == cx_seq_name {
 		mut parts := []string{cap: n.items.len}
 		for it in n.items {
-			parts << render_node(it)
+			parts << render_seq_item(it)
 		}
 		return '(${parts.join(', ')})'
 	}
@@ -718,21 +735,25 @@ fn render_element(n cx.Element) string {
 	if n.name == cx_arr_name {
 		mut parts := []string{cap: n.items.len}
 		for it in n.items {
-			parts << render_node(it)
+			parts << render_seq_item(it)
 		}
 		return '[${parts.join(', ')}]'
 	}
 	// Map literal `{k: v, k: v}`. The `__cx_map__`
 	// marker carries map entries as child elements (name=key,
 	// items=[value]) per the program-side eval_map representation.
+	// Keys go through the shared envelope-lane rule
+	// (cx.cx_emit_envelope_map_key, #495) so a $-leading /
+	// colon-bearing key quotes and re-parses as itself.
 	if n.name == cx_map_name {
 		mut parts := []string{cap: n.items.len}
 		for it in n.items {
 			if it is cx.Element {
 				val_str := if it.items.len > 0 {
-					render_node(it.items[0])
+					render_seq_item(it.items[0])
 				} else { '' }
-				parts << '${it.name}: ${val_str}'
+				key_str := cx.cx_emit_envelope_map_key(it.name)
+				parts << '${key_str}: ${val_str}'
 			}
 		}
 		return '{${parts.join(', ')}}'
@@ -775,6 +796,53 @@ fn render_element(n cx.Element) string {
 	return s
 }
 
+// render_seq_item renders one item of a rendered collection literal
+// (`(…)` sequence, `[…]` array, `{…}` map value). Identical to
+// `render_node` except for the bare `name==''` wrapper — the multi-value
+// / absence shape produced by comprehensions and the conditional
+// no-branch channel. At top level that wrapper renders newline-joined
+// (empty string when empty), but INSIDE a collection literal the bare
+// form is a hole: an empty `[?for]` result between commas emitted
+// `((), , ())`, and a multi-item one emitted a raw newline mid-sequence —
+// neither is parseable CX (#438). In item position the wrapper follows
+// cxdm §2 ("every value is a sequence; a single value is a sequence of
+// one"): a SINGLETON wrapper is its item and renders as it, while the
+// empty and multi-item shapes serialise as a paren sequence — `()` /
+// `(a, b)` — the canonical sequence-value form `render_body_item`
+// already uses for element bodies (program-conc-018). Every empty item
+// in a rendered sequence has ONE spelling and the emitted text re-parses.
+fn render_seq_item(n cx.Node) string {
+	if n is cx.Element && n.name == '' {
+		if n.items.len == 1 {
+			return render_seq_item(n.items[0])
+		}
+		mut parts := []string{cap: n.items.len}
+		for it in n.items {
+			parts << render_seq_item(it)
+		}
+		return '(${parts.join(', ')})'
+	}
+	return render_node(n)
+}
+
+// render_seq_item_to is the streaming counterpart to `render_seq_item`.
+fn render_seq_item_to(mut b strings.Builder, n cx.Node) {
+	if n is cx.Element && n.name == '' {
+		if n.items.len == 1 {
+			render_seq_item_to(mut b, n.items[0])
+			return
+		}
+		b.write_string('(')
+		for i, it in n.items {
+			if i > 0 { b.write_string(', ') }
+			render_seq_item_to(mut b, it)
+		}
+		b.write_string(')')
+		return
+	}
+	render_node_to(mut b, n)
+}
+
 // render_body_item is the non-streaming counterpart to
 // `render_body_item_to` — see that function's doc for the round-trip
 // quoting rationale.
@@ -785,10 +853,11 @@ fn render_body_item(n cx.Node) string {
 		}
 		return choose_render_quote(n.value)
 	}
-	// Discrete date/datetime scalar → bare (round-trips as a date); see
+	// Discrete date/datetime/bytes scalar → bare (round-trips typed); see
 	// render_body_item_to for the rationale.
 	if n is cx.ScalarNode {
-		if (n.data_type == .date_type || n.data_type == .datetime_type) && n.value is string {
+		if (n.data_type == .date_type || n.data_type == .datetime_type
+			|| n.data_type == .bytes_type) && n.value is string {
 			return n.value as string
 		}
 	}
@@ -936,6 +1005,15 @@ fn node_to_ast_json(n cx.Node) string {
 		cx.ScalarNode {
 			return scalar_node_to_ast_json(n)
 		}
+		// DATA↔PROGRAM seam (#421): a `node_lit` data node reaching the
+		// program result at top level (e.g. a preserved `[?cx …]`
+		// CXDirectiveNode, code.md §13) renders through the same AST-JSON
+		// node encoding json_element already uses for nested children —
+		// keeping top-level and child shapes consistent.
+		cx.CXDirectiveNode, cx.RawTextNode, cx.EntityRefNode, cx.CommentNode,
+		cx.PINode {
+			return cx.emit_ast_json_node(n)
+		}
 		else {
 			// Unhandled node types — render as JSON null with a type
 			// annotation so callers can detect the gap without it being
@@ -1044,13 +1122,20 @@ fn flatten_slots(e cx.Element) cx.Element {
 	for it in e.items {
 		if it is cx.Element && it.name.starts_with(cx_slot_prefix) {
 			label := it.name[cx_slot_prefix.len..]
-			new_items << cx.Element{
+			// Route the renamed slot back through flatten_node so marker
+			// children inside the slot body normalize too.
+			new_items << flatten_node(cx.Element{
 				name:  label
 				attrs: it.attrs
 				items: it.items
-			}
+			})
 		} else {
-			new_items << it
+			// Recurse (#392): a collection marker nested under a plain
+			// element — `[tags ["web", "api"]]` puts a `__cx_arr__` child
+			// under `tags` — must normalize to its cx-native node here,
+			// or the marker leaks verbatim into the document the XML/YAML
+			// emitters consume (`<__cx_arr__>webapi</__cx_arr__>`).
+			new_items << flatten_node(it)
 		}
 	}
 	return cx.Element{
@@ -1329,6 +1414,15 @@ fn render_delimited(n cx.Node, delim string) !string {
 				seen[a.name] = true
 				headers << a.name
 			}
+		}
+	}
+	// #416: records with zero attribute columns are not tabular — emitting
+	// a blank header + blank rows was silent data loss (rc=0, empty
+	// output that then fails reimport with "empty input").
+	if headers.len == 0 {
+		return EvalError{
+			code:    'cx-err:CXER0100'
+			message: 'csv/tsv: result shape is not tabular — the ${rows.len} <${rows[0].name}> record(s) carry no attribute columns; a [table[...]] block or attribute-bearing records are required'
 		}
 	}
 	mut lines := []string{cap: rows.len + 1}

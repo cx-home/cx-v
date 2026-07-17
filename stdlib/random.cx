@@ -77,13 +77,13 @@
   [sig """-> float"""]
   [summary """Draw a uniform float in the half-open range 0.0 to 1.0 from the process-global PRNG."""]
   [example [code """[?lib 'cx-stdlib/random']
-[?let [= $a [$random:seed 42]] [?let [= $f [$random:next-float]] [and [>= $f 0.0] [< $f 1.0]]]]"""] [expect """true"""]]
+[?let [= $a [$random:seed 42]] [= $f [$random:next-float]] [and [>= $f 0.0] [< $f 1.0]]]"""] [expect """true"""]]
 ]
 [fn-doc name=next-bool scope=public purity=impure
   [sig """-> bool"""]
   [summary """Draw a uniform random boolean from the process-global PRNG."""]
   [example [code """[?lib 'cx-stdlib/random']
-[?let [= $a [$random:seed 42]] [?let [= $b [$random:next-bool]] [or [= $b true] [= $b false]]]]"""] [expect """true"""]]
+[?let [= $a [$random:seed 42]] [= $b [$random:next-bool]] [or [= $b true] [= $b false]]]"""] [expect """true"""]]
 ]
 [fn-doc name=int-range scope=public purity=impure
   [sig """-> int"""]

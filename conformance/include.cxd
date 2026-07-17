@@ -16,19 +16,26 @@
 # Status:
 #
 #   Engine (vcx/cx/include.v):   fully implemented per GG1
-#   V regression tests:          13 fixtures in vcx/tests/include_test.v
+#   V regression tests:          15 tests in vcx/tests/include_test.v
 #                                cover splice / nested / diamond / E901
 #                                / E902 / E903 / E904 / E905 / E906 /
 #                                E908 / E911 / XMLDecl discard /
-#                                empty-root pass-through
+#                                empty-root pass-through / U7 sandbox
+#                                (file restored by #421 after collateral
+#                                deletion in the phase-7 POC cleanup)
 #   CX-level wrapper:            4 tests in vcx/tests/cx_module_test.v
 #                                cover DD18 cx:resolve-includes
 #   C ABI:                       cx_to_cx_with_include_root +
 #                                cx_to_data_bin_with_include_root
 #                                exports per GG3
-#   conformance fixtures:        inc-001 below covers the no-resolution
-#                                baseline (no FFI temp-dir interaction).
-#                                The remaining fixture cases live in
+#   conformance fixtures:        inc-001..inc-003 below cover the
+#                                no-resolution baseline (no FFI temp-dir
+#                                interaction); run by the vcx conform gate
+#                                (`make -C vcx conform-include`, wired
+#                                into `make conform` per #421 — the suite
+#                                had been authored but never wired, so the
+#                                gate stayed silently green).
+#                                The resolution fixture cases live in
 #                                vcx/tests/include_test.v; cross-binding
 #                                parity ships when per-binding runners
 #                                adopt the `--- include_root` +
@@ -43,6 +50,43 @@
 #]]
   [out-cx [#
 [?cx include=defaults.cx]
+#]]
+ ]
+
+ [; #421 regression guards for the wider [?cx ...] PI/config namespace the
+    include directive rides on (grammar CXDirective, production 34): with no
+    include root supplied, EVERY [?cx ...] directive - include or config - is
+    preserved verbatim by the data reading (code.md include semantics:
+    resolution is opt-in; CX to CX with resolution disabled preserves
+    directives). An unknown key on a [?cx ...] directive is legal CXAttr
+    surface (the CXDirective production admits any attr list; the layer that
+    consumes each attr is selected by attr name) and rides along untouched. ]
+
+ [case id=inc-002-bare-config-pi-passthrough level=core
+  [tags cx-directive config passthrough issue-421]
+  [in-cx [#
+[?cx version=1.0]
+[config [a 1]]
+#]]
+  [out-cx [#
+[?cx version=1.0]
+[config
+  [a 1]
+]
+#]]
+ ]
+
+ [case id=inc-003-unknown-cx-key-passthrough level=core
+  [tags cx-directive unknown-key passthrough issue-421]
+  [in-cx [#
+[?cx bogus=1]
+[config [a 1]]
+#]]
+  [out-cx [#
+[?cx bogus=1]
+[config
+  [a 1]
+]
 #]]
  ]
 ]

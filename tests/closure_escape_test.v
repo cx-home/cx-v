@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 
 // closure_escape_test.v — BEHAVIORAL coverage for the closure-escape
 // representation fix (cx-private #45). An ESCAPING closure ([?fn] returned from a
@@ -18,11 +19,7 @@ import os
 // failed with `no callable "<sibling>"`.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx-dev` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // run_program writes the given module + entry sources into a fresh temp dir

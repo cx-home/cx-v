@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 import net.mbedtls
 
@@ -11,11 +12,7 @@ import net.mbedtls
 // Skipped only when openssl (cert gen) is unavailable. MUST fail against a stub.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 fn test_net_dial_tls_roundtrip() {

@@ -62,7 +62,7 @@ conformance fixtures for cx-stdlib/store (spec/std-lib/store.md §8).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:get-doc $s $h]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:get-doc $s $h]]
 #]]
   [out-text [#
 [doc [item 'hello']]
@@ -76,7 +76,7 @@ conformance fixtures for cx-stdlib/store (spec/std-lib/store.md §8).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "hello"]]]] [$store:list-docs $s]]]]
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [item "hello"]]]] [= $h2 [$store:put-doc $s [doc [item "hello"]]]] [$store:list-docs $s]]
 #]]
   [out-text [#
 ('01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9')
@@ -104,7 +104,7 @@ conformance fixtures for cx-stdlib/store (spec/std-lib/store.md §8).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "hello"]]]] [= $h1 $h2]]]]
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [item "hello"]]]] [= $h2 [$store:put-doc $s [doc [item "hello"]]]] [= $h1 $h2]]
 #]]
   [out-text [#
 true
@@ -118,7 +118,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "a"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "b"]]]] [= $h1 $h2]]]]
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [item "a"]]]] [= $h2 [$store:put-doc $s [doc [item "b"]]]] [= $h1 $h2]]
 #]]
   [out-text [#
 false
@@ -132,7 +132,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:exists $s $h]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:exists $s $h]]
 #]]
   [out-text [#
 true
@@ -216,7 +216,7 @@ cx-err:CXER1110
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $c [$store:close $s]] [$store:list-docs $s]]]
+[?let [= $s [$store:open "mem://"]] [= $c [$store:close $s]] [$store:list-docs $s]]
 #]]
   [out-err [#
 cx-err:CXER1130
@@ -244,7 +244,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:delete-doc $s $h]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:delete-doc $s $h]]
 #]]
   [out-text [#
 true
@@ -272,7 +272,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $d [$store:delete-doc $s $h]] [$store:exists $s $h]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $d [$store:delete-doc $s $h]] [$store:exists $s $h]]
 #]]
   [out-text [#
 false
@@ -286,7 +286,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:get-alias $s "latest"]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $a [$store:set-alias $s "latest" $h]] [$store:get-alias $s "latest"]]
 #]]
   [out-text [#
 '01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'
@@ -334,7 +334,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "head" $h]] [$count [$store:get-alias $s "head"]]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $a [$store:set-alias $s "head" $h]] [$count [$store:get-alias $s "head"]]]
 #]]
   [out-text [#
 1
@@ -348,7 +348,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:list-aliases $s]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $a [$store:set-alias $s "latest" $h]] [$store:list-aliases $s]]
 #]]
   [out-text [#
 ([alias name=latest hash='01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'])
@@ -362,7 +362,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $a [$store:set-alias $s "latest" $h]] [$store:delete-alias $s "latest"]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $a [$store:set-alias $s "latest" $h]] [$store:delete-alias $s "latest"]]
 #]]
   [out-text [#
 true
@@ -404,7 +404,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:modify-doc $s $h [set-attr name=v value="x"]]] [= $h $h2]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $h2 [$store:modify-doc $s $h [set-attr name=v value="x"]]] [= $h $h2]]
 #]]
   [out-text [#
 false
@@ -418,7 +418,35 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [?let [= $h2 [$store:modify-doc $s $h [set-attr name=v value="x"]]] [$store:exists $s $h]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $h2 [$store:modify-doc $s $h [set-attr name=v value="x"]]] [$store:exists $s $h]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-code-001-put-get-def level=core
+  [tags store mem put-def get-def code-identity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$eq [$store:get-def $s [$store:put-def $s '[?def f ($x) $x]']] '[?def f ($x) $x]']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-code-002-tier2-alpha-dedup level=core
+  [tags store mem put-def code-identity dedup]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-def $s '[?def f ($x) $x]']] [= $h2 [$store:put-def $s '[?def f ($y) $y]']] [$eq $h1 $h2]]
 #]]
   [out-text [#
 true
@@ -432,7 +460,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $a [$store:open "mem://"]] [?let [= $h [$store:put-doc $a [doc [item "hello"]]]] [?let [= $b [$store:open "mem://"]] [$store:migrate $a $b]]]]
+[?let [= $a [$store:open "mem://"]] [= $h [$store:put-doc $a [doc [item "hello"]]]] [= $b [$store:open "mem://"]] [$store:migrate $a $b]]
 #]]
   [out-text [#
 [migration-report doc-count=1 hashes-verified=1 bytes-written=20]
@@ -446,10 +474,297 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $a [$store:open "mem://"]] [?let [= $h [$store:put-doc $a [doc [item "hello"]]]] [?let [= $b [$store:open "mem://"]] [?let [= $m [$store:migrate $a $b]] [$store:get-doc $b $h]]]]]
+[?let [= $a [$store:open "mem://"]] [= $h [$store:put-doc $a [doc [item "hello"]]]] [= $b [$store:open "mem://"]] [= $m [$store:migrate $a $b]] [$store:get-doc $b $h]]
 #]]
   [out-text [#
 [doc [item 'hello']]
+#]]
+ ]
+
+ [case id=store-clone-001-into-empty level=core
+  [tags store mem clone porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $a [$store:open "mem://"]] [= $h [$store:put-doc $a [doc [item "hello"]]]] [= $b [$store:open "mem://"]] [= $r [$store:clone $a $b]] [$store:get-doc $b $h]]
+#]]
+  [out-text [#
+[doc [item 'hello']]
+#]]
+ ]
+
+ [case id=store-push-001-local-to-remote level=core
+  [tags store mem push porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $l [$store:open "mem://"]] [= $h [$store:put-doc $l [doc [v 1]]]] [= $rm [$store:open "mem://"]] [= $r [$store:push $l $rm]] [$store:get-doc $rm $h]]
+#]]
+  [out-text [#
+[doc [v 1]]
+#]]
+ ]
+
+ [case id=store-pull-001-remote-to-local level=core
+  [tags store mem pull porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $rm [$store:open "mem://"]] [= $h [$store:put-doc $rm [doc [v 2]]]] [= $l [$store:open "mem://"]] [= $r [$store:pull $l $rm]] [$store:get-doc $l $h]]
+#]]
+  [out-text [#
+[doc [v 2]]
+#]]
+ ]
+
+ [case id=store-fetch-001-remote-to-local level=core
+  [tags store mem fetch porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $rm [$store:open "mem://"]] [= $h [$store:put-doc $rm [doc [v 3]]]] [= $l [$store:open "mem://"]] [= $r [$store:fetch $l $rm]] [$store:get-doc $l $h]]
+#]]
+  [out-text [#
+[doc [v 3]]
+#]]
+ ]
+
+ [case id=store-status-001-heads-and-dedup level=core
+  [tags store mem status porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [v 1]]]] [$store:status $s]]
+#]]
+  [out-text [#
+[status backend=mem docs=1 objects=5 logical=5 distinct=5 unflushed=1]
+#]]
+ ]
+
+ [case id=store-mounts-001-local-handle-refuses level=core
+  [tags store mem mounts service-tier CXER1709]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:mounts $s]]
+#]]
+  [out-err [#
+cx-err:CXER1709
+#]]
+ ]
+
+ [case id=store-config-reload-001-local-handle-refuses level=core
+  [tags store mem config-reload service-tier CXER1709]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:config-reload $s]]
+#]]
+  [out-err [#
+cx-err:CXER1709
+#]]
+ ]
+
+ [case id=store-log-001-one-epoch level=core
+  [tags store mem log porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [v 1]]]] [$count [$store:log $s]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=store-gc-001-reclaims-unreachable level=core
+  [tags store mem gc porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $a [$store:put-doc $s [doc [item "x"]]]] [= $b [$store:put-doc $s [doc [item "y"]]]] [= $d [$store:delete-doc $s $a]] [$store:gc $s]]
+#]]
+  [out-text [#
+[gc-result reclaimed=4 objects=5]
+#]]
+ ]
+
+ [case id=store-prune-001-reclaims-unreachable level=core
+  [tags store mem prune porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $a [$store:put-doc $s [doc [item "x"]]]] [= $b [$store:put-doc $s [doc [item "y"]]]] [= $d [$store:delete-doc $s $a]] [$store:prune $s]]
+#]]
+  [out-text [#
+[prune-result reclaimed=4 objects=5]
+#]]
+ ]
+
+ [case id=store-rotate-kek-001-plaintext-unsupported level=core
+  [tags store mem rotate-kek encryption CXER1141]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:rotate-kek $s "tenant-b"]]
+#]]
+  [out-err [#
+cx-err:CXER1141
+#]]
+ ]
+
+ [; ── #290: gc/prune succeed on the flat file:// document model (the legacy
+    on-disk form) — §15 lists both under write (file/local), so the capability
+    table is the contract. Flat semantics mirror pc_reclaim's obj_roots
+    semantics: every present doc is its own object AND a root, so there is
+    never a sub-doc object to reclaim (reclaimed=0, objects=<live docs>);
+    gc additionally compacts the append log to a snapshot. ── ]
+ [case id=store-gc-002-flat-file-succeeds level=core grant='read write'
+  [tags store gc porcelain file-backend document-model granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $u [$strings:join ("document+file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [= $s [$store:open $u]] [= $a [$store:put-doc $s [doc [item "x"]]]] [= $b [$store:put-doc $s [doc [item "y"]]]] [= $d [$store:delete-doc $s $a]] [$store:gc $s]]
+#]]
+  [out-text [#
+[gc-result reclaimed=0 objects=1]
+#]]
+ ]
+
+ [case id=store-prune-002-flat-file-succeeds level=core grant='read write'
+  [tags store prune porcelain file-backend document-model granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $u [$strings:join ("document+file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [= $s [$store:open $u]] [= $a [$store:put-doc $s [doc [item "x"]]]] [= $b [$store:put-doc $s [doc [item "y"]]]] [= $d [$store:delete-doc $s $a]] [$store:prune $s]]
+#]]
+  [out-text [#
+[prune-result reclaimed=0 objects=1]
+#]]
+ ]
+
+ [; ── #291/#298: delete-doc / delete-alias on the flat model are durable
+    across opens — the append log carries T (doc) / X (alias) tombstone
+    records that store_read_index replays. ── ]
+ [case id=store-delete-002-flat-file-persists-across-opens level=core grant='read write'
+  [tags store delete-doc file-backend document-model persistence tombstone granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $u [$strings:join ("document+file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [= $s1 [$store:open $u]] [= $h [$store:put-doc $s1 [user name=z]]] [= $d [$store:delete-doc $s1 $h]] [= $s2 [$store:open $u]] [$count [$store:list-docs $s2]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=store-delete-alias-002-flat-file-persists-across-opens level=core grant='read write'
+  [tags store delete-alias file-backend document-model persistence tombstone granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?lib 'cx-stdlib/strings']
+[?let [= $u [$strings:join ("document+file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [= $s1 [$store:open $u]] [= $h [$store:put-doc $s1 [user name=z]]] [= $a [$store:set-alias $s1 "current" $h]] [= $d [$store:delete-alias $s1 "current"]] [= $s2 [$store:open $u]] [$count [$store:list-aliases $s2]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=store-diff-001-modified-leaf level=core
+  [tags store mem diff porcelain hash-skip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $a [$store:put-doc $s [order [id 1] [amt 100]]]] [= $b [$store:put-doc $s [order [id 1] [amt 200]]]] [$store:diff $s $a $b]]
+#]]
+  [out-text [#
+[diff [change path='/order/amt/[0]' kind=modified]]
+#]]
+ ]
+
+ [case id=store-diff-002-identical-empty level=core
+  [tags store mem diff porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $a [$store:put-doc $s [order [id 1]]]] [$store:diff $s $a $a]]
+#]]
+  [out-text [#
+[diff]
+#]]
+ ]
+
+ [case id=store-branch-001-create-and-resolve level=core
+  [tags store mem branch porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [v 1]]]] [= $br [$store:branch $s "main" $h]] [= [$store:get-alias $s "main"] $h]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-branch-002-force-moves level=core
+  [tags store mem branch branch-force porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [v 1]]]] [= $h2 [$store:put-doc $s [doc [v 2]]]] [= $b1 [$store:branch $s "main" $h1]] [= $b2 [$store:branch-force $s "main" $h2]] [= [$store:get-alias $s "main"] $h2]]
+#]]
+  [out-text [#
+true
 #]]
  ]
 
@@ -460,7 +775,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h1 [$store:put-doc $s [doc [item "a"]]]] [?let [= $h2 [$store:put-doc $s [doc [item "b"]]]] [$store:list-docs $s]]]]
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [item "a"]]]] [= $h2 [$store:put-doc $s [doc [item "b"]]]] [$store:list-docs $s]]
 #]]
   [out-text [#
 ('5983f412523c65a91811045dcec65275781457f0d986c09600740ca91cc96762', 'c04da92110f3dab497ddbc323581161da20b797a508958d8a624ef9f23a4de23')
@@ -474,7 +789,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:iter-docs $s]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:iter-docs $s]]
 #]]
   [out-text [#
 ([entry hash='01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9' [doc [item 'hello']]])
@@ -546,7 +861,7 @@ cx-err:CXER0271
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/strings']
-[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [?let [= $s [$store:open $u]] [?let [= $h [$store:put-doc $s [user name=z]]] [$store:get-doc $s $h]]]]
+[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [= $s [$store:open $u]] [= $h [$store:put-doc $s [user name=z]]] [$store:get-doc $s $h]]
 #]]
   [out-text [#
 [user name=z]
@@ -563,7 +878,7 @@ cx-err:CXER0271
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/strings']
-[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [?let [= $s1 [$store:open $u]] [?let [= $h [$store:put-doc $s1 [user name=z]]] [?let [= $s2 [$store:open $u]] [$count [$store:list-docs $s2]]]]]]
+[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [= $s1 [$store:open $u]] [= $h [$store:put-doc $s1 [user name=z]]] [= $s2 [$store:open $u]] [$count [$store:list-docs $s2]]]
 #]]
   [out-text [#
 1
@@ -580,7 +895,7 @@ cx-err:CXER0271
 [?lib 'cx-stdlib/io']
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/strings']
-[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [?let [= $s1 [$store:open $u]] [?let [= $h [$store:put-doc $s1 [user name=z]]] [?let [= $a [$store:set-alias $s1 "current" $h]] [?let [= $s2 [$store:open $u]] [= [$store:get-alias $s2 "current"] $h]]]]]]
+[?let [= $u [$strings:join ("file://", [$path:join [$io:temp-dir "cxstore"] "s/"]) ""]] [= $s1 [$store:open $u]] [= $h [$store:put-doc $s1 [user name=z]]] [= $a [$store:set-alias $s1 "current" $h]] [= $s2 [$store:open $u]] [= [$store:get-alias $s2 "current"] $h]]
 #]]
   [out-text [#
 true
@@ -595,7 +910,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $a [$store:put-doc $s [user name=al]]] [?let [= $b [$store:put-doc-stream $s [user name=al]]] [= $a $b]]]]
+[?let [= $s [$store:open "mem://"]] [= $a [$store:put-doc $s [user name=al]]] [= $b [$store:put-doc-stream $s [user name=al]]] [= $a $b]]
 #]]
   [out-text [#
 true
@@ -609,7 +924,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [root [user name=al]]]] [$count [$store:query $s "//user"]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [root [user name=al]]]] [$count [$store:query $s "//user"]]]
 #]]
   [out-text [#
 1
@@ -623,10 +938,192 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [?let [= $h [$store:put-doc $s [root [user name=al]]]] [$count [$store:query $s "//missing"]]]]
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [root [user name=al]]]] [$count [$store:query $s "//missing"]]]
 #]]
   [out-text [#
 0
+#]]
+ ]
+
+ [; ── (C) remote byte-source backends (#91/#106/#78) — deny-by-default lane +
+    backend-status checks behind a `net` grant. The `net` capability gate is the
+    FIRST thing for every remote scheme (security.md §2): an ungranted `open`
+    yields CXER0271 and reveals nothing about backend availability. Live
+    round-trips (s3/http/ftp/sftp/csrp) need real services and live in the
+    env-gated V integration tests (store_{s3_minio,http,ftp,sftp,csrp}_test.v),
+    out of this language-neutral corpus. ── ]
+
+ [case id=store-020-open-s3-cap-denied level=core
+  [tags store open remote s3 capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open "s3://bucket/prefix/"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=store-021-open-http-cap-denied level=core
+  [tags store open remote http capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open "http://example.com/objects/"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=store-022-open-csrp-cap-denied level=core
+  [tags store open remote cx-store csrp capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open "cx-store+http://127.0.0.1:9099/teststore/"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=store-023-open-ftps-cap-denied-before-experimental level=core
+  [tags store open remote ftps capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open "ftps://h/dir/"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [; ftps:// without the opt-in is experimental (#107); behind a `net` grant the
+    default open raises CXER1100 (not a silent attempt). ]
+ [case id=store-024-open-ftps-experimental-default level=core grant='net'
+  [tags store open remote ftps experimental CXER1100]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open "ftps://h/dir/"]
+#]]
+  [out-err [#
+cx-err:CXER1100
+#]]
+ ]
+
+ [; sftp:// is gated `-d cx_sftp`; the default conformance build links no SSH
+    lib, so behind a `net` grant the open honestly raises CXER1100 (not built). ]
+ [case id=store-025-open-sftp-unbuilt-default level=core grant='net'
+  [tags store open remote sftp gated CXER1100]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open "sftp://h/dir/"]
+#]]
+  [out-err [#
+cx-err:CXER1100
+#]]
+ ]
+
+ [; §B unknown-scheme dispatch (#208.3): an unrecognized backend scheme is a hard
+    CXER1100 E_STORE_UNRESOLVED_BACKEND — NOT a silent attempt and NOT a cap denial.
+    Granted `net` so this exercises SCHEME DISPATCH (the resolver rejecting an
+    unknown scheme), not the capability gate. ]
+ [case id=store-025b-open-unknown-scheme-dispatch level=core grant='net'
+  [tags store open remote unknown-scheme dispatch CXER1100]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:open "gopher://h/dir/"]
+#]]
+  [out-err [#
+cx-err:CXER1100
+#]]
+ ]
+
+ [; ── (D) text doc-I/O enabling verbs (#78 CSRP) — put-doc-text / get-doc-text.
+    A CX-program CSRP server has no ast_bin/parse-text→doc verb, so it handles
+    cxd-text bodies via these. put-doc-text canonicalizes its text (parse +
+    render-canonical) then hashes+stores, so it dedups with put-doc of the same
+    doc (one stored object). get-doc-text returns the stored canonical text, or
+    the absence channel () for a miss (never null, never an err). mem:// is
+    capability-free, so these run under the empty set. ── ]
+
+ [case id=store-026-put-doc-text-stores level=core
+  [tags store put-doc-text mem csrp text]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $a [$store:put-doc-text $s "[doc [v 1]]"]] [$count [$store:list-docs $s]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=store-027-get-doc-text-roundtrips-to-same-hash level=core
+  [tags store put-doc-text get-doc-text mem csrp text dedup]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc-text $s "[doc [v 1]]"]] [= $t [$store:get-doc-text $s $h1]] [= $h2 [$store:put-doc-text $s $t]] [$count [$store:list-docs $s]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=store-028-get-doc-text-miss-is-absence level=core
+  [tags store get-doc-text mem absence csrp]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$count [$store:get-doc-text $s "0000000000000000000000000000000000000000000000000000000000000000"]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [; csrp-handle is the CSRP reference-server per-request handler (#78). It does
+    socket I/O (reads the request, writes the response), so it is net-gated;
+    under the empty capability set the gate denies (CXER0271). A live exchange
+    can't be fixtured here — the cx↔cx round trip lives in store_csrp_test.v. ]
+ [case id=store-029-csrp-handle-cap-denied level=core
+  [tags store csrp-handle capability CXER0271]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[$store:csrp-handle [exchange state=open url='tcp://0.0.0.0:8080'] [$store:open "mem://"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
 #]]
  ]
 

@@ -70,6 +70,37 @@ fn test_for_comp_memory_independent_of_loaded_closures() {
 	assert ratio < 3.0, 'for-comp memory scaled with the loaded closures table (#62 regressed): big=${big} small=${small} ratio=${ratio:.1f} (want < 3.0; pre-fix ~8×)'
 }
 
+// Same contract for `[?let]` frames (#272): a let frame only writes bindings,
+// so it must alias the closures table, not deep-copy it. Pre-fix EVERY let in
+// EVERY closure call cloned the whole program closure table — on a served
+// [$xap:host] render path (nested-let readout bodies × 540+ closures in scope)
+// that allocated tens of MB per HTTP request and drove the vgc collect storm
+// that wedged the xap-marine helm (multi-second HTTP freezes → keepalive
+// kill-loops). The let-chain's footprint must be independent of how many
+// closures are loaded.
+fn test_let_chain_memory_independent_of_loaded_closures() {
+	lets := '[?def deep (\$x) [?let [= \$a [\$concat \$x "-a"]] [= \$b [\$concat \$a "-b"]] [= \$c [\$concat \$b "-c"]] \$c]]\n'
+	loop := '[?for [in \$i [\$range 1 3000]] [yield [deep [\$text \$i]]]]'
+	run_prog(lets + loop) // warm-up
+	gc_collect()
+
+	base0 := used()
+	run_prog(lets + loop) // no lib: small closures table
+	small := i64(used()) - i64(base0)
+
+	gc_collect()
+	base1 := used()
+	run_prog("[?lib 'cx-stdlib/http' :as http]\n" + lets + loop) // large closures table
+	big := i64(used()) - i64(base1)
+
+	if base0 == 0 || small <= 0 {
+		eprintln('NOTE: used_memory() unmeasurable / noisy on this platform; skipping ratio assert')
+		return
+	}
+	ratio := f64(big) / f64(small)
+	assert ratio < 3.0, 'let-frame memory scaled with the loaded closures table (#272 regressed): big=${big} small=${small} ratio=${ratio:.1f} (want < 3.0)'
+}
+
 // Correctness: closures must still resolve THROUGH the aliased table inside a
 // comprehension (the alias is read-only; this guards that aliasing did not break
 // closure scoping in `[?for]` bodies).

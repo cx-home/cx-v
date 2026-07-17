@@ -335,17 +335,16 @@ fn bus_get_open(arg cx.Node) (&BusState, cx.Node, bool) {
 // a callable function value (boolean predicate over the message).
 fn bus_compile_pattern(p cx.Node) (BusPattern, cx.Node, bool) {
 	if name := bus_atom_name(p) {
-		// §2.2 prefix-glob. The spec writes the hierarchy with `.` and the
-		// glob suffix `.*` (`:order.*`); the CX program atom grammar admits
-		// neither `.` nor `*` as a NameChar (grammar.ebnf [6a]), so this
-		// impl realizes the SAME prefix-glob with `-` as the hierarchy
-		// separator and a TRAILING `-` as the glob marker: `:order-` matches
-		// `:order-placed` / `:order-cancelled` (and `:order-` itself). The
-		// semantics are identical; only the typeable spelling differs.
-		if name.len > 1 && name.ends_with('-') {
+		// §2.2 prefix-glob, in the spec's own spelling (#397 owner ruling
+		// 2026-07-13: lexicon [L40] atoms now carry dotted segments plus an
+		// optional terminal `.*` glob segment): `:order.*` matches
+		// `:order.placed` / `:order.cancelled` (and `:order` itself). The
+		// earlier `-`-separator workaround for the pre-ruling atom grammar
+		// is retired — cutover, no dual accept.
+		if name.len > 2 && name.ends_with('.*') {
 			return BusPattern{
 				kind: .atom
-				text: name#[..-1] // strip the trailing `-` glob marker
+				text: name#[..-2] // strip the trailing `.*` glob segment
 				glob: true
 			}, bus_null(), true
 		}
@@ -398,7 +397,7 @@ fn bus_pattern_matches(pat BusPattern, msg cx.Node, mut env MatchEnv) bool {
 		.atom {
 			topic := bus_topic_of(msg) or { return false }
 			if pat.glob {
-				return topic == pat.text || topic.starts_with(pat.text + '-')
+				return topic == pat.text || topic.starts_with(pat.text + '.')
 			}
 			return topic == pat.text
 		}
@@ -433,7 +432,7 @@ fn bus_pattern_at_least_as_specific(sub_pat BusPattern, query BusPattern) bool {
 				return false
 			}
 			if query.glob {
-				return sub_pat.text == query.text || sub_pat.text.starts_with(query.text + '-')
+				return sub_pat.text == query.text || sub_pat.text.starts_with(query.text + '.')
 					|| (sub_pat.glob && sub_pat.text.starts_with(query.text))
 			}
 			// exact query: only an exact subscriber on the same topic.

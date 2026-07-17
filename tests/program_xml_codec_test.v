@@ -184,15 +184,23 @@ fn test_xml_binding_position_predicate() {
 }
 
 fn test_xml_binding_attr_eq_predicate() {
-	assert_xml_roundtrip('$u/item[@id=1]')
+	assert_xml_roundtrip('$u/item[= $_@id 1]')
 }
 
 fn test_xml_binding_attr_existence_predicate() {
 	assert_xml_roundtrip('$u/item[@active]')
 }
 
+fn test_xml_binding_attr_absence_predicate() {
+	assert_xml_roundtrip('$u/item[@!deleted]')
+}
+
 fn test_xml_binding_attr_comparison_predicate() {
-	assert_xml_roundtrip('$doc/item[@n>=5]')
+	assert_xml_roundtrip('$doc/item[>= $_@n 5]')
+}
+
+fn test_xml_binding_fused_call_predicate() {
+	assert_xml_roundtrip('$u/item[$myfn $_]')
 }
 
 // ── Sequence / array literals (structural: cx:seq / cx:arr) ────────────────────
@@ -336,9 +344,9 @@ fn test_xml_call_bare_reference() {
 }
 
 fn test_xml_call_labeled_arg() {
-	assert_xml_roundtrip('foo(:limit 10, $x)')
+	assert_xml_roundtrip('[$foo limit=10 $x]')
 }
 
-fn test_xml_call_fallible_paren() {
-	assert_xml_roundtrip('bar(1, 2)?')
+fn test_xml_call_fallible_multi_arg() {
+	assert_xml_roundtrip('[$bar 1 2]?')
 }

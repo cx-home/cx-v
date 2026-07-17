@@ -106,9 +106,11 @@ fn emit_program_binding(mut b strings.Builder, n cx.ProgramBinding) {
 			}
 		}
 		for pred in step.predicates {
-			b.write_string('[')
-			b.write_string(path_predicate_label(pred))
-			b.write_string(']')
+			// Full predicate emission — the emitted source is REPARSED by
+			// the dispatcher bridges (match/modify), so the informational
+			// `[expr]` label placeholder is not acceptable here; a general
+			// body must round-trip ([159]).
+			emit_path_predicate(mut b, pred)
 		}
 	}
 }
@@ -116,15 +118,30 @@ fn emit_program_binding(mut b strings.Builder, n cx.ProgramBinding) {
 // ── cx.ProgramCall — `name(args) [? | !]?` ─────────────────────────────────────
 
 fn emit_program_call(mut b strings.Builder, n cx.ProgramCall) {
+	// Partial-application hole sentinel — emits as the bare `_`.
+	if n.name == cx.program_hole_name {
+		b.write_string('_')
+		return
+	}
+	// Bare reference (function VALUE, e.g. a [?pipe] stage) — no call.
+	if !n.explicit_call && n.args.len == 0 {
+		b.write_string(n.name)
+		return
+	}
+	// Head-dispatch `[$name arg …]` — the ONLY call surface (code.md
+	// §6.3); the paren-call emission this replaces was retired with
+	// grammar [132]–[134].
+	b.write_string('[\$')
 	b.write_string(n.name)
-	b.write_string('(')
 	for i, a in n.args {
-		if i > 0 {
-			b.write_string(', ')
+		b.write_string(' ')
+		if i < n.arg_labels.len && n.arg_labels[i].len > 0 {
+			b.write_string(n.arg_labels[i])
+			b.write_string('=')
 		}
 		emit_program_node(mut b, a)
 	}
-	b.write_string(')')
+	b.write_string(']')
 	if n.fallible {
 		b.write_string('?')
 	} else if n.must_succeed {
@@ -241,6 +258,10 @@ fn emit_program_directive(mut b strings.Builder, d cx.ProgramDirective) {
 		emit_eval_directive(mut b, d)
 		return
 	}
+	if d.name == 'match' {
+		emit_match_directive(mut b, d)
+		return
+	}
 	b.write_string('[?')
 	b.write_string(d.name)
 	for s in d.slots {
@@ -266,6 +287,94 @@ fn emit_eval_directive(mut b strings.Builder, d cx.ProgramDirective) {
 			b.write_string(']')
 		} else {
 			emit_program_node(mut b, s.value)
+		}
+	}
+	b.write_string(']')
+}
+
+// emit_match_directive emits `[?match]` in the canonical CLAUSE-CHILD surface
+// (#400): `[?match SCRUTINEE [case P [where G]? R] [when PRED R] [else R]
+// [yield R]]`. The parser flattens each clause into labeled-slot runs
+// (case→pattern, optional where→guard, yield→result; when→pred, yield→result;
+// else→placeholder-bool, yield→result; bare yield→result for the single-arm
+// form) — parse_match_clause is the forward map, this is its exact inverse.
+// The generic emit_directive_slot path wrote the RETIRED `:label` colon-slot
+// spelling, which is stable under re-parse-and-re-emit at the TEXT level but
+// yields a different AST (bare atoms in argument position) that [?match]
+// evaluation rejects — fmt was corrupting valid match programs.
+fn emit_match_directive(mut b strings.Builder, d cx.ProgramDirective) {
+	b.write_string('[?match')
+	mut i := 0
+	for i < d.slots.len {
+		s := d.slots[i]
+		if s.kind != .labeled {
+			b.write_string(' ')
+			emit_program_node(mut b, s.value)
+			i++
+			continue
+		}
+		match s.label {
+			'case' {
+				b.write_string(' [case ')
+				emit_program_node(mut b, s.value)
+				i++
+				if i < d.slots.len && d.slots[i].kind == .labeled
+					&& d.slots[i].label == 'where' {
+					b.write_string(' [where ')
+					emit_program_node(mut b, d.slots[i].value)
+					b.write_string(']')
+					i++
+				}
+				if i < d.slots.len && d.slots[i].kind == .labeled
+					&& d.slots[i].label == 'yield' {
+					b.write_string(' ')
+					emit_program_node(mut b, d.slots[i].value)
+					i++
+				}
+				b.write_string(']')
+			}
+			'when' {
+				b.write_string(' [when ')
+				emit_program_node(mut b, s.value)
+				i++
+				if i < d.slots.len && d.slots[i].kind == .labeled
+					&& d.slots[i].label == 'yield' {
+					b.write_string(' ')
+					emit_program_node(mut b, d.slots[i].value)
+					i++
+				}
+				b.write_string(']')
+			}
+			'else' {
+				// The stored else value is the parser's placeholder bool —
+				// the clause surface carries only the result expression.
+				i++
+				b.write_string(' [else')
+				if i < d.slots.len && d.slots[i].kind == .labeled
+					&& d.slots[i].label == 'yield' {
+					b.write_string(' ')
+					emit_program_node(mut b, d.slots[i].value)
+					i++
+				}
+				b.write_string(']')
+			}
+			'yield' {
+				// Single-arm form: a yield slot with no owning clause.
+				b.write_string(' [yield ')
+				emit_program_node(mut b, s.value)
+				b.write_string(']')
+				i++
+			}
+			else {
+				// Unknown labeled slot: fall back to the clause-child shape
+				// so the output at least stays in the current surface.
+				b.write_string(' [')
+				b.write_string(s.label)
+				b.write_string(' ')
+				emit_program_node(mut b, s.value)
+				b.write_string(']')
+				i++
+			}
 		}
 	}
 	b.write_string(']')
@@ -638,9 +747,7 @@ fn emit_cx_element_literal(mut b strings.Builder, l cx.ProgramLiteral) {
 		emit_program_node(mut b, name_e)
 		for a in l.attrs {
 			b.write_string(' ')
-			b.write_string(a.name)
-			b.write_string('=')
-			emit_program_node(mut b, a.value)
+			emit_construction_attr(mut b, a)
 		}
 		for it in l.items {
 			b.write_string(' ')
@@ -651,12 +758,10 @@ fn emit_cx_element_literal(mut b strings.Builder, l cx.ProgramLiteral) {
 	}
 	b.write_string('[')
 	b.write_string(l.name)
-	// Attributes — element-construction attrs (name=expr).
+	// Attributes — element-construction attrs (name=expr / name::T=expr).
 	for a in l.attrs {
 		b.write_string(' ')
-		b.write_string(a.name)
-		b.write_string('=')
-		emit_program_node(mut b, a.value)
+		emit_construction_attr(mut b, a)
 	}
 	// Body items (positional). Slots come in the parallel `slots` list
 	// for labeled `:label value` pairs.
@@ -671,6 +776,20 @@ fn emit_cx_element_literal(mut b strings.Builder, l cx.ProgramLiteral) {
 		emit_program_node(mut b, s.value)
 	}
 	b.write_string(']')
+}
+
+// emit_construction_attr renders one element-construction attribute
+// clause — `name=VALUE`, or the typed `name::T=VALUE` when the attr
+// carries a D3 ascription ([L50]; #466) — so the canonical program
+// surface re-parses to the same ProgramAttr.
+fn emit_construction_attr(mut b strings.Builder, a cx.ProgramAttr) {
+	b.write_string(a.name)
+	if a.data_type != '' {
+		b.write_string('::')
+		b.write_string(a.data_type)
+	}
+	b.write_string('=')
+	emit_program_node(mut b, a.value)
 }
 
 // emit_quoted_string emits a string literal with quote-style chosen
@@ -781,36 +900,53 @@ fn path_axis_emit_name(a cx.ProgramPathAxis) string {
 }
 
 fn emit_path_predicate(mut b strings.Builder, p cx.ProgramPathPredicate) {
-	b.write_string('[')
 	match p.kind {
 		.position {
+			b.write_string('[')
 			b.write_string(p.int_index.str())
+			b.write_string(']')
 		}
 		.attr_test {
+			b.write_string('[')
 			emit_pattern_attr(mut b, cx.ProgramPatternAttr{
 				kind:  p.attr_kind
 				name:  p.attr_name
 				op:    p.attr_op
 				value: p.attr_value
 			})
+			b.write_string(']')
 		}
 		.expr {
-			// General PredicateExpr body. Emit the
-			// body via the canonical program-emit path. The
-			// __pred_last sugar marker round-trips as `last()`.
+			// General PredicateExpr body — FUSED BRACKETS ([159b]): a
+			// bracketed form body (operator element / call / directive)
+			// already carries its own brackets, which double as the
+			// predicate's — emitting an extra pair would produce the
+			// invalid `[[…]]`. Only non-form bodies (binding/path EBV)
+			// get wrapped. The retired `last()` marker emits its
+			// canonical replacement.
 			body := p.body or {
-				b.write_string('?')
-				b.write_string(']')
+				b.write_string('[?]')
 				return
 			}
 			if body is cx.ProgramCall && (body as cx.ProgramCall).name == '__pred_last' {
-				b.write_string('last()')
-			} else {
+				b.write_string('[= \$_position \$_last]')
+				return
+			}
+			fused := match body {
+				cx.ProgramLiteral { (body as cx.ProgramLiteral).kind == .cx_element }
+				cx.ProgramCall { true }
+				cx.ProgramDirective { true }
+				else { false }
+			}
+			if fused {
 				emit_program_node(mut b, body)
+			} else {
+				b.write_string('[')
+				emit_program_node(mut b, body)
+				b.write_string(']')
 			}
 		}
 	}
-	b.write_string(']')
 }
 
 // emit_program_slice_access parser-only stub.

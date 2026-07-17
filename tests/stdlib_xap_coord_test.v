@@ -12,9 +12,9 @@ import code
 fn test_xap_coord_latest_wins() {
 	prog := "[?lib 'cx-xap' :as xap]
 [?let [= \$rt [\$xap:run {tenant: \"helm\"}]]
-[?let [= \$a [\$xap:coord-publish \$rt \"chart/viewport\" [viewport zoom=12]]]
-[?let [= \$b [\$xap:coord-publish \$rt \"chart/viewport\" [viewport zoom=13]]]
-  [\$xap:coord-read \$rt \"chart/viewport\"]]]]"
+[= \$a [\$xap:coord-publish \$rt \"chart/viewport\" [viewport zoom=12]]]
+[= \$b [\$xap:coord-publish \$rt \"chart/viewport\" [viewport zoom=13]]]
+  [\$xap:coord-read \$rt \"chart/viewport\"]]"
 	out := code.eval_code('', prog, 'text') or {
 		assert false, 'eval failed: ${err}'
 		return
@@ -40,8 +40,8 @@ fn test_xap_coord_empty_channel() {
 fn test_xap_coord_not_journaled() {
 	prog := "[?lib 'cx-xap' :as xap]
 [?let [= \$rt [\$xap:run {tenant: \"helm\"}]]
-[?let [= \$a [\$xap:coord-publish \$rt \"chart/viewport\" [viewport zoom=12]]]
-  [\$xap:state \$rt \"/chart/viewport\"]]]"
+[= \$a [\$xap:coord-publish \$rt \"chart/viewport\" [viewport zoom=12]]]
+  [\$xap:state \$rt \"/chart/viewport\"]]"
 	out := code.eval_code('', prog, 'text') or {
 		assert false, 'eval failed: ${err}'
 		return

@@ -10,17 +10,22 @@ import code
 // least one direct test):
 //
 //   - attr_test predicate filters candidates with the attr.
-//   - attr_compare predicate (all 6 ops) filters correctly.
+//   - attr_compare predicate (all 6 prefix ops `[OP $_@name V]`) filters
+//     correctly; missing attribute → ABSENCE → comparison false (all ops,
+//     including `!=`) — never an error.
 //   - int_position predicate keeps only the Nth candidate.
 //   - `$_position` reference inside predicate works.
 //   - `$_last` reference works.
+//   - bool_expr connectives `[and …]` / `[or …]` / `[not …]` evaluate
+//     (EBV fold over children).
 //   - `:bind NAME` from PredicateEvalContext is visible inside the predicate
 //     (cross-step reference via reserved_binding-shaped AST).
 //   - Empty candidate sequence → empty result, no error.
 //   - Single-candidate sequence with passing predicate → [single].
 //   - 3-candidate mixed pass/fail → expected filtered subset.
 //   - EBV coercion: each table row gives the documented result.
-//   - count(*) function_call form filters by children_count.
+//   - function_call count AST (hand-built — the paren-call SURFACE is
+//     retired per #110) filters by children_count.
 //   - Generic / unsupported predicate → MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED.
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -104,7 +109,7 @@ fn test_attr_compare_eq_string() {
 		elem('user', {'role': 'guest'}),
 		elem('user', {'role': 'admin'}),
 	]
-	pred := cx.predicate_expr_parse('@role = "admin"') or {
+	pred := cx.predicate_expr_parse('= \$_@role "admin"') or {
 		assert false, '${err}'
 		return
 	}
@@ -120,7 +125,7 @@ fn test_attr_compare_neq_string() {
 		elem('u', {'r': 'a'}),
 		elem('u', {'r': 'b'}),
 	]
-	pred := cx.predicate_expr_parse('@r != "a"') or {
+	pred := cx.predicate_expr_parse('!= \$_@r "a"') or {
 		assert false
 		return
 	}
@@ -138,7 +143,7 @@ fn test_attr_compare_lt_int() {
 		elem('u', {'age': '17'}),
 		elem('u', {'age': '30'}),
 	]
-	pred := cx.predicate_expr_parse('@age < 18') or {
+	pred := cx.predicate_expr_parse('< \$_@age 18') or {
 		assert false, '${err}'
 		return
 	}
@@ -156,7 +161,7 @@ fn test_attr_compare_lte_int() {
 		elem('u', {'n': '2'}),
 		elem('u', {'n': '3'}),
 	]
-	pred := cx.predicate_expr_parse('@n <= 2') or {
+	pred := cx.predicate_expr_parse('<= \$_@n 2') or {
 		assert false
 		return
 	}
@@ -173,7 +178,7 @@ fn test_attr_compare_gt_int() {
 		elem('u', {'n': '5'}),
 		elem('u', {'n': '10'}),
 	]
-	pred := cx.predicate_expr_parse('@n > 4') or {
+	pred := cx.predicate_expr_parse('> \$_@n 4') or {
 		assert false
 		return
 	}
@@ -190,7 +195,7 @@ fn test_attr_compare_gte_int() {
 		elem('u', {'n': '5'}),
 		elem('u', {'n': '10'}),
 	]
-	pred := cx.predicate_expr_parse('@n >= 5') or {
+	pred := cx.predicate_expr_parse('>= \$_@n 5') or {
 		assert false
 		return
 	}
@@ -203,12 +208,14 @@ fn test_attr_compare_gte_int() {
 
 fn test_attr_compare_absent_attr_is_false() {
 	// An item missing the attribute being compared MUST fail the
-	// predicate (per attr_compare contract).
+	// predicate (per attr_compare contract): a missing-attribute read
+	// yields ABSENCE (empty sequence), and comparisons with absence are
+	// false — never an error (§9.2).
 	candidates := [
 		elem('u', {'r': 'a'}),
 		elem('u', {}),
 	]
-	pred := cx.predicate_expr_parse('@r = "a"') or {
+	pred := cx.predicate_expr_parse('= \$_@r "a"') or {
 		assert false
 		return
 	}
@@ -217,6 +224,43 @@ fn test_attr_compare_absent_attr_is_false() {
 		return
 	}
 	assert out.len == 1
+}
+
+fn test_attr_compare_absent_attr_neq_also_false() {
+	// Comparisons with absence are false for ALL ops, INCLUDING `!=` —
+	// `[!= $_@missing 1]` filters everything out; it does not pass items
+	// lacking the attribute.
+	candidates := [
+		elem('u', {}),
+		elem('u', {}),
+	]
+	pred := cx.predicate_expr_parse('!= \$_@missing 1') or {
+		assert false, '${err}'
+		return
+	}
+	out := code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
+		assert false, 'absence comparison must not error: ${err}'
+		return
+	}
+	assert out.len == 0
+}
+
+fn test_attr_compare_all_absent_filters_out_without_error() {
+	// `[= $_@missing 1]` over a sequence where NO item carries the
+	// attribute → empty result, no error.
+	candidates := [
+		elem('u', {'other': 'x'}),
+		elem('u', {}),
+	]
+	pred := cx.predicate_expr_parse('= \$_@missing 1') or {
+		assert false, '${err}'
+		return
+	}
+	out := code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
+		assert false, 'absence comparison must not error: ${err}'
+		return
+	}
+	assert out.len == 0
 }
 
 // ── int_position ─────────────────────────────────────────────────────────────
@@ -381,16 +425,35 @@ fn test_reserved_underscore_name_in_eval_context_rejected() {
 	assert false, 'expected scope-build to reject reserved `_` binding'
 }
 
-// ── count(*) function_call ───────────────────────────────────────────────────
+// ── bool_expr connectives (prefix `and` / `or` / `not`) ──────────────────────
 
-fn test_count_compare_filters_by_arity() {
+fn test_bool_expr_and_filters_intersection() {
 	candidates := [
-		elem_with_count('group', {}, 0),
-		elem_with_count('group', {}, 2),
-		elem_with_count('group', {}, 5),
+		elem('u', {'a': '1', 'b': '2'}),
+		elem('u', {'a': '1'}),
+		elem('u', {'b': '2'}),
 	]
-	pred := cx.predicate_expr_parse('count(*) > 1') or {
+	pred := cx.predicate_expr_parse('and [@a] [@b]') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	out := code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
 		assert false, '${err}'
+		return
+	}
+	assert out.len == 1
+	assert 'a' in out[0].attrs
+	assert 'b' in out[0].attrs
+}
+
+fn test_bool_expr_or_with_compares_filters_union() {
+	candidates := [
+		elem('u', {'a': '1'}),
+		elem('u', {'b': '3'}),
+		elem('u', {'c': '9'}),
+	]
+	pred := cx.predicate_expr_parse('or [= \$_@a 1] [> \$_@b 2]') or {
+		assert false, 'parse failed: ${err}'
 		return
 	}
 	out := code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
@@ -400,16 +463,86 @@ fn test_count_compare_filters_by_arity() {
 	assert out.len == 2
 }
 
+fn test_bool_expr_not_inverts() {
+	candidates := [
+		elem('u', {'deleted': 'true'}),
+		elem('u', {}),
+	]
+	pred := cx.predicate_expr_parse('not [@deleted]') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	out := code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
+		assert false, '${err}'
+		return
+	}
+	assert out.len == 1
+	assert 'deleted' !in out[0].attrs
+}
+
+fn test_bool_expr_and_absence_operand_is_false_not_error() {
+	// A comparison over a missing attribute inside a connective is just
+	// false — the whole `and` folds to false, no error.
+	candidates := [elem('u', {'a': '1'})]
+	pred := cx.predicate_expr_parse('and [= \$_@a 1] [= \$_@missing 1]') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	out := code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
+		assert false, 'absence inside connective must not error: ${err}'
+		return
+	}
+	assert out.len == 0
+}
+
+// ── count function_call AST (hand-built) ─────────────────────────────────────
+//
+// The paren-call SURFACE `count(*)` is RETIRED (#110) — predicate_expr_parse
+// hard-errors on it (see predicate_expr_test.v). The evaluator's
+// function_call arm still services hand-built ASTs; keep its behavior
+// pinned here.
+
+fn test_count_paren_surface_retired() {
+	_ := cx.predicate_expr_parse('count(*) > 1') or {
+		assert err.msg().contains('retired'), 'expected retired-surface message, got: ${err.msg()}'
+		return
+	}
+	assert false, 'paren-call count(*) should be a hard parse error'
+}
+
+fn test_count_compare_filters_by_arity() {
+	candidates := [
+		elem_with_count('group', {}, 0),
+		elem_with_count('group', {}, 2),
+		elem_with_count('group', {}, 5),
+	]
+	pred := &cx.PredicateExpr{
+		kind:     .function_call
+		name:     'count'
+		value:    '*'
+		op:       '>'
+		position: 1
+		source:   'count(*) > 1'
+	}
+	out := code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
+		assert false, '${err}'
+		return
+	}
+	assert out.len == 2
+}
+
 fn test_count_bare_truthy_iff_nonzero() {
-	// Bare `count(*)` returns the int → EBV true iff non-zero.
+	// Bare count → returns the int → EBV true iff non-zero.
 	candidates := [
 		elem_with_count('group', {}, 0),
 		elem_with_count('group', {}, 1),
 		elem_with_count('group', {}, 3),
 	]
-	pred := cx.predicate_expr_parse('count(*)') or {
-		assert false, '${err}'
-		return
+	pred := &cx.PredicateExpr{
+		kind:   .function_call
+		name:   'count'
+		value:  '*'
+		source: 'count(*)'
 	}
 	out := code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
 		assert false
@@ -464,20 +597,20 @@ fn test_ebv_multi_element_sequence_true() {
 // ── Generic / unsupported predicate ──────────────────────────────────────────
 
 fn test_generic_predicate_returns_not_yet_implemented_error() {
-	// A `bool_expr`-kind PredicateExpr cannot be produced by the
-	// Phase 2.19 parser (it bails out early to source-only PathPredicate);
+	// A `generic`-kind PredicateExpr is never produced by the parser;
 	// we synthesize one directly to confirm the evaluator surfaces the
 	// MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED error gracefully.
+	// (bool_expr now EVALUATES — see the connective tests above.)
 	candidates := [elem('u', {})]
 	pred := &cx.PredicateExpr{
-		kind:   .bool_expr
-		source: '@a and @b'
+		kind:   .generic
+		source: 'instance of thing'
 	}
 	code.eval_predicate_filter(candidates, pred, empty_ctx()) or {
 		assert err.msg().contains('MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED')
 		return
 	}
-	assert false, 'expected NOT_YET_IMPLEMENTED error on bool_expr'
+	assert false, 'expected NOT_YET_IMPLEMENTED error on generic kind'
 }
 
 fn test_unsupported_function_call_returns_not_yet_implemented() {

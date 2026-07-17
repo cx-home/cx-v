@@ -128,6 +128,13 @@ fn json_maybe_named(entries []cx.Node) cx.Node {
 							name:  ae.name
 							value: av.value
 						}
+					} else {
+						// a non-scalar `$attrs` value is outside the `named`
+						// subset (json.md §2) — bail to the plain map rather
+						// than silently dropping the attribute; the
+						// conversion-lane envelope walk (#475) owns the
+						// extended shapes.
+						return json_map(entries)
 					}
 				}
 			}

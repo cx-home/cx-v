@@ -171,8 +171,10 @@ pub fn convert(src string, from Format, to Format) !string {
 
 // convert_opts is convert with a lossless flag. When lossless is true and the
 // target is XML, typed scalars carry their type per conversions.md §0.2
-// (emit_xml_lossless); other targets are currently unaffected (their lossless
-// forms are separate work).
+// (emit_xml_lossless); the cx target is inherently lossless. Any OTHER
+// target REJECTS lossless=true with an error (#416) — the JSON sidecar /
+// YAML tag modes of §0.2 are specified but not implemented, and a silently
+// ignored flag is worse than an error.
 //
 // Both axes route through the codec registry (codec.md §6): convert_opts is a
 // registry lookup + compose, never a per-pair branch. The Format enum maps to

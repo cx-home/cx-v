@@ -363,7 +363,7 @@
 }
 #]]
   [out-xml [#
-<tags cx:type="string[]"><item>admin</item><item>user</item><item>guest</item></tags>
+<tags cx:type="string[]"><cx:item>admin</cx:item><cx:item>user</cx:item><cx:item>guest</cx:item></tags>
 #]]
   [out-cx [#
 [tags::string[] admin user guest]
@@ -393,7 +393,7 @@
 }
 #]]
   [out-xml [#
-<scores cx:type="int[]"><item>10</item><item>20</item><item>30</item></scores>
+<scores cx:type="int[]"><cx:item>10</cx:item><cx:item>20</cx:item><cx:item>30</cx:item></scores>
 #]]
   [out-cx [#
 [scores::int[] 10 20 30]
@@ -423,6 +423,243 @@
 #]]
   [out-cx [#
 [data::bytes SGVsbG8=]
+#]]
+ ]
+
+ # #457: a `0x…` hex literal under an explicit `::bytes` ascription is a bytes
+ # value REGARDLESS of magnitude (lexicon [L51] lists bytes in the ascription
+ # type set) — it must never int-coerce. Short (fits i64), 8-byte (over i64,
+ # would clamp), and attr-position forms all keep the source `0x` spelling.
+ [case id=016b-scalar-bytes-short-hex level=extended
+  [tags scalar bytes hex explicit issue-457]
+  [in-cx [#
+[hash::bytes 0x3a7bd3e2]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "hash",
+      "dataType": "bytes",
+      "items": [{"type": "Scalar", "dataType": "bytes", "value": "0x3a7bd3e2"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<hash cx:type="bytes">0x3a7bd3e2</hash>
+#]]
+  [out-cx [#
+[hash::bytes 0x3a7bd3e2]
+#]]
+ ]
+
+ [case id=016c-scalar-bytes-hex-8byte level=extended
+  [tags scalar bytes hex overflow explicit issue-457]
+  [in-cx [#
+[magic::bytes 0x89504e470d0a1a0a]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "magic",
+      "dataType": "bytes",
+      "items": [{"type": "Scalar", "dataType": "bytes", "value": "0x89504e470d0a1a0a"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<magic cx:type="bytes">0x89504e470d0a1a0a</magic>
+#]]
+  [out-cx [#
+[magic::bytes 0x89504e470d0a1a0a]
+#]]
+ ]
+
+ [case id=016d-attr-bytes-short-hex level=extended
+  [tags attribute bytes hex explicit issue-457]
+  [in-cx [#
+[e h::bytes=0x3a7bd3e2]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "e",
+      "attrs": [{"name": "h", "value": "0x3a7bd3e2", "dataType": "bytes"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<e h="0x3a7bd3e2" cx:attr-types="h=bytes"/>
+#]]
+  [out-cx [#
+[e h::bytes=0x3a7bd3e2]
+#]]
+ ]
+
+ [; ── #466 attribute-ascription family (grammar [55]; lexicon [L50]) ──
+    The D3 typed attribute `name::T=value` is one production shared by the
+    DATA and PROGRAM readings (the program element literal gained it in
+    #466). The value is coercion-CHECKED (M-ERR-2/D-H): malformed →
+    CXER0109, out-of-range sized int → CXERLEX-RANGE, array annotation →
+    CXER0100 (attributes are scalar-only, D2). ]
+
+ [case id=016e-attr-int-hex-coerce level=extended
+  [tags attribute int hex explicit issue-466]
+  [in-cx [#
+[e n::int=0x2a]
+#]]
+  [out-cx [#
+[e n=42]
+#]]
+ ]
+
+ [case id=016f-attr-sized-u16 level=extended
+  [tags attribute sized-int explicit issue-466]
+  [in-cx [#
+[e n::u16=8080]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "e",
+      "attrs": [{"name": "n", "value": 8080, "dataType": "u16"}]
+    }
+  ]
+}
+#]]
+  [out-cx [#
+[e n::u16=8080]
+#]]
+ ]
+
+ [case id=016g-attr-decimal-hex-err level=extended
+  [tags attribute decimal hex error CXER0109 explicit issue-466]
+  [; OWNER RULING (#466 item 3): a hex token under ::decimal REJECTS
+     loudly — decimal is a base-10 value type; hex there is a mistake
+     (M-ERR-2 fail-loud). Supersedes the former verbatim-'0x2a' pin. ]
+  [in-cx [#
+[e n::decimal=0x2a]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=016h-attr-bigint-hex-err level=extended
+  [tags attribute bigint hex error CXER0109 explicit issue-466]
+  [; Same #466-item-3 ruling as 016g: hex under ::bigint is CXER0109 in
+     both readings — bigint is a base-10 value type. ]
+  [in-cx [#
+[e n::bigint=0x2a]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=016i-attr-atom level=extended
+  [tags attribute atom explicit issue-466]
+  [in-cx [#
+[e n::atom=busy]
+#]]
+  [out-cx [#
+[e n=:busy]
+#]]
+ ]
+
+ [case id=016j-attr-decimal-underscores level=extended
+  [tags attribute decimal underscores explicit issue-466]
+  [; Underscore group separators strip under ::decimal on the attribute
+     path exactly as on the ascribed-body path (single coercion home). ]
+  [in-cx [#
+[e n::decimal=1_000.50]
+#]]
+  [out-cx [#
+[e n::decimal=1000.50]
+#]]
+ ]
+
+ [case id=016k-attr-int-malformed-err level=extended
+  [tags attribute int error CXER0109 explicit issue-466]
+  [; Pre-#466 the data reading silently coerced `abc` to 0 under an
+     explicit ::int — the exact silent-zero class M-ERR-2 forbids. ]
+  [in-cx [#
+[e n::int=abc]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=016l-attr-u8-range-err level=extended
+  [tags attribute sized-int range error CXERLEX-RANGE explicit issue-466]
+  [in-cx [#
+[e n::u8=999]
+#]]
+  [out-err [#
+cx-err:CXERLEX-RANGE
+#]]
+ ]
+
+ [case id=016m-attr-array-type-err level=extended
+  [tags attribute array-type error CXER0100 explicit issue-466]
+  [; Attributes are scalar-only (D2): an array annotation in attribute
+     position is a parse error in BOTH readings. ]
+  [in-cx [#
+[e n::int[]=1]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=016n-attr-atom-invalid-name-err level=extended
+  [tags attribute atom error CXER0109 explicit issue-466]
+  [; ::atom demands a denotable atom name (lexicon [L40]); `0x2a` fails
+     loud instead of minting an atom whose render `:0x2a` cannot
+     re-parse (#466 item 2). ]
+  [in-cx [#
+[e n::atom=0x2a]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=016o-body-atom-typed level=extended
+  [tags scalar atom explicit issue-466]
+  [; #466 item 2: an ascribed-body ::atom item is ATOM-typed in the data
+     reading too (pre-fix it fell through to string while the program
+     reading typed it — `:busy` vs 'busy'). ]
+  [in-cx [#
+[x::atom busy]
+#]]
+  [out-cx [#
+[x::atom :busy]
+#]]
+ ]
+
+ [case id=016p-body-atom-number-err level=extended
+  [tags scalar atom error CXER0109 explicit issue-466]
+  [in-cx [#
+[x::atom 42]
+#]]
+  [out-err [#
+cx-err:CXER0109
 #]]
  ]
 
@@ -486,6 +723,10 @@
 [defaults &def timeout=30]
 [*def]
 #]]
+  [out-canonical [#
+[defaults timeout=30]
+[defaults timeout=30]
+#]]
  ]
 
  [case id=019-anchor-merge level=extended
@@ -526,6 +767,10 @@
   [out-cx [#
 [defaults &def timeout=30 retries=3]
 [production *def host=prod.example.com retries=5]
+#]]
+  [out-canonical [#
+[defaults timeout=30 retries=3]
+[production timeout=30 retries=5 host=prod.example.com]
 #]]
  ]
 
@@ -751,7 +996,7 @@
   [tags array autotype typed-list]
   # @CHOICE-1 §9-one-layer: a whitespace scalar run is a TYPED LIST of discrete
   # typed children — NOT a `T[]` auto-array. No element cx:type; XML uses the
-  # per-item `<cx:int>` carrier (distinct from the explicit `::T[]` `<item>` form).
+  # per-item `<cx:int>` carrier (distinct from the explicit `::T[]` `<cx:item>` form).
   [in-cx [#
 [scores 10 20 30]
 #]]
@@ -858,7 +1103,7 @@
 }
 #]]
   [out-xml [#
-<tags cx:type="string[]"><item>solo</item></tags>
+<tags cx:type="string[]"><cx:item>solo</cx:item></tags>
 #]]
   [out-cx [#
 [tags::string[] solo]
@@ -888,7 +1133,7 @@
 }
 #]]
   [out-xml [#
-<scores cx:type="float[]"><item>1.1</item><item>2.2</item><item>3.3</item></scores>
+<scores cx:type="float[]"><cx:item>1.1</cx:item><cx:item>2.2</cx:item><cx:item>3.3</cx:item></scores>
 #]]
   [out-cx [#
 [scores::float[] 1.1 2.2 3.3]
@@ -918,7 +1163,7 @@
 }
 #]]
   [out-xml [#
-<flags cx:type="bool[]"><item>true</item><item>false</item><item>true</item></flags>
+<flags cx:type="bool[]"><cx:item>true</cx:item><cx:item>false</cx:item><cx:item>true</cx:item></flags>
 #]]
   [out-cx [#
 [flags::bool[] true false true]
@@ -1006,10 +1251,10 @@ world</desc>
  [case id=041-interpolation-nested-brackets level=extended
   [tags cx interpolation bracket-balance]
   [in-cx [#
-[p [?=//service[@port=8080]/@host]]
+[p [?=//service[= $_@port 8080]/@host]]
 #]]
   [out-cx [#
-[p [?=//service[@port=8080]/@host]]
+[p [?=//service[= $_@port 8080]/@host]]
 #]]
  ]
 
@@ -1121,23 +1366,20 @@ world''']
 [message body=[# raw [literal] content ##][#]]
 #]]
   [out-ast [#
-{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","body":[{"type":"RawText","value":" raw [literal] content "}]}]}]}
+{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","value":" raw [literal] content "}]}]}
 #]]
   [out-cx [#
-[message body=[# raw [literal] content ##][#]]
+[message body=' raw [literal] content ']
 #]]
  ]
 
- [case id=041-attr-pipe-block-direct level=extended
-  [tags attribute pipe-block]
+ [case id=041-attr-pipe-block-rejected level=extended
+  [tags attribute pipe-block scalar-only d2 issue-396]
   [in-cx [#
 [message body=[| hello world |]]
 #]]
-  [out-ast [#
-{"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","body":[{"type":"BlockContent","items":[{"type":"Text","value":" hello world "}]}]}]}]}
-#]]
-  [out-cx [#
-[message body=[| hello world |]]
+  [out-err [#
+scalar-only
 #]]
  ]
 

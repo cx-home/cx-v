@@ -100,10 +100,6 @@ fn parse_cx_lock_opts(args []string) CxLockOpts {
 				o.output_path = a[9..]
 				i++
 			}
-			a == '--help' || a == '-h' {
-				print_cx_lock_usage()
-				exit(0)
-			}
 			a.starts_with('--') {
 				eprintln('cx lock: unknown flag ${a}')
 				print_cx_lock_usage()
@@ -390,6 +386,16 @@ fn resolve_lib_to_module_lock(lib cx.LibNode, prior map[string]cx.ModuleLock) !c
 				return existing
 			}
 			eprintln('cx lock: warning — HTTPS resolver `${name}` has no prior :sri; recorded resolved-only (Phase 2.x graft: real fetch + SRI compute)')
+			return cx.ModuleLock{
+				name:     name
+				resolved: name
+			}
+		}
+		.pkg_url {
+			// pkg: refs are self-locking — the reference IS the resolution
+			// (registry-verified at load; the #hash form pins exactly, and a
+			// deployment doc's pins are the lockfile of record — distribution
+			// spec §6.2).
 			return cx.ModuleLock{
 				name:     name
 				resolved: name

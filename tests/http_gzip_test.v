@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 import net
 import compress.gzip
@@ -13,11 +14,7 @@ import compress.gzip
 // is left raw. Loopback → needs --allow-net=ip:port.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // Disjoint PID + nanosecond-salted band (26200-26299) so the concurrent

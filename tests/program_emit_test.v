@@ -98,26 +98,45 @@ fn test_binding_with_attr_path() {
 	assert_roundtrip('\$user@id')
 }
 
-// ── Calls ────────────────────────────────────────────────────────────────────
+// ── Calls (head-dispatch `[$name arg …]` — the only call surface, §6.3) ──────
 
 fn test_call_zero_args() {
-	assert_roundtrip('now()')
+	assert_roundtrip('[\$now]')
 }
 
 fn test_call_one_arg() {
-	assert_roundtrip('count(42)')
+	assert_roundtrip('[\$count 42]')
 }
 
 fn test_call_multi_args() {
-	assert_roundtrip('plus(1, 2)')
+	assert_roundtrip('[\$plus 1 2]')
 }
 
 fn test_call_fallible() {
-	assert_roundtrip('parse-int("42")?')
+	assert_roundtrip('[\$parse-int "42"]?')
 }
 
 fn test_call_must_succeed() {
-	assert_roundtrip('parse-int("42")!')
+	assert_roundtrip('[\$parse-int "42"]!')
+}
+
+fn test_call_labeled_arg_emits_name_eq_value() {
+	prog := cx.parse_program('[\$fetch url="x" retries=3]') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	emit := code.program_node_to_source(cx.ProgramNode(prog.body))
+	assert emit == '[\$fetch url="x" retries=3]', 'labeled-arg emission drift: ${emit}'
+}
+
+fn test_call_bare_reference_emits_just_name() {
+	// A bare reference (explicit_call=false, 0 args) emits the plain name.
+	prog := cx.parse_program('foo') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	emit := code.program_node_to_source(cx.ProgramNode(prog.body))
+	assert emit == 'foo', 'bare reference emission drift: ${emit}'
 }
 
 // ── Path expressions ────────────────────────────────────────────────────────
@@ -134,12 +153,68 @@ fn test_path_with_attr_predicate() {
 	assert_roundtrip('//user[@active]')
 }
 
-fn test_path_with_attr_eq_predicate() {
-	assert_roundtrip('//user[@id=1]')
+fn test_path_with_attr_absence_predicate() {
+	assert_roundtrip('//user[@!banned]')
+}
+
+fn test_path_with_prefix_compare_predicate() {
+	assert_roundtrip('//user[= \$_@id 1]')
+}
+
+fn test_path_fused_predicate_emits_one_bracket_pair() {
+	// Fused bodies get ONE bracket pair — `//user[= $_@id 991]`, never
+	// the doubled `[[…]]`.
+	prog := cx.parse_program('//user[= \$_@id 991]') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	emit := code.program_node_to_source(cx.ProgramNode(prog.body))
+	assert emit == '//user[= \$_@id 991]', 'fused predicate emission drift: ${emit}'
+	assert !emit.contains('[['), 'fused predicate must not double-bracket: ${emit}'
+}
+
+fn test_path_fused_call_predicate_roundtrip() {
+	assert_roundtrip('//user[\$myfn \$_]')
+}
+
+fn test_path_directive_fused_predicate_roundtrip() {
+	assert_roundtrip('//user[?match \$_ [case [x] true] [else false]]')
+}
+
+fn test_path_connective_predicate_roundtrip() {
+	assert_roundtrip('//user[and [= \$_@a 1] [> \$_@b 2]]')
+}
+
+fn test_path_positional_via_reserved_bindings_roundtrip() {
+	assert_roundtrip('//user[= \$_position \$_last]')
 }
 
 fn test_path_attr_axis() {
 	assert_roundtrip('//user/@name')
+}
+
+// ── Binding-path step predicates emit their real bodies ─────────────────────
+
+fn test_binding_path_predicate_emits_real_body() {
+	// The old informational `[expr]` placeholder is gone — a binding-path
+	// step predicate emits its actual body.
+	prog := cx.parse_program('\$u/item[= \$_@id 1]') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	emit := code.program_node_to_source(cx.ProgramNode(prog.body))
+	assert emit == '\$u/item[= \$_@id 1]', 'binding-path predicate emission drift: ${emit}'
+	assert !emit.contains('[expr]'), 'informational [expr] placeholder must be gone: ${emit}'
+}
+
+fn test_binding_path_positional_predicate_roundtrip() {
+	assert_roundtrip('\$u/item[1]')
+}
+
+// ── Set operators in expression position ────────────────────────────────────
+
+fn test_union_expression_roundtrip() {
+	assert_roundtrip('[union (1, 2) (2, 3)]')
 }
 
 // ── `[?match]` realistic shapes ──────────────────────────────────────────────
@@ -182,7 +257,7 @@ fn test_modify_set_attr() {
 }
 
 fn test_modify_delete() {
-	assert_roundtrip('[?modify \$doc //user[@active=false] [delete]]')
+	assert_roundtrip('[?modify \$doc //user[= \$_@active false] [delete]]')
 }
 
 fn test_modify_set() {

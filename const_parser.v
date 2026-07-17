@@ -299,12 +299,30 @@ fn const_read_name(mut c ConstParseCursor) string {
 // def_read_expr_until_close:
 //   - `[` / `]` track depth.
 //   - `'` / `"` open a quoted span that shields brackets + escapes.
+//   - `#` line comments, `[; … ]` block comments, and `[#…#]` raw text are
+//     OPAQUE spans (#289) — shared recognizers in lexical.v.
 //   - top-level `]` breaks the scan (without consuming).
 fn const_read_expr_until_close(mut c ConstParseCursor) !string {
 	start := c.pos
 	mut depth := 0
 	for !c.at_end() {
 		b := c.peek()
+		if hash_line_comment_at(c.src, c.pos) {
+			c.pos = line_comment_end(c.src, c.pos)
+			continue
+		}
+		if block_comment_open_at(c.src, c.pos) {
+			c.pos = block_comment_end(c.src, c.pos) or {
+				return error('CXCONST_PARSE: unterminated `[; … ]` comment in value expression')
+			}
+			continue
+		}
+		if raw_span_open_at(c.src, c.pos) {
+			c.pos = raw_span_end(c.src, c.pos) or {
+				return error('CXCONST_PARSE: unterminated `[#…#]` raw text in value expression')
+			}
+			continue
+		}
 		if b == `'` || b == `"` {
 			quote := b
 			c.advance()

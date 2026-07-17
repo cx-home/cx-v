@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import net
 import time
 
@@ -19,11 +20,7 @@ import time
 // body as a second segment. The echo server must still see the full body.
 
 fn cx_bin_sb() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 fn pick_port_sb() int {

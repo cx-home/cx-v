@@ -16,6 +16,7 @@
 [?def write-file       scope=public impure [returns null]              ($path::string $content::string) [$io-write-file $path $content]]
 [?def write-file-bytes scope=public impure [returns null]              ($path::string $content::bytes)  [$io-write-file-bytes $path $content]]
 [?def write-file-lines scope=public impure [returns null]              ($path::string $lines::[sequence string]) [$io-write-file-lines $path $lines]]
+[?def edit-file        scope=public impure [returns null]              ($path::string $from::string $to::string) [$io-edit-file $path $from $to]]
 [?def append-file      scope=public impure [returns null]              ($path::string $content::string) [$io-append-file $path $content]]
 [?def append-file-bytes scope=public impure [returns null]             ($path::string $content::bytes)  [$io-append-file-bytes $path $content]]
 
@@ -77,6 +78,15 @@
 [?def lock   scope=public impure [returns element] ($handle::element $kind::atom) [$io-lock $handle $kind]]
 [?def unlock scope=public impure [returns null]    ($handle::element)             [$io-unlock $handle]]
 
+[; §3.10 continuous filesystem watch (#128-B) — a recursive, real OS watch
+   (inotify / FSEvents). watch-next BLOCKS until the next change; with an
+   optional timeout (ms) it returns absence on expiry. An [change op=overflow]
+   means the OS dropped events under load — rescan the tree. watch-close
+   unblocks a parked watch-next. ]
+[?def watch       scope=public impure [returns element] ($path::string)                   [$io-watch $path]]
+[?def watch-next  scope=public impure [returns element] ($handle::element $timeout::int -1) [$io-watch-next $handle $timeout]]
+[?def watch-close scope=public impure [returns null]    ($handle::element)                 [$io-watch-close $handle]]
+
 [; co-located docs (seeded — refine in place). ]
 [module-doc name=io
   [scope """File and stream I/O — whole-file reads and writes, streaming handles, line iteration, filesystem queries, directory operations, globbing, tempfiles, and advisory file locking. Whole-file operations materialize content in memory; streaming handles and lazy iterators process arbitrary-size inputs with bounded memory. Path arguments resolve via cx-stdlib/path. Every function is impure and capability-gated: read or write access is checked at the effect point and denied by default."""]]
@@ -103,6 +113,12 @@
   [summary """Create or truncate a file and write a string; atomic via tempfile rename on POSIX."""]
   [example [code """[?lib 'cx-stdlib/io']
 [$io:write-file "/tmp/out.txt" "hello"]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=edit-file scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Surgical in-place file edit: read, replace `from` with `to` (it MUST occur exactly once, else [err cx-err:CXER2903] and no write), and write back. The in-CX equivalent of the harness Edit tool — needs both read and write capabilities."""]
+  [example [code """[?lib 'cx-stdlib/io']
+[$io:edit-file "/tmp/out.txt" "old" "new"]"""] [expect """cx-err:CXER0271"""]]
 ]
 [fn-doc name=write-file-bytes scope=public purity=impure
   [sig """-> null"""]
@@ -381,4 +397,22 @@
   [summary """Release a lock held on a file handle."""]
   [example [code """[?lib 'cx-stdlib/io']
 [$io:unlock [$io:open "/tmp/out.txt" "w"]]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=watch scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Start a recursive OS filesystem watch (inotify / FSEvents) on a directory and return a watch handle. Real continuous notification, not polling."""]
+  [example [code """[?lib 'cx-stdlib/io']
+[$io:watch "/tmp/project"]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=watch-next scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Block until the next change under a watch handle and return [change path=… op=created|modified|deleted]. With an optional timeout (ms) returns absence on expiry. An [change op=overflow] means the OS dropped events under load — rescan the tree."""]
+  [example [code """[?lib 'cx-stdlib/io']
+[$io:watch-next [$io:watch "/tmp/project"] 1000]"""] [expect """cx-err:CXER0271"""]]
+]
+[fn-doc name=watch-close scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Tear down a watch handle and unblock any watch-next currently parked on it. Idempotent."""]
+  [example [code """[?lib 'cx-stdlib/io']
+[$io:watch-close [$io:watch "/tmp/project"]]"""] [expect """cx-err:CXER0271"""]]
 ]

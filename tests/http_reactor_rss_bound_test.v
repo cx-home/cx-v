@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 import net
 
@@ -26,11 +27,7 @@ import net
 // meaningful.
 
 fn cx_bin() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 fn rss_port() int {
@@ -164,4 +161,148 @@ fn test_reactor_rss_bounded_under_sustained_for_comprehension() {
 		return
 	}
 	assert rkb < 300 * 1024, 'reactor RSS ${rkb} KB after 500 requests exceeds the 300 MB ceiling — the per-request closures-table copy regressed (#57); pre-fix this was 660 MB+'
+}
+
+// A heavier per-request value-building handler (1000-item [?for] → concat join),
+// the cx-private #131 (xap-marine OOM) shape: large transient body building, a
+// small steady live set. vgc's OLD fixed-floor pacer never fired on this pattern,
+// so committed pages — and RSS — climbed monotonically (measured: ~571 MB and
+// rising). The reactor churn gate (gc_collect_if_churned) held it flat as a
+// host-side crutch; since cx #71 the vgc ADAPTIVE pacer bounds it by
+// construction and the gate defaults OFF — so this test now guards the pacer
+// itself (no CX_HTTP_GC_* env is set).
+fn rss_heavy_server_prog(port int) string {
+	return "[?lib 'cx-stdlib/http' :as http]\n" +
+		'[?def h impure (\$req)\n' +
+		'  [?let [= \$rows [?for [in \$i [\$range 1 1000]]\n' +
+		'                    [yield [\$concat "row-" [\$text \$i] "=" [\$text [* \$i \$i]] ";"]]]]\n' +
+		'    [response status=200 [body [\$concat "ok " [\$text [\$count \$rows]]]]]]]\n' +
+		'[\$http:serve "tcp://127.0.0.1:${port}" \$h {block: true}]\n'
+}
+
+fn test_reactor_rss_bounded_under_heavy_value_building() {
+	port := rss_port() + 1
+	prog := write_tmp_file('cx_rss_heavy.cx', rss_heavy_server_prog(port))
+	// Single reactor (CX_HTTP_N=1): RSS bounding is the concern here. Frequent
+	// collection trips the known residual multi-reactor GC race (a SEPARATE
+	// axis), so pin one reactor to keep this gate measuring RSS, not the race.
+	pid_s := os.execute('CX_HTTP_N=1 ${cx_bin()} --allow-all ${prog} >/tmp/cx_rss_heavy.log 2>&1 & echo \$!')
+	pid := pid_s.output.trim_space().int()
+	if pid <= 0 {
+		eprintln('SKIP: could not spawn heavy reactor server')
+		return
+	}
+	defer {
+		os.execute('kill -9 ${pid} 2>/dev/null')
+	}
+
+	mut up := false
+	for _ in 0 .. 50 {
+		if one_get(port) {
+			up = true
+			break
+		}
+		time.sleep(100 * time.millisecond)
+	}
+	if !up {
+		log := os.read_file('/tmp/cx_rss_heavy.log') or { '' }
+		eprintln('SKIP: heavy reactor never bound on ${port}; log: ${log}')
+		return
+	}
+
+	// Sustained heavy load, measured as CONVERGENCE: drive identical 1000-req
+	// windows until one grows RSS by <10% over the previous window's end (the
+	// pacer's steady state), bounded by a window budget and a hard absolute
+	// backstop. The honest #71 contract is "plateaus by construction" — the
+	// absolute equilibrium (and how fast it is reached) legitimately varies
+	// with build opt-level AND with CPU contention from parallel test jobs
+	// (both inflate GC pauses, so the adaptive headroom settles higher), which
+	// a fixed ceiling or a fixed-split plateau conflates with a leak. The
+	// pre-fix failure cannot pass: its climb is ~linear per request (~140 MB
+	// per window), so it crosses the 520 MB backstop long before consecutive
+	// window ratios flatten under 1.10, and eventually OOM-panics.
+	mut ok := 0
+	mut total := 0
+	mut prev_kb := u64(0)
+	mut converged := false
+	mut last_kb := u64(0)
+	for _ in 0 .. 7 {
+		for _ in 0 .. 1000 {
+			if one_get(port) {
+				ok++
+			}
+		}
+		total += 1000
+		last_kb = rss_kb(pid)
+		if last_kb == 0 {
+			break // RSS unmeasurable; survival assertions below still hold
+		}
+		assert last_kb < 520 * 1024, 'heavy reactor RSS ${last_kb} KB after ${total} requests exceeds the 520 MB runaway backstop (#131/#71); the pre-adaptive-pacer repro reaches ~571 MB by 4000 requests and keeps climbing'
+		if prev_kb > 0 && f64(last_kb) / f64(prev_kb) < 1.10 {
+			converged = true
+			break
+		}
+		prev_kb = last_kb
+	}
+
+	alive := os.execute('kill -0 ${pid} 2>/dev/null').exit_code == 0
+	log := os.read_file('/tmp/cx_rss_heavy.log') or { '' }
+	assert alive, 'heavy reactor died under ${total}-req load (likely the #131 OOM panic); served ${ok}/${total}; log: ${log}'
+	assert ok * 100 >= total * 95, 'heavy reactor dropped too many requests: ${ok}/${total} ok; log: ${log}'
+	if last_kb == 0 {
+		eprintln('NOTE: RSS unmeasurable on this platform; survival assertions still hold')
+		return
+	}
+	assert converged, 'heavy reactor RSS never plateaued: ${last_kb} KB after ${total} requests, still growing >=10% per 1000-req window — transients are not being reclaimed by construction (#131/#71)'
+}
+
+// The churn-gate OPT-IN must keep working (it is the ops escape hatch for a
+// host-chosen collection pace, and builtin.gc_collect_if_churned needs a live
+// consumer): the same heavy shape with CX_HTTP_GC_MB=1 pinned must stay bounded
+// and serve traffic exactly like the default path.
+fn test_reactor_rss_bounded_with_churn_gate_pinned() {
+	port := rss_port() + 2
+	prog := write_tmp_file('cx_rss_gate.cx', rss_heavy_server_prog(port))
+	pid_s := os.execute('CX_HTTP_N=1 CX_HTTP_GC_MB=1 ${cx_bin()} --allow-all ${prog} >/tmp/cx_rss_gate.log 2>&1 & echo \$!')
+	pid := pid_s.output.trim_space().int()
+	if pid <= 0 {
+		eprintln('SKIP: could not spawn gate-pinned reactor server')
+		return
+	}
+	defer {
+		os.execute('kill -9 ${pid} 2>/dev/null')
+	}
+
+	mut up := false
+	for _ in 0 .. 50 {
+		if one_get(port) {
+			up = true
+			break
+		}
+		time.sleep(100 * time.millisecond)
+	}
+	if !up {
+		log := os.read_file('/tmp/cx_rss_gate.log') or { '' }
+		eprintln('SKIP: gate-pinned reactor never bound on ${port}; log: ${log}')
+		return
+	}
+
+	mut ok := 0
+	for _ in 0 .. 1000 {
+		if one_get(port) {
+			ok++
+		}
+	}
+
+	alive := os.execute('kill -0 ${pid} 2>/dev/null').exit_code == 0
+	log := os.read_file('/tmp/cx_rss_gate.log') or { '' }
+	assert alive, 'gate-pinned reactor died under load; served ${ok}/1000; log: ${log}'
+	assert ok >= 950, 'gate-pinned reactor dropped too many requests: ${ok}/1000 ok; log: ${log}'
+
+	rkb := rss_kb(pid)
+	if rkb == 0 {
+		eprintln('NOTE: RSS unmeasurable on this platform; survival assertions still hold')
+		return
+	}
+	assert rkb < 280 * 1024, 'gate-pinned reactor RSS ${rkb} KB exceeds the 280 MB ceiling — the CX_HTTP_GC_MB opt-in regressed'
 }

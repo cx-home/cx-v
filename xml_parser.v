@@ -482,6 +482,7 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	mut cx_id := ?string(none)
 	mut cx_body_ref := ?string(none)
 	mut cx_attr_types := ''
+	mut cx_cols := ''
 	mut attrs := []Attribute{}
 
 	// Read attributes
@@ -504,6 +505,13 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 			// applied to the sibling attributes in a post-pass below so it
 			// works regardless of source ordering.
 			cx_attr_types = aval
+		}
+		else if aname == 'cx:cols' {
+			// #413: reserved `[table]`-block column sidecar (conversions.md
+			// §2.1). Consumed here; combined with cx:type="table" below to
+			// reconstruct the TableData payload from <cx:row>/<cx:cell>
+			// children.
+			cx_cols = aval
 		}
 		else if aname == 'cx:body-ref' {
 			// GG7: the
@@ -581,13 +589,22 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	if b == `/` {
 		p.advance() // '/'
 		p.xml_expect(`>`)!
-		return new_element(name, ElementMeta{
+		mut el := new_element(name, ElementMeta{
 			anchor:    cx_anchor
 			merge:     cx_merge
 			data_type: cx_type
 			id:        cx_id
 			body_ref:  cx_body_ref
 		}, attrs, []Node{})
+		// #413: a self-closing table image is a header-only table (zero
+		// rows, valid per conversions.md §8.3). Legacy `cx:type="table"`
+		// WITHOUT cx:cols (the pre-#413 emit) keeps its old reading: a bare
+		// `::table`-annotated element with no payload.
+		if xml_is_table_image(cx_type, cx_cols) {
+			td := xml_build_table_data(cx_cols, []Node{})!
+			el = el.with_table(td)
+		}
+		return el
 	}
 
 	p.xml_expect(`>`)!
@@ -595,6 +612,22 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 	// Parse children
 	mut items := []Node{}
 	p.parse_xml_content(name, cx_type, mut items)!
+
+	// #413: cx:type="table" + cx:cols reconstructs the TableData payload
+	// from the reserved <cx:row>/<cx:cell> children (the exact inverse of
+	// emit_xml_table_element). The rows live in the pooled `table` field;
+	// the element body stays empty, matching the CX parse of a `[table]`
+	// block.
+	if xml_is_table_image(cx_type, cx_cols) {
+		td := xml_build_table_data(cx_cols, items)!
+		return new_element(name, ElementMeta{
+			anchor:    cx_anchor
+			merge:     cx_merge
+			data_type: cx_type
+			id:        cx_id
+			body_ref:  cx_body_ref
+		}, attrs, []Node{}).with_table(td)
+	}
 
 	// If cx_type is an array type, items should already be Scalar nodes
 	return new_element(name, ElementMeta{
@@ -604,6 +637,171 @@ fn (mut p XmlParser) parse_xml_element() !Node {
 		id:        cx_id
 		body_ref:  cx_body_ref
 	}, attrs, items)
+}
+
+// xml_is_table_image reports whether the element carries the #413 table
+// image markers: cx:type="table" plus a non-empty cx:cols sidecar.
+fn xml_is_table_image(cx_type ?string, cx_cols string) bool {
+	ct := cx_type or { return false }
+	return ct == 'table' && cx_cols.trim_space().len > 0
+}
+
+// xml_build_table_data reconstructs a TableData from the reserved cx:cols
+// sidecar and the parsed <cx:row> children (#413, conversions.md §2.1).
+// Column tokens are the canonical CX header form: `name::type` or a bare
+// (string-typed) name. Every non-whitespace child must be a <cx:row> whose
+// children are <cx:cell> elements, one per declared column — anything else
+// in a table body is a reserved-shape import error.
+fn xml_build_table_data(cols_spec string, items []Node) !TableData {
+	mut cols := []TableColumn{}
+	for tok in cols_spec.split_any(' \t').filter(it.len > 0) {
+		if tok.contains('::') {
+			cols << TableColumn{ name: tok.all_before('::'), type_name: tok.all_after('::') }
+		} else {
+			cols << TableColumn{ name: tok }
+		}
+	}
+	if cols.len == 0 {
+		return error('cx:cols declares no columns')
+	}
+	mut rows := [][]TableCellValue{}
+	for n in items {
+		match n {
+			TextNode {
+				if n.value.trim_space().len > 0 {
+					return error('cx:type="table" body must contain only <cx:row> children; found text "${n.value.trim_space()}"')
+				}
+			}
+			CommentNode, PINode {
+				// Tolerated (stripped) — matches the CX parser, which skips
+				// comments between table rows.
+			}
+			Element {
+				if n.name != 'cx:row' {
+					return error('cx:type="table" body must contain only <cx:row> children; found <${n.name}> (reserved cx: shape, conversions.md §2.1)')
+				}
+				row := xml_table_row_cells(n, cols)!
+				rows << row
+			}
+			else {
+				return error('cx:type="table" body must contain only <cx:row> children')
+			}
+		}
+	}
+	return TableData{ cols: cols, rows: rows }
+}
+
+// xml_table_row_cells decodes one <cx:row> into its TableCellValue list.
+fn xml_table_row_cells(row Element, cols []TableColumn) ![]TableCellValue {
+	mut cells := []TableCellValue{cap: cols.len}
+	for c in row.items {
+		match c {
+			TextNode {
+				if c.value.trim_space().len > 0 {
+					return error('<cx:row> must contain only <cx:cell> children; found text "${c.value.trim_space()}"')
+				}
+			}
+			Element {
+				if c.name != 'cx:cell' {
+					return error('<cx:row> must contain only <cx:cell> children; found <${c.name}>')
+				}
+				col_type := if cells.len < cols.len { cols[cells.len].type_name } else { '' }
+				cells << xml_decode_table_cell(c, col_type)!
+			}
+			else {
+				return error('<cx:row> must contain only <cx:cell> children')
+			}
+		}
+	}
+	if cells.len != cols.len {
+		return error('<cx:row> has ${cells.len} cells; cx:cols declares ${cols.len} columns')
+	}
+	return cells
+}
+
+// xml_decode_table_cell decodes one <cx:cell>. A `<cx:TYPE>` carrier child
+// (already decoded to a typed ScalarNode by the element walk) is
+// authoritative; a decoded collection carrier becomes a collection cell;
+// bare text recovers per the column's declared type via
+// xml_recover_bare_cell; an empty cell is the empty string.
+fn xml_decode_table_cell(cell Element, col_type string) !TableCellValue {
+	// Single decoded value (carrier or collection)?
+	mut text_parts := []string{}
+	mut value := ?TableCellValue(none)
+	mut value_count := 0
+	for it in cell.items {
+		match it {
+			ScalarNode {
+				// A `<cx:TYPE>` carrier decode (typed) — authoritative.
+				value = cell_value_from_scalar(it.value)
+				value_count++
+			}
+			ArrayNode {
+				value = TableCellValue(it)
+				value_count++
+			}
+			MapNode {
+				value = TableCellValue(it)
+				value_count++
+			}
+			SequenceNode {
+				value = TableCellValue(it)
+				value_count++
+			}
+			TextNode {
+				text_parts << it.value
+			}
+			EntityRefNode {
+				text_parts << xml_expand_std_entity(it.name)!
+			}
+			else {
+				return error('<cx:cell> content must be text, a <cx:TYPE> carrier, or a collection carrier')
+			}
+		}
+	}
+	if value_count > 1 || (value_count == 1 && text_parts.len > 0) {
+		return error('<cx:cell> must carry exactly one value')
+	}
+	if v := value {
+		return v
+	}
+	if text_parts.len == 0 {
+		// <cx:cell/> — the empty string (only string cells can be empty).
+		return TableCellValue('')
+	}
+	return xml_recover_bare_cell(text_parts.join(''), col_type)
+}
+
+// xml_expand_std_entity maps the five XML built-in entities to their
+// character; anything else inside a <cx:cell> is an import error (general
+// entities are not resolvable at this layer).
+fn xml_expand_std_entity(name string) !string {
+	return match name {
+		'amp'  { '&' }
+		'lt'   { '<' }
+		'gt'   { '>' }
+		'quot' { '"' }
+		'apos' { "'" }
+		else   { error('unresolvable entity &${name}; inside <cx:cell>') }
+	}
+}
+
+// xml_recover_bare_cell types a bare-text cell per its column's declared
+// type — mirroring the CX parser's read_table_cell bare path: the literal
+// token `null` is the null cell; a string-family column keeps the text
+// verbatim; any other column coerces via the same coerce_scalar the CX
+// parser uses. The emitter probes this exact function
+// (xml_bare_cell_roundtrips) before choosing the bare form, so emit and
+// import can never disagree.
+fn xml_recover_bare_cell(text string, col_type string) TableCellValue {
+	if text == 'null' {
+		return TableCellValue(NullValue{})
+	}
+	if col_type == '' || col_type == 'string' || col_type == 's' {
+		return TableCellValue(text)
+	}
+	sc := coerce_scalar(expand_type_alias(col_type), text.trim_space())
+	return cell_value_from_scalar(sc.value)
 }
 
 fn (mut p XmlParser) parse_xml_content(parent_name string, cx_type ?string, mut items []Node) ! {
@@ -698,16 +896,19 @@ fn (mut p XmlParser) parse_xml_content(parent_name string, cx_type ?string, mut 
 				// child element
 				n := p.parse_xml_element()!
 				if is_array {
-					// <item>value</item> → Scalar
+					// <cx:item>value</cx:item> → Scalar (conversions.md §2.1:
+					// the per-item wrapper of a cx:type="T[]" array is the
+					// reserved cx:item element; a bare <item> is an ordinary
+					// user element, #392)
 					if n is Element {
 						ne := n as Element
-						if ne.name == 'item' {
+						if ne.name == 'cx:item' {
 							text_val := ne.items.filter(it is TextNode).map((it as TextNode).value).join('')
 							items << coerce_scalar(arr_elem_type, text_val.trim_space())
 						}
 					}
 				} else {
-					items << n
+					items << xml_decode_collection_carrier(n)
 				}
 			}
 		} else if b == `&` {
@@ -826,4 +1027,109 @@ fn (mut p XmlParser) xml_expect(expected u8) ! {
 	b := p.peek()
 	if b != expected { return error(p.err("expected '${rune(expected)}' got '${rune(b)}'")) }
 	p.advance()
+}
+
+// ── conversions.md §2.1 collection-carrier IMPORT (the exact inverse of the
+// emit mapping; #392) ────────────────────────────────────────────────────────
+// The reserved carriers decode back to cx-native collection nodes:
+//   <cx:arr><cx:item>v</cx:item>…</cx:arr>            → ArrayNode
+//   <cx:seq><cx:item>v</cx:item>…</cx:seq>            → SequenceNode
+//   <cx:map><cx:entry cx:key="k">v</cx:entry>…</cx:map> → MapNode
+//     (cx:key-type restores a non-string key's scalar type)
+// The child loop decodes depth-first, so a nested carrier inside a cx:item /
+// cx:entry value is already a collection node by the time its wrapper is
+// unwrapped here. Any non-carrier node passes through unchanged.
+
+fn xml_decode_collection_carrier(n Node) Node {
+	if n is Element {
+		e := n as Element
+		match e.name {
+			'cx:arr' {
+				return ArrayNode{
+					items: xml_carrier_items(e)
+				}
+			}
+			'cx:seq' {
+				return SequenceNode{
+					items: xml_carrier_items(e)
+				}
+			}
+			'cx:map' {
+				mut entries := []MapEntry{cap: e.items.len}
+				for it in e.items {
+					if it is Element && (it as Element).name == 'cx:entry' {
+						ee := it as Element
+						key_str := find_attr_value(ee.attrs, 'cx:key') or { '' }
+						ktype := find_attr_value(ee.attrs, 'cx:key-type') or { 'string' }
+						key := coerce_scalar(ktype, key_str)
+						entries << MapEntry{
+							key_type:  key.data_type
+							key_value: key.value
+							value:     xml_wrapped_item_value(ee)
+						}
+					}
+				}
+				return MapNode{
+					entries: entries
+				}
+			}
+			else {
+				return n
+			}
+		}
+	}
+	return n
+}
+
+// xml_carrier_items unwraps each <cx:item> child of a cx:arr / cx:seq carrier
+// to its value. Non-cx:item children (indentation text) are skipped — cx:item
+// is the ONLY legal child of a carrier per conversions.md, and an orphan
+// cx:item elsewhere is already an import error at the reserved-prefix layer.
+fn xml_carrier_items(e Element) []Node {
+	mut out := []Node{cap: e.items.len}
+	for it in e.items {
+		if it is Element && (it as Element).name == 'cx:item' {
+			out << xml_wrapped_item_value(it as Element)
+		}
+	}
+	return out
+}
+
+// xml_wrapped_item_value extracts the single value a cx:item / cx:entry
+// wrapper carries: a sole structural child (element / already-decoded
+// collection / typed-carrier scalar) passes through; a text-only body
+// auto-types exactly like other imported XML scalars, so `<cx:item>3</cx:item>`
+// round-trips to int 3 the way `[3, …]` emitted it.
+fn xml_wrapped_item_value(e Element) Node {
+	mut structural := []Node{}
+	mut text := []u8{}
+	for it in e.items {
+		match it {
+			TextNode {
+				text << it.value.bytes()
+			}
+			else {
+				structural << it
+			}
+		}
+	}
+	if structural.len == 1 {
+		return structural[0]
+	}
+	if structural.len > 1 {
+		// A multi-node item value is an inline sequence at the item position
+		// (conversions.md: `<cx:seq>…</cx:seq>` inline is the canonical form,
+		// but be liberal on import — wrap what is there).
+		return SequenceNode{
+			items: structural
+		}
+	}
+	tok := text.bytestr().trim_space()
+	if node := try_autotype(tok) {
+		return node
+	}
+	return ScalarNode{
+		data_type: .string_type
+		value:     ScalarValue(tok)
+	}
 }

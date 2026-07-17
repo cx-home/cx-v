@@ -66,5 +66,5 @@
   [sig """-> [sequence string]"""]
   [summary """Emit a value as a sequence of chunks whose concatenation equals pretty-with-opts."""]
   [example [code """[?lib 'cx-stdlib/format']
-[$format:emit-stream [user] {}]"""] [expect """([user])"""]]
+[$format:emit-stream [user] {}]"""] [expect """('[user]')"""]]
 ]

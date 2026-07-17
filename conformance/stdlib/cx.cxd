@@ -1,0 +1,646 @@
+[test-suite name=cx
+  [doc [#
+conformance fixtures for the cx: self-host module (spec/03-approved/modules/cx.md).
+
+   The module is ALWAYS available (modules/cx.md §1 activation "Always") —
+   most cases call [$cx:fn …] with no [?lib]; the activation section
+   (090-…) additionally pins the [?lib 'cx-stdlib/cx'] module lane, the
+   as= alias lane and the flat [$cx-fn] dispatch alias (§4).
+
+   Section grouping by id range:
+     001-007  #436 — [$cx:parse] of directive-bearing source is a CXDM
+              value: navigable, renderable as CX surface, modifiable;
+              pure-data parse unregressed
+     010-012  §4 round-trip identity serialize∘parse ≡ canonical
+              (data lane, directive lane, canonical-input lane)
+     020-029  serialize / canonical / hash / equal (CLI-verb agreement:
+              hash hex pins the `cx hash` digest of the same doc)
+     040-049  diff (navigable [diff [change …]…] value) + patch
+              (apply ≡ diff⁻¹; fail-loud CXER4102)
+     060-067  to-format / from-format against the conversions registry
+              (incl. the #445 table-XML lane and the #442 YAML
+              block-sequence-of-mappings lane)
+     080-085  select — runtime CXPath ≡ the equivalent inline path
+              (descendant, predicate, attribute axis, empty, CXER4106)
+     090-093  activation lanes (no-[?lib], module lane, as= alias, flat
+              [$cx-fn] alias)
+
+   No inter-fixture comment dividers and no inline comments inside
+   in-code (the harness extracts sections to end-of-chunk).
+#]]
+
+ [case id=cx-001-parse-directive-navigable level=core
+  [tags cx parse directive cxpath issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:parse "[?if true [then 1] [else 2]]"]] [$count $t//then]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=cx-002-parse-directive-wildcard level=core
+  [tags cx parse directive cxpath wildcard issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:parse "[?if true [then 1] [else 2]]"]] [$count $t//*]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=cx-003-parse-directive-renders-cx-surface level=core
+  [tags cx parse directive render issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:parse "[?if true [then 1] [else 2]]"]
+#]]
+  [out-text [#
+[?if 'true ' [then 1] [else 2]]
+#]]
+ ]
+
+ [case id=cx-004-parse-directive-modify-applies level=core
+  [tags cx parse directive modify issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:parse "[?if true [then 1] [else 2]]"]] [?modify $t //then [set 42]]]
+#]]
+  [out-text [#
+[?if 'true ' [then 42] [else 2]]
+#]]
+ ]
+
+ [case id=cx-005-parse-nested-directive-descends level=core
+  [tags cx parse directive nested cxpath issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:parse "[doc [?if cond [then [x 1]]] [tail 9]]"]] [r [a [$count $t//x]] [b [$count $t//tail]]]]
+#]]
+  [out-text [#
+[r [a 1] [b 1]]
+#]]
+ ]
+
+ [case id=cx-006-parse-pure-data-unregressed level=core
+  [tags cx parse data cxpath issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:parse "[config [db [port 5432]]]"]] [r [echo $t] [n [$count $t//port]] [p $t/db/port]]]
+#]]
+  [out-text [#
+[r [echo [config [db [port 5432]]]] [n 1] [p 5432]]
+#]]
+ ]
+
+ [case id=cx-007-parse-directive-attr-axis level=core
+  [tags cx parse directive attribute issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:parse "[doc [?if c [then [x k=7]]]]"]] [$count $t//x/@k]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=cx-010-roundtrip-data level=core
+  [tags cx parse serialize canonical roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:serialize [$cx:parse "[a 1]"]] [$cx:canonical "[a 1]"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-011-roundtrip-directive level=core
+  [tags cx parse serialize canonical roundtrip directive issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:serialize [$cx:parse "[?if true [then 1] [else 2]]"]] [$cx:canonical "[?if true [then 1] [else 2]]"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-012-roundtrip-canonical-input level=core
+  [tags cx parse serialize canonical roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $c [$cx:canonical "[cfg [db host='h' port=5432] [flags on true]]"]] [$eq [$cx:serialize [$cx:parse $c]] $c]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-020-serialize-element level=core
+  [tags cx serialize]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:serialize [a 1]]
+#]]
+  [out-text [#
+'[a 1]'
+#]]
+ ]
+
+ [case id=cx-021-serialize-string-is-a-value level=core
+  [tags cx serialize string]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:serialize "hi"]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=cx-022-canonical-string-as-source level=core
+  [tags cx canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:canonical "[a    1]"]
+#]]
+  [out-text [#
+'[a 1]'
+#]]
+ ]
+
+ [case id=cx-023-canonical-value level=core
+  [tags cx canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:canonical [a 1]]
+#]]
+  [out-text [#
+'[a 1]'
+#]]
+ ]
+
+ [case id=cx-024-hash-pins-cli-digest level=core
+  [tags cx hash sha256 cli-agreement]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:hash [a 1]]
+#]]
+  [out-text [#
+'c2de3721009da3ce799e831e8c1293f6c7c47033bca422657fc3693d79ae82b5'
+#]]
+ ]
+
+ [case id=cx-025-hash-value-and-source-agree level=core
+  [tags cx hash canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:hash "[a   1]"] [$cx:hash [a 1]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-026-hash-pure-repeat level=core
+  [tags cx hash purity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:hash [cfg [a 1] [b 2]]] [$cx:hash [cfg [a 1] [b 2]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-027-equal-true level=core
+  [tags cx equal]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:equal [a 1] [a 1]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-028-equal-false level=core
+  [tags cx equal]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:equal [a 1] [a 2]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=cx-029-equal-anchor-resolving level=core
+  [tags cx equal anchors canonical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:equal "[x [a &n 1] [b [*n]]]" "[x [a 1] [b [a 1]]]"]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-040-diff-identical-is-empty level=core
+  [tags cx diff]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [$cx:diff [a 1] [a 1]]] [$count $d/change]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=cx-041-diff-attr-record-shape level=core
+  [tags cx diff record navigable]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:diff [users [user name="ada" age=30]] [users [user name="ada" age=31]]]
+#]]
+  [out-text [#
+[diff [change kind=attribute-changed path='/users/user/@age' before='30' after='31' payload=attr [before [v age=30]] [after [v age=31]]]]
+#]]
+ ]
+
+ [case id=cx-042-patch-attr-and-add level=core
+  [tags cx diff patch roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [users [user name="ada" age=30] [user name="bob"]]] [= $b [users [user name="ada" age=31] [user name="bob"] [user name="eve"]]] [= $d [$cx:diff $a $b]] [$cx:equal [$cx:patch $a $d] $b]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-043-patch-body-remove-rename level=core
+  [tags cx diff patch roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [doc [t 'hello'] [items [i 1] [i 2] [i 3] [i 4]] [old [x 1] [y 2]]]] [= $b [doc [t 'world'] [items [i 1] [i 9]] [new [x 5] [y 2]]]] [= $d [$cx:diff $a $b]] [$cx:equal [$cx:patch $a $d] $b]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-044-patch-table-payload level=core
+  [tags cx diff patch table issue-445]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [$cx:parse "[users [table[name age::int]]
+  ada 30
+  bob 25
+]"]] [= $b [$cx:parse "[users [table[name age::int]]
+  ada 31
+  bob 25
+  eve 22
+]"]] [= $d [$cx:diff $a $b]] [$cx:equal [$cx:patch $a $d] $b]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-045-patch-idempotent-repatch level=core
+  [tags cx patch idempotent]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [a 1]] [= $b [a 2]] [= $d [$cx:diff $a $b]] [$cx:equal [$cx:patch [$cx:patch $a $d] $d] $b]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-046-patch-wrong-base-fails-loud level=core
+  [tags cx patch error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [$cx:diff [a 1] [a 2]]] [$cx:patch [a 5] $d]]
+#]]
+  [out-err [#
+CXER4102
+#]]
+ ]
+
+ [case id=cx-047-patch-rejects-non-diff level=core
+  [tags cx patch error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:patch [a 1] [nope]]
+#]]
+  [out-err [#
+CXER4102
+#]]
+ ]
+
+ [case id=cx-060-to-format-json level=core
+  [tags cx to-format json conversions]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:to-format [a 1] "json"]
+#]]
+  [out-text [#
+'{
+  "a": 1
+}'
+#]]
+ ]
+
+ [case id=cx-061-to-format-string-as-source-xml level=core
+  [tags cx to-format xml conversions]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:to-format "[a 1]" "xml"]
+#]]
+  [out-text [#
+'<a>1</a>'
+#]]
+ ]
+
+ [case id=cx-062-to-format-unknown-format level=core
+  [tags cx to-format error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:to-format [a 1] "nope"]
+#]]
+  [out-err [#
+CXER4103
+#]]
+ ]
+
+ [case id=cx-063-from-format-json level=core
+  [tags cx from-format json conversions]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:from-format '{"a": 1}' "json"]
+#]]
+  [out-text [#
+{a: 1}
+#]]
+ ]
+
+ [case id=cx-064-from-format-yaml-block-seq level=core
+  [tags cx from-format yaml conversions issue-442]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:from-format "- name: ada
+  age: 30
+- name: bob
+  age: 25" "yaml"]
+#]]
+  [out-text [#
+[{name: ada, age: 30}, {name: bob, age: 25}]
+#]]
+ ]
+
+ [case id=cx-065-from-format-parse-failure level=core
+  [tags cx from-format error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:from-format "not json" "json"]
+#]]
+  [out-err [#
+CXER4105
+#]]
+ ]
+
+ [case id=cx-066-from-format-unknown-format level=core
+  [tags cx from-format error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:from-format "x" "nope"]
+#]]
+  [out-err [#
+CXER4103
+#]]
+ ]
+
+ [case id=cx-067-xml-table-lane-roundtrip level=core
+  [tags cx to-format from-format xml table issue-445]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:parse "[users [table[name age::int]]
+  ada 30
+  bob 25
+]"]] [$cx:equal [$cx:from-format [$cx:to-format $t "xml"] "xml"] $t]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-080-select-agrees-with-inline-path level=core
+  [tags cx select cxpath]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $doc [users [user name="ada"] [user name="bob"]]] [$eq [$count [$cx:select $doc "//user"]] [$count $doc//user]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-081-select-predicate level=core
+  [tags cx select cxpath predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $doc [users [user name="ada"] [user name="bob"]]] [$cx:select $doc "//user[= $_@name 'bob']"]]
+#]]
+  [out-text [#
+([user name=bob])
+#]]
+ ]
+
+ [case id=cx-082-select-attribute-axis level=core
+  [tags cx select cxpath attribute]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $doc [users [user name="ada"]]] [$cx:select $doc "//user/@name"]]
+#]]
+  [out-text [#
+([name 'ada'])
+#]]
+ ]
+
+ [case id=cx-083-select-no-match-is-empty-sequence level=core
+  [tags cx select cxpath empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $doc [users [user name="ada"]]] [$count [$cx:select $doc "//ghost"]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=cx-084-select-malformed-path level=core
+  [tags cx select error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:select [a 1] "//["]
+#]]
+  [out-err [#
+CXER4106
+#]]
+ ]
+
+ [case id=cx-085-select-over-parsed-directive level=core
+  [tags cx select parse directive issue-436]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:parse "[?if true [then 1] [else 2]]"]] [$count [$cx:select $t "//then"]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=cx-090-always-on-no-lib level=core
+  [tags cx activation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:hash [a 1]]
+#]]
+  [out-text [#
+'c2de3721009da3ce799e831e8c1293f6c7c47033bca422657fc3693d79ae82b5'
+#]]
+ ]
+
+ [case id=cx-091-module-lane level=core
+  [tags cx activation module]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/cx']
+[$cx:serialize [a 1]]
+#]]
+  [out-text [#
+'[a 1]'
+#]]
+ ]
+
+ [case id=cx-092-module-alias-lane level=core
+  [tags cx activation module alias]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/cx' as=x]
+[$x:hash [a 1]]
+#]]
+  [out-text [#
+'c2de3721009da3ce799e831e8c1293f6c7c47033bca422657fc3693d79ae82b5'
+#]]
+ ]
+
+ [case id=cx-093-flat-dispatch-alias level=core
+  [tags cx activation alias]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx-serialize [a 1]]
+#]]
+  [out-text [#
+'[a 1]'
+#]]
+ ]
+]

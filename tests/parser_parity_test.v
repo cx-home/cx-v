@@ -38,7 +38,7 @@ const match_corpus = [
 // modify_corpus — representative [?modify] shapes.
 const modify_corpus = [
 	'[?modify \$doc //user [set-attr status "active"]]',
-	'[?modify \$doc //user[@active=false] [delete]]',
+	'[?modify \$doc //user[= \$_@active false] [delete]]',
 	'[?modify \$doc //user/@name [set "Alicia"]]',
 	'[?modify \$doc //widget [rename component]]',
 	'[?modify \$doc //section [append [para "Hi"]]]',
@@ -121,7 +121,7 @@ fn test_modify_dispatch_behavioral() {
 	// [?modify] via the production dispatcher (bridge → lowering).
 	in_cx := '[users [user active=true [name Alice]] [user active=false [name Bob]]]'
 	// Predicate-focus delete: Bob dropped, Alice kept.
-	got := run_eval(in_cx, '[?modify \$doc //user[@active=false] [delete]]') or {
+	got := run_eval(in_cx, '[?modify \$doc //user[= \$_@active false] [delete]]') or {
 		assert false, 'modify delete eval failed: ${err}'
 		return
 	}

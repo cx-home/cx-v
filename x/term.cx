@@ -1,0 +1,62 @@
+# cx-x/term — native raw-mode terminal input (EXPERIMENTAL `x/` tier, issue #30).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): in-tree (one repo,
+# one toolchain, one gate) but EXEMPT from the frozen-`std` byte-compatible-reimpl
+# stability promise — the surface may evolve until it proves out, then graduates
+# to `cx-stdlib/term`. Users see the tier in the path (`cx-x/term`).
+#
+# The substrate for interactive TUIs (a lazygit-class XAP surface): single-key
+# reads with a timeout on the program's own tty (fd 0), instead of io:read-line's
+# blocking, line-buffered cooked mode. NOT a wrapped TUI framework — the XAP
+# surface/panel layer is the widget model; a TUI is just another renderer of it.
+#
+# termios (raw/cooked) + winsize + a poll-gated read live in the cx_term.h C shim
+# (sibling of cx_pty.h); a VT/ANSI key decoder turns the raw byte stream into
+# `[key name=… mods=(…)]` event elements (arrows, fn-keys, ctrl/alt-chords) — no
+# terminfo DB, targeting VT/ANSI (xterm-256color), which cx already emits. POSIX.
+#
+# Capability: every terminal effect reads/mutates the controlling tty and is
+# gated on `read` (consistent with stdin read-line). On a non-tty (a pipe, a
+# headless run) raw-mode/size raise cx-err:CXER3450 (E_TERM_NOT_A_TTY).
+#
+# select (Stage 2) waits on the FIRST ready of keystrokes ∪ source fds ∪ a timer
+# over one poll(2) shim — the load-bearing primitive that dissolves the
+# "live-stream OR interactive-input" split (#28/#29): one loop, both signals. It
+# returns READINESS for a non-keystroke source (`[ready index=N <handle>]`) and
+# leaves the read to the source's own module, so term stays decoupled from every
+# source's wire framing (SSE, sockets, …).
+
+[module-doc name=term
+  [scope """Native raw-mode terminal input for interactive TUIs (EXPERIMENTAL x/
+   tier, #30). raw-mode/cooked-mode save+restore the tty's termios on fd 0;
+   read-event returns the next decoded VT/ANSI key (`[key name=… mods=(…)]`),
+   resize, or `[timeout]`; size reports the window dimensions. The substrate for
+   a lazygit-class XAP terminal surface — a peer renderer to web/agent, not a
+   wrapped TUI framework. POSIX; gated on the `read` capability; a non-tty raises
+   cx-err:CXER3450."""]]
+
+[?def is-tty       scope=public impure [returns bool]    ()              [$term-is-tty]]
+[?def raw-mode     scope=public impure [returns null]    ()              [$term-raw-mode]]
+[?def cooked-mode  scope=public impure [returns null]    ()              [$term-cooked-mode]]
+[?def size         scope=public impure [returns element] ()              [$term-size]]
+[?def read-event   scope=public impure [returns element] ()              [$term-read-event]]
+[?def select       scope=public impure [returns element] ($opts)         [$term-select $opts]]
+
+[fn-doc name=is-tty scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Report whether stdin (fd 0) is a terminal. False under a pipe / headless run — guard interactive paths with it. Requires no capability."""]]
+[fn-doc name=raw-mode scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Switch the tty (fd 0) to raw mode (cfmakeraw: no line buffering, no echo, byte-at-a-time) and save the prior termios so cooked-mode restores it. Raises cx-err:CXER3450 on a non-tty. Needs the `read` capability."""]]
+[fn-doc name=cooked-mode scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Restore the tty's saved (pre-raw) termios. A no-op if raw-mode was never entered. Pair with raw-mode (ideally via a scope guard) so the terminal is always restored. Needs the `read` capability."""]]
+[fn-doc name=size scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Report the terminal window size as `[size rows=R cols=C]` (TIOCGWINSZ). Raises cx-err:CXER3450 on a non-tty. Needs the `read` capability."""]]
+[fn-doc name=read-event scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Read and decode the next terminal event from raw stdin: `[key name=NAME mods=(:ctrl :alt :shift)]` for a keystroke (arrows, fn-keys, ctrl/alt-chords, printable), or `[timeout]`. Requires raw-mode. Needs the `read` capability."""]]
+[fn-doc name=select scope=public purity=impure
+  [sig """{keys: bool sources: (handle …) timeout: int-ms} -> element"""]
+  [summary """Wait for the FIRST ready of keystrokes (keys: true → raw stdin), any source handle's fd becoming readable (sources: a sequence of [socket]/[exchange]/SSE-stream handles), or the timer (timeout: milliseconds; omit/-1 to block). Returns the decoded `[key …]` for a keystroke, `[ready index=N <handle>]` when source N is readable (read it via its own module, e.g. http:sse-events — term stays decoupled from each source's framing), or `[timeout]`. The one primitive that unifies live-stream and interactive input in a single loop. Requires raw-mode for keystrokes. Needs the `read` capability."""]]

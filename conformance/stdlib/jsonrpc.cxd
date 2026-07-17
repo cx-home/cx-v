@@ -205,8 +205,8 @@ false
    [in-code [#
 [?lib 'cx-stdlib/jsonrpc' :as rpc]
 [?let [= $a [$rpc:request 1 "a" {}]]
- [?let [= $b [$rpc:request 2 "b" {}]]
-  [$rpc:is-batch ($a, $b)]]]
+ [= $b [$rpc:request 2 "b" {}]]
+ [$rpc:is-batch ($a, $b)]]
 #]]
    [out-text [#
 true

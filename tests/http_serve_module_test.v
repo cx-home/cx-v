@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 
 // Tests the MODULE-level server surface `[$http:serve url $handler {block:true}]`
@@ -14,11 +15,7 @@ import time
 // Skipped when curl is unavailable.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make -C vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 fn curl_available() bool {

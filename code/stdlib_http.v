@@ -7,6 +7,8 @@ import net
 import net.mbedtls
 import compress.gzip
 import compress.zstd
+import sync
+import time
 
 // stdlib_http.v — native primitives backing the `cx-stdlib/http` module
 // (spec/02-inprogress/stdlib_http.md). L7 HTTP/1.1 client + server, built
@@ -55,9 +57,11 @@ const http_err_redirect_loop = 'cx-err:CXER4527' // E_HTTP_REDIRECT_LOOP
 const http_err_too_many_redirects = 'cx-err:CXER4528' // E_HTTP_TOO_MANY_REDIRECTS
 const http_err_redirect_invalid = 'cx-err:CXER4529' // E_HTTP_REDIRECT_INVALID
 const http_err_body_too_large = 'cx-err:CXER4530' // E_HTTP_BODY_TOO_LARGE
+const http_err_request_timeout = 'cx-err:CXER4534' // E_HTTP_REQUEST_TIMEOUT (§4.5 whole-request deadline)
 const http_err_content_decode = 'cx-err:CXER4532' // E_HTTP_CONTENT_DECODE
 const http_err_arg_invalid = 'cx-err:CXER4539' // E_HTTP_ARG_INVALID
 const http_err_respond_invalid = 'cx-err:CXER4541' // E_HTTP_RESPOND_INVALID
+const http_err_no_request = 'cx-err:CXER4542' // E_HTTP_NO_REQUEST — clean EOF/idle: peer sent nothing (not a framing error)
 
 // ── value builders ───────────────────────────────────────────────────
 fn http_str(s string) cx.Node {
@@ -721,6 +725,19 @@ mut:
 	legacy_post_redirect bool
 	auto_decompress      bool = true
 	max_body_bytes       int  = 67108864 // 64 MiB (§3.1)
+	// timeout: the §4.5 WHOLE-REQUEST deadline (connect + every redirect hop +
+	// body read), default 30s, surfaced as CXER4534. Distinct from (and the
+	// reason for existing despite) the net layer's bounds: connect is
+	// select-bounded at 5s and each single read at the 30s socket default, but
+	// a response that keeps dribbling bytes resets the per-read clock every
+	// time — an LLM upstream streaming a generation holds a connection (and on
+	// a served path, its reactor — cx #275) for MINUTES with no single read
+	// ever timing out. Only a whole-request budget bounds that.
+	timeout_ms           i64 = 30_000
+	// deadline_at: absolute time.ticks() cutoff, stamped ONCE by
+	// http_do_request so all redirect hops spend from the same budget. 0 =
+	// not yet stamped.
+	deadline_at          i64
 }
 
 // http_parse_req_opts reads the redirect/decompress/tls opts off the per-call
@@ -742,6 +759,19 @@ fn http_parse_req_opts(opts cx.Node) HttpReqOpts {
 	}
 	if v := http_map_entry_int(opts, 'max-body-bytes') {
 		o.max_body_bytes = v
+	}
+	// `timeout` is a duration scalar ({timeout: 5s} / {timeout: 1500ms}); an
+	// absent, malformed, or non-positive value keeps the 30s §3.1 default
+	// (same lenient-parse posture as the other opts). There is deliberately
+	// no infinite opt-out — §3.1 bounds are "never unbounded"; a caller that
+	// needs longer states how long.
+	tstr := http_map_entry_str(opts, 'timeout')
+	if tstr != '' {
+		if ns := duration_to_ns(tstr) {
+			if ns > 0 {
+				o.timeout_ms = ns / 1_000_000
+			}
+		}
 	}
 	return o
 }
@@ -774,8 +804,15 @@ fn http_do_request(method string, url string, extra_headers [][]string, body []u
 	mut cur_body := body.clone()
 	mut cur_headers := extra_headers.clone()
 	mut visited := []string{}
+	// §4.5: one whole-request budget, stamped here so every redirect hop —
+	// connects, writes, and reads alike — spends from the same clock.
+	mut dopts := opts
+	dopts.deadline_at = time.ticks() + dopts.timeout_ms
 	for hop := 0; ; hop++ {
-		resp := http_do_single(cur_method, cur_url, cur_headers, cur_body, opts)
+		if time.ticks() >= dopts.deadline_at {
+			return mk_err(http_err_request_timeout, 'E_HTTP_REQUEST_TIMEOUT: whole-request timeout (${dopts.timeout_ms}ms) exceeded after ${hop} redirect hop(s)')
+		}
+		resp := http_do_single(cur_method, cur_url, cur_headers, cur_body, dopts)
 		if is_err_value(resp) {
 			return resp
 		}
@@ -1011,8 +1048,313 @@ fn http_response_decoded(e cx.Element, decoded []u8, wire []u8) cx.Node {
 	}
 }
 
-// http_do_single performs one real request/response over a fresh TCP conn.
-fn http_do_single(method string, url string, extra_headers [][]string, body []u8, opts HttpReqOpts) cx.Node {
+// ── #234 client connection pool (§5.2 keep-alive reuse) ───────────────────────
+//
+// http_do_single keeps the connection OPEN after a fully-framed keep-alive
+// response and parks it in a process-global pool keyed by
+// scheme://host:port + TLS identity (verify flag + CA), so the next request to
+// the same origin reuses the TCP (and TLS session) instead of re-dialing —
+// the client half of the §5.2 keep-alive the server has honored since #234.1.
+// Discipline:
+//   - a conn is poolable only when the response was DEFINITELY framed
+//     (Content-Length satisfied / chunked terminator seen — never read-to-EOF)
+//     AND the server did not say `Connection: close` AND it spoke HTTP/1.1;
+//   - a pooled conn that proves stale (write fails, or zero response bytes —
+//     the server closed it while parked) is dropped and the request REDIALS
+//     ONCE on a fresh conn. The retry fires only when no response byte was
+//     received, so a request is never replayed after a partial response;
+//   - idle conns are evicted after http_pool_idle_ms (§5.2 60s) — lazily on
+//     take, and by an opportunistic sweep on every park;
+//   - per-key and total caps bound parked fds; overflow closes instead of parks.
+// The pool holds only IDLE conns (a taken conn is owned exclusively by its
+// request), so no two requests ever share a socket.
+
+const http_pool_idle_ms = i64(60000) // §5.2: idle keep-alive eviction window
+const http_pool_max_per_key = 8
+const http_pool_max_total = 64
+
+// HttpPoolConn — one client connection (plain TCP, or TLS when ssl is set).
+@[heap]
+struct HttpPoolConn {
+mut:
+	tcp     &net.TcpConn
+	ssl     &mbedtls.SSLConn = unsafe { nil } // non-nil ⇒ https (TLS over tcp)
+	last_ms i64 // time.ticks() when parked (idle-eviction clock)
+}
+
+__global (
+	g_http_pool_mu    &sync.Mutex
+	g_http_pool       map[string][]&HttpPoolConn
+	g_http_pool_total int
+)
+
+// (the pool mutex/map are initialized in the module init() in stdlib_codec.v —
+// one init per module — once, before any thread, so locking is race-free
+// thereafter; same pattern as g_csrp_disco.)
+
+// http_pool_key — pooled conns are origin- AND trust-scoped: two requests with
+// different verify/CA settings never share a socket. The CA PEM rides in the
+// key verbatim (a handful of origins at most — compactness is irrelevant,
+// correctness is not).
+fn http_pool_key(scheme string, host string, port int, verify bool, ca string) string {
+	return '${scheme}://${host}:${port}|v=${verify}|ca=${ca}'
+}
+
+fn (mut c HttpPoolConn) pool_close() {
+	if c.ssl != unsafe { nil } {
+		c.ssl.close() or {}
+	}
+	c.tcp.close() or {}
+}
+
+fn (mut c HttpPoolConn) pool_write_string(s string) ! {
+	if c.ssl != unsafe { nil } {
+		c.ssl.write_string(s)!
+		return
+	}
+	c.tcp.write_string(s)!
+}
+
+fn (mut c HttpPoolConn) pool_write(b []u8) ! {
+	if c.ssl != unsafe { nil } {
+		c.ssl.write(b)!
+		return
+	}
+	c.tcp.write(b)!
+}
+
+fn (mut c HttpPoolConn) pool_read(mut buf []u8) !int {
+	if c.ssl != unsafe { nil } {
+		return c.ssl.read(mut buf)!
+	}
+	return c.tcp.read(mut buf)!
+}
+
+// http_pool_take pops the freshest idle conn for `key` (LIFO — the most
+// recently parked is the least likely to have been closed by the server),
+// closing any idle-expired ones it walks past.
+fn http_pool_take(key string) ?&HttpPoolConn {
+	g_http_pool_mu.lock()
+	now := time.ticks()
+	mut list := g_http_pool[key] or {
+		g_http_pool_mu.unlock()
+		return none
+	}
+	mut expired := []&HttpPoolConn{}
+	mut found := &HttpPoolConn(unsafe { nil })
+	for list.len > 0 {
+		mut pc := list.pop()
+		g_http_pool_total--
+		if now - pc.last_ms <= http_pool_idle_ms {
+			found = pc
+			break
+		}
+		expired << pc
+	}
+	g_http_pool[key] = list
+	g_http_pool_mu.unlock()
+	for mut pc in expired {
+		pc.pool_close()
+	}
+	if found == unsafe { nil } {
+		return none
+	}
+	return found
+}
+
+// http_pool_put parks a conn for reuse, sweeping idle-expired conns across the
+// whole pool while it holds the lock. Overflow (per-key or total cap) closes
+// the conn instead of parking it.
+fn http_pool_put(key string, mut pc HttpPoolConn) {
+	now := time.ticks()
+	pc.last_ms = now
+	mut to_close := []&HttpPoolConn{}
+	g_http_pool_mu.lock()
+	// opportunistic sweep: drop idle-expired conns everywhere.
+	for k, list in g_http_pool {
+		mut kept := []&HttpPoolConn{cap: list.len}
+		for c in list {
+			if now - c.last_ms <= http_pool_idle_ms {
+				kept << c
+			} else {
+				to_close << c
+				g_http_pool_total--
+			}
+		}
+		g_http_pool[k] = kept
+	}
+	mut list := g_http_pool[key] or { []&HttpPoolConn{} }
+	if list.len >= http_pool_max_per_key || g_http_pool_total >= http_pool_max_total {
+		g_http_pool_mu.unlock()
+		for mut c in to_close {
+			c.pool_close()
+		}
+		pc.pool_close()
+		return
+	}
+	list << pc
+	g_http_pool[key] = list
+	g_http_pool_total++
+	g_http_pool_mu.unlock()
+	for mut c in to_close {
+		c.pool_close()
+	}
+}
+
+// http_conn_exchange writes one request and reads its response off `pc`.
+// Returns (raw, complete, werr): werr != '' ⇒ the WRITE failed (no response
+// byte consumed — safe to redial); werr == 'too-large' ⇒ the response blew the
+// cap (hard error, never retried); otherwise raw holds whatever arrived
+// (possibly empty ⇒ the conn was dead — a pooled caller redials, a fresh
+// caller parses the empty read into the honest invalid-response error, exactly
+// as before) and `complete` reports definite framing (poolability input).
+fn http_conn_exchange(mut pc HttpPoolConn, method string, head string, body []u8, max_resp int, deadline_at i64) ([]u8, bool, string) {
+	pc.pool_write_string(head) or { return []u8{}, false, 'write request: ${err.msg()}' }
+	if body.len > 0 {
+		pc.pool_write(body) or { return []u8{}, false, 'write body: ${err.msg()}' }
+	}
+	mut raw := []u8{}
+	mut complete := false
+	for {
+		// §4.5 whole-request budget: each read may spend at most what remains
+		// of THIS REQUEST's deadline — a per-read socket timeout alone is
+		// defeated by a dribbling upstream (every arriving byte resets it).
+		// The socket read timeout is (re)armed to the shrinking remainder
+		// before every read, and a read failure PAST the deadline is the
+		// timeout regardless of the error's shape (tcp and tls surface
+		// deadline lapses differently; wall-clock classification covers both).
+		rem_ms := deadline_at - time.ticks()
+		if rem_ms <= 0 {
+			return raw, complete, 'timeout'
+		}
+		pc.tcp.set_read_timeout(rem_ms * time.millisecond)
+		if pc.ssl != unsafe { nil } {
+			pc.ssl.read_timeout = rem_ms * time.millisecond
+		}
+		mut tmp := []u8{len: 8192}
+		n := pc.pool_read(mut tmp) or {
+			if time.ticks() >= deadline_at {
+				return raw, complete, 'timeout'
+			}
+			break
+		}
+		if n <= 0 {
+			break
+		}
+		raw << tmp[..n]
+		if raw.len > max_resp {
+			return raw, false, 'too-large'
+		}
+		if http_exchange_complete(raw, method) {
+			complete = true
+			break
+		}
+	}
+	return raw, complete, ''
+}
+
+// http_exchange_complete — response completeness for the exchange loop. A HEAD
+// response and the 204/304 statuses are complete at the header terminator:
+// they NEVER carry a body, even when a Content-Length is advertised, so
+// waiting on framing would hang against a keep-alive server (the old
+// `Connection: close` client was rescued by the server's EOF; a pooled client
+// must not rely on one). Everything else defers to http_response_complete
+// (Content-Length / chunked framing).
+fn http_exchange_complete(raw []u8, method string) bool {
+	s := raw.bytestr()
+	he := s.index('\r\n\r\n') or { return false }
+	if method == 'HEAD' {
+		return true
+	}
+	sl := s[..he].split('\r\n')[0].split(' ')
+	if sl.len >= 2 {
+		st := sl[1].int()
+		if st == 204 || st == 304 {
+			return true
+		}
+	}
+	return http_response_complete(raw)
+}
+
+// http_conn_poolable — the response permits reuse: definitely framed (never
+// read-to-EOF), HTTP/1.1, and no `Connection: close` from the server.
+fn http_conn_poolable(raw []u8, complete bool) bool {
+	if !complete {
+		return false
+	}
+	s := raw.bytestr()
+	he := s.index('\r\n\r\n') or { return false }
+	lines := s[..he].split('\r\n')
+	if lines.len == 0 || !lines[0].starts_with('HTTP/1.1') {
+		return false
+	}
+	for i in 1 .. lines.len {
+		ln := lines[i]
+		ci := ln.index(':') or { continue }
+		if ln[..ci].trim_space().to_lower() == 'connection' {
+			return !ln[ci + 1..].trim_space().to_lower().contains('close')
+		}
+	}
+	return true // HTTP/1.1 default: persistent
+}
+
+// http_dial_conn dials (and TLS-handshakes) a fresh connection. The error
+// nodes are byte-identical to the pre-pool http_do_single dial paths.
+fn http_dial_conn(scheme string, host string, pinned string, port int, tls_verify bool, tls_ca string) (&HttpPoolConn, cx.Node, bool) {
+	nilconn := &HttpPoolConn(unsafe { nil })
+	mut tcp := net.dial_tcp(net_join_host_port(pinned, port)) or {
+		msg := err.msg()
+		ecode := if msg.contains('refused') { 'cx-err:CXER4505' } else { 'cx-err:CXER4506' }
+		hostlbl := if scheme == 'https' { pinned } else { host }
+		return nilconn, mk_err(ecode, 'E_HTTP: connect ${hostlbl}:${port}: ${msg}'), false
+	}
+	if scheme != 'https' {
+		return &HttpPoolConn{
+			tcp: tcp
+		}, store_null(), true
+	}
+	// real TLS via mbedTLS (net dial-tls config). verify defaults true against
+	// the OS trust store (§3.6); opts.verify=false / opts.ca override.
+	mut cfg := mbedtls.SSLConnectConfig{
+		validate: tls_verify
+	}
+	if tls_ca != '' {
+		cfg = mbedtls.SSLConnectConfig{
+			validate:               tls_verify
+			in_memory_verification: true
+			verify:                 tls_ca
+		}
+	} else if tls_verify {
+		cfg = mbedtls.SSLConnectConfig{
+			validate: true
+			verify:   http_os_ca_bundle()
+		}
+	}
+	mut ssl := mbedtls.new_ssl_conn(cfg) or {
+		tcp.close() or {}
+		return nilconn, mk_err('cx-err:CXER4512', 'E_HTTP: TLS init: ${err.msg()}'), false
+	}
+	ssl.connect(mut tcp, host) or {
+		tcp.close() or {}
+		return nilconn, mk_err('cx-err:CXER4512', 'E_HTTP: TLS handshake ${host}:${port}: ${err.msg()}'), false
+	}
+	return &HttpPoolConn{
+		tcp: tcp
+		ssl: ssl
+	}, store_null(), true
+}
+
+// http_do_single performs one real request/response, reusing a pooled
+// keep-alive connection to the origin when one is parked (#234; fresh dial
+// otherwise, redial-once when a pooled conn proves stale).
+fn http_do_single(method string, url string, extra_headers [][]string, body []u8, opts_in HttpReqOpts) cx.Node {
+	// Defensive stamp: http_do_request seeds the whole-request deadline; a
+	// future direct caller that forgets must still get §4.5's bounded default
+	// rather than an already-expired (or unbounded) budget.
+	mut opts := opts_in
+	if opts.deadline_at == 0 {
+		opts.deadline_at = time.ticks() + opts.timeout_ms
+	}
 	tls_verify := opts.tls_verify
 	tls_ca := opts.tls_ca
 	scheme, host, port, path := http_url_parts(url)
@@ -1039,95 +1381,60 @@ fn http_do_single(method string, url string, extra_headers [][]string, body []u8
 			head += 'Content-Type: application/octet-stream\r\n'
 		}
 	}
-	head += 'Connection: close\r\n\r\n'
+	// #234: advertise keep-alive (the HTTP/1.1 default, stated explicitly) so a
+	// fully-framed exchange leaves the conn reusable; http_conn_poolable decides.
+	head += 'Connection: keep-alive\r\n\r\n'
 	max_resp := 64 * 1024 * 1024
-	mut raw := []u8{}
-	if scheme == 'https' {
-		// real TLS via mbedTLS (net dial-tls config). verify defaults true
-		// against the OS trust store (§3.6); opts.verify=false / opts.ca override.
-		mut cfg := mbedtls.SSLConnectConfig{
-			validate: tls_verify
-		}
-		if tls_ca != '' {
-			cfg = mbedtls.SSLConnectConfig{
-				validate:               tls_verify
-				in_memory_verification: true
-				verify:                 tls_ca
-			}
-		} else if tls_verify {
-			cfg = mbedtls.SSLConnectConfig{
-				validate: true
-				verify:   http_os_ca_bundle()
-			}
-		}
-		mut tcp := net.dial_tcp(net_join_host_port(pinned, port)) or {
-			msg := err.msg()
-			ecode := if msg.contains('refused') { 'cx-err:CXER4505' } else { 'cx-err:CXER4506' }
-			return mk_err(ecode, 'E_HTTP: connect ${pinned}:${port}: ${msg}')
-		}
-		mut ssl := mbedtls.new_ssl_conn(cfg) or {
-			tcp.close() or {}
-			return mk_err('cx-err:CXER4512', 'E_HTTP: TLS init: ${err.msg()}')
-		}
-		ssl.connect(mut tcp, host) or {
-			return mk_err('cx-err:CXER4512', 'E_HTTP: TLS handshake ${host}:${port}: ${err.msg()}')
-		}
-		defer {
-			ssl.close() or {}
-		}
-		ssl.write_string(head) or {
-			return mk_err('cx-err:CXER4508', 'E_HTTP: write request: ${err.msg()}')
-		}
-		if body.len > 0 {
-			ssl.write(body) or {
-				return mk_err('cx-err:CXER4508', 'E_HTTP: write body: ${err.msg()}')
-			}
-		}
-		for {
-			mut tmp := []u8{len: 8192}
-			n := ssl.read(mut tmp) or { break }
-			if n <= 0 {
-				break
-			}
-			raw << tmp[..n]
-			if raw.len > max_resp {
-				return mk_err('cx-err:CXER4530', 'E_HTTP_BODY_TOO_LARGE: response over ${max_resp} bytes')
-			}
-			if http_response_complete(raw) {
-				break
-			}
-		}
-		return http_parse_response(raw, method)
-	}
-	mut conn := net.dial_tcp(net_join_host_port(pinned, port)) or {
-		msg := err.msg()
-		ecode := if msg.contains('refused') { 'cx-err:CXER4505' } else { 'cx-err:CXER4506' }
-		return mk_err(ecode, 'E_HTTP: connect ${host}:${port}: ${msg}')
-	}
-	defer {
-		conn.close() or {}
-	}
-	conn.write_string(head) or {
-		return mk_err('cx-err:CXER4508', 'E_HTTP: write request: ${err.msg()}')
-	}
-	if body.len > 0 {
-		conn.write(body) or {
-			return mk_err('cx-err:CXER4508', 'E_HTTP: write body: ${err.msg()}')
-		}
-	}
-	for {
-		mut tmp := []u8{len: 8192}
-		n := conn.read(mut tmp) or { break }
-		if n <= 0 {
-			break
-		}
-		raw << tmp[..n]
-		if raw.len > max_resp {
+	key := http_pool_key(scheme, host, port, tls_verify, tls_ca)
+	// Pooled attempt (§5.2 reuse). A stale parked conn — write failure or zero
+	// response bytes (the server closed it while idle) — is dropped and the
+	// request falls through to ONE fresh dial. The retry fires only when no
+	// response byte arrived, so a request is never replayed mid-response.
+	if mut ppc := http_pool_take(key) {
+		raw, complete, werr := http_conn_exchange(mut ppc, method, head, body, max_resp,
+			opts.deadline_at)
+		if werr == 'too-large' {
+			ppc.pool_close()
 			return mk_err('cx-err:CXER4530', 'E_HTTP_BODY_TOO_LARGE: response over ${max_resp} bytes')
 		}
-		if http_response_complete(raw) {
-			break
+		if werr == 'timeout' {
+			// The budget is spent — a redial could only time out again with
+			// less budget. Fail the request here (§4.5).
+			ppc.pool_close()
+			return mk_err(http_err_request_timeout, 'E_HTTP_REQUEST_TIMEOUT: no complete response within the whole-request timeout')
 		}
+		if werr == '' && raw.len > 0 {
+			if http_conn_poolable(raw, complete) {
+				http_pool_put(key, mut ppc)
+			} else {
+				ppc.pool_close()
+			}
+			return http_parse_response(raw, method)
+		}
+		ppc.pool_close() // stale — redial once below
+	}
+	mut pc, errn, ok := http_dial_conn(scheme, host, pinned, port, tls_verify, tls_ca)
+	if !ok {
+		return errn
+	}
+	raw, complete, werr := http_conn_exchange(mut pc, method, head, body, max_resp,
+		opts.deadline_at)
+	if werr == 'too-large' {
+		pc.pool_close()
+		return mk_err('cx-err:CXER4530', 'E_HTTP_BODY_TOO_LARGE: response over ${max_resp} bytes')
+	}
+	if werr == 'timeout' {
+		pc.pool_close()
+		return mk_err(http_err_request_timeout, 'E_HTTP_REQUEST_TIMEOUT: no complete response within the whole-request timeout')
+	}
+	if werr != '' {
+		pc.pool_close()
+		return mk_err('cx-err:CXER4508', 'E_HTTP: ${werr}')
+	}
+	if http_conn_poolable(raw, complete) {
+		http_pool_put(key, mut pc)
+	} else {
+		pc.pool_close()
 	}
 	return http_parse_response(raw, method)
 }
@@ -1455,16 +1762,27 @@ fn http_exchange_request_real(args []cx.Node) cx.Node {
 		return mk_err(http_err_arg_invalid, 'E_HTTP_ARG_INVALID: exchange-request on a closed/unknown exchange')
 	}
 	req_line := net_read_line_buf(mut h) or {
-		return mk_err(http_err_respond_invalid, 'E_HTTP_REQUEST_INVALID: empty request (peer closed before sending)')
+		// No request line at all: a clean EOF (peer closed) or an idle-timeout on a
+		// kept-alive connection. Distinct code so the serve loop closes quietly
+		// rather than answering a spurious 400 (#234.1).
+		return mk_err(http_err_no_request, 'E_HTTP_NO_REQUEST: peer sent no request line (closed or idle)')
+	}
+	if req_line.trim_space() == '' {
+		// A bare CRLF before any request line — same clean-close signal.
+		return mk_err(http_err_no_request, 'E_HTTP_NO_REQUEST: empty request line')
 	}
 	parts := req_line.split(' ')
-	if parts.len < 2 {
-		return mk_err(http_err_respond_invalid, 'E_HTTP_REQUEST_INVALID: malformed request line "${req_line}"')
+	// #219.3: require all three request-line tokens (method, target, HTTP-version).
+	// A two-token line (`POST /path`) was accepted → reject as malformed (400).
+	if parts.len < 3 {
+		return mk_err(http_err_respond_invalid, 'E_HTTP_REQUEST_INVALID: request line needs method, target, and HTTP-version: "${req_line}"')
 	}
 	method := parts[0].to_upper()
 	target := parts[1]
 	mut hdr_nodes := []cx.Node{}
 	mut content_length := 0
+	mut cl_seen := false
+	mut cl_str := ''
 	for {
 		line := net_read_line_buf(mut h) or { break }
 		if line == '' {
@@ -1474,6 +1792,15 @@ fn http_exchange_request_real(args []cx.Node) cx.Node {
 		hname := line[..ci].trim_space()
 		hval := line[ci + 1..].trim_space()
 		if hname.to_lower() == 'content-length' {
+			// #219.1/.2: RFC 9112 — a duplicate/conflicting Content-Length is a
+			// request-smuggling primitive and (with no read deadline) an
+			// unauthenticated worker-exhaustion hang. Reject a second Content-Length
+			// whose value differs (a repeated identical value is tolerated per RFC).
+			if cl_seen && hval != cl_str {
+				return mk_err(http_err_respond_invalid, 'E_HTTP_REQUEST_INVALID: conflicting duplicate Content-Length (${cl_str} vs ${hval})')
+			}
+			cl_seen = true
+			cl_str = hval
 			content_length = hval.int()
 		}
 		hdr_nodes << cx.Node(cx.Element{
@@ -1630,33 +1957,131 @@ fn http_respond_impl(args []cx.Node) cx.Node {
 	return http_null()
 }
 
+// http_write_response_keepalive writes a [response] to the exchange with
+// `Connection: keep-alive` and leaves the socket OPEN for the next request on the
+// same connection (#234.1). Returns false on a write failure or a response that
+// cannot be safely pipelined (an explicit `Connection: close`, or an unknown
+// shape) — the caller then closes the connection. Unlike http_respond_impl this
+// NEVER closes the fd; the serve loop owns the connection's lifetime.
+pub fn http_write_response_keepalive(ex cx.Node, resp cx.Node, idle_ms i64) bool {
+	re := http_elem(resp) or { return false }
+	if !http_is_response(re) {
+		return false
+	}
+	st := http_attr(re, 'status') or { return false }
+	status := st.int()
+	if status < 100 || status > 599 {
+		return false
+	}
+	// honor an explicit Connection: close the handler set — cannot keep alive.
+	for hdr in http_header_elems(re) {
+		hn := http_attr(hdr, 'name') or { continue }
+		if hn.to_lower() == 'connection' {
+			hv := http_attr(hdr, 'value') or { '' }
+			if hv.to_lower().contains('close') {
+				return false
+			}
+		}
+	}
+	mut h := net_mut_handle(ex) or { return false }
+	wire := http_serialize_response_ka(re, status, true, idle_ms)
+	net_h_write(mut h, wire) or { return false }
+	return true
+}
+
+// http_chunk_size bounds a single Transfer-Encoding: chunked wire frame. A
+// larger binary stream is emitted as a run of these chunks rather than buffered
+// behind a Content-Length — the streaming response path the CSRP transport
+// (the cx-store:// remote protocol) reads back via http_dechunk.
+const http_chunk_size = 4096
+
+// http_emit_chunked frames `body` as HTTP/1.1 chunked transfer-encoding:
+// each piece is `<hex-len>\r\n<piece>\r\n`, terminated by `0\r\n\r\n`. Pieces
+// are at most http_chunk_size bytes, so a multi-KB binary stream produces
+// multiple real wire chunks (a peer must de-chunk to recover the octets).
+fn http_emit_chunked(mut sb []u8, body []u8) {
+	mut off := 0
+	for off < body.len {
+		mut end := off + http_chunk_size
+		if end > body.len {
+			end = body.len
+		}
+		piece := body[off..end]
+		sb << '${piece.len.hex()}\r\n'.bytes()
+		sb << piece
+		sb << '\r\n'.bytes()
+		off = end
+	}
+	sb << '0\r\n\r\n'.bytes()
+}
+
 // http_serialize_response renders a server-side [response] to the HTTP/1.1 wire:
-// status line + headers (Content-Length forced from the body, Connection: close)
-// + CRLF + body octets (§3.5).
+// status line + headers + CRLF + body. When the response carries a
+// `Transfer-Encoding: chunked` header the body is streamed as chunked frames
+// (Content-Length is suppressed — RFC 9112 §6.3 forbids both); otherwise the
+// body is written verbatim behind a Content-Length forced from its length
+// (§3.5). Connection: close is added if the handler did not set it.
 fn http_serialize_response(resp cx.Element, status int) []u8 {
+	return http_serialize_response_ka(resp, status, false, 0)
+}
+
+// http_serialize_response_ka is the keep-alive-aware serializer. When `keep_alive`
+// and the handler set no explicit Connection header, it advertises
+// `Connection: keep-alive` + `Keep-Alive: timeout=<idle_ms/1000>` so a persistent
+// connection is held open between requests (#234.1 / CSRP §5.2); otherwise it
+// adds `Connection: close` (the single-turn §3.5 exchange). The response always
+// carries a definite length (Content-Length here, or the chunked 0-terminator),
+// so a kept-alive peer knows exactly where one response ends and the next begins.
+fn http_serialize_response_ka(resp cx.Element, status int, keep_alive bool, idle_ms i64) []u8 {
 	body := http_body_octets(resp)
-	mut sb := []u8{}
-	reason := http_reason_phrase(status)
-	sb << 'HTTP/1.1 ${status} ${reason}\r\n'.bytes()
-	mut saw_clen := false
+	hdrs := http_header_elems(resp)
+	mut chunked := false
 	mut saw_conn := false
-	for hdr in http_header_elems(resp) {
+	for hdr in hdrs {
 		hn := http_attr(hdr, 'name') or { continue }
 		hv := http_attr(hdr, 'value') or { '' }
 		lname := hn.to_lower()
-		if lname == 'content-length' {
-			saw_clen = true
+		if lname == 'transfer-encoding' && hv.to_lower().contains('chunked') {
+			chunked = true
 		}
 		if lname == 'connection' {
 			saw_conn = true
 		}
+	}
+	mut sb := []u8{}
+	reason := http_reason_phrase(status)
+	sb << 'HTTP/1.1 ${status} ${reason}\r\n'.bytes()
+	mut saw_clen := false
+	for hdr in hdrs {
+		hn := http_attr(hdr, 'name') or { continue }
+		hv := http_attr(hdr, 'value') or { '' }
+		lname := hn.to_lower()
+		// Under chunked transfer a Content-Length is illegal; drop any the
+		// handler set so the framing stays unambiguous.
+		if chunked && lname == 'content-length' {
+			continue
+		}
+		if lname == 'content-length' {
+			saw_clen = true
+		}
 		sb << '${hn}: ${hv}\r\n'.bytes()
+	}
+	if !saw_conn {
+		if keep_alive {
+			sb << 'Connection: keep-alive\r\n'.bytes()
+			secs := if idle_ms > 0 { idle_ms / 1000 } else { i64(0) }
+			sb << 'Keep-Alive: timeout=${secs}\r\n'.bytes()
+		} else {
+			sb << 'Connection: close\r\n'.bytes()
+		}
+	}
+	if chunked {
+		sb << '\r\n'.bytes()
+		http_emit_chunked(mut sb, body)
+		return sb
 	}
 	if !saw_clen {
 		sb << 'Content-Length: ${body.len}\r\n'.bytes()
-	}
-	if !saw_conn {
-		sb << 'Connection: close\r\n'.bytes()
 	}
 	sb << '\r\n'.bytes()
 	sb << body

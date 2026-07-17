@@ -50,7 +50,7 @@ value/absence · **M** = missing surface · **D** = spec-doc staleness.
 
 | # | Sev | Finding | Spec anchor | Observed |
 |---|---|---|---|---|
-| F1 | E | `(bind $name)` path-step annotation parses but the path walker never populates the binding | code.md §5.5.2 (worked example), grammar `[160a]` | `//team (bind $t) / member[… $t …]` → `CXER0001 unbound variable $t` at eval; fixture `pred-006` sidesteps via two-generator `[?for]` |
+| F1 | E | ~~`(bind $name)` path-step annotation parses but the path walker never populates the binding~~ **RESOLVED 2026-07-14 (#434)** — the walker binds the step's focus (fork-per-focus for subsequent steps); enforced fixtures `program-cxpath-bind-001…007` in code.cxd | code.md §5.5 (worked example), grammar `[160a]` | was: `//team (bind $t) / member[… $t …]` → `CXER0001 unbound variable $t` at eval; fixture `pred-006` sidesteps via two-generator `[?for]` |
 | F2 | **S** | Attribute reads inside **nested** predicates silently match nothing | §5.5.2 (predicate bodies are full CX exprs) | `//team[count($_/member[$_@role="lead"]) >= 1]` → empty; child-element `$_/role` works (`pred-005` uses child elements only) |
 | F3 | E | Missing-attribute read hard-errors instead of riding the absence channel | §9.1.2.2 (optional attr miss = absence) | `$u/@absent` and `$u@absent` → `CXER0001 no attribute` (kills any `[?for]`/`[where]` over heterogeneous nodes) |
 | F4 | M/E | `[?const]` modifiers: `scope=public` rejected; spec's bare `lazy` parses but the const **never binds** (impl wants `:lazy` atom) | §12.3 | `[?const scope=public K 42]` → `CXER0212`; `[?const lazy K 42]` parses, `$K` unbound on read; `[?const :lazy K …]` (fixture surface) works |

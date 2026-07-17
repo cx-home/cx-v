@@ -534,19 +534,19 @@ fn finish_step(mut c PathParseCursor, axis PathAxis, node_test string) !PathStep
 	}
 	for !c.at_end() && c.peek() == `[` {
 		body := read_predicate_body(mut c)!
-		// Phase 2.19: attempt to promote the body into a structural
-		// PredicateExpr AST. The parser only
-		// recognises the atomic-template forms currently; bodies
-		// outside that scope (`and`/`or` connectives, arbitrary
-		// function calls, instance-of, etc.) gracefully fall back
-		// to source-only mode — the structural promotion is purely
-		// additive at this phase.
-		// TODO(Phase 2.x): widen the predicate body parser to cover
-		// the full ProgramExpr surface; when it does, source-only
-		// fallback should narrow to genuinely malformed bodies.
+		// Attempt to promote the body into a structural PredicateExpr
+		// AST (the notation atoms). General prefix bodies fall back to
+		// source-only mode (the program parser owns their structure).
+		// The RETIRED infix/paren surface (grammar [132]–[134]) is a
+		// HARD error — it must never survive via the source-only
+		// fallback.
 		mut pred := PathPredicate{ source: body }
 		if expr := predicate_expr_parse(body) {
 			pred.expr = expr
+		} else {
+			if err.msg().starts_with('RETIRED_PREDICATE_SURFACE') {
+				return error('CXPATH_PARSE: ${err.msg().all_after('RETIRED_PREDICATE_SURFACE: ')}')
+			}
 		}
 		step.predicates << pred
 	}

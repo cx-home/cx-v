@@ -696,9 +696,9 @@ cx-err:CXER3803
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/i18n']
 [?let [= $d [$io:temp-dir "cxc"]]
-  [?let [= $p [$path:join $d "cat.cx"]]
-    [?let [= $w [$io:write-file $p "[catalog default=\"en\" [entry key=\"greeting\" [msg locale=\"en\" Hello]]]"]]
-      [?let [= $cat [$i18n:load-catalog $p]] $cat@default]]]]
+  [= $p [$path:join $d "cat.cx"]]
+  [= $w [$io:write-file $p "[catalog default=\"en\" [entry key=\"greeting\" [msg locale=\"en\" Hello]]]"]]
+  [?let [= $cat [$i18n:load-catalog $p]] $cat@default]]
 #]]
   [out-text [#
 'en'

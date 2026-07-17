@@ -16,9 +16,56 @@ import strconv
 
 // ── Internal JSON value type (mirrors tests/runners/conformance/conformance_run.v) ──
 
-type JV = JVNull | bool | i64 | f64 | string | []JV | map[string]JV
+type JV = JVNull | JVTyped | bool | i64 | f64 | string | []JV | map[string]JV
 
 struct JVNull {}
+
+// JVTyped is the import-side twin of the emit-side JsonTyped carrier
+// (emitter_semantic.v): a scalar whose CX type the source format named
+// explicitly — a YAML `!!cx:T` / `!!binary` tag, a TOML/JSON sidecar entry,
+// or format-native typing (YAML dates, temporal spans, bigint promotion).
+//   typ  — CX type NAME (atom / date / datetime / decimal / bigint /
+//          duration / period / bytes / sized numerics)
+//   text — canonical payload: atom name WITHOUT `:`, bytes as `0x…` hex,
+//          otherwise the verbatim scalar text
+struct JVTyped {
+	typ  string
+	text string
+}
+
+// typed_scalar_node materializes a JVTyped as the CX value-model scalar. The
+// sized numeric names collapse to int/float (the runtime value model carries
+// no width — scalar_type_from_name's documented collapse); a payload that
+// cannot parse under the named type degrades to a plain string rather than
+// inventing a zero.
+fn typed_scalar_node(typ string, text string) ScalarNode {
+	st := scalar_type_from_name(typ) or {
+		return ScalarNode{ data_type: .string_type, value: ScalarValue(text) }
+	}
+	match st {
+		.int_type {
+			if v := text.parse_int(10, 64) {
+				return ScalarNode{ data_type: .int_type, value: ScalarValue(v) }
+			}
+			return ScalarNode{ data_type: .string_type, value: ScalarValue(text) }
+		}
+		.float_type {
+			if v := strconv.atof64(text) {
+				return ScalarNode{ data_type: .float_type, value: ScalarValue(v) }
+			}
+			return ScalarNode{ data_type: .string_type, value: ScalarValue(text) }
+		}
+		.bool_type {
+			return ScalarNode{ data_type: .bool_type, value: ScalarValue(text == 'true') }
+		}
+		.null_type {
+			return ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) }
+		}
+		else {
+			return ScalarNode{ data_type: st, value: ScalarValue(text) }
+		}
+	}
+}
 
 // ── JSON Reader ───────────────────────────────────────────────────────────────
 
@@ -222,11 +269,12 @@ fn jv_to_value_node(v JV) Node {
 			}
 			return ArrayNode{ items: items }
 		}
-		JVNull { return ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) } }
-		bool   { return ScalarNode{ data_type: .bool_type, value: ScalarValue(v as bool) } }
-		i64    { return ScalarNode{ data_type: .int_type, value: ScalarValue(v as i64) } }
-		f64    { return ScalarNode{ data_type: .float_type, value: ScalarValue(v as f64) } }
-		string { return ScalarNode{ data_type: .string_type, value: ScalarValue(v as string) } }
+		JVNull  { return ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) } }
+		JVTyped { return typed_scalar_node(v.typ, v.text) }
+		bool    { return ScalarNode{ data_type: .bool_type, value: ScalarValue(v as bool) } }
+		i64     { return ScalarNode{ data_type: .int_type, value: ScalarValue(v as i64) } }
+		f64     { return ScalarNode{ data_type: .float_type, value: ScalarValue(v as f64) } }
+		string  { return ScalarNode{ data_type: .string_type, value: ScalarValue(v as string) } }
 	}
 }
 
@@ -278,6 +326,9 @@ fn jv_to_nodes(name string, v JV) []Node {
 fn jv_to_single_element(name string, v JV) Node {
 	match v {
 		JVNull { return Element{ name: name, items: [] } }
+		JVTyped {
+			return Element{ name: name, items: [Node(typed_scalar_node(v.typ, v.text))] }
+		}
 		bool {
 			val := v as bool
 			return Element{
@@ -328,12 +379,13 @@ fn jv_to_single_element(name string, v JV) Node {
 
 fn jv_to_scalar(v JV) Node {
 	return match v {
-		JVNull { ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) } }
-		bool   { ScalarNode{ data_type: .bool_type, value: ScalarValue(v as bool) } }
-		i64    { ScalarNode{ data_type: .int_type, value: ScalarValue(v as i64) } }
-		f64    { ScalarNode{ data_type: .float_type, value: ScalarValue(v as f64) } }
-		string { ScalarNode{ data_type: .string_type, value: ScalarValue(v as string) } }
-		else   { ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) } }
+		JVNull  { ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) } }
+		JVTyped { typed_scalar_node(v.typ, v.text) }
+		bool    { ScalarNode{ data_type: .bool_type, value: ScalarValue(v as bool) } }
+		i64     { ScalarNode{ data_type: .int_type, value: ScalarValue(v as i64) } }
+		f64     { ScalarNode{ data_type: .float_type, value: ScalarValue(v as f64) } }
+		string  { ScalarNode{ data_type: .string_type, value: ScalarValue(v as string) } }
+		else    { ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) } }
 	}
 }
 
@@ -349,13 +401,14 @@ fn jv_arr_scalar_type(arr []JV) (bool, ?string) {
 	mut has_arr   := false
 	for v in arr {
 		match v {
-			i64    { has_int = true }
-			f64    { has_float = true }
-			bool   { has_bool = true }
-			string { has_str = true }
-			JVNull { has_null = true }
+			i64     { has_int = true }
+			f64     { has_float = true }
+			bool    { has_bool = true }
+			string  { has_str = true }
+			JVNull  { has_null = true }
+			JVTyped { has_obj = true } // typed scalars keep their own nodes — not a homogeneous scalar array
 			map[string]JV { has_obj = true }
-			[]JV   { has_arr = true }
+			[]JV    { has_arr = true }
 		}
 	}
 	if has_obj || has_arr { return false, none }
@@ -369,6 +422,154 @@ fn jv_arr_scalar_type(arr []JV) (bool, ?string) {
 	if has_bool  && !has_int && !has_float && !has_str && !has_null { return true, ?string('bool[]') }
 	if has_str   && !has_int && !has_float && !has_bool && !has_null { return true, ?string('string[]') }
 	return false, none
+}
+
+// ── JSON `cx:type` sidecar import (conversions.md §0.2, #444) ─────────────────
+//
+// apply_cx_type_sidecar walks an imported value tree and consumes every
+// object-level `cx:type` sidecar: a Map entry whose key is exactly `cx:type`
+// and whose value is a Map of field-name → CX type-name strings. The entry is
+// removed and each named sibling field is re-typed:
+//
+//   bytes            — base64 string payload → `0x…` bytes scalar
+//   atom             — ":NAME" (or bare NAME) string → atom scalar
+//   date / datetime / decimal / bigint / duration / period
+//                    — string payload → the typed scalar, text verbatim
+//   sized numerics   — the value is already a native JSON number; the runtime
+//                      value model carries no width, so it stays int/float
+//                      (scalar_type_from_name's documented collapse)
+//
+// The sidecar is consumed UNCONDITIONALLY (no import-side mode flag), matching
+// the XML importer's treatment of the reserved `cx:` namespace (xml_parser.v
+// consumes cx:type attributes on every parse): `cx:` is CX's reserved protocol
+// prefix at every conversion boundary. Fields the sidecar names but that are
+// missing, non-scalar, or whose payload cannot decode are left untouched.
+pub fn apply_cx_type_sidecar(n Node) Node {
+	match n {
+		MapNode {
+			mut side := map[string]string{}
+			mut entries := []MapEntry{cap: n.entries.len}
+			for entry in n.entries {
+				if entry.key_type == .string_type {
+					kv := entry.key_value
+					if kv is string && kv == 'cx:type' {
+						if tm := sidecar_type_map(entry.value) {
+							for k, tn in tm {
+								side[k] = tn
+							}
+							continue // consume the sidecar entry
+						}
+					}
+				}
+				entries << MapEntry{
+					key_type:  entry.key_type
+					key_value: entry.key_value
+					value:     apply_cx_type_sidecar(entry.value)
+				}
+			}
+			if side.len > 0 {
+				for i, entry in entries {
+					if entry.key_type != .string_type {
+						continue
+					}
+					kv := entry.key_value
+					if kv is string {
+						if tn := side[kv] {
+							entries[i] = MapEntry{
+								key_type:  entry.key_type
+								key_value: entry.key_value
+								value:     sidecar_retype(entry.value, tn)
+							}
+						}
+					}
+				}
+			}
+			return MapNode{ ...n, entries: entries }
+		}
+		ArrayNode {
+			return ArrayNode{ ...n, items: n.items.map(apply_cx_type_sidecar(it)) }
+		}
+		SequenceNode {
+			return SequenceNode{ ...n, items: n.items.map(apply_cx_type_sidecar(it)) }
+		}
+		Element {
+			return Element{ ...n, items: n.items.map(apply_cx_type_sidecar(it)) }
+		}
+		else {
+			return n
+		}
+	}
+}
+
+// sidecar_type_map reads a sidecar value node as field-name → type-name; none
+// unless it is a Map whose keys and values are all plain strings.
+fn sidecar_type_map(n Node) ?map[string]string {
+	if n !is MapNode {
+		return none
+	}
+	m := n as MapNode
+	mut out := map[string]string{}
+	for entry in m.entries {
+		if entry.key_type != .string_type {
+			return none
+		}
+		kv := entry.key_value
+		if kv !is string {
+			return none
+		}
+		val := entry.value
+		if val !is ScalarNode {
+			return none
+		}
+		sv := (val as ScalarNode).value
+		if sv !is string {
+			return none
+		}
+		out[kv as string] = sv as string
+	}
+	if out.len == 0 {
+		return none
+	}
+	return out
+}
+
+// sidecar_retype applies one sidecar entry to one value node. Only a plain
+// string scalar re-types (the §0.2 payloads are strings); sized-numeric names
+// leave the native number as-is; anything unexpected passes through.
+fn sidecar_retype(n Node, type_name string) Node {
+	if type_name_is_sized_numeric(type_name) {
+		return n // native JSON number already carries the runtime value
+	}
+	if n !is ScalarNode {
+		return n
+	}
+	s := n as ScalarNode
+	if s.data_type != .string_type {
+		return n
+	}
+	sv := s.value
+	if sv !is string {
+		return n
+	}
+	text := sv as string
+	match type_name {
+		'bytes' {
+			if hex := base64_to_bytes_hex(text) {
+				return ScalarNode{ ...s, data_type: .bytes_type, value: ScalarValue(hex) }
+			}
+			return n
+		}
+		'atom' {
+			return ScalarNode{ ...s, data_type: .atom_type, value: ScalarValue(text.trim_string_left(':')) }
+		}
+		'date', 'datetime', 'decimal', 'bigint', 'duration', 'period' {
+			st := scalar_type_from_name(type_name) or { return n }
+			return ScalarNode{ ...s, data_type: st, value: ScalarValue(text) }
+		}
+		else {
+			return n // unknown type name — leave the value untouched
+		}
+	}
 }
 
 // ── Deprecated JSON entry points retired (item C, conversions.md §4.1) ───────

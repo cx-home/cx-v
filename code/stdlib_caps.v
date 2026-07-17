@@ -144,6 +144,7 @@ pub fn caps_apply_spec(spec string) {
 		return
 	}
 	mut caps := []string{}
+	mut net_hosts := []string{}
 	for tok in s.split_any(' \t,') {
 		t := tok.trim_space()
 		if t == '' {
@@ -152,8 +153,27 @@ pub fn caps_apply_spec(spec string) {
 		// drop a `cap:resource` / `cap=resource` scope suffix → bare cap.
 		cap_name := t.all_before(':').all_before('=')
 		caps << cap_name
+		// A `net:<host>[:<port>]` (or `net=<host>…`) token additionally records a
+		// host scope, so the net grant is least-privilege (only the named host is
+		// dialable) AND a literal-IP / `localhost` scope overrides the §4.5
+		// private-range deny set (net.md §4.5; #47). A bare `net` stays unscoped
+		// (all hosts; the deny set still applies on dial).
+		if cap_name == 'net' {
+			mut scope := ''
+			if t.contains(':') {
+				scope = t.all_after(':').trim_space()
+			} else if t.contains('=') {
+				scope = t.all_after('=').trim_space()
+			}
+			if scope != '' {
+				net_hosts << scope
+			}
+		}
 	}
 	caps_set_list(caps)
+	if net_hosts.len > 0 {
+		caps_set_net_hosts(net_hosts)
+	}
 }
 
 // caps_snapshot / caps_restore support `[?with-caps]` narrowing: snapshot
@@ -232,6 +252,16 @@ fn cap_current_flags() CapSet {
 }
 
 // set_cap_flag sets one capability bool on a CapSet by name.
+// capability_names returns every capability name the grant surface accepts
+// (`--allow-<name>` on the CLI, `[grant ...]` in fixtures). The CLI help is
+// generated from THIS list (vcx/cmd/main.v usage_text, #417) so the
+// documented set cannot drift from the accepted set — keep it in lockstep
+// with the set_cap_flag match below (same names, same order as the CapSet
+// fields).
+pub fn capability_names() []string {
+	return ['read', 'write', 'net', 'env', 'clock', 'random', 'subprocess', 'eval', 'secret-reveal']
+}
+
 fn set_cap_flag(mut c CapSet, capability string, val bool) {
 	match capability {
 		'read' { c.read = val }

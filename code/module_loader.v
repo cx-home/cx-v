@@ -537,6 +537,17 @@ pub fn resolve_lib(node cx.LibNode, mut table ModuleTable) !&Module {
 				return error('MODULE_HTTPS_FETCH_DEFERRED: HTTPS fetch deferred to Phase 2.14 graft (resolver=`${name}`)')
 			}
 		}
+		.pkg_url {
+			// distribution spec §6.2: resolve through the bound registry with
+			// the full §3 verify chain; the module source is the verified
+			// tree's <name>.cx code entry. In-memory test sources keyed by
+			// the literal reference take precedence (hermetic fixtures).
+			if s := table.registered_sources[name] {
+				s
+			} else {
+				xap_pkg_module_source(name)!
+			}
+		}
 	}
 	loaded := load_module(source, name, mut table)!
 	// Phase 2.15: visibility check on `:only` selective-import list.
@@ -708,6 +719,16 @@ fn module_loader_scan_directives(source string) ![]ModuleLoaderDirective {
 			}
 			continue
 		}
+		if c == `]` {
+			// A stray top-level `]` has no matching `[` — the module is
+			// structurally malformed (grammar GR-STRAY-CLOSE; BareValue [L70]
+			// excludes `]`, so it can never be prose either). Fail LOUDLY at
+			// load: `cx fmt` and direct eval already reject this shape, and
+			// silently skipping it here made the loader serve modules the
+			// other entry points refuse (#289 — the xap-marine composer.cx
+			// stray closer loaded and ran for weeks).
+			return error('MODULE_PARSE: stray top-level `]` with no matching `[` at byte ${i} (GR-STRAY-CLOSE)')
+		}
 		if c != `[` {
 			// Stray non-directive token at top level — skip ahead to
 			// the next `[` to remain forward-tolerant. Future
@@ -766,7 +787,12 @@ fn module_loader_starts_with(src []u8, pos int, lit string) bool {
 // module_loader_find_close_bracket returns the byte index of the
 // `]` that closes the bracket opened at `start`. Handles nested
 // brackets and shields against `[` / `]` appearing inside single-
-// or double-quoted string literals.
+// or double-quoted string literals. `#` line comments, `[; … ]`
+// block comments, and `[#…#]` raw text inside the span are OPAQUE
+// (#289): an apostrophe in a comment (`no-op'd`) must not open a
+// string span and swallow the rest of the module — the shared
+// recognizers in cx/lexical.v keep this scan byte-identical to the
+// program lexer's skipping.
 fn module_loader_find_close_bracket(src []u8, start int) !int {
 	if start >= src.len || src[start] != `[` {
 		return error('MODULE_PARSE: scanner asked to balance non-`[` byte at position ${start}')
@@ -785,6 +811,22 @@ fn module_loader_find_close_bracket(src []u8, start int) !int {
 				in_str = 0
 			}
 			i++
+			continue
+		}
+		if cx.hash_line_comment_at(src, i) {
+			i = cx.line_comment_end(src, i)
+			continue
+		}
+		if i > start && cx.block_comment_open_at(src, i) {
+			i = cx.block_comment_end(src, i) or {
+				return error('MODULE_PARSE: unterminated `[; … ]` comment inside form starting at position ${start}')
+			}
+			continue
+		}
+		if i > start && cx.raw_span_open_at(src, i) {
+			i = cx.raw_span_end(src, i) or {
+				return error('MODULE_PARSE: unterminated `[#…#]` raw text inside form starting at position ${start}')
+			}
 			continue
 		}
 		// Triple-quoted raw string `"""…"""` — skip its whole span. Raw

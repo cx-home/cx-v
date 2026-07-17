@@ -54,8 +54,10 @@ fn start_handler_listener(handler cx.Node, host string, port int, block bool, mu
 // In the wasm playground there are no held SSE fds and no subscriber map, so
 // all three are no-ops / return a benign zero value.
 
-// cx_sse_topic_subscribe — no-op in the wasm build (no picoev, no fds).
-fn cx_sse_topic_subscribe(topic string, fd int) {
+// cx_sse_topic_subscribe — no-op in the wasm build (no picoev, no fds). The
+// `ack` (SSE prelude + initial frame, written atomically with registration in
+// the real listener) has no fd to go to here.
+fn cx_sse_topic_subscribe(topic string, fd int, ack string) {
 	// No subscriber map in the wasm build; SSE topic pub/sub requires a
 	// real socket listener which is not available under -d wasm32_emcc.
 }
@@ -71,4 +73,11 @@ fn cx_sse_topic_on_close_fd(fd int) {
 // there is no real listener.
 fn cx_sse_topic_publish(topic string, frame string) int {
 	return 0
+}
+
+// services_listener_init_globals — wasm no-op twin of the notd variant's
+// init hook (stdlib_codec.v init() calls it unconditionally): the dispatch/
+// gc/SSE globals it initializes live in the excluded notd file, and nothing
+// in the wasm build can reach them (#329).
+fn services_listener_init_globals() {
 }

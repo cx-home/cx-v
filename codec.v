@@ -38,6 +38,15 @@ pub mut:
 	emit        ?fn (ParseResult, bool) !string
 	// emit_bytes: tree → binary output (binary codecs).
 	emit_bytes  ?fn (Document) []u8
+	// lossless marks codecs whose text emitter honors the lossless flag
+	// (#416/#444/#475): cx (inherently lossless), xml (`cx:` markers), json
+	// and yaml (the `$tag` structure envelope + `cx:type` sidecar / `!!cx:T`
+	// tags — full element-document round-trip) — all per conversions.md
+	// §0.2/§2.2.1/§2.3.1. convert_by_name REJECTS lossless=true for any other
+	// codec: TOML/MD lossless is spec'd as unsupported (§0.2 "no extension
+	// protocol"), and a silent no-op (flag accepted, output unchanged) is
+	// never acceptable.
+	lossless bool
 }
 
 // codec_table is the static base registry, built once at program init from the
@@ -82,6 +91,11 @@ pub fn register_codec(c Codec) {
 	if ebf := c.emit_bytes {
 		merged.emit_bytes = ebf
 	}
+	// Capability flags are additive: a registration can ENABLE lossless
+	// support but never silently strip it from the base entry.
+	if c.lossless {
+		merged.lossless = true
+	}
 	// codec_overlay is a process-global singleton registry. The newer V checker
 	// (Jun-11 upstream) disallows aliasing the immutable const pointer as `mut` to
 	// mutate its map, so the intentional in-place registration is done under
@@ -96,14 +110,16 @@ fn build_codec_table() map[string]Codec {
 	mut t := map[string]Codec{}
 	// ── Text codecs (full parse/emit contract) ──────────────────────────────
 	t['cx'] = Codec{
-		name:  'cx'
-		parse: parse_cx
-		emit:  cx_codec_emit
+		name:     'cx'
+		parse:    parse_cx
+		emit:     cx_codec_emit
+		lossless: true // CX text emit is inherently lossless
 	}
 	t['xml'] = Codec{
-		name:  'xml'
-		parse: parse_xml_cx
-		emit:  xml_codec_emit
+		name:     'xml'
+		parse:    parse_xml_cx
+		emit:     xml_codec_emit
+		lossless: true // per-value <cx:T> carriers (conversions.md §0.2)
 	}
 	// json — the strict, lossless parser lives in the upper `code` layer
 	// (vcx/code/stdlib_json.v::json_do_parse) which `cx` cannot import. The
@@ -111,13 +127,15 @@ fn build_codec_table() map[string]Codec {
 	// the runtime overlay at init (register_codec, see below). The deprecated
 	// element-synthesising `parse_json_cx` is retired (conversions.md §4.1).
 	t['json'] = Codec{
-		name: 'json'
-		emit: json_codec_emit
+		name:     'json'
+		emit:     json_codec_emit
+		lossless: true // `$tag` envelope + `cx:type` sidecar + per-item carrier (conversions.md §2.2.1, #444/#475)
 	}
 	t['yaml'] = Codec{
-		name:  'yaml'
-		parse: parse_yaml_cx
-		emit:  yaml_codec_emit
+		name:     'yaml'
+		parse:    parse_yaml_cx
+		emit:     yaml_codec_emit
+		lossless: true // `$tag` envelope + `!!cx:T` / `!!binary` tags (conversions.md §2.3.1, #444/#475)
 	}
 	t['toml'] = Codec{
 		name:  'toml'
@@ -203,8 +221,28 @@ pub fn convert_by_name(src string, from string, to string, lossless bool) !strin
 	to_codec := codec_lookup(to) or { return error('unknown target format: ${to}') }
 	parse_fn := from_codec.parse or { return error('codec ${from} has no text parser') }
 	emit_fn := to_codec.emit or { return error('codec ${to} has no text emitter') }
+	// #416: a lossless request against a codec whose emitter ignores the
+	// flag must be a hard error, never a silent no-op — before this,
+	// `--lossless --to=json|yaml|toml` was accepted and changed nothing.
+	if lossless && !to_codec.lossless {
+		return error('--lossless is not supported for --to=${to}; supported: ${lossless_codec_names().join(', ')}')
+	}
 	res := parse_fn(src)!
 	return emit_fn(res, lossless)!
+}
+
+// lossless_codec_names returns the sorted names of codecs whose text
+// emitter honors the lossless flag (for the #416 rejection message).
+pub fn lossless_codec_names() []string {
+	mut names := []string{}
+	for name in codec_names() {
+		c := codec_lookup(name) or { continue }
+		if c.lossless {
+			names << name
+		}
+	}
+	names.sort()
+	return names
 }
 
 // parse_to_doc parses `src` with codec `name` and returns the single Document.
@@ -334,19 +372,19 @@ fn xml_codec_emit(res ParseResult, lossless bool) !string {
 fn json_codec_emit(res ParseResult, lossless bool) !string {
 	if res.is_multi {
 		docs := res.multi or { return error('no multi docs') }
-		return emit_semantic_json_docs(docs)
+		return if lossless { emit_semantic_json_docs_lossless(docs) } else { emit_semantic_json_docs(docs) }
 	}
 	doc := res.single or { return error('no document') }
-	return emit_semantic_json(doc)
+	return if lossless { emit_semantic_json_lossless(doc) } else { emit_semantic_json(doc) }
 }
 
 fn yaml_codec_emit(res ParseResult, lossless bool) !string {
 	if res.is_multi {
 		docs := res.multi or { return error('no multi docs') }
-		return emit_yaml_docs(docs)
+		return if lossless { emit_yaml_docs_lossless(docs) } else { emit_yaml_docs(docs) }
 	}
 	doc := res.single or { return error('no document') }
-	return emit_yaml(doc)
+	return if lossless { emit_yaml_lossless(doc) } else { emit_yaml(doc) }
 }
 
 fn toml_codec_emit(res ParseResult, lossless bool) !string {

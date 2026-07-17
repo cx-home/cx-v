@@ -1,0 +1,1667 @@
+[test-suite name=similar
+  [doc [#
+conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
+
+   Graded similarity: [~ a b] / [~ a b $pred] is the single core operator
+   (the graded cognate of [= a b]); every other construct — cxpath
+   predicate, join, distinct/group-by, contains, sort, [?match] when-arms,
+   validate — is that operator in a position (§3.1). The module owns only
+   the operator backing, [$similar:predicate], the ten scorers, and the
+   normalizers; the verbs are core (no module prefix).
+
+   Every expected output below was re-derived by RUNNING the program
+   against the shipped binary (cx <file> — the single oracle). Floats are
+   copied exactly as the canonical renderer prints them; no display
+   convention. The default predicate carries cuts {match: 0.95,
+   review: 0.85}; a predicate built with NO decide policy returns
+   score+evidence only (no band attr) and is FALSY in boolean position.
+   null comparand -> the absence channel (), never 0. Disjoint kinds ->
+   score 0.0 + [kind-mismatch …] evidence, no coercion.
+
+   Case families:
+     001-013 operator scalar rules (§2.1.1)
+     014-024 per-scorer known pairs (§4.2; 024 advisory — see TODO)
+     025-028 normalizers (§4.3, ft pipeline)
+     029-040 recursive comparison over value kinds (§2.3)
+     041-061 construct x kind matrix (§3.2) + footnoted negatives
+     062-071 join: four types over ONE dataset + selection modes (§5.1)
+     072-078 clustering policies + determinism (§5.2)
+     079-082 routing + resolutions resume tier (§5.3/§5.4)
+     083     decision-policy purpose-relativity (pairs with case 002)
+     084     truthiness in boolean position (band=:match iff truthy)
+     085-100 module fns / fn-doc corpus / core verb happy paths
+     101-113 documented errors (CXER4900 predicate / CXER4901 verb opts)
+
+   Errors render as [err code=cx-err:CXER49xx …]; out-err pins the code.
+#]]
+
+ [# ---- §2.1.1 operator scalar rules -------------------------------- #]
+
+ [case id=similar-001-op-identical-strings level=core
+  [tags similar op identical]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "acme" "acme"]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [scorer :jaro-winkler]]]
+#]]
+ ]
+
+ [case id=similar-002-op-graded-string-review level=core
+  [tags similar op graded-string]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "acme" "acne"]
+#]]
+  [out-text [#
+[similar score=0.8666666666666667 band=:review [evidence [scorer :jaro-winkler]]]
+#]]
+ ]
+
+ [case id=similar-003-op-unrelated-string-no-match level=core
+  [tags similar op no-match]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "acme" "globex"]
+#]]
+  [out-text [#
+[similar score=0.47222222222222215 band=:no-match [evidence [scorer :jaro-winkler]]]
+#]]
+ ]
+
+ [case id=similar-004-op-numbers-exact-default level=core
+  [tags similar op numeric-exact]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([~ 100 100], [~ 100 105])
+#]]
+  [out-text [#
+([similar score=1.0 band=:match [evidence [scorer :numeric]]], [similar score=0.0 band=:no-match [evidence [scorer :numeric]]])
+#]]
+ ]
+
+ [case id=similar-005-op-numeric-tolerance-shorthand level=core
+  [tags similar op tolerance]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ 100 105 10]
+#]]
+  [out-text [#
+[similar score=0.5 band=:no-match [evidence [scorer :numeric]]]
+#]]
+ ]
+
+ [case id=similar-006-op-numeric-tolerance-no-decide-no-band level=core
+  [tags similar op predicate no-decide]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[~ 100 105 [$similar:predicate {tolerance: 10.0}]]
+#]]
+  [out-text [#
+[similar score=0.5 [evidence [scorer :numeric]]]
+#]]
+ ]
+
+ [case id=similar-007-op-atoms-nominal level=core
+  [tags similar op atom degenerate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([~ :active :active], [~ :active :closed])
+#]]
+  [out-text [#
+([similar score=1.0 band=:match [evidence [scorer :exact]]], [similar score=0.0 band=:no-match [evidence [scorer :exact]]])
+#]]
+ ]
+
+ [case id=similar-008-op-bools-degenerate level=core
+  [tags similar op bool degenerate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([~ true true], [~ true false])
+#]]
+  [out-text [#
+([similar score=1.0 band=:match [evidence [scorer :exact]]], [similar score=0.0 band=:no-match [evidence [scorer :exact]]])
+#]]
+ ]
+
+ [case id=similar-009-op-kind-mismatch-string-number level=core
+  [tags similar op kind-mismatch]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "100" 100]
+#]]
+  [out-text [#
+[similar score=0.0 band=:no-match [evidence [kind-mismatch 'string' 'number']]]
+#]]
+ ]
+
+ [case id=similar-010-op-null-absence-channel level=core
+  [tags similar op null absence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "acme" null]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=similar-011-op-dates-exact-default level=core
+  [tags similar op temporal-exact]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([~ 2024-01-15 2024-01-15], [~ 2024-01-15 2024-01-20])
+#]]
+  [out-text [#
+([similar score=1.0 band=:match [evidence [scorer :temporal]]], [similar score=0.0 band=:no-match [evidence [scorer :temporal]]])
+#]]
+ ]
+
+ [case id=similar-012-op-dates-tolerance-no-decide-no-band level=core
+  [tags similar op temporal tolerance no-decide]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ 2024-01-15 2024-01-20 [similar-predicate tolerance=10.0]]
+#]]
+  [out-text [#
+[similar score=0.5 [evidence [scorer :temporal]]]
+#]]
+ ]
+
+ [case id=similar-013-op-dates-tolerance-decide-review level=core
+  [tags similar op temporal tolerance decide]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[~ 2024-01-15 2024-01-20 [$similar:predicate {tolerance: 10.0, decide: {match: 0.9, review: 0.4}}]]
+#]]
+  [out-text [#
+[similar score=0.5 band=:review [evidence [scorer :temporal]]]
+#]]
+ ]
+
+ [# ---- §4.2 per-scorer known pairs --------------------------------- #]
+
+ [case id=similar-014-score-jaro-winkler-names level=core
+  [tags similar score jaro-winkler]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score :jaro-winkler "martha" "marhta"]
+#]]
+  [out-text [#
+0.9611111111111111
+#]]
+ ]
+
+ [case id=similar-015-score-levenshtein-typo level=core
+  [tags similar score levenshtein fn-doc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score :levenshtein "flaw" "lawn"]
+#]]
+  [out-text [#
+0.5
+#]]
+ ]
+
+ [case id=similar-016-score-damerau-beats-levenshtein level=core
+  [tags similar score damerau transposition]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+([$similar:score :damerau "abcd" "acbd"], [$similar:score :levenshtein "abcd" "acbd"])
+#]]
+  [out-text [#
+(0.75, 0.5)
+#]]
+ ]
+
+ [case id=similar-017-score-token-set-word-order level=core
+  [tags similar score token-set]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score :token-set "acme corp" "corp acme"]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=similar-018-score-token-sort level=core
+  [tags similar score token-sort]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score :token-sort "acme corp inc" "inc corp acme"]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=similar-019-score-jaccard level=core
+  [tags similar score jaccard]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score :jaccard "red green blue" "green blue yellow"]
+#]]
+  [out-text [#
+0.5
+#]]
+ ]
+
+ [case id=similar-020-score-cosine-partial-overlap level=core
+  [tags similar score cosine]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score :cosine "big data platform" "big data warehouse"]
+#]]
+  [out-text [#
+0.6666666666666667
+#]]
+ ]
+
+ [case id=similar-021-score-metaphone-homophones level=core
+  [tags similar score metaphone phonetic]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+([$similar:score :metaphone "smith" "smyth"], [$similar:score :metaphone "Katherine" "Catherine"])
+#]]
+  [out-text [#
+(1.0, 1.0)
+#]]
+ ]
+
+ [case id=similar-022-score-numeric-exact-default level=core
+  [tags similar score numeric]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+([$similar:score :numeric 100 100], [$similar:score :numeric 100 105])
+#]]
+  [out-text [#
+(1.0, 0.0)
+#]]
+ ]
+
+ [case id=similar-023-score-temporal-exact-default level=core
+  [tags similar score temporal]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+([$similar:score :temporal 2024-01-15 2024-01-15], [$similar:score :temporal 2024-01-15 2024-01-16])
+#]]
+  [out-text [#
+(1.0, 0.0)
+#]]
+ ]
+
+ [; §4.2 closed unit-interval contract: :cosine over identical token
+    multisets must print exactly 1.0 — the scorer clamps the float
+    dot-product overshoot (was 1.0000000000000002 before the clamp). ]
+ [case id=similar-024-score-cosine-identical-unit-range level=core
+  [tags similar score cosine unit-range]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score :cosine "big data platform" "data platform big"]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [# ---- §4.3 normalizers (ft pipeline) ------------------------------ #]
+
+ [case id=similar-025-normalize-fold-case-default level=core
+  [tags similar op normalize fold-case]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "ACME" "acme"]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [scorer :jaro-winkler]]]
+#]]
+ ]
+
+ [case id=similar-026-normalize-trim-default level=core
+  [tags similar op normalize trim]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "  acme  " "acme"]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [scorer :jaro-winkler]]]
+#]]
+ ]
+
+ [case id=similar-027-normalize-stem-token-scorer-contrast level=core
+  [tags similar predicate normalize stem]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $stemmed [$similar:predicate {score: :token-set, normalize: {stem: true}}]]
+      [= $plain [$similar:predicate {score: :token-set}]]
+  ([$similar:score-of [~ "running fast" "run fastly" $stemmed]],
+   [$similar:score-of [~ "running fast" "run fastly" $plain]])]
+#]]
+  [out-text [#
+(1.0, 0.5)
+#]]
+ ]
+
+ [case id=similar-028-normalize-stopwords level=core
+  [tags similar predicate normalize stopwords]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[~ "the acme corp" "acme corp" [$similar:predicate {score: :token-set, normalize: {stopwords: true}}]]
+#]]
+  [out-text [#
+[similar score=1.0 [evidence [scorer :token-set]]]
+#]]
+ ]
+
+ [# ---- §2.3 recursive comparison over value kinds ------------------ #]
+
+ [case id=similar-029-map-identical level=core
+  [tags similar op map fields]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ {name: "acme corp", city: "berlin"} {name: "acme corp", city: "berlin"}]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [fields [field name=name score=1.0] [field name=city score=1.0]]]]
+#]]
+ ]
+
+ [case id=similar-030-map-weighted-graded level=core
+  [tags similar op map fields graded]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ {name: "acme corp", city: "berlin"} {name: "acne corp", city: "berlin"}]
+#]]
+  [out-text [#
+[similar score=0.9703703703703703 band=:match [evidence [fields [field name=name score=0.9407407407407408] [field name=city score=1.0]]]]
+#]]
+ ]
+
+ [case id=similar-031-map-weights-purpose-contrast level=core
+  [tags similar predicate weights contrast]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $name-heavy [$similar:predicate {weights: {name: 3.0, city: 1.0}}]]
+      [= $city-heavy [$similar:predicate {weights: {name: 1.0, city: 3.0}}]]
+  ([$similar:score-of [~ {name: "acne corp", city: "berlin"} {name: "acme corp", city: "berlin"} $name-heavy]],
+   [$similar:score-of [~ {name: "acne corp", city: "berlin"} {name: "acme corp", city: "berlin"} $city-heavy]])]
+#]]
+  [out-text [#
+(0.9555555555555556, 0.9851851851851852)
+#]]
+ ]
+
+ [case id=similar-032-map-skipped-field-null-aware level=core
+  [tags similar op map skipped null-aware]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ {name: "acme", city: "berlin"} {name: "acme"}]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [fields [field name=name score=1.0] [skipped name=city]]]]
+#]]
+ ]
+
+ [case id=similar-033-map-per-field-scorer-override level=core
+  [tags similar predicate weights field-scorer]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ {sku: "code red 7", note: "x"} {sku: "red code 7", note: "x"} [similar-predicate [weights [field name='sku' score=token-set]] [decide match=0.95 review=0.85]]]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [fields [field name=sku score=1.0] [field name=note score=1.0]]]]
+#]]
+ ]
+
+ [case id=similar-034-element-name-attrs-children level=core
+  [tags similar op element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ [m [a 1] [b "acme"]] [m [a 1] [b "acne"]]]
+#]]
+  [out-text [#
+[similar score=0.9777777777777779 band=:match [evidence [element [field name='#name' score=1.0] [field name=a score=1.0] [field name=b score=0.9333333333333333]]]]
+#]]
+ ]
+
+ [case id=similar-035-element-nested-depth-two level=core
+  [tags similar op element subtree]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ [org name=acme [dept name=eng [team "runtime"]]] [org name=acme [dept name=eng [team "runtimes"]]]]
+#]]
+  [out-text [#
+[similar score=0.998611111111111 band=:match [evidence [element [field name='#name' score=1.0] [field name=name score=1.0] [field name=dept score=0.9958333333333332]]]]
+#]]
+ ]
+
+ [case id=similar-036-sequence-alignment-ordered level=core
+  [tags similar op sequence alignment]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ (1, 2, 3) (1, 2, 4)]
+#]]
+  [out-text [#
+[similar score=0.6666666666666666 band=:no-match [evidence [alignment [member index=0 score=1.0] [member index=1 score=1.0] [member index=2 score=0.0]]]]
+#]]
+ ]
+
+ [case id=similar-037-array-alignment level=core
+  [tags similar op array alignment]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ ["red", "green"] ["red", "green"]]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [alignment [member index=0 score=1.0] [member index=1 score=1.0]]]]
+#]]
+ ]
+
+ [case id=similar-038-array-vs-sequence-kind-mismatch level=core
+  [tags similar op kind-mismatch collection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ [1, 2] (1, 2)]
+#]]
+  [out-text [#
+[similar score=0.0 band=:no-match [evidence [kind-mismatch 'array' 'sequence']]]
+#]]
+ ]
+
+ [case id=similar-039-sequence-unordered-set-contrast level=core
+  [tags similar predicate ordered set-similarity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+([$similar:score-of [~ ("red", "green", "blue") ("blue", "red", "green") [$similar:predicate {ordered: false}]]],
+ [$similar:score-of [~ ("red", "green", "blue") ("blue", "red", "green")]])
+#]]
+  [out-text [#
+(1.0, 0.39074074074074067)
+#]]
+ ]
+
+ [case id=similar-040-table-as-sequence-of-rows level=core
+  [tags similar op table sequence-of-rows]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ ({sku: "a1", qty: 2}, {sku: "b2", qty: 5}) ({sku: "a1", qty: 2}, {sku: "b2", qty: 6})]
+#]]
+  [out-text [#
+[similar score=0.75 band=:no-match [evidence [alignment [member index=0 score=1.0] [member index=1 score=0.5]]]]
+#]]
+ ]
+
+ [# ---- §3.2 construct x kind matrix -------------------------------- #]
+
+ [case id=similar-041-cxpath-scalar-child-text level=core
+  [tags similar cxpath scalar predicate-position]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $docs [vendors [vendor [name "acme corp"] [city "berlin"]] [vendor [name "globex"] [city "paris"]]]]
+  $docs//vendor[~ $_/name "acme corp"]]
+#]]
+  [out-text [#
+[vendor [name 'acme corp'] [city 'berlin']]
+#]]
+ ]
+
+ [case id=similar-042-cxpath-scalar-attribute level=core
+  [tags similar cxpath scalar attribute]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $docs [vendors [vendor name='acme corp'] [vendor name=globex]]]
+  $docs//vendor[~ $_@name "acme corp"]]
+#]]
+  [out-text [#
+[vendor name='acme corp']
+#]]
+ ]
+
+ [case id=similar-043-cxpath-map-comparand level=core
+  [tags similar cxpath map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $docs [rows [row a=1 b=2] [row a=1 b=9]]]
+  $docs//row[~ {a: $_@a, b: $_@b} {a: 1, b: 2}]]
+#]]
+  [out-text [#
+[row a=1 b=2]
+#]]
+ ]
+
+ [case id=similar-044-cxpath-element-comparand level=core
+  [tags similar cxpath element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $docs [vendors [vendor [name "acme corp"]] [vendor [name "globex"]]]]
+  $docs//vendor[~ $_ [vendor [name "acme corp."]]]]
+#]]
+  [out-text [#
+[vendor [name 'acme corp']]
+#]]
+ ]
+
+ [case id=similar-045-cxpath-sequence-comparand level=core
+  [tags similar cxpath sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $docs [rows [row [t 'red'] [t 'green']] [row [t 'blue'] [t 'cyan']]]]
+  $docs//row[~ ([$text [$first $_/t]], [$text [$last $_/t]]) ("red", "green")]]
+#]]
+  [out-text [#
+[row [t 'red'] [t 'green']]
+#]]
+ ]
+
+ [case id=similar-046-cxpath-array-comparand level=core
+  [tags similar cxpath array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $docs [rows [row a=red b=green] [row a=blue b=cyan]]]
+  $docs//row[~ [$_@a, $_@b] ["red", "gren"]]]
+#]]
+  [out-text [#
+[row a=red b=green]
+#]]
+ ]
+
+ [case id=similar-047-join-map-rows level=core
+  [tags similar join map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ({name: "acme corp", city: "berlin"},) ({name: "acme corp.", city: "berlin"},) {on: [$similar:predicate {decide: {match: 0.9, review: 0.8}}], type: :inner}]
+#]]
+  [out-text [#
+[join-result type=:inner [pair score=0.99 band=:match [left {name: 'acme corp', city: 'berlin'}] [right {name: 'acme corp.', city: 'berlin'}]]]
+#]]
+ ]
+
+ [case id=similar-048-join-element-rows level=core
+  [tags similar join element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ([v [name "acme corp"]],) ([v [name "acme corp."]],) {on: [$similar:predicate {decide: {match: 0.9, review: 0.8}}], type: :inner}]
+#]]
+  [out-text [#
+[join-result type=:inner [pair score=0.995 band=:match [left [v [name 'acme corp']]] [right [v [name 'acme corp.']]]]]
+#]]
+ ]
+
+ [case id=similar-049-join-sequence-rows level=core
+  [tags similar join sequence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join (("red", "green"),) (("red", "gren"),) {on: [$similar:predicate {decide: {match: 0.9, review: 0.8}}], type: :inner}]
+#]]
+  [out-text [#
+[join-result type=:inner [pair score=0.9766666666666666 band=:match [left ('red', 'green')] [right ('red', 'gren')]]]
+#]]
+ ]
+
+ [case id=similar-050-join-array-rows level=core
+  [tags similar join array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join (["acme corp", "berlin"],) (["acme corp.", "berlin"],) {on: [$similar:predicate {decide: {match: 0.9, review: 0.8}}], type: :inner}]
+#]]
+  [out-text [#
+[join-result type=:inner [pair score=0.99 band=:match [left ['acme corp', 'berlin']] [right ['acme corp.', 'berlin']]]]
+#]]
+ ]
+
+ [case id=similar-051-distinct-map-element-rows level=core
+  [tags similar distinct map element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [$similar:predicate {decide: {match: 0.9, review: 0.8}}]]
+  ([$distinct ({name: "acme corp"}, {name: "acme corp."}, {name: "globex"}) {by: $p, policy: :transitive-closure}],
+   [$distinct ([v [name "acme corp"]], [v [name "acme corp."]], [v [name "globex"]]) {by: $p, policy: :transitive-closure}])]
+#]]
+  [out-text [#
+(({name: 'acme corp'}, {name: 'globex'}), ([v [name 'acme corp']], [v [name 'globex']]))
+#]]
+ ]
+
+ [case id=similar-052-distinct-sequence-array-rows level=core
+  [tags similar distinct sequence array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [$similar:predicate {decide: {match: 0.9, review: 0.8}}]]
+  ([$distinct (("acme corp",), ("acme corp.",), ("globex",)) {by: $p, policy: :transitive-closure}],
+   [$distinct (["acme corp"], ["acme corp."], ["globex"]) {by: $p, policy: :transitive-closure}])]
+#]]
+  [out-text [#
+((('acme corp'), ('globex')), (['acme corp'], ['globex']))
+#]]
+ ]
+
+ [case id=similar-053-contains-map-element level=core
+  [tags similar contains map element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [$similar:predicate {decide: {match: 0.9, review: 0.8}}]]
+  ([$contains ({name: "acme corp"}, {name: "globex"}) {name: "acme corp."} $p],
+   [$contains ([v [name "acme corp"]], [v [name "globex"]]) [v [name "acme corp."]] $p])]
+#]]
+  [out-text [#
+([similar score=0.98 band=:match [best {name: 'acme corp'}]], [similar score=0.995 band=:match [best [v [name 'acme corp']]]])
+#]]
+ ]
+
+ [case id=similar-054-contains-sequence-array level=core
+  [tags similar contains sequence array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [$similar:predicate {decide: {match: 0.9, review: 0.8}}]]
+  ([$contains (("red", "green"), ("blue", "cyan")) ("red", "gren") $p],
+   [$contains (["red", "green"], ["blue", "cyan"]) ["red", "gren"] $p])]
+#]]
+  [out-text [#
+([similar score=0.9766666666666666 band=:match [best ('red', 'green')]], [similar score=0.9766666666666666 band=:match [best ['red', 'green']]])
+#]]
+ ]
+
+ [case id=similar-055-sort-map-element-nearest level=core
+  [tags similar sort similarity-to map element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+([$sort ({name: "globex"}, {name: "acme inc"}, {name: "acme corp"}) {by: [$similar:similarity-to {name: "acme"}]}],
+ [$sort ([v [name "globex"]], [v [name "acme inc"]], [v [name "acme corp"]]) {by: [$similar:similarity-to [v [name "acme"]]]}])
+#]]
+  [out-text [#
+(({name: 'acme inc'}, {name: 'acme corp'}, {name: 'globex'}), ([v [name 'acme inc']], [v [name 'acme corp']], [v [name 'globex']]))
+#]]
+ ]
+
+ [case id=similar-056-sort-sequence-array-nearest level=core
+  [tags similar sort similarity-to sequence array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+([$sort (("globex",), ("acme inc",), ("acme corp",)) {by: [$similar:similarity-to ("acme",)]}],
+ [$sort (["globex"], ["acme inc"], ["acme corp"]) {by: [$similar:similarity-to ["acme"]]}])
+#]]
+  [out-text [#
+((('acme inc'), ('acme corp'), ('globex')), (['acme inc'], ['acme corp'], ['globex']))
+#]]
+ ]
+
+ [case id=similar-057-match-map-element-arms level=core
+  [tags similar match map element when-arm]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([?let [= $x {name: "acme corp", city: "berlin"}]
+   [?match $x [when [~ $x {name: "acme corp.", city: "berlin"}] 'same-org'] [else 'new-org']]],
+ [?let [= $x [v [name "acme corp"]]]
+   [?match $x [when [~ $x [v [name "acme corp."]]] 'same-org'] [else 'new-org']]])
+#]]
+  [out-text [#
+('same-org', 'same-org')
+#]]
+ ]
+
+ [case id=similar-058-match-sequence-array-arms level=core
+  [tags similar match sequence array when-arm]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([?let [= $x ("red", "gren")]
+   [?match $x [when [~ $x ("red", "green")] 'close'] [else 'far']]],
+ [?let [= $x ["red", "gren"]]
+   [?match $x [when [~ $x ["red", "green"]] 'close'] [else 'far']]])
+#]]
+  [out-text [#
+('close', 'close')
+#]]
+ ]
+
+ [case id=similar-059-validate-map-element level=core
+  [tags similar validate map element]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [$similar:predicate {decide: {match: 0.9, review: 0.8}}]]
+  ([$validate {name: "acme crop"} ({name: "acme corp"}, {name: "globex"}) {by: $p}],
+   [$validate [v [name "acme crop"]] ([v [name "acme corp"]], [v [name "globex"]]) {by: $p}])]
+#]]
+  [out-text [#
+([similar score=0.9777777777777777 band=:match [nearest {name: 'acme corp'}]], [similar score=0.9944444444444445 band=:match [nearest [v [name 'acme corp']]]])
+#]]
+ ]
+
+ [case id=similar-060-validate-sequence-array level=core
+  [tags similar validate sequence array]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [$similar:predicate {decide: {match: 0.9, review: 0.8}}]]
+  ([$validate ("red", "gren") (("red", "green"), ("blue", "cyan")) {by: $p}],
+   [$validate ["red", "gren"] (["red", "green"], ["blue", "cyan"]) {by: $p}])]
+#]]
+  [out-text [#
+([similar score=0.9766666666666666 band=:match [nearest ('red', 'green')]], [similar score=0.9766666666666666 band=:match [nearest ['red', 'green']]])
+#]]
+ ]
+
+ [# footnote 5 negative: $bind / pattern arms keep exact semantics beside
+    a graded when-arm — the graded arm falls through on kind mismatch and
+    the structural [case …] arm binds. #]
+ [case id=similar-061-match-pattern-arm-exact-alongside-graded level=core
+  [tags similar match pattern-arm negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [x 42]]
+  [?match $x [when [~ $x "ACME Corp"] 'graded'] [case [x $v] $v] [else 'no']]]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [# ---- §5.1 join: four types as filters over ONE labeled result ----
+    L=("acme corp", "globex", "initech") R=("acme corp.", "globex inc", "hooli")
+    under cuts {match: 0.95, review: 0.85}: acme pair 0.98 :match,
+    globex pair 0.92 :review, initech/hooli unmatched. #]
+
+ [case id=similar-062-join-inner level=core
+  [tags similar join inner]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("acme corp", "globex", "initech") ("acme corp.", "globex inc", "hooli") {on: [$similar:predicate {decide: {match: 0.95, review: 0.85}}], type: :inner}]
+#]]
+  [out-text [#
+[join-result type=:inner [pair score=0.98 band=:match [left 'acme corp'] [right 'acme corp.']]]
+#]]
+ ]
+
+ [case id=similar-063-join-left level=core
+  [tags similar join left]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("acme corp", "globex", "initech") ("acme corp.", "globex inc", "hooli") {on: [$similar:predicate {decide: {match: 0.95, review: 0.85}}], type: :left}]
+#]]
+  [out-text [#
+[join-result type=:left [pair score=0.98 band=:match [left 'acme corp'] [right 'acme corp.']] [left-only 'globex'] [left-only 'initech']]
+#]]
+ ]
+
+ [case id=similar-064-join-right level=core
+  [tags similar join right]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("acme corp", "globex", "initech") ("acme corp.", "globex inc", "hooli") {on: [$similar:predicate {decide: {match: 0.95, review: 0.85}}], type: :right}]
+#]]
+  [out-text [#
+[join-result type=:right [pair score=0.98 band=:match [left 'acme corp'] [right 'acme corp.']] [right-only 'globex inc'] [right-only 'hooli']]
+#]]
+ ]
+
+ [# also the §5.3 routing pin: a :full join partitions deterministically
+    into match / review / unmatched residue as labeled data. #]
+ [case id=similar-065-join-full-routing-partition level=core
+  [tags similar join full routing]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("acme corp", "globex", "initech") ("acme corp.", "globex inc", "hooli") {on: [$similar:predicate {decide: {match: 0.95, review: 0.85}}], type: :full}]
+#]]
+  [out-text [#
+[join-result type=:full [pair score=0.98 band=:match [left 'acme corp'] [right 'acme corp.']] [pair score=0.92 band=:review [left 'globex'] [right 'globex inc']] [left-only 'initech'] [right-only 'hooli']]
+#]]
+ ]
+
+ [case id=similar-066-join-exact-field-on level=core
+  [tags similar join exact-field]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ({id: 1, v: "a"}, {id: 2, v: "b"}) ({id: 2, w: "x"}, {id: 3, w: "y"}) {on: "id"}]
+#]]
+  [out-text [#
+[join-result type=:inner [pair score=1.0 band=:match [left {id: 2, v: 'b'}] [right {id: 2, w: 'x'}]]]
+#]]
+ ]
+
+ [# greedy trap (numeric tolerance 10 -> exact controllable scores):
+    s(100,101)=0.9 s(100,104)=0.6 s(99,101)=0.8 s(99,104)=0.5(below cut).
+    greedy-best = per-left-row best (rights may repeat): both lefts take 101.
+    optimal = global 1:1 assignment: 0.6+0.8=1.4 beats 0.9 alone. #]
+ [case id=similar-067-join-selection-greedy-best level=core
+  [tags similar join selection greedy-best]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join (100, 99) (101, 104) {on: [$similar:predicate {tolerance: 10.0, decide: {match: 0.85, review: 0.55}}], type: :full, selection: :greedy-best}]
+#]]
+  [out-text [#
+[join-result type=:full [pair score=0.9 band=:match [left 100] [right 101]] [pair score=0.8 band=:review [left 99] [right 101]] [right-only 104]]
+#]]
+ ]
+
+ [case id=similar-068-join-selection-optimal-assignment level=core
+  [tags similar join selection optimal]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join (100, 99) (101, 104) {on: [$similar:predicate {tolerance: 10.0, decide: {match: 0.85, review: 0.55}}], type: :full, selection: :optimal}]
+#]]
+  [out-text [#
+[join-result type=:full [pair score=0.6 band=:review [left 100] [right 104]] [pair score=0.8 band=:review [left 99] [right 101]]]
+#]]
+ ]
+
+ [case id=similar-069-join-selection-top-k level=core
+  [tags similar join selection top-k]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join (100,) (101, 104, 99, 150) {on: [$similar:predicate {tolerance: 10.0, decide: {match: 0.85, review: 0.55}}], type: :full, selection: :top-k, k: 2}]
+#]]
+  [out-text [#
+[join-result type=:full [pair score=0.9 band=:match [left 100] [right 101]] [pair score=0.9 band=:match [left 100] [right 99]] [right-only 104] [right-only 150]]
+#]]
+ ]
+
+ [case id=similar-070-join-selection-all-above level=core
+  [tags similar join selection all-above]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join (100, 102) (101, 104) {on: [$similar:predicate {tolerance: 10.0, decide: {match: 0.85, review: 0.55}}], type: :full, selection: :all-above}]
+#]]
+  [out-text [#
+[join-result type=:full [pair score=0.9 band=:match [left 100] [right 101]] [pair score=0.6 band=:review [left 100] [right 104]] [pair score=0.9 band=:match [left 102] [right 101]] [pair score=0.8 band=:review [left 102] [right 104]]]
+#]]
+ ]
+
+ [case id=similar-071-join-decide-override-opts level=core
+  [tags similar join decide override]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("acme corp",) ("acme corp.",) {on: [$similar:predicate {}], type: :inner, decide: {match: 0.9, review: 0.8}}]
+#]]
+  [out-text [#
+[join-result type=:inner [pair score=0.98 band=:match [left 'acme corp'] [right 'acme corp.']]]
+#]]
+ ]
+
+ [# ---- §5.2 clustering: chain 100~106~112 where 100!~112 -----------
+    (tolerance 10, cut 0.4: s(100,106)=0.4 s(106,112)=0.4 s(100,112)=0). #]
+
+ [case id=similar-072-distinct-transitive-closure-chain level=core
+  [tags similar distinct transitive-closure clustering]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$distinct (100, 106, 112) {by: [$similar:predicate {tolerance: 10.0, decide: {match: 0.4, review: 0.4}}], policy: :transitive-closure}]
+#]]
+  [out-text [#
+(100)
+#]]
+ ]
+
+ [case id=similar-073-distinct-complete-linkage-splits-chain level=core
+  [tags similar distinct complete-linkage clustering]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$distinct (100, 106, 112) {by: [$similar:predicate {tolerance: 10.0, decide: {match: 0.4, review: 0.4}}], policy: :complete-linkage}]
+#]]
+  [out-text [#
+(100, 112)
+#]]
+ ]
+
+ [case id=similar-074-distinct-singletons-exact-dupes-only level=core
+  [tags similar distinct singletons]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$distinct ("acme", "acme", "acne") {by: [$similar:predicate {decide: {match: 0.95, review: 0.85}}], policy: :singletons}]
+#]]
+  [out-text [#
+('acme', 'acne')
+#]]
+ ]
+
+ [case id=similar-075-distinct-exact-default level=core
+  [tags similar distinct exact]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$distinct ("a", "b", "a", "c", "b")]
+#]]
+  [out-text [#
+('a', 'b', 'c')
+#]]
+ ]
+
+ [case id=similar-076-group-by-chain-cohesion level=core
+  [tags similar group-by cohesion transitive-closure]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$group-by (100, 106, 112) {by: [$similar:predicate {tolerance: 10.0, decide: {match: 0.4, review: 0.4}}], policy: :transitive-closure}]
+#]]
+  [out-text [#
+([cluster cohesion=0.26666666666666666 100 106 112])
+#]]
+ ]
+
+ [case id=similar-077-group-by-complete-linkage-cohesion level=core
+  [tags similar group-by complete-linkage cohesion]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$group-by ("acme corp", "acme corp.", "globex") {by: [$similar:predicate {decide: {match: 0.9, review: 0.8}}], policy: :complete-linkage}]
+#]]
+  [out-text [#
+([cluster cohesion=0.98 'acme corp' 'acme corp.'], [cluster cohesion=1.0 'globex'])
+#]]
+ ]
+
+ [case id=similar-078-distinct-deterministic-rerun level=core
+  [tags similar distinct determinism]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [$similar:predicate {tolerance: 10.0, decide: {match: 0.4, review: 0.4}}]]
+  [= [$distinct (100, 106, 112) {by: $p, policy: :transitive-closure}]
+     [$distinct (100, 106, 112) {by: $p, policy: :transitive-closure}]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [# ---- §5.3/§5.4 routing + resolutions resume tier ----------------- #]
+
+ [case id=similar-079-resolution-flips-match-to-no-match level=core
+  [tags similar resolutions no-match provenance]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "acme corp" "acme corp." [similar-predicate [decide match=0.95 review=0.85] [resolutions [resolution verdict=no-match decided-by='erik' [left "acme corp"] [right "acme corp."]]]]]
+#]]
+  [out-text [#
+[similar score=0.0 band=:no-match [evidence [resolved decided-by=erik :no-match]]]
+#]]
+ ]
+
+ [case id=similar-080-resolution-short-circuits-to-match level=core
+  [tags similar resolutions match short-circuit]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[~ "globex" "initech" [similar-predicate [decide match=0.95 review=0.85] [resolutions [resolution verdict=match decided-by='erik' [left "globex"] [right "initech"]]]]]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [resolved decided-by=erik :match]]]
+#]]
+ ]
+
+ [case id=similar-081-join-resolution-tier level=core
+  [tags similar join resolutions resume]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [similar-predicate [decide match=0.95 review=0.85] [resolutions [resolution verdict=match decided-by='ops' [left "globex"] [right "initech"]]]]]
+  [$join ("globex",) ("initech",) {on: $p, type: :full}]]
+#]]
+  [out-text [#
+[join-result type=:full [pair score=1.0 band=:match [left 'globex'] [right 'initech']]]
+#]]
+ ]
+
+ [case id=similar-082-join-resolutions-deterministic-rerun level=core
+  [tags similar join resolutions determinism]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[?let [= $p [similar-predicate [decide match=0.95 review=0.85] [resolutions [resolution verdict=match decided-by='erik' [left "globex"] [right "initech"]]]]]
+  [= [$join ("globex",) ("initech",) {on: $p, type: :full}]
+     [$join ("globex",) ("initech",) {on: $p, type: :full}]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [# ---- decision policy purpose-relativity (pairs with case 002:
+    the SAME pair is :review under the default cuts). --------------- #]
+
+ [case id=similar-083-decision-policy-purpose-relativity level=core
+  [tags similar predicate decide purpose-relativity]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[~ "acme" "acne" [$similar:predicate {decide: {match: 0.8, review: 0.7}}]]
+#]]
+  [out-text [#
+[similar score=0.8666666666666667 band=:match [evidence [scorer :jaro-winkler]]]
+#]]
+ ]
+
+ [# ---- truthiness: a report is truthy iff band=:match; review band
+    and no-decide (band-less) reports are falsy. -------------------- #]
+
+ [case id=similar-084-truthiness-if-bands level=core
+  [tags similar op truthiness bands]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+([?if [~ "a" "a"] [then 'y'] [else 'n']],
+ [?if [~ "acme" "acne"] [then 'y'] [else 'n']],
+ [?if [~ "acme" "acme" [$similar:predicate {}]] [then 'y'] [else 'n']])
+#]]
+  [out-text [#
+('y', 'n', 'n')
+#]]
+ ]
+
+ [# ---- module fns + fn-doc corpus + core verb happy paths ---------- #]
+
+ [case id=similar-085-fn-doc-score-of-token-set level=core
+  [tags similar score-of token-set fn-doc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score-of [~ "acme corp" "corp acme" [$similar:predicate {score: :token-set}]]]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=similar-086-fn-doc-sort-similarity-to level=core
+  [tags similar sort similarity-to fn-doc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$sort ("acme corp", "globex", "acme inc") {by: [$similar:similarity-to "acme"]}]
+#]]
+  [out-text [#
+('acme inc', 'acme corp', 'globex')
+#]]
+ ]
+
+ [case id=similar-087-fn-doc-score-of-identical level=core
+  [tags similar score-of fn-doc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:score-of [~ "acme" "acme"]]
+#]]
+  [out-text [#
+1.0
+#]]
+ ]
+
+ [case id=similar-088-fn-doc-band-of-identical level=core
+  [tags similar band-of fn-doc]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:band-of [~ "acme" "acme"]]
+#]]
+  [out-text [#
+:match
+#]]
+ ]
+
+ [case id=similar-089-band-of-no-decide-absence level=core
+  [tags similar band-of no-decide absence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:band-of [~ "acme" "acne" [$similar:predicate {}]]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=similar-090-similarity-to-custom-predicate level=core
+  [tags similar similarity-to predicate sort]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$sort ("globex", "acme inc", "acme corp") {by: [$similar:similarity-to "acme" [$similar:predicate {score: :levenshtein}]]}]
+#]]
+  [out-text [#
+('acme inc', 'acme corp', 'globex')
+#]]
+ ]
+
+ [case id=similar-091-predicate-ctor-canonical-form level=core
+  [tags similar predicate ctor render]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:predicate {score: :token-set, decide: {match: 0.9, review: 0.8}}]
+#]]
+  [out-text [#
+[similar-predicate score=:token-set [decide match=0.9 review=0.8]]
+#]]
+ ]
+
+ [case id=similar-092-predicate-ctor-per-field-scorer level=core
+  [tags similar predicate ctor field-scorer]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:predicate {weights: {name: {weight: 2.0, score: :token-set}}}]
+#]]
+  [out-text [#
+[similar-predicate [weights [field name=name weight=2.0 score=:token-set]]]
+#]]
+ ]
+
+ [case id=similar-093-sort-exact-asc-desc level=core
+  [tags similar sort exact dir]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([$sort (3, 1, 2)], [$sort (1, 3, 2) {dir: :desc}])
+#]]
+  [out-text [#
+((1, 2, 3), (3, 2, 1))
+#]]
+ ]
+
+ [case id=similar-094-sort-by-field level=core
+  [tags similar sort by-field]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sort ({n: "b", v: 1}, {n: "a", v: 2}) {by: "n"}]
+#]]
+  [out-text [#
+({n: 'a', v: 2}, {n: 'b', v: 1})
+#]]
+ ]
+
+ [case id=similar-095-sort-by-closure-key level=core
+  [tags similar sort closure-key]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$sort ("bb", "a", "ccc") {by: [?fn ($x) [$strings:length $x]]}]
+#]]
+  [out-text [#
+('a', 'bb', 'ccc')
+#]]
+ ]
+
+ [case id=similar-096-contains-exact-forms level=core
+  [tags similar contains exact string-form]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([$contains ("apple", "banana") "banana"], [$contains "warehouse" "house"])
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
+ [case id=similar-097-contains-scalar-graded level=core
+  [tags similar contains scalar graded best]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$contains ("apple", "banana") "bananna" [$similar:predicate {decide: {match: 0.9, review: 0.8}}]]
+#]]
+  [out-text [#
+[similar score=0.9714285714285714 band=:match [best 'banana']]
+#]]
+ ]
+
+ [case id=similar-098-match-scalar-graded-arms level=core
+  [tags similar match scalar when-arm]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([?let [= $x "ACME Corp"] [?match $x [when [~ $x "ACME Corp"] 'hit'] [else 'no']]],
+ [?let [= $x "totally different"] [?match $x [when [~ $x "ACME Corp"] 'hit'] [else 'no']]])
+#]]
+  [out-text [#
+('hit', 'no')
+#]]
+ ]
+
+ [case id=similar-099-validate-exact-ok-invalid level=core
+  [tags similar validate exact vocabulary]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([$validate "red" ("red", "green", "blue")], [$validate "crimson" ("red", "green", "blue")])
+#]]
+  [out-text [#
+([ok 'red'], [invalid [violation code=not-in-vocabulary got=crimson message='value is not one of the 3 allowed values']])
+#]]
+ ]
+
+ [case id=similar-100-validate-scalar-graded-nearest level=core
+  [tags similar validate scalar graded nearest]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$validate "gren" ("red", "green", "blue") {by: [$similar:predicate {decide: {match: 0.9, review: 0.8}}]}]
+#]]
+  [out-text [#
+[similar score=0.9533333333333333 band=:match [nearest 'green']]
+#]]
+ ]
+
+ [# ---- documented errors: CXER4900 (predicate config) -------------- #]
+
+ [case id=similar-101-err-predicate-unknown-scorer level=core
+  [tags similar predicate CXER4900 unknown-scorer]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:predicate {score: :bogus}]
+#]]
+  [out-err [#
+cx-err:CXER4900
+#]]
+ ]
+
+ [case id=similar-102-err-predicate-cuts-review-above-match level=core
+  [tags similar predicate CXER4900 decide-cuts]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:predicate {decide: {match: 0.7, review: 0.9}}]
+#]]
+  [out-err [#
+cx-err:CXER4900
+#]]
+ ]
+
+ [case id=similar-103-err-predicate-tolerance-nonpositive level=core
+  [tags similar predicate CXER4900 tolerance]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:predicate {tolerance: -1.0}]
+#]]
+  [out-err [#
+cx-err:CXER4900
+#]]
+ ]
+
+ [case id=similar-104-err-predicate-non-map-ctor level=core
+  [tags similar predicate CXER4900 non-map]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:predicate "not-a-map"]
+#]]
+  [out-err [#
+cx-err:CXER4900
+#]]
+ ]
+
+ [case id=similar-105-err-predicate-stem-character-scorer level=core
+  [tags similar predicate CXER4900 stem-pairing]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:predicate {score: :levenshtein, normalize: {stem: true}}]
+#]]
+  [out-err [#
+cx-err:CXER4900
+#]]
+ ]
+
+ [case id=similar-106-err-predicate-malformed-resolutions level=core
+  [tags similar predicate CXER4900 resolutions]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$similar:predicate {resolutions: [({left: "globex", right: "initech", verdict: :match})]}]
+#]]
+  [out-err [#
+cx-err:CXER4900
+#]]
+ ]
+
+ [# ---- documented errors: CXER4901 (verb options) ------------------ #]
+
+ [case id=similar-107-err-join-missing-on level=core
+  [tags similar join CXER4901 missing-on]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("a",) ("b",) {type: :inner}]
+#]]
+  [out-err [#
+cx-err:CXER4901
+#]]
+ ]
+
+ [case id=similar-108-err-join-unknown-selection level=core
+  [tags similar join CXER4901 selection]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("a",) ("b",) {on: [$similar:predicate {}], selection: :bogus}]
+#]]
+  [out-err [#
+cx-err:CXER4901
+#]]
+ ]
+
+ [case id=similar-109-err-join-unknown-type level=core
+  [tags similar join CXER4901 join-type]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("a",) ("b",) {on: [$similar:predicate {}], type: :sideways}]
+#]]
+  [out-err [#
+cx-err:CXER4901
+#]]
+ ]
+
+ [case id=similar-110-err-join-top-k-below-one level=core
+  [tags similar join CXER4901 top-k]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$join ("a",) ("b",) {on: [$similar:predicate {}], selection: :top-k, k: 0}]
+#]]
+  [out-err [#
+cx-err:CXER4901
+#]]
+ ]
+
+ [case id=similar-111-err-distinct-unknown-policy level=core
+  [tags similar distinct CXER4901 policy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$distinct ("a", "b") {by: [$similar:predicate {}], policy: :bogus}]
+#]]
+  [out-err [#
+cx-err:CXER4901
+#]]
+ ]
+
+ [case id=similar-112-err-group-by-unknown-policy level=core
+  [tags similar group-by CXER4901 policy]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$group-by ("a", "b") {by: [$similar:predicate {}], policy: :bogus}]
+#]]
+  [out-err [#
+cx-err:CXER4901
+#]]
+ ]
+
+ [# footnote 4 negative: sort has no intrinsic mutual-similarity order —
+    a bare predicate as "by" (no similarity-to reference) is refused. #]
+ [case id=similar-113-err-sort-bare-predicate-by level=core
+  [tags similar sort CXER4901 negative footnote-4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/similar']
+[$sort ("a", "b") {by: [$similar:predicate {}]}]
+#]]
+  [out-err [#
+cx-err:CXER4901
+#]]
+ ]
+]

@@ -98,19 +98,11 @@ fn (mut b BinBuf) attr_(a Attribute) {
 	// (round-trips as `name=@id`) from a literal string starting with `@`
 	// (round-trips quoted). Format version 2 added.
 	b.u8_(if a.is_ref { u8(1) } else { u8(0) })
-	// BracketBody attribute value tail.
-	// u8:body_flag (0 = no body, 1 = body present)
-	// u16:body_count + nodes[] when flag = 1.
-	// Format version 5 added.
-	if body := a.body() {
-		b.u8_(1)
-		b.u16_(u16(body.len))
-		for n in body {
-			encode_node(mut b, n)
-		}
-	} else {
-		b.u8_(0)
-	}
+	// Attribute body tail slot (format version 5). The node-valued
+	// Attribute.body channel was REMOVED (#396 owner ruling 1b,
+	// 2026-07-13: attributes are strictly scalar), so the flag is always
+	// 0 — the v5 layout stays byte-stable without a version bump.
+	b.u8_(0)
 }
 
 // to_heap returns a heap-allocated, length-prefixed buffer.
@@ -259,6 +251,14 @@ pub fn events_to_bin(events []StreamEvent) BinBuf {
 //       a recursively-encoded value node. Capability bit 29 signals
 //       support; v1-5 decoders MUST reject buffers whose version byte
 //       is >= 6.
+// 9 — #464: the pooled Element.table payload joins the wire. A
+//       table-bearing Element counts one extra child and encodes a
+//       table record (tag 0x17, ast-bin.md §4.8) as the FIRST entry of
+//       nodes[]. Emitted only when a table is present anywhere in the
+//       Document (common case stays at v6/v8 — byte-identical to the
+//       pre-#464 layout, so every buffer an old reader could decode is
+//       unchanged). Decoders reject 0x17 in a < v9 envelope. Capability
+//       bit 40 signals support. (v7 reserved; v8 = MatchNode/ModifyNode.)
 //
 // Node type IDs (u8):
 //   0x01 Element      — str:name  optstr:anchor  optstr:data_type  optstr:merge
@@ -282,6 +282,14 @@ pub fn events_to_bin(events []StreamEvent) BinBuf {
 //   0x10 ArrayNode    (v6+) — u16:item_count  nodes[]
 //   0x11 MapNode      (v6+) — u16:entry_count  entries[]
 //                             entry: str:key_data_type  str:key_value  node:value
+//   0x17 TableRecord  (v9+) — u16:col_count  cols[]  u32:row_count  rows[]
+//                             col: str:name  str:type_name ('' = string-default)
+//                             row: u16:cell_count (MUST == col_count)  cells[]
+//                             cell: one node — 0x03 Scalar (int/float/bool/
+//                             null/string) or 0x0F/0x10/0x11 collection.
+//                             NOT a standalone Node kind: valid ONLY as the
+//                             first entry of an Element's nodes[] (counted in
+//                             child_count); it re-attaches as Element.table.
 //   0xFF skip         — unknown/DTD node (decoder skips, no payload follows)
 //
 // Attribute payload (per attr inside any node that holds attrs[]):
@@ -306,7 +314,18 @@ fn encode_node(mut b BinBuf, n Node) {
 			for a in n.attrs {
 				b.attr_(a)
 			}
-			b.u16_(u16(n.items.len))
+			// #464 / format v9: the pooled `[table[…]]` payload rides as
+			// a table record (tag 0x17) in the FIRST child slot, counted
+			// in child_count. Emitting it in tag-read position keeps old
+			// readers fail-loud (unknown tag) on the unversioned
+			// single-node frame, and byte-stability for every table-free
+			// element (no unconditional flag byte).
+			if td := n.table_opt() {
+				b.u16_(u16(n.items.len + 1))
+				encode_table_record(mut b, td)
+			} else {
+				b.u16_(u16(n.items.len))
+			}
 			for child in n.items {
 				encode_node(mut b, child)
 			}
@@ -454,6 +473,85 @@ fn encode_node(mut b BinBuf, n Node) {
 	}
 }
 
+// encode_table_record writes the v9 table record (tag 0x17,
+// ast-bin.md §4.8) carrying the pooled Element.table payload. Columns
+// are (name, type_name) string pairs — empty type_name = undeclared /
+// string-default, mirroring the canonical CX header and the AST-JSON
+// "table" object (#443). Each row leads with its own cell count
+// (MUST equal col_count — the decoder's malformed-payload tripwire)
+// followed by one recursively-encoded node per cell: scalar cells as
+// 0x03 Scalar, collection cells via the existing 0x0F/0x10/0x11
+// encodings. The runtime provenance flag `from_chunked` is NOT on the
+// wire (decoded tables restore false).
+fn encode_table_record(mut b BinBuf, td &TableData) {
+	b.u8_(0x17)
+	b.u16_(u16(td.cols.len))
+	for c in td.cols {
+		b.str_(c.name)
+		b.str_(c.type_name)
+	}
+	b.u32_(u32(td.rows.len))
+	for row in td.rows {
+		b.u16_(u16(row.len))
+		for cell in row {
+			encode_node(mut b, table_cell_wire_node(cell))
+		}
+	}
+}
+
+// table_cell_wire_node lifts one TableCellValue into the Node it
+// encodes as: scalar variants become a 0x03 Scalar (typed per the
+// in-memory variant — declared column types like `date` keep their
+// string payload, the column header carries the type); collection
+// variants ride their own tags.
+fn table_cell_wire_node(c TableCellValue) Node {
+	return match c {
+		bool         { Node(ScalarNode{ data_type: .bool_type, value: ScalarValue(c) }) }
+		i64          { Node(ScalarNode{ data_type: .int_type, value: ScalarValue(c) }) }
+		f64          { Node(ScalarNode{ data_type: .float_type, value: ScalarValue(c) }) }
+		string       { Node(ScalarNode{ data_type: .string_type, value: ScalarValue(c) }) }
+		NullValue    { Node(ScalarNode{ data_type: .null_type, value: ScalarValue(c) }) }
+		ArrayNode    { Node(c) }
+		MapNode      { Node(c) }
+		SequenceNode { Node(c) }
+	}
+}
+
+// has_table_node returns true iff any Element in the slice (or any
+// nested node reachable through items / entries / iterator source
+// args) carries a table payload. Used by doc_to_bin to bump the
+// version byte to 9 only when the 0x17 record is actually emitted,
+// keeping table-free Documents byte-identical to the pre-#464 layout.
+fn has_table_node(nodes []Node) bool {
+	for n in nodes {
+		if node_has_table(n) {
+			return true
+		}
+	}
+	return false
+}
+
+fn node_has_table(n Node) bool {
+	return match n {
+		Element {
+			!isnil(n.table) || has_table_node(n.items)
+		}
+		BlockContentNode  { has_table_node(n.items) }
+		CXDirectiveNode   { has_table_node(n.items) }
+		EvalDirectiveNode { has_table_node(n.items) }
+		SequenceNode      { has_table_node(n.items) }
+		ArrayNode         { has_table_node(n.items) }
+		IteratorNode      { has_table_node(n.source_args) }
+		MapNode {
+			for entry in n.entries {
+				if node_has_table(entry.value) { return true }
+			}
+			false
+		}
+		else { false }
+	}
+}
+
 // has_v8_node returns true iff any node in the slice (or any nested
 // node reachable through items / entries) is a v8 kind (currently
 // MatchNode + ModifyNode — PathNode is parallel-only at this graft).
@@ -473,24 +571,12 @@ fn node_is_v8(n Node) bool {
 	return match n {
 		MatchNode, ModifyNode { true }
 		Element {
-			if has_v8_node(n.items) { return true }
-			for a in n.attrs {
-				if body := a.body() {
-					if has_v8_node(body) { return true }
-				}
-			}
-			false
+			has_v8_node(n.items)
 		}
 		BlockContentNode    { has_v8_node(n.items) }
 		CXDirectiveNode     { has_v8_node(n.items) }
 		EvalDirectiveNode {
-			if has_v8_node(n.items) { return true }
-			for a in n.attrs {
-				if body := a.body() {
-					if has_v8_node(body) { return true }
-				}
-			}
-			false
+			has_v8_node(n.items)
 		}
 		SequenceNode { has_v8_node(n.items) }
 		ArrayNode    { has_v8_node(n.items) }
@@ -515,7 +601,15 @@ pub fn doc_to_bin(doc Document) BinBuf {
 	// Cap bit 36 (`0x1000000000` per spec/abi.md §1.5) signals reader
 	// support; v6/v7 readers MUST reject v8 buffers.
 	v8_needed := has_v8_node(doc.prolog) || has_v8_node(doc.elements)
-	if v8_needed {
+	// #464: the Element table record (tag 0x17) is a v9 extension —
+	// bump ONLY when a table payload is actually present so the common
+	// case keeps its previous envelope (same additive discipline as the
+	// v6→v8 bump below). Capability bit 40 signals reader support;
+	// v6/v8 readers MUST reject v9 buffers.
+	v9_needed := has_table_node(doc.prolog) || has_table_node(doc.elements)
+	if v9_needed {
+		b.u8_(9) // v9 — Element table record (0x17).
+	} else if v8_needed {
 		b.u8_(8) // v8 — MatchNode (0x14) + ModifyNode (0x15) joined the
 		         // node-kind table / 0030. PathNode (0x13)
 		         // remains standalone at this graft; a later phase
@@ -545,6 +639,25 @@ pub fn emit_ast_bin(doc Document) []u8 {
 	out << u8((sz >> 8) & 0xFF)
 	out << u8((sz >> 16) & 0xFF)
 	out << u8((sz >> 24) & 0xFF)
+	out << b.buf
+	return out
+}
+
+// emit_node_bin returns the framed [u32 LE size][payload] ast_bin of a single
+// Node — the per-object encoding used by the cxstore content-addressed engine
+// (docs-src/canonical/cxstore/object_model.md Appendix A.1). Mirrors
+// emit_ast_bin but encodes one node rather than a whole Document, so a subtree
+// can be hashed and stored independently. Deterministic: same node → same
+// bytes (encode_node uses fixed tags + field order).
+pub fn emit_node_bin(n Node) []u8 {
+	mut b := BinBuf{}
+	encode_node(mut b, n)
+	mut out := []u8{cap: b.buf.len + 4}
+	sz := u32(b.buf.len)
+	out << u8(sz & 0xFF)
+	out << u8((sz >> 8) & 0xFF)
+	out << u8((sz >> 16) & 0xFF)
+	out << u8(sz >> 24)
 	out << b.buf
 	return out
 }
@@ -584,10 +697,12 @@ pub fn bin_to_doc(framed []u8) !Document {
 	// changes shipped at v7); v8 introduces MatchNode (0x14) +
 	// ModifyNode (0x15) — PathNode (0x13) wire payload exists but
 	// remains parallel-only at this graft (decoded at the standalone
-	// codec entry, not from encode_node dispatch). Reader accepts
-	// 1..8; the v8 decoder reuses the v6 decode_node dispatch table
-	// extended with 0x14 / 0x15 arms below.
-	if version < 1 || version > 8 {
+	// codec entry, not from encode_node dispatch). v9 introduces the
+	// Element table record (0x17, #464). Reader accepts 1..9; the v9
+	// decoder reuses the v6 decode_node dispatch table extended with
+	// the 0x14 / 0x15 arms below and the decode_element table-record
+	// hook.
+	if version < 1 || version > 9 {
 		return error('ast_bin: unsupported version ${version}')
 	}
 	r.version = version
@@ -605,6 +720,27 @@ pub fn bin_to_doc(framed []u8) !Document {
 	resolve_namespaces(mut doc)
 	resolve_ids(doc)!
 	return doc
+}
+
+// node_from_bin decodes a single Node from framed [u32 LE size][payload] bytes
+// produced by emit_node_bin — the inverse used by the cxstore content-addressed
+// engine to reconstruct a subtree object (object_model.md Appendix A). The
+// payload is a bare encode_node stream (no version/prolog framing), so the
+// reader is primed at the max node version to accept every node kind.
+pub fn node_from_bin(framed []u8) !Node {
+	if framed.len < 4 {
+		return error('ast_bin: input too short for size header')
+	}
+	size := u32(framed[0]) | (u32(framed[1]) << 8) | (u32(framed[2]) << 16) | (u32(framed[3]) << 24)
+	if 4 + int(size) > framed.len {
+		return error('ast_bin: declared payload (${size}) exceeds remaining input')
+	}
+	mut r := AstReader{
+		buf:     unsafe { framed[4..4 + int(size)] }
+		pos:     0
+		version: 9
+	}
+	return r.decode_node()!
 }
 
 fn (mut r AstReader) read_u8() !u8 {
@@ -662,18 +798,13 @@ fn (mut r AstReader) read_attr() !Attribute {
 		attr.is_ref = flag == 1
 	}
 	if r.version >= 5 {
-		// v3.5: BracketBody attribute body tail. Flag=0 means
-		// no body; flag=1 is followed by u16:body_count + nodes[].
+		// v5 attr body tail slot. The node-valued Attribute.body channel
+		// was REMOVED (#396 ruling 1b) — the flag must be 0; a blob
+		// carrying flag=1 encodes a value the data model no longer
+		// represents and fails loud.
 		body_flag := r.read_u8()!
-		if body_flag == 1 {
-			body_count := r.read_u16()!
-			mut body := []Node{cap: int(body_count)}
-			for _ in 0 .. body_count {
-				body << r.decode_node()!
-			}
-			attr.set_body(body)
-		} else if body_flag != 0 {
-			return error('ast_bin: invalid attr body_flag ${body_flag}')
+		if body_flag != 0 {
+			return error('ast_bin: attr body_flag ${body_flag} — node-valued attribute bodies were removed (scalar-only attributes, D2/#396)')
 		}
 	}
 	return attr
@@ -730,6 +861,14 @@ fn (mut r AstReader) decode_node() !Node {
 		0x14 { r.decode_match_node_dispatch()! }   // v8
 		0x15 { r.decode_modify_node_dispatch()! }  // v8
 		0x16 { r.decode_iterator_node()! }         // IteratorNode
+		0x17 {
+			// v9 table record — NOT a standalone Node kind. Only
+			// decode_element's first-child hook may consume it; reaching
+			// it through the generic dispatch means the record sits in a
+			// position the format forbids (top level, prolog, non-first
+			// child, nested container, cell). Fail loud, never misparse.
+			error('ast_bin: table record (0x17) outside the first child slot of an Element at offset ${r.pos - 1}')
+		}
 		0xFF { Node(TextNode{}) } // skip — unknown / DTD nodes
 		else { error('ast_bin: unknown node tag 0x${tag:02x} at offset ${r.pos - 1}') }
 	}
@@ -780,17 +919,102 @@ fn (mut r AstReader) decode_element() !Node {
 		attrs << r.read_attr()!
 	}
 	child_count := r.read_u16()!
-	mut items := []Node{cap: int(child_count)}
-	for _ in 0 .. child_count {
+	// v9 table record hook (#464): a table-bearing Element carries its
+	// pooled payload as the FIRST entry of nodes[] under tag 0x17,
+	// counted in child_count. Peek — only the first child slot may hold
+	// it (any other position falls through decode_node's 0x17 reject).
+	mut table := ?&TableData(none)
+	mut remaining := int(child_count)
+	if remaining > 0 && r.pos < r.buf.len && r.buf[r.pos] == 0x17 {
+		if r.version < 9 {
+			return error('ast_bin: table record (0x17) in a v${r.version} envelope — the Element table payload is a v9 extension')
+		}
+		r.pos++
+		table = r.decode_table_record()!
+		remaining--
+	}
+	mut items := []Node{cap: remaining}
+	for _ in 0 .. remaining {
 		items << r.decode_node()!
 	}
-	return Node(new_element(name, ElementMeta{
+	el := new_element(name, ElementMeta{
 		anchor:    anchor
 		merge:     merge
 		data_type: data_type
 		id:        id
 		body_ref:  body_ref
-	}, attrs, items))
+	}, attrs, items)
+	if td := table {
+		return Node(el.with_table(td))
+	}
+	return Node(el)
+}
+
+// decode_table_record reads the v9 table record body (after the 0x17
+// tag): u16:col_count, (name, type_name) string pairs, u32:row_count,
+// then per row u16:cell_count (MUST equal col_count) + one node per
+// cell. Cells decode through the ordinary node dispatch and are then
+// narrowed to the legal cell kinds — 0x03 Scalar carrying one of the
+// five base scalar types, or a 0x0F/0x10/0x11 collection. Anything
+// else is a malformed payload and fails loud.
+fn (mut r AstReader) decode_table_record() !&TableData {
+	col_count := r.read_u16()!
+	mut cols := []TableColumn{cap: int(col_count)}
+	for _ in 0 .. col_count {
+		name := r.read_str()!
+		type_name := r.read_str()!
+		cols << TableColumn{
+			name:      name
+			type_name: type_name
+		}
+	}
+	row_count := r.read_u32()!
+	mut rows := [][]TableCellValue{cap: int(row_count)}
+	for row_idx in 0 .. row_count {
+		cell_count := r.read_u16()!
+		if int(cell_count) != int(col_count) {
+			return error('ast_bin: table row ${row_idx} carries ${cell_count} cells; header declares ${col_count} columns')
+		}
+		mut row := []TableCellValue{cap: int(cell_count)}
+		for cell_idx in 0 .. cell_count {
+			n := r.decode_node()!
+			row << wire_node_to_table_cell(n) or {
+				return error('ast_bin: table row ${row_idx} cell ${cell_idx}: ${err.msg()}')
+			}
+		}
+		rows << row
+	}
+	return &TableData{
+		cols: cols
+		rows: rows
+		// Runtime provenance — not on the wire; restores false.
+		from_chunked: false
+	}
+}
+
+// wire_node_to_table_cell narrows a decoded cell node back to its
+// TableCellValue variant. Inverse of table_cell_wire_node.
+fn wire_node_to_table_cell(n Node) !TableCellValue {
+	match n {
+		ScalarNode {
+			return match n.data_type {
+				.int_type    { TableCellValue(n.value as i64) }
+				.float_type  { TableCellValue(n.value as f64) }
+				.bool_type   { TableCellValue(n.value as bool) }
+				.null_type   { TableCellValue(NullValue{}) }
+				.string_type { TableCellValue(n.value as string) }
+				else {
+					error('cell scalar type "${scalar_type_name(n.data_type)}" is not a table-cell kind (int/float/bool/null/string)')
+				}
+			}
+		}
+		ArrayNode    { return TableCellValue(n) }
+		MapNode      { return TableCellValue(n) }
+		SequenceNode { return TableCellValue(n) }
+		else {
+			return error('cell node is not a Scalar or Array/Map/Sequence collection')
+		}
+	}
 }
 
 fn (mut r AstReader) decode_scalar() !Node {

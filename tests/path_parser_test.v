@@ -140,13 +140,23 @@ fn test_parse_path_predicate_attrtest() {
 }
 
 fn test_parse_path_predicate_with_quoted_string() {
-	src := '//user[@name = "alice"]'
+	src := '//user[= \$_@name "alice"]'
 	p := cx.parse_path(src) or {
 		assert false, 'parse failed: ${err}'
 		return
 	}
 	assert p.steps[0].predicates.len == 1
-	assert p.steps[0].predicates[0].source == '@name = "alice"'
+	assert p.steps[0].predicates[0].source == '= \$_@name "alice"'
+}
+
+fn test_parse_path_predicate_infix_compare_is_retired() {
+	// The infix attribute-comparison surface `[@name = "alice"]` is
+	// RETIRED (#110) — a hard parse error, never a source-only fallback.
+	_ := cx.parse_path('//user[@name = "alice"]') or {
+		assert err.msg().contains('retired'), 'expected retired-surface message, got: ${err.msg()}'
+		return
+	}
+	assert false, 'infix attribute comparison should be a hard parse error'
 }
 
 fn test_parse_path_predicate_with_nested_brackets() {
@@ -185,7 +195,7 @@ fn test_parse_path_sets_source_and_loc() {
 // ── Round-trip with hand-constructed PathNode (eq excludes source/loc) ────────
 
 fn test_parse_path_round_trip_eq_hand_constructed() {
-	parsed := cx.parse_path('//user[@active=true]') or {
+	parsed := cx.parse_path('//user[= \$_@active true]') or {
 		assert false, 'parse failed: ${err}'
 		return
 	}
@@ -195,7 +205,7 @@ fn test_parse_path_round_trip_eq_hand_constructed() {
 			cx.PathStep{
 				axis:       cx.PathAxis.child
 				node_test:  'user'
-				predicates: [cx.PathPredicate{ source: '@active=true' }]
+				predicates: [cx.PathPredicate{ source: '= \$_@active true' }]
 			},
 		]
 	}
@@ -306,13 +316,13 @@ fn test_parse_path_multi_predicate_two_attrtests() {
 }
 
 fn test_parse_path_multi_predicate_index_then_attr() {
-	p := cx.parse_path('//user[1][@name="alice"]') or {
+	p := cx.parse_path('//user[1][= \$_@name "alice"]') or {
 		assert false, 'parse failed: ${err}'
 		return
 	}
 	assert p.steps[0].predicates.len == 2
 	assert p.steps[0].predicates[0].source == '1'
-	assert p.steps[0].predicates[1].source == '@name="alice"'
+	assert p.steps[0].predicates[1].source == '= \$_@name "alice"'
 }
 
 fn test_parse_path_multi_predicate_three_bare() {

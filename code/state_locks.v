@@ -1,5 +1,7 @@
 module code
 
+import cx
+
 // ── ProgramState locked accessors ──────────────────────────
 //
 // Encapsulates the per-field `sync.RwMutex` discipline so directive
@@ -147,6 +149,67 @@ fn (mut s ProgramState) worker_has(name string) bool {
 	s.workers_lock.rlock()
 	defer { s.workers_lock.runlock() }
 	return name in s.workers
+}
+
+// ── worker lifecycle (concurrent [?worker] ↔ [?cancel] arbitration) ──────────
+//
+// The cancel request ([?cancel], main thread) and the terminal publish
+// (run_worker_thread, worker thread) both check-then-write the record's
+// done/cancelled/result fields. Without a shared critical section the two
+// interleave: a body completing between [?cancel]'s done-check and its stamp
+// clobbered the WORKER_CANCELLED chain with the body's value — the
+// program-conc-017 "[ok] instead of CXER0221/CXER0260" flake. All three
+// transitions below take workers_lock so exactly one terminal outcome wins,
+// per §10.5.4: cancel-while-running wins over a later body completion; a
+// body that completed FIRST keeps its value (cancel of a done worker is a
+// no-op).
+
+// worker_request_cancel implements the §10.5.4 request semantics: a
+// still-running worker is marked cancelled with the WORKER_CANCELLED /
+// CANCELLED chain stamped as its terminal result; a worker that already
+// ran to completion keeps its value. `result` is written BEFORE the
+// `cancelled` flag flips so the [?wait-for] spin (which exits on the flag,
+// unlocked) always reads a complete record.
+fn (mut s ProgramState) worker_request_cancel(rec_ptr &WorkerRecord) {
+	mut rec := unsafe { rec_ptr }
+	s.workers_lock.lock()
+	defer { s.workers_lock.unlock() }
+	if rec.done {
+		return
+	}
+	rec.result = mk_err_with_slots('cx-err:CXER0221', [
+		Slot{ label: 'cause', value: mk_err_with_slots('cx-err:CXER0260', []) },
+	])
+	rec.cancelled = true
+}
+
+// worker_publish stores a concurrent worker's terminal result. A record
+// already stamped cancelled keeps the WORKER_CANCELLED chain (the cancel
+// request won the §10.5.4 arbitration); `done` flips last either way.
+fn (mut s ProgramState) worker_publish(rec_ptr &WorkerRecord, result cx.Node) {
+	mut rec := unsafe { rec_ptr }
+	s.workers_lock.lock()
+	defer { s.workers_lock.unlock() }
+	if !rec.cancelled {
+		rec.result = result
+	}
+	rec.done = true
+}
+
+// worker_publish_cancelled marks the terminal state of a worker whose BODY
+// observed cancellation at a cancellation point (CXER0260 surfaced from
+// [?send]/[?receive]/[?check-cancel]/[?sleep]/[?for], §10.5.4) — the worker
+// terminated via [?cancel], so the terminal shape is the same
+// WORKER_CANCELLED chain the cancel-side stamp writes (idempotent with it).
+fn (mut s ProgramState) worker_publish_cancelled(rec_ptr &WorkerRecord) {
+	mut rec := unsafe { rec_ptr }
+	s.workers_lock.lock()
+	defer { s.workers_lock.unlock() }
+	rec.result = mk_err_with_slots('cx-err:CXER0221', [
+		Slot{ label: 'cause', value: mk_err_with_slots('cx-err:CXER0260', []) },
+	])
+	rec.cancelled = true
+	rec.done = true
 }
 
 // ── services ────────────────────────────────────────────────────────────────

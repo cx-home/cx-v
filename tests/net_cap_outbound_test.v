@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 
 // net_cap_outbound_test.v — #47: `--allow-all` (the grant-EVERYTHING
 // opt-out) permits OUTBOUND to ANY host, loopback/private included — it
@@ -15,7 +16,7 @@ import os
 // stage (CXER4506); the deny-set forbids it (CXER4504).
 
 fn cx_bin_net() string {
-	return os.join_path(@VMODROOT, 'target', 'cx')
+	return testenv.cx_bin()
 }
 
 fn dial_loopback_prog() string {

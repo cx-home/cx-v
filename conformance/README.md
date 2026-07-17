@@ -253,7 +253,7 @@ A conformant binding must pass tests covering each of these behaviors:
 - Original Document is unchanged after transform
 - `transform("config/missing", fn)` returns the original Document unchanged
 - Chained transforms: `doc.transform(...).transform(...)` works correctly
-- `transform_all("//service[@active=false]", fn)` applies fn to every matching element
+- `transform_all("//service[= $_@active false]", fn)` applies fn to every matching element
 
 **Error cases:**
 - Parsing `fixtures/errors/unclosed.cx` raises a parse error
@@ -292,9 +292,9 @@ expression patterns against the standard fixtures:
 - `config/*` → all direct children of config
 
 **Attribute predicates:**
-- `//server[@host=localhost]` → servers with host=localhost
-- `//server[@port=8080]` → int comparison (typed, not string)
-- `//server[@debug=false]` → bool comparison
+- `//server[= $_@host localhost]` → servers with host=localhost
+- `//server[= $_@port 8080]` → int comparison (typed, not string)
+- `//server[= $_@debug false]` → bool comparison
 - `//server[@active!=false]` → inequality
 - `//server[@port>=8000]` → numeric range
 - `//*[@id]` → elements that have an id attribute

@@ -129,14 +129,32 @@ fn path_expr_label(p cx.ProgramPathExpr) string {
 			.prefix_local     { s += step.ns_prefix + ':' + step.name }
 		}
 		for pred in step.predicates {
-			s += '[' + path_predicate_label(pred) + ']'
+			s += path_predicate_render(pred)
 		}
 	}
 	return s
 }
 
-// path_predicate_label renders the body of a single `[…]` predicate in
-// canonical terse form. The brackets are added by the caller.
+// path_predicate_render renders a whole `[…]` predicate in canonical
+// form — INCLUDING its brackets, because a fused general body carries
+// its own bracket pair ([159b]: the predicate's brackets ARE the
+// form's; `[[…]]` is invalid). Routes through the same emitter the
+// canonical renderer uses, so the JSON projection matches emit.
+fn path_predicate_render(p cx.ProgramPathPredicate) string {
+	match p.kind {
+		.position, .attr_test {
+			return '[' + path_predicate_label(p) + ']'
+		}
+		.expr {
+			mut b := strings.new_builder(32)
+			emit_path_predicate(mut b, p)
+			return b.str()
+		}
+	}
+}
+
+// path_predicate_label renders the body of a single atomic predicate
+// (positional / attribute-test). The brackets are added by the caller.
 fn path_predicate_label(p cx.ProgramPathPredicate) string {
 	match p.kind {
 		.position {
@@ -146,10 +164,8 @@ fn path_predicate_label(p cx.ProgramPathPredicate) string {
 			return path_predicate_attr_label(p)
 		}
 		.expr {
-			// General PredicateExpr — emit a placeholder; full
-			// round-trip of arbitrary body expressions is canonical-
-			// emit territory (program_emit.v / render.v). The label
-			// surface is informational (diagrams, error messages).
+			// Unreachable via path_predicate_render; kept for direct
+			// label consumers (diagrams) as a coarse marker.
 			return 'expr'
 		}
 	}

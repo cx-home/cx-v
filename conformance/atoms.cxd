@@ -321,8 +321,10 @@ status: !!cx:atom "active"
   [in-cx [#
 [event kind=:click]
 #]]
+  [; #441 re-bless: `event` was quoted only because it contains the letter
+    `e` (the emitter swallowed the atof64 error); a bare name needs no quote. ]
   [out-yaml [#
-"event":
+event:
   kind: !!cx:atom "click"
 #]]
  ]
@@ -347,6 +349,65 @@ transitions:
   [out-toml [#
 [config]
 mode = ":strict"
+#]]
+ ]
+
+ [; Dotted atoms — lexicon [L40] `':' Ident ('.' Ident)*` (#397, owner ruling
+    2026-07-13): interior dots join ident segments into ONE opaque interned
+    name (hierarchical topic/tag namespaces, bus.md §2.2). No structural
+    semantics at the atom level; equality stays byte-identical whole-name.
+    Before the ruling the DATA reader silently fell back to string/text for
+    dotted spellings while the PROGRAM reader errored — now both read the
+    atom, per the [L11] lockstep rule. ]
+
+ [case id=atom-025-dotted-attribute level=core
+  [tags atom literal dotted issue-397 attribute]
+  [in-cx [#
+[event kind=:order.placed]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "event",
+      "attrs": [{"name": "kind", "value": "order.placed", "dataType": "atom"}]
+    }
+  ]
+}
+#]]
+  [out-cx [#
+[event kind=:order.placed]
+#]]
+ ]
+
+ [case id=atom-026-dotted-sequence-items level=core
+  [tags atom literal dotted issue-397 sequence]
+  [in-cx [#
+[topics (:order.placed, :billing.invoice.paid)]
+#]]
+  [out-cx [#
+[topics (:order.placed, :billing.invoice.paid)]
+#]]
+ ]
+
+ [case id=atom-027-trailing-dot-is-not-an-atom level=core
+  [tags atom literal dotted issue-397 boundary]
+  [in-cx [#
+[m x=:order.]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "m",
+      "attrs": [{"name": "x", "value": ":order."}]
+    }
+  ]
+}
 #]]
  ]
 ]

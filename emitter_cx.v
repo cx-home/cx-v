@@ -214,8 +214,22 @@ pub fn cx_emit_map_inline(n MapNode, compact bool) string {
 // recurses through cx_emit_*_inline to keep the inline-canonical form.
 fn cx_emit_collection_item(n Node, compact bool) string {
 	return match n {
-		TextNode      { cx_quote_text_if_needed(n.value) }
-		ScalarNode    { cx_scalar(n) }
+		TextNode      { cx_collection_string(n.value) }
+		ScalarNode    {
+			// #473: a STRING scalar (imported / runtime-built — a CX-source
+			// quoted value arrives as a TextNode) quotes under the same rule
+			// as the TextNode arm; cx_scalar's verbatim string arm let a
+			// number-shaped payload emit bare and re-import as int.
+			if n.data_type == .string_type {
+				sv := match n.value {
+					string { n.value as string }
+					else   { scalar_value_str(n.value) }
+				}
+				cx_collection_string(sv)
+			} else {
+				cx_scalar(n)
+			}
+		}
 		EntityRefNode { '&${n.name};' }
 		RawTextNode   { '[#${n.value}#]' }
 		SequenceNode  { cx_emit_sequence_inline(n, compact) }
@@ -243,10 +257,39 @@ fn cx_emit_collection_item(n Node, compact bool) string {
 fn cx_emit_map_key(kt ScalarType, kv ScalarValue) string {
 	if kt == .string_type {
 		s := match kv { string { kv } else { scalar_value_str(kv) } }
-		if cx_is_bare_name(s) { return s }
+		// A ':' inside a bare STRING key mis-lexes on re-parse (`{cx:seq: v}`
+		// splits at the first colon → key `cx`), breaking the §1 emit/parse
+		// fixpoint — QName chars are bare-name chars, so cx_is_bare_name
+		// alone admits it. Quote such keys.
+		if cx_is_bare_name(s) && !s.contains(':') { return s }
 		return cx_choose_quote(s)
 	}
 	return cx_scalar(ScalarNode{ data_type: kt, value: kv })
+}
+
+// cx_emit_envelope_map_key renders a map key whose TYPE was erased to its
+// string image — the program-side `__cx_map__` envelope (vcx/code/eval.v
+// eval_map) stores every key as the entry element's name. This is the
+// single home for the envelope-lane key rule; the program renderer's
+// `__cx_map__` paths (vcx/code/render.v, #495) delegate here so the two
+// lanes cannot drift.
+//
+// The rule intentionally DIFFERS from cx_emit_map_key's string arm: in the
+// typed data lane a number-shaped STRING key must quote (else it re-imports
+// as int), but in the envelope a number image is just as likely a genuine
+// int/float/bool/date key (`{7: v}`, program-dc-entry-int-key) — quoting it
+// would flip it to a string on re-parse. So an auto-typing image stays BARE
+// (its text re-parses to the same key image) and quoting is forced only
+// when the bare image would structurally mis-parse: a `:` anywhere (a bare
+// `cx:seq` key splits at the first colon; QName chars are bare-name chars),
+// a `$`-leading name (reads as a binding reference / reserved-envelope
+// key, e.g. `$tag`), or an image that is neither a bare name nor an
+// auto-typing scalar (spaces, quotes, delimiters, empty, `@`/`#` sigils…).
+pub fn cx_emit_envelope_map_key(s string) string {
+	if !s.contains(':') && (cx_is_bare_name(s) || cx_would_autotype(s)) {
+		return s
+	}
+	return cx_choose_quote(s)
 }
 
 // cx_array_item_needs_quote reports whether a bare text item inside an array
@@ -369,8 +412,11 @@ fn cx_emit_element(e Element, depth int, compact bool, mut out []string) {
 	}
 
 	// v3.4: emit :table form when this Element carries TableData.
+	// #469: e.items carries the comments the parser retained between the
+	// element name and the `[table[` head — passed through so the pooled
+	// emitter re-emits them (they were retained but silently dropped here).
 	if td := e.table_opt() {
-		cx_emit_table_element(e.name, td, depth, compact, mut out)
+		cx_emit_table_element(e, td, depth, compact, mut out)
 		return
 	}
 
@@ -405,10 +451,31 @@ fn cx_emit_element(e Element, depth int, compact bool, mut out []string) {
 // are space-separated cells. Cells use canonical scalar formatting:
 // quoted iff the value is empty, contains whitespace, or would
 // auto-type differently from its declared column type.
-fn cx_emit_table_element(name string, td TableData, depth int, compact bool, mut out []string) {
+//
+// #478: the element's head meta — anchor, merge, id, attributes — is
+// ElementMeta like on any other element (grammar [29]: the TableBlock
+// occupies only the TypeAnnotation slot) and MUST be re-emitted; this
+// lane previously rendered the bare name, dropping every head meta on
+// round-trip. The `table` data_type is implied by the `[table[…]]`
+// clause and is never rendered as a glued `::table` (the parser rejects
+// an explicit annotation on a table-block element). The TableBlock
+// closes the head — it always follows the attributes, since the parser
+// treats the `[table[` opener as the transition into the row body.
+// #469: comments the parser retained (the element's only possible
+// items) re-emit between the head meta and the `[table[…]]` clause.
+fn cx_emit_table_element(e Element, td TableData, depth int, compact bool, mut out []string) {
 	ind := cx_ind(depth, compact)
 	nl  := if compact { '' } else { '\n' }
 	row_ind := cx_ind(depth + 1, compact)
+	name := e.name
+
+	mut meta := ''
+	if a := e.anchor() { meta += ' &${a}' }
+	if m := e.merge()  { meta += ' *${m}' }
+	if id := e.id()    { meta += ' #${id}' }
+	for a in e.attrs {
+		meta += ' ${cx_attr_scalar(a)}'
+	}
 
 	mut header_parts := []string{}
 	for col in td.cols {
@@ -420,6 +487,13 @@ fn cx_emit_table_element(name string, td TableData, depth int, compact bool, mut
 	}
 	header := header_parts.join(' ')
 
+	// #469: comments the parser retained between the element name and the
+	// `[table[` head (its only possible items) re-emit ahead of the head —
+	// the reader's ElementMeta loop collects them back into the same slot,
+	// so the emit is a fixpoint and `cx fmt` is lossless for them.
+	items := e.items
+	has_comments := items.any(it is CommentNode)
+
 	if compact || td.rows.len == 0 {
 		mut all := []string{}
 		for row in td.rows {
@@ -430,11 +504,45 @@ fn cx_emit_table_element(name string, td TableData, depth int, compact bool, mut
 		}
 		body := all.join(' ')
 		body_sep := if body.len > 0 { ' ' } else { '' }
-		out << '${ind}[${name} [table[${header}]]${body_sep}${body}]${nl}'
+		mut cparts := ''
+		if has_comments {
+			// Inline position: block spelling only — a bare `# …` here
+			// would comment out the rest of the record, so a retained
+			// line comment normalizes to `[;…]` (content preserved).
+			for item in items {
+				if item is CommentNode {
+					cparts += '[;${item.value}] '
+				}
+			}
+		}
+		out << '${ind}[${name}${meta} ${cparts}[table[${header}]]${body_sep}${body}]${nl}'
 		return
 	}
 
-	out << '${ind}[${name} [table[${header}]]${nl}'
+	if has_comments {
+		// Multiline home: each retained comment on its own line between
+		// the head meta and the `[table[…]]` clause, in its own spelling
+		// (`[; … ]` block / `# …` line — cx_emit_node keeps both).
+		out << '${ind}[${name}${meta}${nl}'
+		for item in items {
+			if item is CommentNode {
+				cx_emit_node(item, depth + 1, compact, mut out)
+			}
+		}
+		out << '${row_ind}[table[${header}]]${nl}'
+		for row in td.rows {
+			mut cells := []string{}
+			for i, cell in row {
+				ct := if i < td.cols.len { td.cols[i].type_name } else { '' }
+				cells << cx_format_table_cell(cell, ct)
+			}
+			out << '${row_ind}${cells.join(' ')}${nl}'
+		}
+		out << '${ind}]${nl}'
+		return
+	}
+
+	out << '${ind}[${name}${meta} [table[${header}]]${nl}'
 	for row in td.rows {
 		mut cells := []string{}
 		for i, cell in row {
@@ -451,16 +559,37 @@ fn cx_emit_table_element(name string, td TableData, depth int, compact bool, mut
 // no whitespace; quoted otherwise. col_type is reserved for future
 // per-column-type formatting (e.g., float-precision matching the
 // declared :f32 width); currently unused.
-fn cx_format_table_cell(v TableCellValue, _col_type string) string {
+fn cx_format_table_cell(v TableCellValue, col_type string) string {
 	return match v {
 		i64       { v.str() }
 		f64       { format_float(v) }
 		bool      { if v { 'true' } else { 'false' } }
 		NullValue { 'null' }
 		string    {
-			if v.len == 0 || v.contains(' ') || v.contains('\t')
-				|| v.contains('\n') || v.contains("'")
-				|| v.contains('[') || v.contains(']') {
+			// #485: the cell context's instantiation of the shared #483
+			// collection-string rule (cx_collection_string): quote exactly
+			// when the bare image would re-read as a DIFFERENT value in
+			// cell position. In a string-family column a bare token
+			// re-reads as the same string — grammar [29b]: untyped columns
+			// default to ::string, read_table_cell never auto-types them —
+			// so type-shaped text (`1h30m`, `36`) stays bare losslessly.
+			// What MUST quote is anything the cell reader dispatches away
+			// from the bare-token path or that derails the row re-parse:
+			//   • a NON-string column (#413: bare coerces per column type),
+			//   • the literal `null` (the null cell in ANY column),
+			//   • whitespace (the cell separator) and `]` (the row closer),
+			//   • a leading collection opener `[` / `{` / `(`
+			//     (read_table_cell dispatches array / map / sequence
+			//     literals on the first byte — `{a:b}` flipped string→map),
+			//   • any quote char, either kind (`"q"` re-read as `q` — the
+			//     same both-quote rule cx_collection_string carries).
+			string_col := col_type == '' || col_type == 'string' || col_type == 's'
+			if v.len == 0 || !string_col || v == 'null'
+				|| v.contains(' ') || v.contains('\t')
+				|| v.contains('\n') || v.contains('\r')
+				|| v.contains("'") || v.contains('"')
+				|| v.contains(']')
+				|| v.starts_with('[') || v.starts_with('{') || v.starts_with('(') {
 				cx_choose_quote(v)
 			} else {
 				v
@@ -484,35 +613,8 @@ fn cx_build_meta(e Element) string {
 	if id := e.id()       { s += ' #${id}' }
 	if dt := e.data_type() { s += '::${dt}' }
 	for a in e.attrs {
-		// v3.5: BracketBody attribute values round-trip as
-		// `name=[body]`. The body is emitted inline as a body sequence.
-		// Multi-line-text symmetry: single-item body whose
-		// node is RawTextNode or BlockContentNode emits as the direct
-		// form `name=[# ... #]` / `name=[| ... |]` — dropping the
-		// redundant outer BracketBody wrap. Parses back to the same AST.
-		if body_items := a.body() {
-			if body_items.len == 1 {
-				it := body_items[0]
-				if it is RawTextNode {
-					s += ' ${a.name}=[#${(it as RawTextNode).value}#]'
-					continue
-				}
-				if it is BlockContentNode {
-					block := it as BlockContentNode
-					mut inner := []string{}
-					for sub in block.items {
-						if sub is TextNode {
-							inner << (sub as TextNode).value
-						}
-					}
-					s += ' ${a.name}=[|${inner.join('')}|]'
-					continue
-				}
-			}
-			body_str := cx_build_inline_body(body_items, true, false)
-			s += ' ${a.name}=[${body_str}]'
-			continue
-		}
+		// Attributes are strictly scalar (D2 / #396 ruling 1b) — the v3.5
+		// BracketBody round-trip branch is gone with the body channel.
 		s += ' ${cx_attr_scalar(a)}'
 	}
 	return s
@@ -582,8 +684,8 @@ fn cx_build_inline_body(items []Node, compact bool, parent_scalar_typed bool) st
 	return parts.join(' ')
 }
 
-fn cx_quote_text_if_needed(s string) string {
-	needs_quote := s.starts_with(' ') || s.ends_with(' ')
+fn cx_text_needs_quote(s string) bool {
+	return s.starts_with(' ') || s.ends_with(' ')
 		|| s.contains('  ') || s.contains('\n') || s.contains('\t')
 		|| s.contains('[') || s.contains(']') || s.contains('&')
 		|| s.contains('\\')
@@ -592,8 +694,30 @@ fn cx_quote_text_if_needed(s string) string {
 		|| cx_body_leading_sigil(s)       // `+tls` / `-debug` / `*a` / `@r` …
 		|| cx_text_has_boundary_quote(s)
 		|| cx_would_autotype(s)
-	if !needs_quote { return s }
+}
+
+fn cx_quote_text_if_needed(s string) string {
+	if !cx_text_needs_quote(s) { return s }
 	return cx_choose_quote(s)
+}
+
+// cx_collection_string renders a STRING payload in map-value / sequence-item
+// position (#473). Beyond the element-body rule (cx_text_needs_quote — which
+// carries the would-autotype protection: number / float / bool / null / atom /
+// date / datetime / duration / period / bigint / hex shaped strings quote so
+// the text lane re-imports them as strings), a collection item must also
+// quote when the bare image would derail the COLLECTION re-parse: any quote
+// char (a mid-token `'` is safe bare prose in element-body position — core
+// 035 — but opens quoted text in `{k: it's}`), or a closer that ends the
+// collection early (`}` / `)`). Applied to BOTH TextNode and string-
+// ScalarNode payloads so a CX-authored value and the same value imported
+// from JSON/YAML canonicalize identically (the idempotency fixpoint).
+fn cx_collection_string(s string) string {
+	if cx_text_needs_quote(s) || s.contains("'") || s.contains('"')
+		|| s.contains('}') || s.contains(')') {
+		return cx_choose_quote(s)
+	}
+	return s
 }
 
 // cx_body_leading_sigil reports whether a bare-emitted body text would be
@@ -733,14 +857,39 @@ pub fn cx_attr_scalar(a Attribute) string {
 
 pub fn cx_would_autotype(s string) bool {
 	if s.contains(' ') { return false }
-	if s.starts_with('0x') || s.starts_with('0X') { return true }
+	if s.starts_with('0x') || s.starts_with('0X')
+		|| s.starts_with('-0x') || s.starts_with('-0X') { return true }
 	if s == 'true' || s == 'false' || s == 'null' { return true }
 	if _ := s.parse_int(10, 64) { return true }
+	// #473: align with try_autotype's full shape set — a bare image that
+	// re-parses as ANY typed scalar must count, or a string payload with
+	// that shape silently type-flips through the CX text lane.
+	//   • over-i64 decimal ints auto-promote to bigint ([L20]/D-H) and
+	//     underscore-grouped numerics type after strip_underscores. (The
+	//     leading-zero `007` class stays covered by parse_int above:
+	//     over-reporting quotes a token that would stay text — the safe
+	//     direction, and the long-standing surface.)
+	if cleaned := strip_underscores(s) {
+		if is_v34_decimal_int(cleaned) { return true }
+		if cleaned != s && (cleaned.contains('.') || cleaned.contains('e') || cleaned.contains('E')) {
+			if has_ascii_digit(cleaned) {
+				if _ := strconv.atof64(cleaned) { return true }
+			}
+		}
+	}
 	if s.contains('.') || s.contains('e') || s.contains('E') {
 		if _ := strconv.atof64(s) { return true }
 	}
 	if is_datetime(s) { return true }
 	if is_date(s) { return true }
+	//   • duration / period spans ([L25]/[L26]): `1h30m`, `100ms`, `3mo`.
+	if _ := temporal_span_kind(s) { return true }
+	//   • atom literals ([L40]): `:click`. The reserved `:true`/`:false`/
+	//     `:null` are rejected by the auto-typer and re-parse as text.
+	if s.len >= 2 && s[0] == `:` && is_atom_pattern_name(s[1..]) {
+		name := s[1..]
+		if name != 'true' && name != 'false' && name != 'null' { return true }
+	}
 	return false
 }
 
@@ -769,7 +918,7 @@ fn cx_quote_attr_if_needed(s string) string {
 	// strings (`:true` / `:false` / `:null`) follow the same rule — the
 	// auto-typer rejects them as atoms, but the surface text still
 	// looks atom-shaped and must be quoted.
-	if s.len > 1 && s[0] == `:` && is_atom_name(s[1..]) {
+	if s.len > 1 && s[0] == `:` && is_atom_pattern_name(s[1..]) {
 		return "'${s}'"
 	}
 	return s
@@ -891,11 +1040,6 @@ fn cx_emit_eval_directive(n EvalDirectiveNode, depth int, compact bool, mut out 
 	ind := cx_ind(depth, compact)
 	mut s := '${ind}[?${n.name}'
 	for a in n.attrs {
-		if body_items := a.body() {
-			body_str := cx_build_inline_body(body_items, true, false)
-			s += ' ${a.name}=[${body_str}]'
-			continue
-		}
 		val_str := a.str_value()
 		if val_str.len == 0 {
 			s += ' ${a.name}'

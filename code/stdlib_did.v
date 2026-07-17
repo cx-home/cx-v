@@ -49,16 +49,39 @@ fn did_split(s string) ?DidParts {
 	}
 }
 
-// did_key_bytes recovers the 32-byte Ed25519 public key from a did:key.
+// did_self_desc_mb returns the `z<base58btc>` multibase key identifier for a
+// SELF-DESCRIBING DID — did:key (id = `z…`) or did:peer numalgo-0 (id = `0z…`,
+// xap_identity_model §1: the same multicodec/multibase encoding as did:key with
+// a `0` numalgo prefix; it is resolved by the SAME offline synthesis and
+// differs only in its usage contract — a pairwise DID never published). Errors
+// for methods that need the network (did:web).
+fn did_self_desc_mb(parts DidParts) !string {
+	match parts.method {
+		'key' {
+			if !parts.id.starts_with('z') {
+				return error(did_err_malformed)
+			}
+			return parts.id
+		}
+		'peer' {
+			// v1 supports numalgo-0 only: `did:peer:0z…`.
+			if !parts.id.starts_with('0z') {
+				return error(did_err_method_unsup)
+			}
+			return parts.id[1..] // strip the '0' numalgo prefix → `z…`
+		}
+		else {
+			return error(did_err_not_self_desc)
+		}
+	}
+}
+
+// did_key_bytes recovers the 32-byte Ed25519 public key from a self-describing
+// DID (did:key or did:peer:0).
 fn did_key_bytes(s string) !([]u8) {
 	parts := did_split(s) or { return error(did_err_malformed) }
-	if parts.method != 'key' {
-		return error(did_err_not_self_desc)
-	}
-	if !parts.id.starts_with('z') {
-		return error(did_err_malformed) // multibase base58btc prefix
-	}
-	decoded := base58.decode_bytes(parts.id[1..].bytes()) or { return error(did_err_malformed) }
+	mb := did_self_desc_mb(parts)!
+	decoded := base58.decode_bytes(mb[1..].bytes()) or { return error(did_err_malformed) }
 	if decoded.len != 34 || decoded[0] != did_ed25519_multicodec[0]
 		|| decoded[1] != did_ed25519_multicodec[1] {
 		return error(did_err_key_unsup)
@@ -140,6 +163,22 @@ fn did_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			mb := 'z' + base58.encode_bytes(prefixed).bytestr()
 			return crypto_string_node('did:key:' + mb)
 		}
+		'did-peer-create' {
+			// did:peer numalgo-0 (§1): same ed25519 multibase as did:key, with a
+			// `0` numalgo prefix. Pairwise identity — never published.
+			if args.len != 1 {
+				return none
+			}
+			pubkey := arg_bytes(args[0]) or { return none }
+			if pubkey.len != 32 {
+				return mk_err(did_err_key_unsup, 'did/peer-create: Ed25519 public key must be 32 bytes, got ${pubkey.len}')
+			}
+			mut prefixed := []u8{cap: 34}
+			prefixed << did_ed25519_multicodec
+			prefixed << pubkey
+			mb := 'z' + base58.encode_bytes(prefixed).bytestr()
+			return crypto_string_node('did:peer:0' + mb)
+		}
 		'did-parse' {
 			if args.len != 1 {
 				return none
@@ -182,12 +221,12 @@ fn did_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			parts := did_split(s) or {
 				return mk_err(did_err_malformed, 'did/document: not a valid DID: ${s}')
 			}
-			if parts.method != 'key' {
-				return mk_err(did_err_not_self_desc, 'did/document: ${parts.method} is not self-describing — use resolve')
+			mb := did_self_desc_mb(parts) or {
+				return mk_err(err.msg(), 'did/document: ${parts.method} is not self-describing — use resolve')
 			}
 			// validate the key decodes before synthesizing
 			did_key_bytes(s) or { return mk_err(err.msg(), 'did/document: ${err.msg()}') }
-			return did_key_document(s, parts.id)
+			return did_key_document(s, mb)
 		}
 		'did-verify-control' {
 			if args.len != 3 {
@@ -216,9 +255,12 @@ fn did_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 				return mk_err(did_err_malformed, 'did/resolve: not a valid DID: ${s}')
 			}
 			match parts.method {
-				'key' {
+				'key', 'peer' {
+					mb := did_self_desc_mb(parts) or {
+						return mk_err(err.msg(), 'did/resolve: ${err.msg()}')
+					}
 					did_key_bytes(s) or { return mk_err(err.msg(), 'did/resolve: ${err.msg()}') }
-					return did_key_document(s, parts.id)
+					return did_key_document(s, mb)
 				}
 				'web' {
 					return did_web_resolve(s, parts.id)

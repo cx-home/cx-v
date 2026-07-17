@@ -356,7 +356,7 @@
  [case id=013-cx-type-array level=extended
   [tags xml scalar cx:type array]
   [in-xml [#
-<tags cx:type="string[]"><item>admin</item><item>user</item></tags>
+<tags cx:type="string[]"><cx:item>admin</cx:item><cx:item>user</cx:item></tags>
 #]]
   [out-ast [#
 {
@@ -375,7 +375,7 @@
 }
 #]]
   [out-xml [#
-<tags cx:type="string[]"><item>admin</item><item>user</item></tags>
+<tags cx:type="string[]"><cx:item>admin</cx:item><cx:item>user</cx:item></tags>
 #]]
   [out-cx [#
 [tags::string[] admin user]
@@ -635,6 +635,176 @@
   [out-cx [#
 [*foo]
 [p bar]
+#]]
+ ]
+
+ [; conversions.md §2.1 collection-carrier import — the exact inverse of the
+    emit mapping (#392): cx:arr/cx:item decodes to an Array, cx:map/cx:entry
+    to a Map (cx:key-type restores non-string keys), cx:seq/cx:item to a
+    Sequence. Before this the carriers imported as LITERAL elements named
+    cx:arr / cx:item, so the documented round-trip was broken. ]
+
+ [case id=021-cx-arr-carrier-imports-as-array level=core
+  [tags xml import collection-carrier array issue-392]
+  [in-xml [#
+<tags><cx:arr><cx:item>web</cx:item><cx:item>api</cx:item></cx:arr></tags>
+#]]
+  [out-cx [#
+[tags ['web', 'api']]
+#]]
+ ]
+
+ [case id=022-cx-arr-item-values-autotype level=core
+  [tags xml import collection-carrier array autotype issue-392]
+  [in-xml [#
+<xs><cx:arr><cx:item>1</cx:item><cx:item>2</cx:item><cx:item>3</cx:item></cx:arr></xs>
+#]]
+  [out-cx [#
+[xs [1, 2, 3]]
+#]]
+ ]
+
+ [case id=023-cx-map-carrier-imports-as-map level=core
+  [tags xml import collection-carrier map issue-392]
+  [in-xml [#
+<m><cx:map><cx:entry cx:key="a">1</cx:entry><cx:entry cx:key="b">x</cx:entry></cx:map></m>
+#]]
+  [out-cx [#
+[m {a: 1, b: x}]
+#]]
+ ]
+
+ [case id=024-cx-arr-round-trip-emit-import level=core
+  [tags xml round-trip collection-carrier issue-392]
+  [in-cx [#
+[tags ['web', 'api']]
+#]]
+  [out-xml [#
+<tags><cx:arr><cx:item>web</cx:item><cx:item>api</cx:item></cx:arr></tags>
+#]]
+  [out-cx [#
+[tags ['web', 'api']]
+#]]
+ ]
+
+ [; conversions.md §2.1 [table] block XML image (#413): a table-bearing
+    element emits its declared columns in the reserved `cx:cols` sidecar
+    attribute and each row as a reserved `<cx:row>` of `<cx:cell>` children.
+    Before this the XML emitter dropped the TableData payload entirely
+    (the pooled `table` field is not in `items`), so CX→XML→CX lost every
+    row — even under --lossless. ]
+
+ [case id=025-table-block-emits-rows level=core
+  [tags xml table emit cx:row cx:cell issue-413]
+  [in-cx [#
+[users [table[name::string age::int active::bool]]
+  alice 30 true
+  bob 25 false
+]
+#]]
+  [out-xml [#
+<users cx:type="table" cx:cols="name::string age::int active::bool">
+  <cx:row><cx:cell>alice</cx:cell><cx:cell>30</cx:cell><cx:cell>true</cx:cell></cx:row>
+  <cx:row><cx:cell>bob</cx:cell><cx:cell>25</cx:cell><cx:cell>false</cx:cell></cx:row>
+</users>
+#]]
+  [out-cx [#
+[users [table[name::string age::int active::bool]]
+  alice 30 true
+  bob 25 false
+]
+#]]
+ ]
+
+ [case id=026-table-xml-imports-as-table level=core
+  [tags xml table import cx:row cx:cell issue-413]
+  [in-xml [#
+<users cx:type="table" cx:cols="name::string age::int active::bool">
+  <cx:row><cx:cell>alice</cx:cell><cx:cell>30</cx:cell><cx:cell>true</cx:cell></cx:row>
+  <cx:row><cx:cell>bob</cx:cell><cx:cell>25</cx:cell><cx:cell>false</cx:cell></cx:row>
+</users>
+#]]
+  [out-cx [#
+[users [table[name::string age::int active::bool]]
+  alice 30 true
+  bob 25 false
+]
+#]]
+ ]
+
+ [case id=027-table-quoted-null-empty-cells level=core
+  [tags xml table round-trip null empty-string issue-413]
+  [in-cx [#
+[t [table[name::string score::float ok::bool note::string]]
+  'Ada Lovelace' 99.5 true ''
+  bob 12.5 false null
+]
+#]]
+  [out-xml [#
+<t cx:type="table" cx:cols="name::string score::float ok::bool note::string">
+  <cx:row><cx:cell>Ada Lovelace</cx:cell><cx:cell>99.5</cx:cell><cx:cell>true</cx:cell><cx:cell/></cx:row>
+  <cx:row><cx:cell>bob</cx:cell><cx:cell>12.5</cx:cell><cx:cell>false</cx:cell><cx:cell><cx:null/></cx:cell></cx:row>
+</t>
+#]]
+  [out-cx [#
+[t [table[name::string score::float ok::bool note::string]]
+  'Ada Lovelace' 99.5 true ''
+  bob 12.5 false null
+]
+#]]
+ ]
+
+ [case id=028-table-collection-cells level=core
+  [tags xml table round-trip collection-cells issue-413]
+  [in-cx [#
+[t [table[name tags]]
+  a ['x', 'y']
+  b {k: 1}
+]
+#]]
+  [out-xml [#
+<t cx:type="table" cx:cols="name tags">
+  <cx:row><cx:cell>a</cx:cell><cx:cell><cx:arr><cx:item>x</cx:item><cx:item>y</cx:item></cx:arr></cx:cell></cx:row>
+  <cx:row><cx:cell>b</cx:cell><cx:cell><cx:map><cx:entry cx:key="k">1</cx:entry></cx:map></cx:cell></cx:row>
+</t>
+#]]
+  [out-cx [#
+[t [table[name tags]]
+  a ['x', 'y']
+  b {k: 1}
+]
+#]]
+ ]
+
+ [case id=029-table-header-only level=core
+  [tags xml table zero-rows issue-413]
+  [in-cx [#
+[empty [table[a::int b::string]]]
+#]]
+  [out-xml [#
+<empty cx:type="table" cx:cols="a::int b::string"/>
+#]]
+  [out-cx [#
+[empty [table[a::int b::string]]]
+#]]
+ ]
+
+ [case id=030-table-string-cell-in-typed-column level=core
+  [tags xml table cx:string carrier issue-413]
+  [in-cx [#
+[t [table[n::int]]
+  '12'
+]
+#]]
+  [out-xml [#
+<t cx:type="table" cx:cols="n::int">
+  <cx:row><cx:cell><cx:string>12</cx:string></cx:cell></cx:row>
+</t>
+#]]
+  [out-cx [#
+[t [table[n::int]]
+  '12'
+]
 #]]
  ]
 ]

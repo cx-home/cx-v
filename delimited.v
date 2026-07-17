@@ -161,9 +161,9 @@ pub fn emit_delimited(doc Document, opts EmitOptions) !string {
 				return error('emit_delimited: mixed shape — element <${r.name}> contains both repeated <${first_name}> and singleton <${c.name}>; not supported in v0')
 			}
 		}
-		return emit_repeated_row(child_elems, opts)
+		return emit_repeated_row(child_elems, r.name, opts)
 	}
-	return emit_dotted_path(child_elems, opts)
+	return emit_dotted_path(child_elems, r.name, opts)
 }
 
 fn emit_table_delimited(td TableData, opts EmitOptions) string {
@@ -193,7 +193,7 @@ fn emit_table_delimited(td TableData, opts EmitOptions) string {
 	return lines.join(opts.line_ending) + opts.line_ending
 }
 
-fn emit_repeated_row(siblings []Element, opts EmitOptions) string {
+fn emit_repeated_row(siblings []Element, root_name string, opts EmitOptions) !string {
 	// Columns: first-occurrence order across all siblings.
 	mut cols := []string{}
 	mut col_seen := map[string]bool{}
@@ -204,6 +204,12 @@ fn emit_repeated_row(siblings []Element, opts EmitOptions) string {
 				cols << a.name
 			}
 		}
+	}
+	// #416: zero columns means the document does not flatten to a tabular
+	// shape — emitting a blank header + blank rows was silent data loss
+	// (and the blank output then failed reimport with "empty input").
+	if cols.len == 0 {
+		return error('emit_delimited: element <${root_name}> does not flatten to a tabular shape — its repeated <${siblings[0].name}> children carry no attributes; delimited emit needs a [table[...]] block, repeated attribute-bearing children, or leaf attributes (conversions.md §8.1)')
 	}
 	mut lines := []string{}
 	mut header_cells := []string{}
@@ -229,7 +235,7 @@ fn emit_repeated_row(siblings []Element, opts EmitOptions) string {
 	return lines.join(opts.line_ending) + opts.line_ending
 }
 
-fn emit_dotted_path(children []Element, opts EmitOptions) string {
+fn emit_dotted_path(children []Element, root_name string, opts EmitOptions) !string {
 	// Walk each child recursively; emit a column per leaf attribute
 	// at path `<child>.<...>.<attr>` (the root element name is not
 	// in the path D2 example).
@@ -237,6 +243,13 @@ fn emit_dotted_path(children []Element, opts EmitOptions) string {
 	mut vals := []string{}
 	for c in children {
 		walk_dotted(c, c.name, mut cols, mut vals)
+	}
+	// #416: no leaf attributes anywhere means the flattening found
+	// nothing tabular — before this the emitter produced a blank header
+	// line + blank row (rc=0), which then failed reimport with
+	// "parse_delimited: empty input".
+	if cols.len == 0 {
+		return error('emit_delimited: element <${root_name}> does not flatten to a tabular shape — no leaf attributes found under its children; delimited emit needs a [table[...]] block, repeated attribute-bearing children, or leaf attributes (conversions.md §8.1)')
 	}
 	mut lines := []string{}
 	mut header_cells := []string{}

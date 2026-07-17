@@ -10,6 +10,14 @@
 #   - Numeric underscores in typed-int cells
 #   - CX → CX lossless round-trip
 #   - Empty :table (header only, no rows)
+#   - ElementMeta on table-block elements (#478): attrs / anchor / id
+#     round-trip; explicit `::T` + [table[…]] conflict rejects loudly
+#   - Nested composition (#484): table-bearing elements nest as ordinary
+#     children at any depth/position; TABLE_OPEN is the GLUED `[table[`
+#     token only (spaced `[table [` = ordinary element); a misplaced
+#     glued opener rejects loudly
+#   - Cell string quoting (#485): shared quote-when-would-re-read-
+#     differently rule; untyped columns are string columns ([29b])
 #
 # Verification is via the conformance_run.v out_cx section: parse the
 # input CX, re-emit through emit_cx, compare against the expected
@@ -50,14 +58,17 @@
   ]
 }
 #]]
+  [; #441 re-bless: keys/values containing `.`/`e` were over-quoted by the
+    emitter's swallowed atof64 error; idiomatic YAML quotes only scalars that
+    would re-read as another type. ]
   [out-yaml [#
-"users":
-  - "name": "alice"
-    "age": 30
-    "active": true
-  - "name": bob
-    "age": 25
-    "active": false
+users:
+  - name: alice
+    age: 30
+    active: true
+  - name: bob
+    age: 25
+    active: false
 #]]
  ]
 
@@ -282,6 +293,553 @@
   tags ['admin', 'user']
   meta {k: v}
 ]
+#]]
+ ]
+
+ [case id=tab-016-ast-json-table-image level=core
+  [tags table ast-json projection issue-443]
+  [doc [#
+# 443: the AST-JSON projection carries the pooled TableData payload as a
+# "table" object — cols (name + dataType, omitted for undeclared/string-
+# default columns) and rows (arrays of JSON-native scalar cells). The
+# redundant empty "items" is suppressed when the table payload is present.
+#]]
+  [in-cx [#
+[users [table[name::string age::int active::bool score::float note]]
+  alice 30 true 1.5 'has |pipe|'
+  bob 25 false 2.0 null
+]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "users",
+      "dataType": "table",
+      "table": {
+        "cols": [
+          {"name": "name", "dataType": "string"},
+          {"name": "age", "dataType": "int"},
+          {"name": "active", "dataType": "bool"},
+          {"name": "score", "dataType": "float"},
+          {"name": "note"}
+        ],
+        "rows": [
+          ["alice", 30, true, 1.5, "has |pipe|"],
+          ["bob", 25, false, 2.0, null]
+        ]
+      }
+    }
+  ]
+}
+#]]
+ ]
+
+ [case id=tab-017-ast-json-collection-cells level=core
+  [tags table ast-json projection collection-literal issue-443]
+  [doc [#
+# 443: collection cells (array / map / sequence) use the standard AST-JSON
+# node encodings inside the row array — a cell is a JSON object exactly
+# when it is a collection, so scalar and collection cells stay unambiguous.
+#]]
+  [in-cx [#
+[t [table[name value]]
+  tags [admin, user]
+  meta {role: admin}
+  ports (80, 443)
+]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "t",
+      "dataType": "table",
+      "table": {
+        "cols": [{"name": "name"}, {"name": "value"}],
+        "rows": [
+          ["tags", {"type": "Array", "items": [
+            {"type": "Text", "value": "admin"},
+            {"type": "Text", "value": "user"}]}],
+          ["meta", {"type": "Map", "entries": [
+            {"key": "role", "keyType": "string", "value":
+              {"type": "Text", "value": "admin"}}]}],
+          ["ports", {"type": "Sequence", "items": [
+            {"type": "Scalar", "dataType": "int", "value": 80},
+            {"type": "Scalar", "dataType": "int", "value": 443}]}]
+        ]
+      }
+    }
+  ]
+}
+#]]
+ ]
+
+ [case id=tab-018-ast-json-header-only level=core
+  [tags table ast-json projection header-only issue-443]
+  [in-cx [#
+[t [table[a::int b]]
+]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "t",
+      "dataType": "table",
+      "table": {
+        "cols": [{"name": "a", "dataType": "int"}, {"name": "b"}],
+        "rows": []
+      }
+    }
+  ]
+}
+#]]
+ ]
+
+ [case id=tab-019-ast-bin-typed-untyped-roundtrip level=core
+  [tags table ast-bin wire issue-464]
+  [doc [#
+# 464: the ast_bin wire carries the pooled TableData payload — the v9
+# Element table record (tag 0x17, ast-bin.md §4.8). emit_ast_bin →
+# bin_to_doc is the identity on table-bearing docs (canonical CX
+# compare). Typed + untyped (string-default) columns.
+#]]
+  [in-cx [#
+[users [table[name age::int active::bool score::float note]]
+  alice 30 true 1.5 admin
+  bob 25 false 2.0 user
+]
+#]]
+  [out-cx [#
+[users [table[name age::int active::bool score::float note]]
+  alice 30 true 1.5 admin
+  bob 25 false 2.0 user
+]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-020-ast-bin-quoted-null-cells-roundtrip level=core
+  [tags table ast-bin wire cells quoted null issue-464]
+  [in-cx [#
+[users [table[name::string note]]
+  'alice jones' null
+  bob ''
+]
+#]]
+  [out-cx [#
+[users [table[name::string note]]
+  'alice jones' null
+  bob ''
+]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-021-ast-bin-header-only-roundtrip level=core
+  [tags table ast-bin wire edge empty issue-464]
+  [in-cx [#
+[t [table[a::int b]]]
+#]]
+  [out-cx [#
+[t [table[a::int b]]]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-022-ast-bin-collection-cells-roundtrip level=core
+  [tags table ast-bin wire cells collection-literal issue-464]
+  [doc [#
+# 464: collection cells ride the existing 0x0F/0x10/0x11 node
+# encodings inside the row record — same reuse as the AST-JSON lane's
+# node-object cells (#443).
+#]]
+  [in-cx [#
+[t [table[name value]]
+  tags [admin, user]
+  meta {role: admin, age: 30}
+  ports (80, 443)
+]
+#]]
+  [out-cx [#
+[t [table[name value]]
+  tags ['admin', 'user']
+  meta {role: admin, age: 30}
+  ports (80, 443)
+]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-023-attrs-roundtrip level=core
+  [tags table attrs elementmeta issue-478]
+  [doc [#
+# 478: attributes on a [table[…]]-block element survive parse and every
+# lossless lane. Grammar [29] puts the TableBlock in ElementMeta position
+# in place of TypeAnnotation [26], so the OTHER ElementMeta items —
+# attributes included — coexist with the table clause. The parser
+# previously collected the attrs on the element head and then silently
+# dropped them when it recognized the `[table[` opener.
+#]]
+  [in-cx [#
+[users region=west [table[name age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [out-cx [#
+[users region=west [table[name age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "elements": [
+    {
+      "type": "Element",
+      "name": "users",
+      "dataType": "table",
+      "attrs": [{"name": "region", "value": "west"}],
+      "table": {
+        "cols": [{"name": "name"}, {"name": "age", "dataType": "int"}],
+        "rows": [
+          ["alice", 30],
+          ["bob", 25]
+        ]
+      }
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<users cx:type="table" region="west" cx:cols="name age::int">
+  <cx:row><cx:cell>alice</cx:cell><cx:cell>30</cx:cell></cx:row>
+  <cx:row><cx:cell>bob</cx:cell><cx:cell>25</cx:cell></cx:row>
+</users>
+#]]
+  [out-json [#
+{
+  "users": {
+    "region": "west",
+    "_": [
+      {
+        "name": "alice",
+        "age": 30
+      },
+      {
+        "name": "bob",
+        "age": 25
+      }
+    ]
+  }
+}
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-024-attrs-trailing-sibling level=core
+  [tags table attrs nested sibling issue-478]
+  [doc [#
+# 478: an attributed table element nested under a parent, with a
+# trailing sibling AFTER it — the table parse must consume exactly its
+# own rows and leave the sibling (and its attrs) intact.
+#]]
+  [in-cx [#
+[lib
+  [books source=main [table[title::string year::int]]
+    'The Hobbit' 1937
+    'Dune' 1965
+  ]
+  [shelf id=sci-fi tags='hugo,nebula']
+]
+#]]
+  [out-cx [#
+[lib
+  [books source=main [table[title::string year::int]]
+    'The Hobbit' 1937
+    Dune 1965
+  ]
+  [shelf id=sci-fi tags=hugo,nebula]
+]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-025-anchor-id-meta-roundtrip level=core
+  [tags table elementmeta anchor id issue-478]
+  [doc [#
+# 478 (meta family): AnchorDef and IdDecl are ElementMeta like
+# attributes — grammar [51] — and coexist with the table clause. The
+# parser already attached them; the CX emitter's table lane dropped
+# every head meta on re-emit (it rendered only the element name).
+#]]
+  [in-cx [#
+[users &u #cat region=west [table[name age::int]]
+  alice 30
+]
+#]]
+  [out-cx [#
+[users &u #cat region=west [table[name age::int]]
+  alice 30
+]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-026-type-annotation-conflict level=core
+  [tags table elementmeta type-annotation error issue-478]
+  [doc [#
+# 478 (fail-closed): the TableBlock occupies the TypeAnnotation slot
+# (grammar [29]) — an explicit glued `::T` on a table-block element
+# would be silently overwritten by the implied `table` type, so the
+# parser rejects it loudly instead (no-silent-loss contract).
+#]]
+  [in-cx [#
+[users::int [table[a]]
+  x
+]
+#]]
+  [out-err [#
+explicit type annotation `::int` conflicts with the `[table[…]]` clause
+#]]
+ ]
+
+ [case id=tab-027-nested-one-deep level=core
+  [tags table nested composition issue-484]
+  [doc [#
+# 484: a table-bearing element nests inside another element as ORDINARY
+# composition — grammar [29]/[50]: the TableBlock is head meta of its
+# OWN element; nothing restricts the parent context. This is the issue's
+# exact repro shape. All emit lanes round-trip the nested shape.
+#]]
+  [in-cx [#
+[wrap [users [table[name age]] Ada 36]]
+#]]
+  [out-cx [#
+[wrap
+  [users [table[name age]]
+    Ada 36
+  ]
+]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"wrap","items":[{"type":"Element","name":"users","dataType":"table","table":{"cols":[{"name":"name"},{"name":"age"}],"rows":[["Ada","36"]]}}]}]}
+#]]
+  [out-xml [#
+<wrap>
+  <users cx:type="table" cx:cols="name age">
+    <cx:row><cx:cell>Ada</cx:cell><cx:cell>36</cx:cell></cx:row>
+  </users>
+</wrap>
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-028-nested-two-deep-typed level=core
+  [tags table nested composition typed issue-484]
+  [doc [#
+# 484: two levels of parent context over a typed-column table element —
+# the depth of nesting is immaterial to the table parse.
+#]]
+  [in-cx [#
+[a [b [users [table[name::string age::int]] Ada 36]]]
+#]]
+  [out-cx [#
+[a
+  [b
+    [users [table[name::string age::int]]
+      Ada 36
+    ]
+  ]
+]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"a","items":[{"type":"Element","name":"b","items":[{"type":"Element","name":"users","dataType":"table","table":{"cols":[{"name":"name","dataType":"string"},{"name":"age","dataType":"int"}],"rows":[["Ada",36]]}}]}]}]}
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-029-table-element-mid-siblings level=core
+  [tags table nested sibling issue-484]
+  [doc [#
+# 484: the table ELEMENT as a non-first sibling, with a trailing
+# sibling after it — the table parse consumes exactly its own rows and
+# both siblings survive intact.
+#]]
+  [in-cx [#
+[wrap [x 1] [users [table[name age]] Ada 36] [y 2]]
+#]]
+  [out-cx [#
+[wrap
+  [x 1]
+  [users [table[name age]]
+    Ada 36
+  ]
+  [y 2]
+]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"wrap","items":[{"type":"Element","name":"x","items":[{"type":"Scalar","dataType":"int","value":1}]},{"type":"Element","name":"users","dataType":"table","table":{"cols":[{"name":"name"},{"name":"age"}],"rows":[["Ada","36"]]}},{"type":"Element","name":"y","items":[{"type":"Scalar","dataType":"int","value":2}]}]}]}
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-030-element-named-table-composes level=core
+  [tags table composition reserved-name issue-484]
+  [doc [#
+# 484 (root cause): TABLE_OPEN is the single GLUED token `[table[`
+# (grammar.ebnf lexer note) — an ordinary element NAMED `table` with a
+# SPACE before its bracketed first child is plain composition, not a
+# TableBlock claim. The data reader's whitespace-tolerant opener check
+# hijacked this shape ("expected column name in :table header").
+#]]
+  [in-cx [#
+[furniture [table [legs 4]] [chair oak]]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"furniture","items":[{"type":"Element","name":"table","items":[{"type":"Element","name":"legs","items":[{"type":"Scalar","dataType":"int","value":4}]}]},{"type":"Element","name":"chair","items":[{"type":"Text","value":"oak"}]}]}]}
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-031-spaced-clause-is-composition level=core
+  [tags table composition reserved-name seam issue-484]
+  [doc [#
+# 484 (engine convergence): `[users [table [name age]] Ada 36]` with a
+# SPACE after `table` is NOT the tabular form — the clause opener is the
+# glued `[table[` token only. The program reading already read this as
+# ordinary composition; the data reading auto-promoted it to a table
+# (silent cross-engine divergence). Both engines now agree on the
+# composition reading.
+#]]
+  [in-cx [#
+[users [table [name age]] Ada 36]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"users","items":[{"type":"Element","name":"table","items":[{"type":"Element","name":"name","items":[{"type":"Text","value":"age"}]}]},{"type":"Text","value":" Ada 36"}]}]}
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-032-misplaced-opener-mid-body level=core
+  [tags table reserved-name error issue-484]
+  [doc [#
+# 484 (fail-closed): the reserved `[table[` opener is ElementMeta — it
+# closes a NAMED element's head (grammar [29]: "ElementMeta position").
+# In body position after content has begun it can belong to no element
+# head; it previously fell into the array-literal path and produced
+# silent Array/Sequence garbage. It now rejects loudly.
+#]]
+  [in-cx [#
+[wrap [x 1] [table[name age]] Ada 36]
+#]]
+  [out-err [#
+`[table[` clause-child outside ElementMeta position
+#]]
+ ]
+
+ [case id=tab-033-misplaced-opener-top-level level=core
+  [tags table reserved-name error issue-484]
+  [doc [#
+# 484 (fail-closed): an anonymous `[table[…] rows]` at document level
+# has no element head to close — grammar [50]'s tabular alternative
+# requires a Name. Previously silent Array/Sequence garbage; now loud.
+#]]
+  [in-cx [#
+[table[name age] Ada 36]
+#]]
+  [out-err [#
+`[table[` clause-child outside ElementMeta position
+#]]
+ ]
+
+ [case id=tab-034-untyped-duration-cell-stays-string level=core
+  [tags table cell quoting representability issue-485]
+  [doc [#
+# 485 item 1: an untyped column IS a string column (grammar [29b]
+# "untyped columns default to ::string"), so a duration-shaped string
+# cell's bare image re-reads as the SAME string value — bare is the
+# canonical spelling and the emit→reimport contract holds with no type
+# flip. (The quote-when-would-retype-differently rule shared with
+# cx_collection_string fires only when the re-read value would differ —
+# see tab-035 for the shapes that DO quote.)
+#]]
+  [in-cx [#
+[t [table[w]]
+  '1h30m'
+]
+#]]
+  [out-cx [#
+[t [table[w]]
+  1h30m
+]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"t","dataType":"table","table":{"cols":[{"name":"w"}],"rows":[["1h30m"]]}}]}
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=tab-035-collection-shaped-string-cells-quote level=core
+  [tags table cell quoting representability issue-485]
+  [doc [#
+# 485 item 1: string cells whose bare image would re-read as a
+# DIFFERENT value in cell position must quote — the cell reader
+# dispatches `{`/`(`/`[` to collection literals ({a:b} flipped
+# string→map), and a double-quoted-shaped image loses its quotes
+# ("q" re-read as q). Same rule as the #483 cx_collection_string home,
+# instantiated for the cell context.
+#]]
+  [in-cx [#
+[t [table[a b c]]
+  '{a:b}' '(x,y)' '"q"'
+]
+#]]
+  [out-cx [#
+[t [table[a b c]]
+  '{a:b}' '(x,y)' '"q"'
+]
+#]]
+  [out-ast [#
+{"type":"Document","elements":[{"type":"Element","name":"t","dataType":"table","table":{"cols":[{"name":"a"},{"name":"b"},{"name":"c"}],"rows":[["{a:b}","(x,y)","\"q\""]]}}]}
+#]]
+  [assert-ast-bin-roundtrip [#
+1
 #]]
  ]
 ]

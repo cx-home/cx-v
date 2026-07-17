@@ -206,6 +206,15 @@ fn net_lookup(id int) ?&NetHandle {
 	return reg.handles[id] or { return none }
 }
 
+// net_set_read_deadline_id arms a per-read-operation deadline (ms) on the handle
+// identified by `id` (the daemon's per-connection read timeout, #187). Each
+// subsequent read op applies it via net_arm_read_deadline, so a client that
+// trickles or stalls a body cannot hold a worker indefinitely. 0 clears it.
+pub fn net_set_read_deadline_id(id int, ms i64) {
+	mut h := net_lookup(id) or { return }
+	h.read_deadline_ms = if ms > 0 { ms } else { 0 }
+}
+
 // ── address model (§2.2) ────────────────────────────────────────────
 struct NetAddr {
 mut:
@@ -798,6 +807,15 @@ fn net_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 							h.conn.set_read_deadline(time.unix(0))
 							h.conn.set_read_timeout(net.tcp_default_read_timeout)
 						}
+						if h.udp != unsafe { nil } {
+							// Clearing must undo the per-op arming (timeout=0 +
+							// absolute deadline), else the next recv sees a stale
+							// past deadline and times out instantly. No-deadline
+							// datagram semantics = block until a datagram arrives
+							// (the bound-server default set at listen-udp).
+							h.udp.set_read_deadline(time.unix(0))
+							h.udp.set_read_timeout(net.infinite_timeout)
+						}
 					} else if ms := net_node_ms(v) {
 						// A zero / past relative deadline lapses immediately
 						// (net.md §3.7) — store a minimal positive budget so the
@@ -906,7 +924,7 @@ fn net_dial_impl(name string, args []cx.Node) cx.Node {
 		return net_dial_tcp_real(pa, opts)
 	}
 	if eff == 'udp' {
-		return net_dial_udp_real(pa)
+		return net_dial_udp_real(pa, opts)
 	}
 	if eff == 'dtls' {
 		return net_dial_dtls_real(pinned, a.host, a.port, opts, a)
@@ -1125,11 +1143,17 @@ fn net_listen_tls_real(a NetAddr, opts cx.Node) cx.Node {
 		return mk_err(net_err_tls_config, 'E_NET_TLS_CONFIG: listen-tls requires opts.tls.cert + opts.tls.key')
 	}
 	ca := net_opts_tls_str(opts, 'ca')
+	// `in-memory` (opts.tls.in-memory=true): cert/key/ca are PEM CONTENT, parsed in
+	// memory (mbedtls_x509_crt_parse) rather than as filesystem paths
+	// (mbedtls_x509_crt_parse_file). The store daemon uses this so an ${env:VAR}-
+	// injected key PEM never has to touch disk (#180/#199).
+	in_memory := net_opts_tls_str(opts, 'in-memory') == 'true'
 	cfg := mbedtls.SSLConnectConfig{
-		cert:     cert
-		cert_key: key
-		validate: ca != '' // require a client cert only under mTLS (a configured ca)
-		verify:   ca
+		cert:                   cert
+		cert_key:               key
+		validate:               ca != '' // require a client cert only under mTLS (a configured ca)
+		verify:                 ca
+		in_memory_verification: in_memory
 	}
 	saddr := '${a.host}:${a.port}'
 	listener := mbedtls.new_ssl_listener(saddr, cfg) or {
@@ -1216,19 +1240,23 @@ fn net_accept_real(mut h NetHandle) cx.Node {
 }
 
 // net_dial_udp_real connects a datagram socket (§3.5): send/recv go to the
-// pinned remote; no stream framing.
-fn net_dial_udp_real(a NetAddr) cx.Node {
+// pinned remote; no stream framing. The §3.2 `read-deadline` dial opt is
+// honored like TCP's (stored on the handle, armed per recv — see
+// net_arm_read_deadline; set-deadline can later update or clear it).
+fn net_dial_udp_real(a NetAddr, opts cx.Node) cx.Node {
 	raddr := net_join_host_port(a.host, a.port)
 	udp := net.dial_udp(raddr) or {
 		return mk_err(net_err_unreachable, 'E_NET: dial-udp ${raddr}: ${err.msg()}')
 	}
+	rd_ms := net_map_get_ms(opts, 'read-deadline') or { i64(0) }
 	mut h := &NetHandle{
-		kind:      'socket'
-		transport: 'udp'
-		state:     'open'
-		is_open:   true
-		local:     [a]
-		udp:       udp
+		kind:             'socket'
+		transport:        'udp'
+		state:            'open'
+		is_open:          true
+		local:            [a]
+		udp:              udp
+		read_deadline_ms: if rd_ms > 0 { rd_ms } else { 0 }
 	}
 	id := net_register(h)
 	return net_socket_element(id, h)
@@ -1266,8 +1294,12 @@ fn net_udp_recv(mut h NetHandle, n int) cx.Node {
 	if h.udp == unsafe { nil } {
 		return mk_err(net_err_arg_invalid, 'E_NET_ARG_INVALID: recv needs a connected datagram socket')
 	}
+	net_arm_read_deadline(mut h)
 	mut buf := []u8{len: n}
 	rd, _ := h.udp.read(mut buf) or {
+		if h.read_deadline_ms > 0 && net_err_is_timeout(err) {
+			return mk_err(net_err_timeout, 'E_NET_TIMEOUT: recv exceeded the ${h.read_deadline_ms}ms read deadline')
+		}
 		return mk_err(net_err_reset, 'E_NET: udp recv: ${err.msg()}')
 	}
 	return net_bytes(buf[..rd])
@@ -1316,8 +1348,12 @@ fn net_udp_recv_from(mut h NetHandle, n int) cx.Node {
 	if h.udp == unsafe { nil } {
 		return mk_err(net_err_arg_invalid, 'E_NET_ARG_INVALID: recv-from needs a datagram socket')
 	}
+	net_arm_read_deadline(mut h)
 	mut buf := []u8{len: n}
 	rd, addr := h.udp.read(mut buf) or {
+		if h.read_deadline_ms > 0 && net_err_is_timeout(err) {
+			return mk_err(net_err_timeout, 'E_NET_TIMEOUT: recv-from exceeded the ${h.read_deadline_ms}ms read deadline')
+		}
 		return mk_err(net_err_reset, 'E_NET: udp recv-from: ${err.msg()}')
 	}
 	fip := net_strip_port(addr.str())
@@ -1404,6 +1440,26 @@ fn net_listen_unix_real(path string) cx.Node {
 fn net_mut_handle(n cx.Node) ?&NetHandle {
 	id := net_handle_id(n) or { return none }
 	return net_lookup(id)
+}
+
+// net_rotate_listener_tls installs a new server identity (PEM CONTENT — the
+// store daemon's in-memory posture, #180/#199: an ${env:VAR}-injected key never
+// touches disk) on a live TLS listener (§2.6 config reload). New handshakes
+// present the new certificate; established sessions keep the identity they
+// negotiated (the mbedtls layer retains superseded generations until listener
+// shutdown). Fails without touching the running identity.
+fn net_rotate_listener_tls(id int, cert_pem string, key_pem string, ca_pem string) ! {
+	mut h := net_lookup(id) or { return error('no listener handle ${id}') }
+	if h.ssl_listener == unsafe { nil } {
+		return error('handle ${id} is not a TLS listener')
+	}
+	h.ssl_listener.rotate_certs(mbedtls.SSLConnectConfig{
+		cert:                   cert_pem
+		cert_key:               key_pem
+		validate:               ca_pem != ''
+		verify:                 ca_pem
+		in_memory_verification: true
+	}) or { return error('rotate listener ${id}: ${err.msg()}') }
 }
 
 // net_close_id closes the handle bound to `id` (idempotent, §3.7). Shared by
@@ -1552,21 +1608,28 @@ fn net_err_is_timeout(e IError) bool {
 }
 
 // net_arm_read_deadline applies the handle's configured read deadline (#56) to
-// the underlying TCP conn as an ABSOLUTE deadline for the read operation about
-// to run: `set_read_timeout(0)` makes V's wait_for_read honor the absolute
+// the underlying conn as an ABSOLUTE deadline for the read operation about to
+// run: `set_read_timeout(0)` makes V's wait_for_read honor the absolute
 // `read_deadline`, which we set to now + read_deadline_ms. Called at the start
 // of each read primitive so every operation gets a fresh budget. A no-op when
-// no deadline is configured (the conn keeps its transport default) or for a
-// non-TCP transport (TLS/UDP deadline support is a separate sub-layer).
+// no deadline is configured (the conn keeps its transport default). Covers TCP
+// streams AND datagram sockets (net.md §3.7 marks set-deadline ✅ for udp; the
+// udp half was a spec-compliance gap until the marine NMEA-ingest work needed
+// it — a silent gateway must surface CXER4507, not block recv forever). TLS
+// deadline support remains a separate sub-layer (mbedTLS owns that read path).
 fn net_arm_read_deadline(mut h NetHandle) {
 	if h.read_deadline_ms <= 0 {
 		return
 	}
-	if h.conn == unsafe { nil } {
+	if h.conn != unsafe { nil } {
+		h.conn.set_read_timeout(0)
+		h.conn.set_read_deadline(time.now().add(h.read_deadline_ms * time.millisecond))
 		return
 	}
-	h.conn.set_read_timeout(0)
-	h.conn.set_read_deadline(time.now().add(h.read_deadline_ms * time.millisecond))
+	if h.udp != unsafe { nil } {
+		h.udp.set_read_timeout(0)
+		h.udp.set_read_deadline(time.now().add(h.read_deadline_ms * time.millisecond))
+	}
 }
 
 // NetReadKind classifies a single transport read (net_h_read_step).

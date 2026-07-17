@@ -167,6 +167,9 @@ fn test_binding_with_mixed_path() {
 }
 
 // ── Calls ───────────────────────────────────────────────────────────────────
+//
+// Head-dispatch `[$name arg …]` is the ONLY call surface (code.md §6.3);
+// the paren-call form `name(args)` is RETIRED (#110) — a hard parse error.
 
 fn test_bare_ident_is_zero_arity_call() {
 	p := parse('count')
@@ -178,15 +181,25 @@ fn test_bare_ident_is_zero_arity_call() {
 }
 
 fn test_call_with_args() {
-	p := parse('upper(name, true)')
+	p := parse('[\$upper name true]')
 	body := p.body
 	if body is cx.ProgramCall {
 		assert body.name == 'upper' && body.args.len == 2
+		assert body.explicit_call
+	} else { assert false }
+}
+
+fn test_call_labeled_arg() {
+	p := parse('[\$fetch url="http://x" retries=3]')
+	body := p.body
+	if body is cx.ProgramCall {
+		assert body.name == 'fetch' && body.args.len == 2
+		assert body.arg_labels == ['url', 'retries']
 	} else { assert false }
 }
 
 fn test_call_fallible_postfix() {
-	p := parse('parse(x)?')
+	p := parse('[\$parse x]?')
 	body := p.body
 	if body is cx.ProgramCall {
 		assert body.fallible && !body.must_succeed
@@ -194,11 +207,106 @@ fn test_call_fallible_postfix() {
 }
 
 fn test_call_panic_postfix() {
-	p := parse('parse(x)!')
+	p := parse('[\$parse x]!')
 	body := p.body
 	if body is cx.ProgramCall {
 		assert body.must_succeed && !body.fallible
 	} else { assert false }
+}
+
+fn test_paren_call_is_retired() {
+	cx.parse_program('upper(name, true)') or {
+		assert err.msg().contains('retired'), 'expected retired paren-call error, got: ${err.msg()}'
+		return
+	}
+	assert false, 'paren-call `name(args)` must no longer parse'
+}
+
+fn test_dollar_paren_call_is_retired() {
+	cx.parse_program('\$f(x)') or {
+		assert err.msg().contains('retired'), 'expected retired paren-call error, got: ${err.msg()}'
+		return
+	}
+	assert false, 'paren-call `\$f(x)` must no longer parse'
+}
+
+// ── Set operators as expression heads (union / intersect / except) ──────────
+
+fn test_union_in_expression_position_parses() {
+	p := parse('[union (1, 2) (2, 3)]')
+	body := p.body
+	if body is cx.ProgramLiteral {
+		assert body.kind == .cx_element
+		assert body.name == 'union'
+		assert body.items.len == 2
+	} else { assert false, 'expected cx_element operator form for [union …]' }
+}
+
+fn test_union_evaluates_with_dedup_first_occurrence_order() {
+	got := code.eval_code('[doc]', '[union (1, 2) (2, 3)]', 'text') or {
+		assert false, 'union eval failed: ${err}'
+		return
+	}
+	assert got == '(1, 2, 3)', 'union: expected (1, 2, 3), got ${got}'
+}
+
+fn test_intersect_in_expression_position_evaluates() {
+	got := code.eval_code('[doc]', '[intersect (1, 2, 3) (2, 3, 4)]', 'text') or {
+		assert false, 'intersect eval failed: ${err}'
+		return
+	}
+	assert got == '(2, 3)', 'intersect: expected (2, 3), got ${got}'
+}
+
+fn test_except_in_expression_position_evaluates() {
+	got := code.eval_code('[doc]', '[except (1, 2, 3) (2)]', 'text') or {
+		assert false, 'except eval failed: ${err}'
+		return
+	}
+	assert got == '(1, 3)', 'except: expected (1, 3), got ${got}'
+}
+
+// ── Binding-path predicates (canonical post-#110 surface) ────────────────────
+
+fn test_binding_path_fused_call_predicate_parses() {
+	// `[$myfn $_]` — call-fused predicate body: the predicate's own
+	// brackets are the call form's brackets.
+	p := parse('\$u/item[\$myfn \$_]')
+	body := p.body
+	if body is cx.ProgramBinding {
+		assert body.name == 'u'
+		assert body.path.len == 1
+		assert body.path[0].predicates.len == 1
+	} else { assert false, 'expected ProgramBinding with predicated step' }
+}
+
+fn test_binding_path_directive_fused_predicate_parses() {
+	// `[?match $_ …]` — directive-fused predicate body.
+	p := parse('\$u/item[?match \$_ [case [x] true] [else false]]')
+	body := p.body
+	if body is cx.ProgramBinding {
+		assert body.path.len == 1
+		assert body.path[0].predicates.len == 1
+	} else { assert false, 'expected ProgramBinding with predicated step' }
+}
+
+fn test_binding_path_infix_predicate_is_retired() {
+	cx.parse_program('\$u/item[@id=1]') or {
+		assert err.msg().contains('retired'), 'expected retired infix-predicate error, got: ${err.msg()}'
+		return
+	}
+	assert false, 'infix `[@id=1]` binding-path predicate must no longer parse'
+}
+
+fn test_binding_path_bare_attr_operand_in_form_is_retired() {
+	// A bare `@name` OPERAND inside a form body is retired — the error
+	// must suggest the explicit `$_@name` context path.
+	cx.parse_program('\$u/item[= @id 1]') or {
+		assert err.msg().contains('retired'), 'expected retired bare-@ operand error, got: ${err.msg()}'
+		assert err.msg().contains('\$_@'), 'error should suggest \$_@name, got: ${err.msg()}'
+		return
+	}
+	assert false, 'bare `@name` operand must no longer parse'
 }
 
 // ── Patterns ────────────────────────────────────────────────────────────────
@@ -297,7 +405,7 @@ fn test_directive_unknown_name_errors() {
 }
 
 fn test_directive_with_only_labeled_slots() {
-	p := parse('[?retry max=3 delay=100ms body=fetch()]')
+	p := parse('[?retry max=3 delay=100ms body=[\$fetch]]')
 	body := p.body
 	if body is cx.ProgramDirective {
 		assert body.name == 'retry'
@@ -312,7 +420,7 @@ fn test_directive_with_only_labeled_slots() {
 }
 
 fn test_directive_with_positional_slot() {
-	p := parse('[?timeout 100ms body=work()]')
+	p := parse('[?timeout 100ms body=[\$work]]')
 	body := p.body
 	if body is cx.ProgramDirective {
 		assert body.name == 'timeout'
@@ -589,7 +697,7 @@ fn test_for_comp_bracket_source_still_works() {
 // ── Composite real-fixture shapes ───────────────────────────────────────────
 
 fn test_retry_with_resilience_shape() {
-	p := parse('[?retry max=3 backoff=exponential delay=100ms jitter=equal body=fetch()]')
+	p := parse('[?retry max=3 backoff=exponential delay=100ms jitter=equal body=[\$fetch]]')
 	body := p.body
 	if body is cx.ProgramDirective {
 		assert body.name == 'retry'
@@ -598,7 +706,7 @@ fn test_retry_with_resilience_shape() {
 }
 
 fn test_nested_directive_composition() {
-	p := parse('[?retry max=3 body=[?timeout 1s body=[?circuit-breaker threshold=0.5 window=60s reset=30s body=fetch()]]]')
+	p := parse('[?retry max=3 body=[?timeout 1s body=[?circuit-breaker threshold=0.5 window=60s reset=30s body=[\$fetch]]]]')
 	body := p.body
 	if body is cx.ProgramDirective {
 		assert body.name == 'retry'

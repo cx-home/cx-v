@@ -481,7 +481,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $p [> [$process:pid $h] 0]] [?let [= $w [$process:wait $h]] $p]]]
+[?let [= $h [$process:spawn ("echo", "x")]] [= $p [> [$process:pid $h] 0]] [= $w [$process:wait $h]] $p]
 #]]
   [out-text [#
 true
@@ -523,7 +523,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $w [$process:wait $h]] [$process:poll $h]]]
+[?let [= $h [$process:spawn ("echo", "x")]] [= $w [$process:wait $h]] [$process:poll $h]]
 #]]
   [out-text [#
 0
@@ -537,7 +537,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $w [$process:wait $h]] [$process:close $h]]]
+[?let [= $h [$process:spawn ("echo", "x")]] [= $w [$process:wait $h]] [$process:close $h]]
 #]]
   [out-text [#
 null
@@ -551,7 +551,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $si [$process:stdin $h]] [?let [= $w [$process:wait $h]] [$process:close $h]]]]
+[?let [= $h [$process:spawn ("echo", "x")]] [= $si [$process:stdin $h]] [= $w [$process:wait $h]] [$process:close $h]]
 #]]
   [out-text [#
 null
@@ -565,7 +565,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $so [$process:stdout $h]] [?let [= $w [$process:wait $h]] [$process:close $h]]]]
+[?let [= $h [$process:spawn ("echo", "x")]] [= $so [$process:stdout $h]] [= $w [$process:wait $h]] [$process:close $h]]
 #]]
   [out-text [#
 null
@@ -579,7 +579,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("echo", "x")]] [?let [= $se [$process:stderr $h]] [?let [= $w [$process:wait $h]] [$process:close $h]]]]
+[?let [= $h [$process:spawn ("echo", "x")]] [= $se [$process:stderr $h]] [= $w [$process:wait $h]] [$process:close $h]]
 #]]
   [out-text [#
 null
@@ -607,7 +607,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("sleep", "5")]] [?let [= $s [$process:send-signal $h :term]] [$process:wait $h]]]
+[?let [= $h [$process:spawn ("sleep", "5")]] [= $s [$process:send-signal $h :term]] [$process:wait $h]]
 #]]
   [out-text [#
 143
@@ -621,7 +621,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("sleep", "5")]] [?let [= $t [$process:terminate $h]] [$process:wait $h]]]
+[?let [= $h [$process:spawn ("sleep", "5")]] [= $t [$process:terminate $h]] [$process:wait $h]]
 #]]
   [out-text [#
 143
@@ -635,7 +635,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("sleep", "5")]] [?let [= $k [$process:kill $h]] [$process:wait $h]]]
+[?let [= $h [$process:spawn ("sleep", "5")]] [= $k [$process:kill $h]] [$process:wait $h]]
 #]]
   [out-text [#
 137
@@ -649,7 +649,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn ("sleep", "5")]] [?let [= $k [$process:kill-group $h :kill]] [>= [$process:wait $h] 0]]]
+[?let [= $h [$process:spawn ("sleep", "5")]] [= $k [$process:kill-group $h :kill]] [>= [$process:wait $h] 0]]
 #]]
   [out-text [#
 true
@@ -663,7 +663,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn-pty ("echo", "hi")]] [?let [= $p [> [$process:pid $h] 0]] [?let [= $w [$process:wait $h]] $p]]]
+[?let [= $h [$process:spawn-pty ("echo", "hi")]] [= $p [> [$process:pid $h] 0]] [= $w [$process:wait $h]] $p]
 #]]
   [out-text [#
 true
@@ -677,7 +677,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn-pty ("sleep", "0.3")]] [?let [= $ws [$process:window-size $h]] [?let [= $r $ws@rows] [?let [= $w [$process:wait $h]] $r]]]]
+[?let [= $h [$process:spawn-pty ("sleep", "0.3")]] [= $ws [$process:window-size $h]] [= $r $ws@rows] [= $w [$process:wait $h]] $r]
 #]]
   [out-text [#
 24
@@ -691,7 +691,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[?let [= $h [$process:spawn-pty ("sleep", "0.3")]] [?let [= $sw [$process:set-window-size $h 30 100]] [?let [= $pt [$process:pty $h]] [?let [= $w [$process:wait $h]] [$process:close $h]]]]]
+[?let [= $h [$process:spawn-pty ("sleep", "0.3")]] [= $sw [$process:set-window-size $h 30 100]] [= $pt [$process:pty $h]] [= $w [$process:wait $h]] [$process:close $h]]
 #]]
   [out-text [#
 null

@@ -235,7 +235,10 @@ true
 #]]
  ]
 
- # ENUM_MISMATCH: value not in enum= set (§2.3, §6).
+ # ENUM_MISMATCH: value not in the [enum …] member set (§2.3, §3.5, §6).
+ # Members are the body items of the [enum …] child element — attributes
+ # are scalar-only (code.md §6.4.1), so the retired enum=[…] attr form is
+ # gone (#466/#268 owner ruling).
  [case id=validate-012-shape-enum-mismatch level=core
   [tags validate validate-shape enum-mismatch violation]
   [in-cx [#
@@ -245,7 +248,7 @@ true
 [?lib 'cx-stdlib/validate']
 [?let [= $r [$validate:validate-shape
   [rec [color "purple"]]
-  [schema [field name="color" type="string" enum=["red", "green", "blue"]]]]]
+  [schema [field name="color" type="string" [enum "red" "green" "blue"]]]]]
   $r/violation/@code]
 #]]
   [out-text [#
@@ -253,7 +256,7 @@ true
 #]]
  ]
 
- # enum= member is [ok …] (§3.5 membership test happy path).
+ # [enum …] member is [ok …] (§3.5 membership test happy path).
  [case id=validate-013-shape-enum-ok level=core
   [tags validate validate-shape enum happy]
   [in-cx [#
@@ -264,7 +267,7 @@ true
 [$validate:is-ok
   [$validate:validate-shape
     [rec [color "red"]]
-    [schema [field name="color" type="string" enum=["red", "green", "blue"]]]]]
+    [schema [field name="color" type="string" [enum "red" "green" "blue"]]]]]
 #]]
   [out-text [#
 true
@@ -320,7 +323,7 @@ true
 [$validate:violation-paths
   [$validate:validate-shape
     [rec [address [zip "abc"]]]
-    [schema [field name="address" type="element" schema=[schema
+    [schema [field name="address" type="element" [schema
       [field name="zip" type="string" pattern="^\\d{5}(-\\d{4})?$"]]]]]]
 #]]
   [out-text [#
@@ -458,8 +461,8 @@ cx-err:CXER1603
 #]]
  ]
 
- # CXER1604 E_VALIDATE_ENUM_INVALID: enum= value is non-comparable (§5).
- # An element is non-comparable as an enum member.
+ # CXER1604 E_VALIDATE_ENUM_INVALID: an [enum …] member is non-comparable
+ # (§5). An element is non-comparable as an enum member.
  [case id=validate-024-shape-enum-invalid-err level=core
   [tags validate validate-shape error CXER1604 enum]
   [in-cx [#
@@ -469,7 +472,7 @@ cx-err:CXER1603
 [?lib 'cx-stdlib/validate']
 [$validate:validate-shape
   [rec [x "y"]]
-  [schema [field name="x" type="string" enum=[[bad-member]]]]]
+  [schema [field name="x" type="string" [enum [bad-member]]]]]
 #]]
   [out-err [#
 cx-err:CXER1604
@@ -487,6 +490,8 @@ cx-err:CXER1604
  # programmatically against an implementation whose validate limit is exceeded).
  # This case is documentary for CXER1605 and is not gate-run against the
  # implementation; it asserts the error code on the canonical deep-nesting form.
+ # (#466/#268 migration: the nested schema is a [schema …] CHILD of the field;
+ # a self-referential schema is spelled via the $-value reference.)
  [case id=validate-025-shape-nested-depth-err level=extended
   [tags validate validate-shape error CXER1605 nested depth]
   [in-cx [#
@@ -495,7 +500,7 @@ cx-err:CXER1604
   [in-code [#
 [?lib 'cx-stdlib/validate']
 [?const DEEP_SCHEMA [schema
-  [field name="child" type="element" schema=DEEP_SCHEMA]]]
+  [field name="child" type="element" $DEEP_SCHEMA]]]
 [$validate:validate-shape
   [rec [child [child [child [child [child [child [child [child
     [child [child [child [child [child [child [child [child
@@ -558,7 +563,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/validate']
 [?def end-after-start pure [returns [sequence element]] ($rec::any)
-  [?if [$lt $rec/end $rec/start]
+  [?if [< $rec/end $rec/start]
     [then [violation code="CUSTOM_VIOLATION" path="/end-date"
                      message="end must be after start"]]]]
 [$validate:violation-paths
@@ -574,11 +579,14 @@ true
  ]
 
  # ─────────────────────────────────────────────────────────────────────
- # §3.7 extends= schema composition
+ # §3.7 [extends …] schema composition
  # ─────────────────────────────────────────────────────────────────────
 
- # extends=: child validates base + own fields. A record satisfying both
- # the base and child fields -> [ok …] (§3.7, §4.7, §6).
+ # [extends $Base]: child validates base + own fields. A record satisfying
+ # both the base and child fields -> [ok …] (§3.7, §4.7, §6). The base is
+ # an [extends …] CHILD of [schema …] whose single item is the base-schema
+ # value ($-bound or inline [schema …]) — attributes are scalar-only
+ # (code.md §6.4.1), so the retired extends=$BASE attr form is gone.
  [case id=validate-029-extends-ok level=core
   [tags validate validate-shape extends happy]
   [in-cx [#
@@ -590,7 +598,7 @@ true
 [$validate:is-ok
   [$validate:validate-shape
     [rec [id "x"] [email "a@b.co"]]
-    [schema extends=$BASE
+    [schema [extends $BASE]
       [field name="email" type="string" pattern=".+@.+\\..+"]]]]
 #]]
   [out-text [#
@@ -598,7 +606,7 @@ true
 #]]
  ]
 
- # extends=: a base field still enforced through extension -> violation
+ # [extends …]: a base field still enforced through extension -> violation
  # when missing (§3.7 includes all base fields, §6).
  [case id=validate-030-extends-base-enforced level=core
   [tags validate validate-shape extends required-missing violation]
@@ -610,7 +618,7 @@ true
 [?const BASE [schema [field name="id" type="string"]]]
 [?let [= $r [$validate:validate-shape
   [rec [email "a@b.co"]]
-  [schema extends=$BASE
+  [schema [extends $BASE]
     [field name="email" type="string"]]]]
   $r/violation/@code]
 #]]
@@ -619,10 +627,11 @@ true
 #]]
  ]
 
- # extends= cycle is malformed -> CXER1603 (§3.7, §4.7, §5, §6).
- # §6 mandates this fixture ("cycle -> CXER1603"); the outcome is the
- # spec-fixed error code, which is what this case asserts. A self-
- # referential [?const] is the cycle trigger.
+ # [extends …] cycle / unresolvable base is malformed -> CXER1603 (§3.7,
+ # §4.7, §5, §6). §6 mandates this fixture ("cycle -> CXER1603"); the
+ # outcome is the spec-fixed error code, which is what this case asserts.
+ # A self-referential [?const] is the cycle trigger: the bare word CYCLE
+ # inside [extends …] is a literal symbol carrying no schema value.
  [case id=validate-031-extends-cycle-err level=extended
   [tags validate validate-shape extends error CXER1603 cycle]
   [in-cx [#
@@ -630,8 +639,83 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/validate']
-[?const CYCLE [schema extends=CYCLE [field name="x" type="string"]]]
+[?const CYCLE [schema [extends CYCLE] [field name="x" type="string"]]]
 [$validate:validate-shape [rec [x "y"]] CYCLE]
+#]]
+  [out-err [#
+cx-err:CXER1603
+#]]
+ ]
+
+ # ─────────────────────────────────────────────────────────────────────
+ # Retired attr-collection surface — loud cutover (#466/#268 ruling)
+ # ─────────────────────────────────────────────────────────────────────
+
+ # The retired enum=[…] / schema=[…] / extends=$BASE ATTR forms are gone
+ # (code.md §6.4.1 wins: attrs are strictly scalar). A collection-valued
+ # attr now fails at CONSTRUCTION time (CXER0100, never stringified).
+ [case id=validate-040-retired-enum-attr-construction-err level=core
+  [tags validate schema retired enum error CXER0100]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:validate-shape
+  [rec [color "red"]]
+  [schema [field name="color" type="string" enum=["red", "green"]]]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ # A retired keyword that still ARRIVES as a scalar attr (quoted / bare
+ # string) is a malformed schema with a migration hint -> CXER1603.
+ [case id=validate-041-retired-enum-attr-string-err level=core
+  [tags validate schema retired enum error CXER1603]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:validate-shape
+  [rec [color "red"]]
+  [schema [field name="color" type="string" enum="red,green"]]]
+#]]
+  [out-err [#
+cx-err:CXER1603
+#]]
+ ]
+
+ # Same loud cutover for a string-carried extends= on [schema …].
+ [case id=validate-042-retired-extends-attr-string-err level=core
+  [tags validate schema retired extends error CXER1603]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:validate-shape
+  [rec [x "y"]]
+  [schema extends=BASE [field name="x" type="string"]]]
+#]]
+  [out-err [#
+cx-err:CXER1603
+#]]
+ ]
+
+ # Same loud cutover for a string-carried schema= on [field …].
+ [case id=validate-043-retired-schema-attr-string-err level=core
+  [tags validate schema retired nested error CXER1603]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[$validate:validate-shape
+  [rec [address [zip "78701"]]]
+  [schema [field name="address" type="element" schema=ADDR]]]
 #]]
   [out-err [#
 cx-err:CXER1603

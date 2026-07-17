@@ -133,7 +133,7 @@ fn eval_dc_body_items(prog_items []cx.ProgramNode, mut items []cx.Node, mut cx_a
 						return val_node
 					}
 					aname := (name_node as cx.ScalarNode).value as string
-					sv, dt := node_to_attr_value(val_node)
+					sv, dt := construction_attr_value(aname, it.slots[1].value, val_node)!
 					cx_attrs << cx.new_attribute(aname, sv, cx.AttributeMeta{ data_type: dt })
 					continue
 				}

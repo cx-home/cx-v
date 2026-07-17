@@ -67,9 +67,7 @@ fn toml_table(obj map[string]JsonVal, prefix string) string {
 fn toml_value(v JsonVal) string {
 	return match v {
 		JsonNull    { '' } // TOML has no null — omit
-		// Atom: TOML has no tag protocol, so the atom row of
-		// conversions.md is lossy — emit the `:NAME` surface form as a string.
-		JsonAtom    { toml_str(':' + (v as JsonAtom).name) }
+		JsonTyped   { toml_typed_scalar(v as JsonTyped) }
 		bool        { if v as bool { 'true' } else { 'false' } }
 		i64         { (v as i64).str() }
 		f64         { format_float(v as f64) }
@@ -77,6 +75,24 @@ fn toml_value(v JsonVal) string {
 		[]JsonVal   { toml_array(v as []JsonVal) }
 		map[string]JsonVal { toml_inline_table(v as map[string]JsonVal) }
 	}
+}
+
+// toml_typed_scalar renders a typed CX scalar per the conversions.md §0.2
+// TOML column. TOML admits no tag syntax, so every row is the lossy default —
+// lossless mode for TOML stays rejected (#416/#445):
+//   atom → `:NAME` string · bytes → base64 string (#458) · sized numerics →
+//   native number · everything else → its text as a string.
+fn toml_typed_scalar(t JsonTyped) string {
+	if t.typ == 'atom' {
+		return toml_str(':' + t.text)
+	}
+	if t.typ == 'bytes' {
+		return toml_str(bytes_hex_to_base64(t.text))
+	}
+	if type_name_is_sized_numeric(t.typ) {
+		return t.text
+	}
+	return toml_str(t.text)
 }
 
 fn toml_str(s string) string {

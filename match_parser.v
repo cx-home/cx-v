@@ -411,6 +411,8 @@ fn read_scrutinee(mut c MatchParseCursor) !string {
 //   - `[` / `]` track depth.
 //   - `'` / `"` open a quoted span that shields `:` and brackets;
 //     escape sequences are skipped 1-char-at-a-time.
+//   - `#` line comments, `[; … ]` block comments, and `[#…#]` raw text are
+//     OPAQUE spans (#289) — shared recognizers in lexical.v.
 //
 // Also stops at top-level `]` (without consuming) — the caller's
 // outer loop closes the `[?match …]` form.
@@ -419,6 +421,22 @@ fn read_expr_until_keyword(mut c MatchParseCursor, stop_labels []string) !string
 	mut depth := 0
 	for !c.at_end() {
 		b := c.peek()
+		if hash_line_comment_at(c.src, c.pos) {
+			c.pos = line_comment_end(c.src, c.pos)
+			continue
+		}
+		if block_comment_open_at(c.src, c.pos) {
+			c.pos = block_comment_end(c.src, c.pos) or {
+				return error('CXMATCH_PARSE: unterminated `[; … ]` comment in expression')
+			}
+			continue
+		}
+		if raw_span_open_at(c.src, c.pos) {
+			c.pos = raw_span_end(c.src, c.pos) or {
+				return error('CXMATCH_PARSE: unterminated `[#…#]` raw text in expression')
+			}
+			continue
+		}
 		// Quoted string region: shield everything until matching quote.
 		if b == `'` || b == `"` {
 			quote := b

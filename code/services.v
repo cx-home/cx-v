@@ -143,6 +143,7 @@ fn eval_http_service(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	// [?http-client] can address the just-registered service without
 	// going through the [?test-service-client] helper (used by
 	// program-svc-014 + future direct-service fixtures).
+	env.cow_bindings()
 	env.bindings['test-target'] = cx.Node(cx.ScalarNode{
 		value: cx.ScalarValue('cx-test://${name}/'), data_type: cx.ScalarType.string_type,
 	})
@@ -653,7 +654,11 @@ fn route_client_call(client ClientRecord, method string, path string,
 	// that evaluates to an err value → CXER0161.
 	if auth_expr := res.auth {
 		// Bind $request for the auth expression context.
-		mut auth_env := env.clone()
+		// #317: frame-sharing clone — the closures table is aliased read-only
+		// (cow_closures guards every write); only bindings are copied for the
+		// per-request `$request` binding. Same shape as the socket listener's
+		// template-alias dispatch env.
+		mut auth_env := env.clone_frame_sharing_closures()
 		auth_env.bindings['request'] = build_request_node(method, path, path_params, opts.payload)
 		auth_result := eval_auth(auth_expr, mut auth_env)!
 		if is_err_value(auth_result) {
@@ -664,7 +669,7 @@ fn route_client_call(client ClientRecord, method string, path string,
 	// Evaluate the resource :body with $request bound. 
 	// stash service root into dyn_context so [$serve-file] can resolve
 	// the request path against the filesystem root.
-	mut body_env := env.clone()
+	mut body_env := env.clone_frame_sharing_closures()
 	body_env.bindings['request'] = build_request_node(method, path, path_params, opts.payload)
 	if svc.root != '' {
 		body_env.dyn_context << cx.Node(cx.Element{

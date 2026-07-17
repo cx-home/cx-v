@@ -189,7 +189,11 @@ fn (mut l Lexer) next_token() !ProgramToken {
 			if n1 == `#` {
 				return l.read_raw_span(start)
 			}
-			if n1 == `!` {
+			// `[!NAME` is a data declaration span; `[!=` is the fused
+			// not-equal operator form (`[!= a b]`, [125f] OperatorForm) —
+			// disambiguate on the byte after `!` (declarations always open
+			// with a name character, never `=`).
+			if n1 == `!` && l.peek(2) != `=` {
 				return l.read_decl_span(start)
 			}
 			l.advance()
@@ -322,12 +326,16 @@ fn (mut l Lexer) next_token() !ProgramToken {
 			l.advance()
 			return ProgramToken{ kind: .qmark, text: '?', pos: start }
 		}
+		`~` {
+			l.advance()
+			return ProgramToken{ kind: .tilde, text: '~', pos: start }
+		}
 		`'`, `"` {
 			// Peek ahead: if the next two bytes are the same quote char,
 			// enter triple-quote mode ('''…''' or """…"""). Mirrors the
 			// data parser's read_triple_quoted_str_with_quote logic.
 			if l.peek(1) == c && l.peek(2) == c {
-				return l.read_triple_string(start, c)
+				return l.read_triple_string(start, c, false)
 			}
 			return l.read_string(start, c)
 		}
@@ -356,6 +364,17 @@ fn (mut l Lexer) next_token() !ProgramToken {
 					return l.emit_temporal(start, n)
 				}
 				return l.read_number(start)
+			}
+			// `r'''…'''` / `r"""…"""` — raw (no-dedent) triple-quoted string
+			// (#93). The `r` prefix is recognised ONLY immediately before a
+			// triple quote; a bare `r` (or `r` before a single quote / name
+			// char) stays an ordinary identifier.
+			if c == `r` {
+				q := l.peek(1)
+				if (q == `'` || q == `"`) && l.peek(2) == q && l.peek(3) == q {
+					l.advance() // consume the `r`; cursor now at the opening triple
+					return l.read_triple_string(start, q, true)
+				}
 			}
 			if is_name_start(c) {
 				return l.read_identifier_or_duration(start)
@@ -758,11 +777,12 @@ fn (mut l Lexer) read_string(start Position, quote u8) !ProgramToken {
 // leading + one trailing blank line, then the common leading whitespace of
 // the remaining lines. This is the SAME single implementation the data parser
 // uses, so both parsers dedent identically (cxparse D4).
-fn (mut l Lexer) read_triple_string(start Position, quote u8) !ProgramToken {
+fn (mut l Lexer) read_triple_string(start Position, quote u8, raw bool) !ProgramToken {
 	// l.pos is at the first opening quote. The scan + lookahead-on-close +
 	// dedent live in the one shared scan_triple_quoted (cx/lexical.v); here
 	// we only replay the cursor (advancing per byte keeps line/col stable).
-	value, n := scan_triple_quoted(l.src, l.pos, quote) or {
+	// `raw` (the `r'''…'''` prefix, #93) skips the common-indent dedent.
+	value, n := scan_triple_quoted_opt(l.src, l.pos, quote, raw) or {
 		return LexError{
 			message: 'unterminated triple-quoted string literal'
 			pos:     start

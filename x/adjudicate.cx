@@ -1,0 +1,125 @@
+# cx-x/adjudicate — out-of-band agent adjudicator for the similar review band
+# (EXPERIMENTAL `x/` tier).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): bundled + gated
+# in-tree but EXEMPT from the frozen-`std` byte-compatible-reimpl stability promise
+# (semver-breaking allowed until it proves out). Spec: spec/03-approved/x/adjudicate.md
+# (follow-up of similar.md §5.3 ruling Q4, cx-private #376).
+#
+# similar's v1 cascade is deterministic; the review band exits as DATA and
+# resolutions re-enter as the known-verdicts tier (similar.md §5.4). This module is
+# the OUT-OF-BAND producer of those resolution records: it consumes review-band
+# [pair score=S band=:review [left A] [right B]] elements (the join shape, §5.1)
+# and produces [resolution verdict=V decided-by='agent:<model>' [left A] [right B]]
+# records — the exact value the resolutions: predicate option already consumes.
+# The adjudicator runs BETWEEN runs; determinism of each run is untouched
+# (identical input + identical resolutions ⇒ identical end state).
+#
+# Pure prompt shaping / verdict parsing / record building are split from the
+# effectful calls (the cx-x/llm pattern) so the contract is testable without a
+# network. The effectful path composes cx-x/llm:complete — run under a SCOPED net
+# grant (`--allow-net=127.0.0.1:11434`), never --allow-all.
+
+[?lib 'cx-x/llm' :as llm]
+[?lib 'cx-stdlib/format' :as format]
+[?lib 'cx-stdlib/strings' :as strings]
+[?lib 'cx-stdlib/fp' :as fp]
+
+# ── pure prompt shaping ────────────────────────────────────────────────────────
+# prompt-of — render one review pair as the adjudication prompt. Payloads render
+# via format:canonical (byte-stable CX literals). The score= attr and the
+# [evidence …] child are included when present ([$exists] presence tests).
+# The prompt text itself is NOT version-stable (x/ tier) — fixtures pin structure
+# (both payloads, the three verdict words), never the full text.
+[?def prompt-of scope=public pure [returns string] ($pair::element)
+  [?let
+    [= $left-txt [$format:canonical $pair/left]]
+    [= $right-txt [$format:canonical $pair/right]]
+    [= $score-line [?if [$exists $pair@score]
+                     [then [$concat "automatic score: " [$format:canonical $pair@score] "\n"]]
+                     [else ""]]]
+    [= $evidence-line [?if [$exists $pair/evidence]
+                        [then [$concat "scoring evidence: " [$format:canonical $pair/evidence] "\n"]]
+                        [else ""]]]
+    [$concat
+      "You are an entity-resolution adjudicator. Two records were flagged for review because automatic similarity scoring was inconclusive. Decide whether they refer to the same real-world entity.\n\n"
+      "left: " $left-txt "\n"
+      "right: " $right-txt "\n"
+      $score-line
+      $evidence-line
+      "\nReply with exactly one word — match if they refer to the same entity, no-match if they do not, review if the evidence is genuinely insufficient to decide."]]]
+
+# ── pure verdict parsing ───────────────────────────────────────────────────────
+# verdict-of — model reply → verdict atom. PRECEDENCE, not position: no-match
+# (accepting "no match" spacing) is checked before match (substring hazard), then
+# review; no hit → :review — the safe default: under §5.4 the pair short-circuits
+# to the conventional indeterminate and STAYS HELD. An adjudicator can refuse; it
+# can never silently promote.
+[?def verdict-of scope=public pure [returns atom] ($reply::string)
+  [?let [= $t [$strings:lower $reply]]
+    [?if [$strings:contains $t "no-match"]
+      [then :no-match]
+      [else [?if [$strings:contains $t "no match"]
+              [then :no-match]
+              [else [?if [$strings:contains $t "match"]
+                      [then :match]
+                      [else :review]]]]]]]]
+
+# ── pure record building ───────────────────────────────────────────────────────
+# resolution-of — build one resolutions-table record (similar.md §4.1 row shape).
+# Carries whatever decided-by it is given, so human review tooling reuses it.
+[?def resolution-of scope=public pure [returns element] ($verdict::atom $decided-by::string $left::any $right::any)
+  [resolution verdict=$verdict decided-by=$decided-by [left $left] [right $right]]]
+
+# decisive — keep only firm verdicts (:match/:no-match), preserving order. Whether
+# inconclusive :review records are merged into the next run's table (provenance:
+# adjudication attempted, inconclusive) or dropped (the pair's true score stays
+# visible) is caller policy; this is the one-verb filter for the common case.
+[?def decisive scope=public pure [returns any] ($records::any)
+  [$filter $records [?fn ($r) [?if [= $r@verdict :match]
+                                [then true]
+                                [else [= $r@verdict :no-match]]]]]]
+
+# ── effectful adjudication (composes cx-x/llm) ─────────────────────────────────
+# adjudicate-pair — one review pair → one resolution record, decided-by='agent:<model>'.
+# A pair missing left/right is a caller error and fails loudly via path/absence
+# propagation — never a fabricated record.
+[?def adjudicate-pair scope=public impure [returns element] ($base::string $model::string $pair::element)
+  [?let [= $reply [$llm:complete $base $model [$prompt-of $pair]]]
+    [$resolution-of [$verdict-of $reply] [$concat "agent:" $model] $pair/left $pair/right]]]
+
+# adjudicate — the load-bearing #376 step as one call: review pairs → resolution
+# records in input order, ready to carry on a predicate as resolutions:.
+[?def adjudicate scope=public impure [returns any] ($base::string $model::string $pairs::any)
+  [$fp:map $pairs [?fn ($p) [$adjudicate-pair $base $model $p]]]]
+
+# ── docs ───────────────────────────────────────────────────────────────────────
+[module-doc name=adjudicate
+  [scope """Out-of-band agent adjudicator for the similar review band (EXPERIMENTAL
+   x/ tier; cx-private #376, similar.md §5.3 ruling Q4). Consumes review-band
+   [pair …] elements and produces [resolution verdict=… decided-by='agent:<model>'
+   [left …] [right …]] records — the exact table the resolutions: predicate option
+   (the known-verdicts tier, similar.md §5.4) already consumes, so each run stays
+   deterministic and the adjudicator runs between runs. Pure prompt shaping
+   (prompt-of), verdict parsing (verdict-of; unparseable → :review, the safe
+   default), and record building (resolution-of, decisive) are split from the
+   effectful adjudicate-pair/adjudicate, which compose cx-x/llm:complete under a
+   scoped net grant."""]]
+[fn-doc name=prompt-of scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Render one review [pair …] as the adjudication prompt (payloads via format:canonical; score/evidence included when present). Prompt text is not version-stable."""]]
+[fn-doc name=verdict-of scope=public purity=pure
+  [sig """-> atom"""]
+  [summary """Parse a model reply to :match / :no-match / :review by precedence (no-match before match, then review); unparseable → :review."""]]
+[fn-doc name=resolution-of scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Build one [resolution verdict=… decided-by=… [left …] [right …]] record (the similar.md §4.1 resolutions row shape)."""]]
+[fn-doc name=decisive scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Filter resolution records to firm verdicts (:match/:no-match), dropping :review, preserving order."""]]
+[fn-doc name=adjudicate-pair scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Adjudicate one review pair via cx-x/llm:complete (net): prompt-of → verdict-of → resolution record with decided-by='agent:<model>'."""]]
+[fn-doc name=adjudicate scope=public purity=impure
+  [sig """-> any"""]
+  [summary """Adjudicate a sequence of review pairs in input order (net); returns resolution records ready to carry on a predicate as resolutions:."""]]

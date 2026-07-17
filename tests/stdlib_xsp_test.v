@@ -64,8 +64,8 @@ fn test_xsp_decode_all_splits_two() {
 	prog := "[?lib 'cx-stdlib/xsp' :as xsp]
 [?lib 'cx-stdlib/bytes' :as b]
 [?let [= \$f1 [\$xsp:encode [frame type=event stream=1 [payload [a x=1]]]]]
-[?let [= \$f2 [\$xsp:encode [frame type=event stream=2 [payload [b y=2]]]]]
-  [\$xsp:decode-all [\$b:concat (\$f1, \$f2)]]]]"
+[= \$f2 [\$xsp:encode [frame type=event stream=2 [payload [b y=2]]]]]
+  [\$xsp:decode-all [\$b:concat (\$f1, \$f2)]]]"
 	out := xsp_eval(prog)
 	assert out.contains("stream='1'"), 'first frame lost: ${out}'
 	assert out.contains("stream='2'"), 'second frame lost: ${out}'

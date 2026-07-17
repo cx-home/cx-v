@@ -86,3 +86,85 @@ fn test_multi_megabyte_span_is_bounded() {
 	ratio := alloc_discard_loop(8 * 1024 * 1024, 600, 4) // 8 MiB = 1024 pages
 	assert ratio < 3.0, 'multi-MiB (8 MiB) transients leaked: RSS ratio ${ratio:.2f} (want < 3.0)'
 }
+
+// ── cx #71: pacer-only variants — NO manual gc_collect() anywhere ────────────
+// The adaptive pacer (third_party/v vgc, goal = marked + adaptive headroom)
+// must bound the same transient loops entirely on its own trigger. This is the
+// behavioral guard that the #52-era "force a collect every N bytes" call-site
+// crutches stay retired: if the pacer regresses to needing a manual sweep
+// drive, these ratios climb with the loop length exactly like the pre-fix bug.
+
+// Same shape as alloc_discard_loop but with zero manual collection drives.
+fn alloc_discard_loop_pacer_only(sz int, iters int) {
+	mut sink := u8(0)
+	for i in 0 .. iters {
+		mut buf := []u8{len: sz}
+		buf[i % sz] = u8(i)
+		sink ^= buf[i % sz]
+	}
+	if sink == 0xff && iters == -1 {
+		println('unreachable ${sink}')
+	}
+}
+
+// plateau_growth runs the SAME churn twice and returns end2/end1: the pacer's
+// contract is BOUNDEDNESS — once at steady state, doubling the total churn must
+// not grow RSS. Pre-#71 (fixed 256 MB floor / broken large-span pooling) the
+// growth was ~linear in churn (ratio → ~2.0 and climbing with iters); a pacer
+// that reclaims by construction plateaus (~1.0x). Deliberately NOT an absolute
+// bound: process RSS is cumulative across the tests in this binary, and the
+// equilibrium headroom scales with build opt-level — the invariant that
+// actually guards the retired #52-era gc_collect crutches is "no creep".
+fn plateau_growth(sz int, iters int) f64 {
+	alloc_discard_loop_pacer_only(sz, iters) // reach the pacer's steady state
+	mid := rss()
+	alloc_discard_loop_pacer_only(sz, iters) // the same churn AGAIN
+	end := rss()
+	if mid == 0 || end == 0 {
+		return 1.0 // RSS unmeasurable; don't fail spuriously
+	}
+	return f64(end) / f64(mid)
+}
+
+// 1 MiB transients (dedicated large spans), ~3 GB of churn per pass against an
+// O(1) live set — the #52 fd-streaming shape without its manual gc_collect.
+fn test_large_span_transients_bounded_by_pacer_alone() {
+	growth := plateau_growth(1 * 1024 * 1024, 3000)
+	assert growth < 1.25, 'pacer alone did not bound 1 MiB transients: RSS grew ${growth:.2f}x across a second identical churn pass (want plateau < 1.25x) — the #71 adaptive pacer regressed (call sites must NOT get their gc_collect crutches back)'
+}
+
+// The 64 KiB large-object class under the pacer alone. Passes are sized so the
+// FIRST pass fully saturates the adaptive headroom (its growth is geometric, so
+// a too-small first pass leaves adaptation still ramping in the second pass and
+// reads as spurious growth).
+fn test_small_span_transients_bounded_by_pacer_alone() {
+	growth := plateau_growth(64 * 1024, 12000)
+	assert growth < 1.25, 'pacer alone did not bound 64 KiB transients: RSS grew ${growth:.2f}x across a second identical churn pass (want plateau < 1.25x)'
+}
+
+// ── cx #52: an EXPLICIT gc_collect() returns the free-span pool to the OS ────
+// Automatic cycles keep freed spans committed for reuse (that pool ≈ the
+// pacer's headroom, so steady-state RSS sits ~2x the goal — by design), but an
+// explicit gc_collect() is the caller saying "memory back NOW": it must finish
+// with the unbudgeted pool trim (vgc_pool_trim_all) so RSS drops to the live
+// set. This is what makes post-collect RSS snapshots (cmp-005's bounded-memory
+// assertion, embedder idle hooks) reflect retention instead of the reuse pool.
+fn test_explicit_collect_returns_pool_to_os() {
+	$if !vgc ? {
+		return // the release-os contract is the vgc collector's; boehm keeps its heap
+	}
+	// Reach the pacer's steady state: the reuse pool now holds roughly one
+	// cycle of dead 1 MiB transients (>= the ~8 MB headroom floor), committed.
+	alloc_discard_loop_pacer_only(1 * 1024 * 1024, 3000)
+	peak := rss()
+	gc_collect()
+	after := rss()
+	if peak == 0 || after == 0 {
+		return // RSS unmeasurable on this platform; don't fail spuriously
+	}
+	// At least a few MB of pool must actually go back to the OS. Same process,
+	// same build, seconds apart — the delta isolates the explicit trim, and the
+	// 4 MB bar sits well under the >= 8 MB the headroom floor guarantees the
+	// pool holds at any point of the steady churn.
+	assert after + 4 * 1024 * 1024 <= peak, 'explicit gc_collect() did not return the span pool to the OS: RSS ${peak / (1024 * 1024)} MB -> ${after / (1024 * 1024)} MB (want a >= 4 MB drop; the vgc_pool_trim_all path regressed)'
+}

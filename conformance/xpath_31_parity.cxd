@@ -42,7 +42,7 @@ xpath31-parity
 <users><user id="1" active="true"/><user id="2" active="false"/></users>
 #]]
   [path [#
-//user[@active='true']
+//user[= $_@active 'true']
 #]]
   [out-text [#
 <user id="1" active="true"/>
@@ -119,7 +119,7 @@ xpath31-parity
 <doc><a/><b/><c/></doc>
 #]]
   [path [#
-//*[self::a or self::c]
+//*[or [= [$name $_] "a"] [= [$name $_] "c"]]
 #]]
   [out-text [#
 <a/>
@@ -154,7 +154,7 @@ xpath31-parity
 <users><user age="20"/><user age="25"/><user age="30"/></users>
 #]]
   [path [#
-//user[@age>=25]
+//user[>= $_@age 25]
 #]]
   [out-text [#
 <user age="25"/>
@@ -170,7 +170,7 @@ xpath31-parity
 <users><user role="admin"/><user role="member"/></users>
 #]]
   [path [#
-//user[@role!='admin']
+//user[!= $_@role 'admin']
 #]]
   [out-text [#
 <user role="member"/>
@@ -185,7 +185,7 @@ xpath31-parity
 <items><item price="5"/><item price="10"/><item price="15"/></items>
 #]]
   [path [#
-//item[@price<10]
+//item[< $_@price 10]
 #]]
   [out-text [#
 <item price="5"/>
@@ -204,7 +204,7 @@ xpath31-parity
 <users><user/><user/><user/></users>
 #]]
   [path [#
-count(//user)
+[$count //user]
 #]]
   [out-text [#
 3
@@ -264,7 +264,7 @@ xpath31-parity
 <doc><item n="1"/><item n="2"/><item n="3"/></doc>
 #]]
   [path [#
-//item[position()=2]
+//item[2]
 #]]
   [out-text [#
 <item n="2"/>
@@ -279,7 +279,7 @@ xpath31-parity
 <doc><item n="1"/><item n="2"/><item n="3"/></doc>
 #]]
   [path [#
-//item[position()=last()]
+//item[= $_position $_last]
 #]]
   [out-text [#
 <item n="3"/>
@@ -343,7 +343,8 @@ xpath31-divergence
 #]]
   [expect-diff [#
 Saxon returns 'true' (general comparison existentially over sequence).
-CX raises CXER0103 (multi-value comparison) — the path returns 3 ages.
+CX rejects at parse with CXER0100 — infix comparison is retired everywhere
+(grammar [132]-[134] retirement; predicates are homoiconic prefix forms).
 #]]
  ]
 

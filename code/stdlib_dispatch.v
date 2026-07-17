@@ -38,6 +38,10 @@ fn stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if r := format_stdlib_builtin(name, args) { return r }
 	if r := time_stdlib_builtin(name, args) { return r }
 	if r := store_stdlib_builtin(name, args) { return r }
+	if r := sql_stdlib_builtin(name, args) { return r }
+	$if cx_db_redis ? {
+		if r := redis_stdlib_builtin(name, args) { return r }
+	}
 	if r := json_stdlib_builtin(name, args) { return r }
 	if r := re_stdlib_builtin(name, args) { return r }
 	if r := csv_stdlib_builtin(name, args) { return r }
@@ -51,6 +55,7 @@ fn stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if r := i18n_stdlib_builtin(name, args) { return r }
 	if r := locale_stdlib_builtin(name, args) { return r }
 	if r := ft_stdlib_builtin(name, args) { return r }
+	if r := similar_stdlib_builtin(name, args) { return r }
 	if r := log_stdlib_builtin(name, args) { return r }
 	if r := test_stdlib_builtin(name, args) { return r }
 	if r := io_stdlib_builtin(name, args) { return r }
@@ -65,8 +70,11 @@ fn stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if r := did_stdlib_builtin(name, args) { return r }
 	if r := vc_stdlib_builtin(name, args) { return r }
 	if r := sched_stdlib_builtin(name, args) { return r }
+	if r := term_stdlib_builtin(name, args) { return r }
 	if r := xap_stdlib_builtin(name, args) { return r }
+	if r := xap_dist_stdlib_builtin(name, args) { return r }
 	if r := xsp_stdlib_builtin(name, args) { return r }
+	if r := xsp_auth_stdlib_builtin(name, args) { return r }
 	if r := jsonschema_stdlib_builtin(name, args) { return r }
 	// Registry-driven codec surface (cx/xml/yaml/toml/md + binary). Chained
 	// LAST so a dedicated module (json/csv/url/html) wins any name clash.

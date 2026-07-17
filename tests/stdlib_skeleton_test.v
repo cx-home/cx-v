@@ -32,7 +32,7 @@ import os
 
 fn test_stdlib_surface_enumerates_bundled_subpackages() {
 	names := code.bundled_stdlib_names()
-	assert names.len == 42, 'expected 42 cx-stdlib sub-packages, got ${names.len}: ${names}'
+	assert names.len == 43, 'expected 43 cx-stdlib sub-packages, got ${names.len}: ${names}'
 	expected := [
 		'cx-stdlib/strings',
 		'cx-stdlib/json',
@@ -63,6 +63,9 @@ fn test_stdlib_surface_enumerates_bundled_subpackages() {
 		'cx-stdlib/i18n',
 		'cx-stdlib/locale',
 		'cx-stdlib/ft',
+		// graded similarity & approximate matching (#108): 42→43 similar —
+		// backs the core `~` operator; sibling to ft (shared tokenization).
+		'cx-stdlib/similar',
 		'cx-stdlib/prof',
 		'cx-stdlib/process',
 		'cx-stdlib/fp',

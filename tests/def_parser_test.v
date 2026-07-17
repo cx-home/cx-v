@@ -138,7 +138,7 @@ fn test_parse_def_with_scope_public() {
 	}
 }
 
-fn test_parse_def_adr0063_attr_and_clause_modifiers() {
+fn test_parse_def_attr_and_clause_modifiers() {
 	// modifier surface: `scope=public` attribute + `[returns T]`
 	// clause child (the ONLY admitted forms; the legacy `:scope`/`:returns`
 	// colon-slot surface is retired — D014).
@@ -162,7 +162,7 @@ fn test_parse_def_adr0063_attr_and_clause_modifiers() {
 	assert n.params[0].name == 'name'
 }
 
-fn test_parse_def_adr0063_returns_bracket_type_clause() {
+fn test_parse_def_returns_bracket_type_clause() {
 	// `[returns [or Person null]]` — bracketed composite captured verbatim.
 	src := '[?def find-user [returns [or Person null]] ($id::string) null]'
 	n := cx.parse_def(src) or {
@@ -176,7 +176,7 @@ fn test_parse_def_adr0063_returns_bracket_type_clause() {
 	}
 }
 
-fn test_parse_def_adr0063_unknown_attr_modifier_errors() {
+fn test_parse_def_unknown_attr_modifier_errors() {
 	cx.parse_def('[?def f bogus=1 ($x) x]') or {
 		assert err.msg().contains('unknown attribute modifier'), 'got: ${err.msg()}'
 		return

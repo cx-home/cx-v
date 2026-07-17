@@ -1,6 +1,7 @@
 module picoev
 
 import net
+import os
 import transport.pico_http_parser
 import time
 
@@ -224,6 +225,17 @@ fn accept_callback(listen_fd int, _events int, cb_arg voidptr) {
 // close_conn closes the socket `fd` and removes it from the loop.
 @[inline]
 pub fn (mut pv Picoev) close_conn(fd int) {
+	// cx patch (#275): a dispatch job in flight on an executor DEFERS the socket
+	// close — deregister the fd from the loop (no further events) but keep the
+	// fd number allocated so the executor's late response write cannot land on
+	// a recycled fd. The executor performs the final close (cx_close_socket_fd)
+	// when the job completes; it also owns clearing the held mark.
+	if cx_dispatch_defer_close != unsafe { nil } && cx_dispatch_defer_close(fd) {
+		if pv.delete(fd) != 0 {
+			elog('Error during del (deferred close)')
+		}
+		return
+	}
 	// cx patch (§24): if this is a held-open SSE fd, notify the cx layer to drop
 	// it from its subscriber set (under the push lock) BEFORE the socket closes,
 	// so a concurrent push from another reactor can't write to a reused fd.
@@ -383,6 +395,16 @@ fn default_error_callback(_data voidptr, _req pico_http_parser.Request, mut res 
 
 // new creates a `Picoev` struct and initializes the main loop.
 pub fn new(config Config) !&Picoev {
+	// A server must not die on a peer RST: a write to a connection the client
+	// already reset delivers SIGPIPE, whose default action terminates the
+	// process SILENTLY (no panic, no crash report). Long-held fds (SSE) make
+	// this routine rather than rare — a subscriber that disconnects between
+	// pushes turns the next push into a process kill. Ignore it process-wide
+	// once a server event loop exists; write()/send() then report EPIPE and
+	// the caller drops the fd. Belt to setup_sock's SO_NOSIGPIPE braces.
+	$if !windows {
+		os.signal_ignore(.pipe)
+	}
 	listening_socket_fd := listen(config) or {
 		elog('Error during listen: ${err}')
 		return err

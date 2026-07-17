@@ -13,14 +13,13 @@ ordered dispatch (band CXER4650-4699).
    (returns a [dispatch …] VALUE), unsubscribed with [$bus:off], and
    introspected with subscribers/topics/match/topic/matches (all pure).
 
-   PATTERN FORMS (§2.2): a topic atom (:order-placed); a head-name string
+   PATTERN FORMS (§2.2): a topic atom (:order.placed); a head-name string
    ('metric'); or an arity-1 boolean predicate function over the message
-   (the CXPath-predicate form). PREFIX-GLOB: the spec writes :order.* with
-   `.` hierarchy + `.*` suffix; the CX atom grammar admits neither `.` nor
-   `*` as a NameChar, so this impl realizes the SAME prefix-glob with `-`
-   as the separator and a TRAILING `-` marker: :order- matches
-   :order-placed / :order-cancelled (semantics identical, only the typeable
-   spelling differs).
+   (the CXPath-predicate form). PREFIX-GLOB in the spec's own spelling
+   (#397 owner ruling 2026-07-13 — lexicon [L40] atoms carry dotted
+   segments plus an optional terminal `.*` glob segment): :order.* matches
+   :order.placed / :order.cancelled (and :order itself). The earlier
+   `-`-separator workaround is retired — cutover, no dual accept.
 
    FAULTS (§4.3): a handler "faults" only when it RAISES (a `!`-forced call
    that returns an [err]); a handler that merely RETURNS an [err] value is
@@ -68,7 +67,7 @@ ordered dispatch (band CXER4650-4699).
     [?let [= $d [$bus:emit $b [do :ping]]] $d@topic]]]
 #]]
   [out-text [#
-'ping'
+:ping
 #]]
  ]
 
@@ -166,7 +165,7 @@ ordered dispatch (band CXER4650-4699).
   [in-cx [# [empty] #]]
   [in-code [#
 [?lib 'cx-stdlib/bus']
-[$bus:matches [do :order-placed] :order-placed]
+[$bus:matches [do :order.placed] :order.placed]
 #]]
   [out-text [#
 true
@@ -178,7 +177,7 @@ true
   [in-cx [# [empty] #]]
   [in-code [#
 [?lib 'cx-stdlib/bus']
-[$bus:matches [do :order-placed] :order-]
+[$bus:matches [do :order.placed] :order.*]
 #]]
   [out-text [#
 true
@@ -190,7 +189,7 @@ true
   [in-cx [# [empty] #]]
   [in-code [#
 [?lib 'cx-stdlib/bus']
-[$bus:matches [do :payment-failed] :order-]
+[$bus:matches [do :payment.failed] :order.*]
 #]]
   [out-text [#
 false
@@ -226,10 +225,10 @@ true
   [in-cx [# [empty] #]]
   [in-code [#
 [?lib 'cx-stdlib/bus']
-[$bus:topic [do :order-placed [order id="42"]]]
+[$bus:topic [do :order.placed [order id="42"]]]
 #]]
   [out-text [#
-:order-placed
+:order.placed
 #]]
  ]
 
@@ -402,8 +401,8 @@ true
 [?lib 'cx-stdlib/bus']
 [?with-open [$bus:bus] $b
   [?let [= $s [$bus:on $b :t [?fn ($m) $m]]]
-    [?let [= $one [$bus:off $b $s]]
-      [$bus:off $b $s]]]]
+    [= $one [$bus:off $b $s]]
+    [$bus:off $b $s]]]
 #]]
   [out-text [#
 false
@@ -417,8 +416,8 @@ false
 [?lib 'cx-stdlib/bus']
 [?with-open [$bus:bus] $b
   [?let [= $s [$bus:on $b :t [?fn ($m) $m]]]
-    [?let [= $cancel [$bus:off $b $s]]
-      [?let [= $d [$bus:emit $b [do :t]]] $d@delivered]]]]
+    [= $cancel [$bus:off $b $s]]
+    [?let [= $d [$bus:emit $b [do :t]]] $d@delivered]]]
 #]]
   [out-text [#
 0
@@ -573,8 +572,8 @@ cx-err:CXER4663
   [in-code [#
 [?lib 'cx-stdlib/bus']
 [?let [= $b [$bus:bus]]
-  [?let [= $c [$bus:close $b]]
-    [$bus:emit $b [do :t]]]]
+  [= $c [$bus:close $b]]
+  [$bus:emit $b [do :t]]]
 #]]
   [out-err [#
 cx-err:CXER4664

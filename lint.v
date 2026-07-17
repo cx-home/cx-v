@@ -81,6 +81,9 @@ pub fn cx_text_lint(input string, opts LintOptions) ![]Finding {
 	if check_enabled('CX-L005', opts) {
 		check_l005_deprecated_patterns(input, doc, mut findings)
 	}
+	if check_enabled('CX-L006', opts) {
+		check_l006_let_staircase(input, mut findings)
+	}
 
 	// Apply [?cx lint-disable=...] / lint-enable=... directive scopes.
 	// The directives are scanned in document order; any finding whose
@@ -102,6 +105,150 @@ fn check_enabled(check string, opts LintOptions) bool {
 		if d == check { return false }
 	}
 	return true
+}
+
+// ── CX-L006 — flatten nested single-binding [?let] staircases (#65) ───────────
+//
+// A deep chain of nested single-binding [?let] forms — each [?let] whose only
+// `[= …]` binding precedes a body that is exactly the next [?let], terminating
+// in one expression — is a `let*` written the verbose way. [?let] already takes
+// multiple `[= …]` clauses before its body, so the staircase collapses to one
+// flat [?let]. This is an advisory (info), DETECT-ONLY hint: it flags the
+// OUTERMOST [?let] of a pure staircase of depth >= let_staircase_min and
+// suggests the flat form; it does NOT rewrite (autofix is a separate, larger
+// surface). Non-pure nestings (a [?let] with >1 binding, the legacy
+// bind/value/body slot form, or a body that is an [?if]/[?match]/[?for]/other
+// expression) are left untouched — only the exact chain shape matches.
+
+const let_staircase_min = 3
+
+// is_let_binding_clause reports whether `n` is a `[= $x V]` binding clause —
+// the exact shape eval_let's binding_clause accepts.
+fn is_let_binding_clause(n ProgramNode) bool {
+	if n is ProgramLiteral {
+		if n.kind == .cx_element && n.name == '=' && n.items.len == 2 {
+			head := n.items[0]
+			if head is ProgramBinding {
+				return head.path.len == 0
+			}
+		}
+	}
+	return false
+}
+
+// pure_single_binding_let returns the body of `d` IFF `d` is the pure
+// single-binding positional [?let] form: exactly one `[= …]` binding then one
+// body, no labeled (legacy bind/value/body) slots. Else none.
+fn pure_single_binding_let(d ProgramDirective) ?ProgramNode {
+	mut positionals := []ProgramNode{}
+	for s in d.slots {
+		if s.kind == .labeled {
+			return none
+		}
+		positionals << s.value
+	}
+	if positionals.len != 2 {
+		return none
+	}
+	if !is_let_binding_clause(positionals[0]) {
+		return none
+	}
+	return positionals[1]
+}
+
+// let_staircase_depth counts consecutive pure single-binding [?let] forms from
+// `d` and returns (depth, terminal_body) — terminal_body is the first body that
+// is not itself such a [?let].
+fn let_staircase_depth(d ProgramDirective) (int, ProgramNode) {
+	mut depth := 0
+	mut cur := ProgramNode(d)
+	for {
+		if cur is ProgramDirective {
+			if cur.name == 'let' {
+				if body := pure_single_binding_let(cur) {
+					depth++
+					cur = body
+					continue
+				}
+			}
+		}
+		break
+	}
+	return depth, cur
+}
+
+fn check_l006_let_staircase(input string, mut findings []Finding) {
+	// Parse the PROGRAM reading; a pure-data resource (no [?let] program form)
+	// simply doesn't parse here and is skipped.
+	prog := parse_program(input) or { return }
+	walk_let_staircase(prog.body, mut findings)
+}
+
+fn walk_let_staircase(node ProgramNode, mut findings []Finding) {
+	if node is ProgramDirective {
+		if node.name == 'let' {
+			depth, terminal := let_staircase_depth(node)
+			if depth >= let_staircase_min {
+				findings << Finding{
+					check:      'CX-L006'
+					severity:   .info
+					message:    'nested single-binding [?let] staircase (${depth} levels) — [?let] accepts multiple [= …] clauses; collapse to one flat [?let] (let*)'
+					line:       node.pos.line
+					col:        node.pos.col
+					suggestion: 'rewrite as a single [?let] with the ${depth} bindings in order followed by the body'
+				}
+				// Do not descend INTO the flagged chain (avoid re-flagging the
+				// inner lets); continue scanning from its terminal body.
+				walk_let_staircase(terminal, mut findings)
+				return
+			}
+		}
+	}
+	walk_let_staircase_children(node, mut findings)
+}
+
+fn walk_let_staircase_children(node ProgramNode, mut findings []Finding) {
+	match node {
+		ProgramDirective {
+			for s in node.slots {
+				walk_let_staircase(s.value, mut findings)
+			}
+		}
+		ProgramLiteral {
+			if ne := node.name_expr {
+				walk_let_staircase(ne, mut findings)
+			}
+			for it in node.items {
+				walk_let_staircase(it, mut findings)
+			}
+			for a in node.attrs {
+				walk_let_staircase(a.value, mut findings)
+			}
+		}
+		ProgramCall {
+			for a in node.args {
+				walk_let_staircase(a, mut findings)
+			}
+		}
+		ProgramForComp {
+			for c in node.clauses {
+				if src := c.source {
+					walk_let_staircase(src, mut findings)
+				}
+				if e := c.expr {
+					walk_let_staircase(e, mut findings)
+				}
+			}
+			walk_let_staircase(node.yield, mut findings)
+			if yv := node.yield_value {
+				walk_let_staircase(yv, mut findings)
+			}
+		}
+		Program {
+			walk_let_staircase(node.body, mut findings)
+		}
+		else {}
+	}
 }
 
 // ── CX-L001 — comment-style consistency ──────────────────────────────────────

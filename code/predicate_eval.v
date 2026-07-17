@@ -296,8 +296,50 @@ pub fn eval_predicate_body(predicate &cx.PredicateExpr, scope BindingScope) !Val
 		.function_call {
 			eval_function_call(predicate, scope)!
 		}
-		.bool_expr, .instance_of, .cast_as, .sequence_op, .generic {
+		.bool_expr {
+			eval_bool_expr(predicate, scope)!
+		}
+		.instance_of, .cast_as, .sequence_op, .generic {
 			error('MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED: kind=${cx.predicate_expr_kind_name(predicate.kind)} (Phase 2.21 covers atomic templates only)')
+		}
+	}
+}
+
+// eval_bool_expr handles the fused prefix connectives `[and B B…]` /
+// `[or B B…]` / `[not B]` — EBV-fold over the recursively-evaluated
+// children, short-circuit left→right (code.md §6.5).
+fn eval_bool_expr(p &cx.PredicateExpr, scope BindingScope) !Value {
+	op := p.op or {
+		return error('PREDICATE_EVAL: bool_expr missing op field')
+	}
+	match op {
+		'and' {
+			for ch in p.children {
+				v := eval_predicate_body(ch, scope)!
+				if !ebv(v)! {
+					return value_bool(false)
+				}
+			}
+			return value_bool(true)
+		}
+		'or' {
+			for ch in p.children {
+				v := eval_predicate_body(ch, scope)!
+				if ebv(v)! {
+					return value_bool(true)
+				}
+			}
+			return value_bool(false)
+		}
+		'not' {
+			if p.children.len != 1 {
+				return error('PREDICATE_EVAL: `not` takes exactly one operand')
+			}
+			v := eval_predicate_body(p.children[0], scope)!
+			return value_bool(!ebv(v)!)
+		}
+		else {
+			return error('PREDICATE_EVAL: unknown bool_expr op `${op}`')
 		}
 	}
 }

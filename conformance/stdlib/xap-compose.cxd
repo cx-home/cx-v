@@ -1,0 +1,961 @@
+[test-suite name=xap-compose
+  [doc [#
+Conformance fixtures for XAP grammar composition — the §8.1 function surface of
+spec/02-working/xap_grammar_composition.md: [$xap:compose] (n feature grammars →
+ONE grammar, or CXER4870 carrying every W1-W6 conflict), [$xap:compose-report]
+(the never-raising tooling face), [$xap:resolve] (bare-term resolution ρ;
+ambiguity is CXER4871 with candidates, never a guess), [$xap:grammar-hash]
+(Tier-1 hash of the canonical composed grammar — the §3.1 equality oracle).
+
+SPEC-FIRST: these run RED until the composition engine lands (M0) — the red
+list is the implementation worklist (AUTHORING.md). Expected outputs are
+hand-derived from the spec + canonical.md rendering rules; re-bless against
+`cx eval` (CX_BLESS=1) when the implementation lands, per the single-oracle
+rule.
+
+Fixture families map to spec §9: 1 algebra (001-005), 2 namespace (006-007),
+3 W-gate (008-016), 4 ρ-resolution (017-022), 5 N-COMPOSE-1 (021+023 as the
+after/before pair), 6 N-COMPOSE-2 / runtime integration §8.2 (027-036: the
+composed grammar attaches via [$xap:run {grammar: G}]; every emit then resolves
+through ρ and commits the QUALIFIED intent — ambiguity is CXER4871, unknown is
+CXER4872; for a derived verb the PEP evaluates the TRANSITIVE LEAF constituent
+grant set — a wrapper-name grant conveys nothing, denial is CXER4850 exactly as
+emitting the constituent directly would be; why-allowed answers over the same
+constituent set), 7 signature derivation (024-025), 8 marine worked case (026).
+
+Toy features are minimal-valid per feature.cxs (nouns/verbs/requirements all
+present) so every input would also pass `cx validate` — fixtures never lean on
+schema-invalid inputs except where the case is ABOUT invalidity (016).
+#]]
+
+  [case id=xap-compose-001-empty-identity level=core
+   [tags xap-compose compose algebra identity]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $g [$xap:compose]]
+ [$count $g//verb]]
+#]]
+   [out-text [#
+0
+#]]
+  ]
+
+  [case id=xap-compose-002-qualified-member level=core
+   [tags xap-compose compose namespace qualification]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [frames [use frame=geo via=center]]
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs
+    [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]
+    [verb name=set-waypoint effect=act scope=shared consequence=reversible [intent [do :set-waypoint]] [writes viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [?let [= $g [$xap:compose $chart]]
+  $g//verb[= $_@name 'chart/highlight']/@effect]]
+#]]
+   [out-text [#
+[effect 'arrange']
+#]]
+  ]
+
+  [case id=xap-compose-003-commutative level=core
+   [tags xap-compose compose algebra commutativity grammar-hash]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=list-strikes effect=observe [intent [do :list-strikes]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=list-strikes [want 'to see strikes'] [so 'I avoid them']]]]]
+ [= [$xap:grammar-hash [$xap:compose $chart $strikes]]
+    [$xap:grammar-hash [$xap:compose $strikes $chart]]]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=xap-compose-004-order-independent-nary level=core
+   [tags xap-compose compose algebra associativity grammar-hash]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $a
+  [feature name=a
+   [nouns [noun name=an [field name=x type=int]]]
+   [verbs [verb name=va effect=observe [intent [do :va]] [reads an]]]
+   [requirements [requirement kind=functional as=user traces=va [want 'a'] [so 'a']]]]]
+ [= $b
+ [feature name=b
+  [nouns [noun name=bn [field name=x type=int]]]
+  [verbs [verb name=vb effect=observe [intent [do :vb]] [reads bn]]]
+  [requirements [requirement kind=functional as=user traces=vb [want 'b'] [so 'b']]]]]
+ [= $c
+ [feature name=c
+  [nouns [noun name=cn [field name=x type=int]]]
+  [verbs [verb name=vc effect=observe [intent [do :vc]] [reads cn]]]
+  [requirements [requirement kind=functional as=user traces=vc [want 'c'] [so 'c']]]]]
+ [= [$xap:grammar-hash [$xap:compose $a $b $c]]
+    [$xap:grammar-hash [$xap:compose $c $a $b]]]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=xap-compose-005-idempotent level=core
+   [tags xap-compose compose algebra idempotence grammar-hash]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= [$xap:grammar-hash [$xap:compose $chart $chart]]
+    [$xap:grammar-hash [$xap:compose $chart]]]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=xap-compose-006-same-named-verbs-coexist level=core
+   [tags xap-compose compose namespace collision-free]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs
+    [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]
+    [verb name=set-waypoint effect=act scope=shared consequence=reversible [intent [do :set-waypoint]] [writes viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs
+   [verb name=highlight effect=arrange [intent [do :highlight]] [reads strike]]
+   [verb name=list-strikes effect=observe [intent [do :list-strikes]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=highlight [want 'to see strikes'] [so 'I avoid them']]]]]
+ [= $g [$xap:compose $chart $strikes]]
+ [$count $g//verb]]
+#]]
+   [out-text [#
+4
+#]]
+  ]
+
+  [case id=xap-compose-007-bare-term-index level=core
+   [tags xap-compose compose bare-terms rho-index]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=highlight [want 'to see strikes'] [so 'I avoid them']]]]]
+ [?let [= $g [$xap:compose $chart $strikes]]
+  $g//term[= $_@name 'highlight']/@candidates]]
+#]]
+   [out-text [#
+[candidates 'chart/highlight strikes/highlight']
+#]]
+  ]
+
+  [case id=xap-compose-008-w1-duplicate-name level=core
+   [tags xap-compose compose w-gate w1]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $chart-b
+ [feature name=chart
+  [nouns [noun name=marks [field name=n type=int]]]
+  [verbs [verb name=mark effect=act [intent [do :mark]] [writes marks]]]
+  [requirements [requirement kind=functional as=user traces=mark [want 'to mark'] [so 'marked']]]]]
+ [$xap:compose $chart $chart-b]]
+#]]
+   [out-err [#
+cx-err:CXER4870
+#]]
+  ]
+
+  [case id=xap-compose-009-w2-key-type-mismatch level=core
+   [tags xap-compose compose w-gate w2 keys]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $ais
+  [feature name=ais
+   [keys [key name=mmsi via=mmsi]]
+   [nouns [noun name=vessel [field name=mmsi type=mmsi] [field name=pos type=geo-point]]]
+   [verbs [verb name=track effect=observe [intent [do :track]] [reads vessel]]]
+   [requirements [requirement kind=functional as=user traces=track [want 'to track vessels'] [so 'I know traffic']]]]]
+ [= $harbor
+ [feature name=harbor
+  [keys [key name=mmsi via=id]]
+  [nouns [noun name=berth [field name=id type=int]]]
+  [verbs [verb name=list-berths effect=observe [intent [do :list-berths]] [reads berth]]]
+  [requirements [requirement kind=functional as=user traces=list-berths [want 'to list berths'] [so 'I can dock']]]]]
+ [$xap:compose $ais $harbor]]
+#]]
+   [out-err [#
+cx-err:CXER4870
+#]]
+  ]
+
+  [case id=xap-compose-010-w3-frame-registration-invalid level=core
+   [tags xap-compose compose w-gate w3 frames]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $labels
+  [feature name=labels
+   [frames [use frame=geo via=title]]
+   [nouns [noun name=tag [field name=title type=string]]]
+   [verbs [verb name=label effect=arrange [intent [do :label]] [reads tag]]]
+   [requirements [requirement kind=functional as=user traces=label [want 'to label'] [so 'labeled']]]]]
+ [$xap:compose $labels]]
+#]]
+   [out-err [#
+cx-err:CXER4870
+#]]
+  ]
+
+  [case id=xap-compose-011-w4-mandate-exclusion-contradiction level=core
+   [tags xap-compose compose w-gate w4 rules]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $storm-guard
+ [feature name=storm-guard kind=composite
+  [uses features=chart]
+  [nouns [noun name=storm-marks derived=true [field name=n type=int] [from 'count of chart highlights while a storm condition holds']]]
+  [verbs [verb name=watch effect=observe [intent [do :watch]] [reads storm-marks]]]
+  [rules
+   [rule name=must-mark kind=mandate verb='chart/highlight' when=storm [statement 'In a storm the hazard must be highlighted.']]
+   [rule name=no-mark kind=exclusion verb='chart/highlight' when=storm [statement 'In a storm highlighting is forbidden.']]]
+  [requirements [requirement kind=functional as=user traces=watch [want 'to watch storm marks'] [so 'I see conflicts']]]]]
+ [$xap:compose $chart $storm-guard]]
+#]]
+   [out-err [#
+cx-err:CXER4870
+#]]
+  ]
+
+  [case id=xap-compose-012-w4-ordering-cycle level=core
+   [tags xap-compose compose w-gate w4 ordering cycle]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=set-waypoint effect=act scope=shared consequence=reversible [intent [do :set-waypoint]] [writes viewport]]]
+   [requirements [requirement kind=functional as=user traces=set-waypoint [want 'to set a waypoint'] [so 'I can navigate']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=list-strikes effect=observe [intent [do :list-strikes]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=list-strikes [want 'to see strikes'] [so 'I avoid them']]]]]
+ [= $seq-guard
+ [feature name=seq-guard kind=composite
+  [uses features='chart strikes']
+  [nouns [noun name=plan derived=true [field name=n type=int] [from 'waypoints ordered against strike listings']]]
+  [verbs [verb name=review effect=observe [intent [do :review]] [reads plan]]]
+  [rules
+   [rule name=o1 kind=ordering verb='chart/set-waypoint' after='strikes/list-strikes' [statement 'Check strikes before setting a waypoint.']]
+   [rule name=o2 kind=ordering verb='strikes/list-strikes' after='chart/set-waypoint' [statement 'Set the waypoint before checking strikes.']]]
+  [requirements [requirement kind=functional as=user traces=review [want 'to review the plan'] [so 'I trust it']]]]]
+ [$xap:compose $chart $strikes $seq-guard]]
+#]]
+   [out-err [#
+cx-err:CXER4870
+#]]
+  ]
+
+  [case id=xap-compose-013-w5-uses-not-enabled level=core
+   [tags xap-compose compose w-gate w5 uses]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $ghost-user
+ [feature name=ghost-user kind=composite
+  [uses features='chart ghost']
+  [nouns [noun name=shadow derived=true [field name=n type=int] [from 'a join over chart and ghost']]]
+  [verbs [verb name=peek effect=observe [intent [do :peek]] [reads shadow]]]
+  [requirements [requirement kind=functional as=user traces=peek [want 'to peek'] [so 'peeked']]]]]
+ [$xap:compose $chart $ghost-user]]
+#]]
+   [out-err [#
+cx-err:CXER4870
+#]]
+  ]
+
+  [case id=xap-compose-014-report-all-violations level=core
+   [tags xap-compose compose-report w-gate multi-violation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $chart-b
+ [feature name=chart
+  [nouns [noun name=marks [field name=n type=int]]]
+  [verbs [verb name=mark effect=act [intent [do :mark]] [writes marks]]]
+  [requirements [requirement kind=functional as=user traces=mark [want 'to mark'] [so 'marked']]]]]
+ [= $labels
+ [feature name=labels
+  [frames [use frame=geo via=title]]
+  [nouns [noun name=tag [field name=title type=string]]]
+  [verbs [verb name=label effect=arrange [intent [do :label]] [reads tag]]]
+  [requirements [requirement kind=functional as=user traces=label [want 'to label'] [so 'labeled']]]]]
+ [= $r [$xap:compose-report $chart $chart-b $labels]]
+ [$count $r//conflict]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [case id=xap-compose-015-report-ok level=core
+   [tags xap-compose compose-report ok]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=list-strikes effect=observe [intent [do :list-strikes]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=list-strikes [want 'to see strikes'] [so 'I avoid them']]]]]
+ [?let [= $r [$xap:compose-report $chart $strikes]]
+  $r/@ok]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=xap-compose-016-invalid-argument level=core
+   [tags xap-compose compose arg-validation]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[$xap:compose 42]
+#]]
+   [out-err [#
+cx-err:CXER4873
+#]]
+  ]
+
+  [case id=xap-compose-017-resolve-unique-owner level=core
+   [tags xap-compose resolve rho unique]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $ais
+ [feature name=ais
+  [keys [key name=mmsi via=mmsi]]
+  [nouns [noun name=vessel [field name=mmsi type=mmsi] [field name=pos type=geo-point]]]
+  [verbs [verb name=track effect=observe [intent [do :track]] [reads vessel]]]
+  [requirements [requirement kind=functional as=user traces=track [want 'to track vessels'] [so 'I know traffic']]]]]
+ [= $g [$xap:compose $chart $ais]]
+ [$xap:resolve $g "track"]]
+#]]
+   [out-text [#
+'ais/track'
+#]]
+  ]
+
+  [case id=xap-compose-018-resolve-qualified-bypass level=core
+   [tags xap-compose resolve rho qualified]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=highlight [want 'to see strikes'] [so 'I avoid them']]]]]
+ [= $g [$xap:compose $chart $strikes]]
+ [$xap:resolve $g "chart/highlight"]]
+#]]
+   [out-text [#
+'chart/highlight'
+#]]
+  ]
+
+  [case id=xap-compose-019-resolve-focus-narrowing level=core
+   [tags xap-compose resolve rho context focus]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=highlight [want 'to see strikes'] [so 'I avoid them']]]]]
+ [= $g [$xap:compose $chart $strikes]]
+ [$xap:resolve $g "highlight" {focus: "strikes"}]]
+#]]
+   [out-text [#
+'strikes/highlight'
+#]]
+  ]
+
+  [case id=xap-compose-020-resolve-noun-narrowing level=core
+   [tags xap-compose resolve rho context nouns]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=highlight [want 'to see strikes'] [so 'I avoid them']]]]]
+ [= $g [$xap:compose $chart $strikes]]
+ [$xap:resolve $g "highlight" {nouns: ["strikes/strike"]}]]
+#]]
+   [out-text [#
+'strikes/highlight'
+#]]
+  ]
+
+  [case id=xap-compose-021-resolve-ambiguous-is-a-value level=core
+   [tags xap-compose resolve rho ambiguity n-compose-1]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=highlight [want 'to see strikes'] [so 'I avoid them']]]]]
+ [= $g [$xap:compose $chart $strikes]]
+ [$xap:resolve $g "highlight"]]
+#]]
+   [out-err [#
+cx-err:CXER4871
+#]]
+  ]
+
+  [case id=xap-compose-022-resolve-unknown-term level=core
+   [tags xap-compose resolve rho unknown]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $g [$xap:compose $chart]]
+ [$xap:resolve $g "warp"]]
+#]]
+   [out-err [#
+cx-err:CXER4872
+#]]
+  ]
+
+  [case id=xap-compose-023-n-compose-1-before-lane level=core
+   [tags xap-compose resolve rho n-compose-1]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $g [$xap:compose $chart]]
+ [$xap:resolve $g "highlight"]]
+#]]
+   [out-text [#
+'chart/highlight'
+#]]
+  ]
+
+  [case id=xap-compose-024-derived-signature-floor level=core
+   [tags xap-compose compose composite derived signature constituents]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=set-waypoint effect=act scope=shared consequence=reversible [intent [do :set-waypoint]] [writes viewport]]]
+   [requirements [requirement kind=functional as=user traces=set-waypoint [want 'to set a waypoint'] [so 'I can navigate']]]]]
+ [= $strikes
+ [feature name=strikes
+  [nouns [noun name=strike [field name=pos type=geo-point] [field name=at type=instant]]]
+  [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads strike]]]
+  [requirements [requirement kind=functional as=user traces=highlight [want 'to see strikes'] [so 'I avoid them']]]]]
+ [= $cpa-guard
+ [feature name=cpa-guard kind=composite
+  [uses features='chart strikes']
+  [nouns [noun name=threat derived=true [field name=level type=int] [from 'strikes joined against the chart viewport']]]
+  [verbs
+   [verb name=mark-threat effect=act scope=shared consequence=reversible
+    [intent [do :mark-threat]]
+    [constituents 'chart/set-waypoint strikes/highlight']
+    [reads threat]]]
+  [requirements [requirement kind=functional as=user traces=mark-threat [want 'to mark a threat'] [so 'the crew sees it']]]]]
+ [?let [= $g [$xap:compose $chart $strikes $cpa-guard]]
+  $g//verb[= $_@name 'cpa-guard/mark-threat']/@derived]]
+#]]
+   [out-text [#
+[derived true]
+#]]
+  ]
+
+  [case id=xap-compose-025-derived-signature-weakening-rejected level=core
+   [tags xap-compose compose composite derived signature weakening]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=set-waypoint effect=act scope=shared consequence=reversible [intent [do :set-waypoint]] [writes viewport]]]
+   [requirements [requirement kind=functional as=user traces=set-waypoint [want 'to set a waypoint'] [so 'I can navigate']]]]]
+ [= $weak-guard
+ [feature name=weak-guard kind=composite
+  [uses features=chart]
+  [nouns [noun name=threat derived=true [field name=level type=int] [from 'a projection over chart waypoints']]]
+  [verbs
+   [verb name=mark-threat effect=observe
+    [intent [do :mark-threat]]
+    [constituents 'chart/set-waypoint']
+    [reads threat]]]
+  [requirements [requirement kind=functional as=user traces=mark-threat [want 'to mark a threat'] [so 'the crew sees it']]]]]
+ [$xap:compose $chart $weak-guard]]
+#]]
+   [out-err [#
+cx-err:CXER4870
+#]]
+  ]
+
+  [case id=xap-compose-026-marine-composite-closure level=core
+   [tags xap-compose compose composite marine derived-noun closure]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $own-ship
+  [feature name=own-ship
+   [frames [use frame=geo via=position] [use frame=time via=observed-at]]
+   [nouns [noun name=own-ship singular=true [field name=position type=geo-point] [field name=cog type=deg] [field name=sog type=knots] [field name=observed-at type=instant]]]
+   [verbs [verb name=read-instruments effect=observe [intent [do :read-instruments]] [reads own-ship]]]
+   [requirements [requirement kind=functional as=skipper traces=read-instruments [want 'to read my instruments'] [so 'I know my state']]]]]
+ [= $traffic
+ [feature name=traffic
+  [frames [use frame=geo via=position] [use frame=time via=observed-at]]
+  [keys [key name=mmsi via=mmsi]]
+  [nouns [noun name=vessel [field name=mmsi type=mmsi] [field name=position type=geo-point] [field name=cog type=deg] [field name=sog type=knots] [field name=observed-at type=instant]]]
+  [verbs [verb name=list-targets effect=observe [intent [do :list-targets]] [reads vessel]]]
+  [requirements [requirement kind=functional as=skipper traces=list-targets [want 'to see nearby traffic'] [so 'I avoid it']]]]]
+ [= $collision-cpa
+ [feature name=collision-cpa kind=composite
+  [uses features='own-ship traffic']
+  [frames [use frame=geo] [use frame=time]]
+  [nouns [noun name=cpa derived=true [field name=vessel type=mmsi] [field name=cpa-dist type=nm] [field name=tcpa type=minutes] [from 'per traffic vessel, closest point of approach from own-ship and vessel course/speed over the time frame']]]
+  [verbs [verb name=cpa-threats effect=observe [intent [do :cpa-threats]] [reads cpa]]]
+  [requirements [requirement kind=functional as=skipper traces=cpa-threats [want 'closing vessels flagged'] [so 'I can avoid collision']]]]]
+ [?let [= $g [$xap:compose $own-ship $traffic $collision-cpa]]
+  $g//noun[= $_@name 'collision-cpa/cpa']/@derived]]
+#]]
+   [out-text [#
+[derived true]
+#]]
+  ]
+
+  [case id=xap-compose-027-composite-emit-denied-without-leaf-grant level=core
+   [tags xap-compose emit pep n-compose-2 constituents]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs
+    [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]
+    [verb name=chime effect=observe [intent [do :chime]] [reads door]]]
+   [requirements
+    [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]
+    [requirement kind=functional as=resident traces=chime [want 'to sound the chime'] [so 'arrival is announced']]]]]
+ [= $porch
+ [feature name=porch kind=composite
+  [uses features=door]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [verbs
+   [verb name=welcome effect=act scope=shared consequence=irreversible
+    [intent [do :welcome]]
+    [constituents 'door/unlock door/chime']
+    [reads visit]]]
+  [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
+ [= $g [$xap:compose $door $porch]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/chime']]]
+ [$xap:emit $rt [do :welcome] {actor: "agent:porter-1"}]]
+#]]
+   [out-err [#
+cx-err:CXER4850
+#]]
+  ]
+
+  [case id=xap-compose-028-composite-wrapper-grant-conveys-nothing level=core
+   [tags xap-compose emit pep n-compose-2 wrapper]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs
+    [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]
+    [verb name=chime effect=observe [intent [do :chime]] [reads door]]]
+   [requirements
+    [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]
+    [requirement kind=functional as=resident traces=chime [want 'to sound the chime'] [so 'arrival is announced']]]]]
+ [= $porch
+ [feature name=porch kind=composite
+  [uses features=door]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [verbs
+   [verb name=welcome effect=act scope=shared consequence=irreversible
+    [intent [do :welcome]]
+    [constituents 'door/unlock door/chime']
+    [reads visit]]]
+  [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
+ [= $g [$xap:compose $door $porch]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'porch/welcome']]]
+ [$xap:emit $rt [do :welcome] {actor: "agent:porter-1"}]]
+#]]
+   [out-err [#
+cx-err:CXER4850
+#]]
+  ]
+
+  [case id=xap-compose-029-composite-emit-admitted-with-leaf-grants level=core
+   [tags xap-compose emit pep n-compose-2 constituents]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs
+    [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]
+    [verb name=chime effect=observe [intent [do :chime]] [reads door]]]
+   [requirements
+    [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]
+    [requirement kind=functional as=resident traces=chime [want 'to sound the chime'] [so 'arrival is announced']]]]]
+ [= $porch
+ [feature name=porch kind=composite
+  [uses features=door]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [verbs
+   [verb name=welcome effect=act scope=shared consequence=irreversible
+    [intent [do :welcome]]
+    [constituents 'door/unlock door/chime']
+    [reads visit]]]
+  [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
+ [= $g [$xap:compose $door $porch]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $d1 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/unlock']]]
+ [= $d2 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/chime']]]
+ [$xap:emit $rt [do :welcome] {actor: "agent:porter-1"}]]
+#]]
+   [out-text [#
+[event actor=agent:porter-1 [do 'porch/welcome']]
+#]]
+  ]
+
+  [case id=xap-compose-030-nested-composite-intermediate-grant-insufficient level=core
+   [tags xap-compose emit pep n-compose-2 transitive]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs
+    [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]
+    [verb name=chime effect=observe [intent [do :chime]] [reads door]]]
+   [requirements
+    [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]
+    [requirement kind=functional as=resident traces=chime [want 'to sound the chime'] [so 'arrival is announced']]]]]
+ [= $porch
+ [feature name=porch kind=composite
+  [uses features=door]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [verbs
+   [verb name=welcome effect=act scope=shared consequence=irreversible
+    [intent [do :welcome]]
+    [constituents 'door/unlock door/chime']
+    [reads visit]]]
+  [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
+ [= $estate
+ [feature name=estate kind=composite
+  [uses features=porch]
+  [nouns [noun name=open-day derived=true [field name=visits type=int] [from 'porch visits folded per day']]]
+  [verbs
+   [verb name=open-house effect=act scope=shared consequence=irreversible
+    [intent [do :open-house]]
+    [constituents 'porch/welcome']
+    [reads open-day]]]
+  [requirements [requirement kind=functional as=resident traces=open-house [want 'to run an open house'] [so 'visitors flow in']]]]]
+ [= $g [$xap:compose $door $porch $estate]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'porch/welcome']]]
+ [$xap:emit $rt [do :open-house] {actor: "agent:porter-1"}]]
+#]]
+   [out-err [#
+cx-err:CXER4850
+#]]
+  ]
+
+  [case id=xap-compose-031-nested-composite-leaf-grants-admit level=core
+   [tags xap-compose emit pep n-compose-2 transitive]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs
+    [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]
+    [verb name=chime effect=observe [intent [do :chime]] [reads door]]]
+   [requirements
+    [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]
+    [requirement kind=functional as=resident traces=chime [want 'to sound the chime'] [so 'arrival is announced']]]]]
+ [= $porch
+ [feature name=porch kind=composite
+  [uses features=door]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [verbs
+   [verb name=welcome effect=act scope=shared consequence=irreversible
+    [intent [do :welcome]]
+    [constituents 'door/unlock door/chime']
+    [reads visit]]]
+  [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
+ [= $estate
+ [feature name=estate kind=composite
+  [uses features=porch]
+  [nouns [noun name=open-day derived=true [field name=visits type=int] [from 'porch visits folded per day']]]
+  [verbs
+   [verb name=open-house effect=act scope=shared consequence=irreversible
+    [intent [do :open-house]]
+    [constituents 'porch/welcome']
+    [reads open-day]]]
+  [requirements [requirement kind=functional as=resident traces=open-house [want 'to run an open house'] [so 'visitors flow in']]]]]
+ [= $g [$xap:compose $door $porch $estate]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $d1 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/unlock']]]
+ [= $d2 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/chime']]]
+ [$xap:emit $rt [do :open-house] {actor: "agent:porter-1"}]]
+#]]
+   [out-text [#
+[event actor=agent:porter-1 [do 'estate/open-house']]
+#]]
+  ]
+
+  [case id=xap-compose-032-emit-bare-ambiguous-raises level=core
+   [tags xap-compose emit rho ambiguity runtime]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs [verb name=welcome effect=observe [intent [do :welcome]] [reads door]]]
+   [requirements [requirement kind=functional as=resident traces=welcome [want 'to greet at the door'] [so 'guests feel seen']]]]]
+ [= $lobby
+ [feature name=lobby
+  [nouns [noun name=desk singular=true [field name=staffed type=int]]]
+  [verbs [verb name=welcome effect=observe [intent [do :welcome]] [reads desk]]]
+  [requirements [requirement kind=functional as=resident traces=welcome [want 'to greet at the desk'] [so 'guests feel seen']]]]]
+ [= $g [$xap:compose $door $lobby]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [$xap:emit $rt [do :welcome]]]
+#]]
+   [out-err [#
+cx-err:CXER4871
+#]]
+  ]
+
+  [case id=xap-compose-033-emit-unknown-term-raises level=core
+   [tags xap-compose emit rho unknown runtime]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+   [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]]
+ [= $g [$xap:compose $door]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [$xap:emit $rt [do :warp]]]
+#]]
+   [out-err [#
+cx-err:CXER4872
+#]]
+  ]
+
+  [case id=xap-compose-034-emit-commits-qualified-intent level=core
+   [tags xap-compose emit rho qualified runtime]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]]
+   [requirements [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]]
+ [= $g [$xap:compose $door]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [$xap:emit $rt [do :unlock]]]
+#]]
+   [out-text [#
+[do 'door/unlock']
+#]]
+  ]
+
+  [case id=xap-compose-035-why-allowed-composite-denies-on-missing-leaf level=core
+   [tags xap-compose why-allowed pep n-compose-2]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs
+    [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]
+    [verb name=chime effect=observe [intent [do :chime]] [reads door]]]
+   [requirements
+    [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]
+    [requirement kind=functional as=resident traces=chime [want 'to sound the chime'] [so 'arrival is announced']]]]]
+ [= $porch
+ [feature name=porch kind=composite
+  [uses features=door]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [verbs
+   [verb name=welcome effect=act scope=shared consequence=irreversible
+    [intent [do :welcome]]
+    [constituents 'door/unlock door/chime']
+    [reads visit]]]
+  [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
+ [= $g [$xap:compose $door $porch]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'porch/welcome']]]
+ [?let [= $w [$xap:why-allowed $rt [do :welcome] {actor: "agent:porter-1"}]]
+  $w/@allowed]]
+#]]
+   [out-text [#
+'false'
+#]]
+  ]
+
+  [case id=xap-compose-036-why-allowed-composite-permits-with-leaf-grants level=core
+   [tags xap-compose why-allowed pep n-compose-2]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $door
+  [feature name=door
+   [nouns [noun name=door singular=true [field name=locked type=int]]]
+   [verbs
+    [verb name=unlock effect=act scope=shared consequence=irreversible [intent [do :unlock]] [writes door]]
+    [verb name=chime effect=observe [intent [do :chime]] [reads door]]]
+   [requirements
+    [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]
+    [requirement kind=functional as=resident traces=chime [want 'to sound the chime'] [so 'arrival is announced']]]]]
+ [= $porch
+ [feature name=porch kind=composite
+  [uses features=door]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [verbs
+   [verb name=welcome effect=act scope=shared consequence=irreversible
+    [intent [do :welcome]]
+    [constituents 'door/unlock door/chime']
+    [reads visit]]]
+  [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
+ [= $g [$xap:compose $door $porch]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $d1 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/unlock']]]
+ [= $d2 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/chime']]]
+ [?let [= $w [$xap:why-allowed $rt [do :welcome] {actor: "agent:porter-1"}]]
+  $w/@allowed]]
+#]]
+   [out-text [#
+'true'
+#]]
+  ]
+]

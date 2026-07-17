@@ -48,6 +48,7 @@
  [elem in-code   [card "0..1"]]    # CX program to evaluate (eval fixtures)
  [elem in-xml    [card "0..1"]]    # XML input (xml-import fixtures)
  [elem in-md     [card "0..1"]]    # Markdown input
+ [elem in-yaml   [card "0..1"]]    # YAML input (yaml-import fixtures)
  [elem in-a      [card "0..1"]]    # left operand  (diff fixtures)
  [elem in-b      [card "0..1"]]    # right operand (diff fixtures)
  [elem source    [card "0..1"]]    # document validated against a schema
@@ -81,6 +82,7 @@
 [type in-code::any]
 [type in-xml::any]
 [type in-md::any]
+[type in-yaml::any]
 [type in-a::any]
 [type in-b::any]
 [type source::any]

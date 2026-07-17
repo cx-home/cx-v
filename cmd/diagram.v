@@ -36,9 +36,6 @@ fn run_diagram(args []string) {
 			i++
 		} else if a.starts_with('-o=') {
 			out_path = a[3..]
-		} else if a == '--help' || a == '-h' {
-			eprintln('Usage: cx diagram program.cx [--format=mermaid|svg|png] [-o out.file]')
-			return
 		} else if !a.starts_with('-') {
 			program_path = a
 		}

@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 import net
 
@@ -13,11 +14,7 @@ import net
 // A minimal V HTTP/1.1 server backs it; the cx program is the CLIENT.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // Disjoint PID + nanosecond-salted band (25200-25299) so the concurrent

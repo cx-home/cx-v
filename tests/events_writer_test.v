@@ -179,12 +179,52 @@ fn test_chunked_table_round_trip_through_writer() {
 	w.emit_end_doc() or { panic('end_doc: ${err}') }
 	out := w.close_get_bytes() or { panic('close: ${err}') }
 	s := out.bytestr()
-	assert s.contains(':table'), 'expected :table in output; got "${s}"'
+	// #487 re-bless: the writer previously emitted the RETIRED pre-cutover
+	// surface `[points :table[name:string score:i32]` (v0.7 meta-slot
+	// opener + single-colon column types) — text the live grammar rejects,
+	// which the old `doc.elements.len > 0` assert could not see (the
+	// parser produced silent non-table garbage). The pin is now the
+	// CURRENT `[table[name::type …]]` clause-child form (grammar [29]/[29b])
+	// plus a STRUCTURAL re-parse: the table element must come back as a
+	// real TableData payload with the typed cells intact. (String columns
+	// render UNANNOTATED — grammar [29b]: untyped defaults to ::string;
+	// column_type_name_from_code drops the string tag on emit.)
+	assert s.contains('[table[name score::i32]]'), 'expected current [table[…]] clause form in output; got "${s}"'
 	assert s.contains('alice'), 'expected alice in output; got "${s}"'
 	assert s.contains('91'), 'expected 91 in output; got "${s}"'
-	// Re-parse to assert structural integrity.
 	doc := cx.parse(s) or { panic('reparse failed (${err}); src=${s}') }
-	assert doc.elements.len > 0, 'expected non-empty round-trip parse'
+	assert doc.elements.len == 1, 'expected a single root; got ${doc.elements.len}'
+	root := doc.elements[0]
+	assert root is cx.Element, 'expected Element root'
+	outer := root as cx.Element
+	assert outer.name == 'points'
+	// The chunked table rides as the (writer-convention) same-named child
+	// element of the enclosing StartElement.
+	mut found_table := false
+	for it in outer.items {
+		if it is cx.Element {
+			inner := it as cx.Element
+			if inner.name == 'points' {
+				td := inner.table_opt() or { continue }
+				assert td.cols.len == 2
+				assert td.cols[0].name == 'name'
+				assert td.cols[0].type_name == '' // string default, unannotated
+				assert td.cols[1].name == 'score'
+				assert td.cols[1].type_name == 'i32'
+				assert td.rows.len == 2
+				c00 := td.rows[0][0]
+				c01 := td.rows[0][1]
+				c10 := td.rows[1][0]
+				c11 := td.rows[1][1]
+				assert c00 is string && c00 as string == 'alice'
+				assert c01 is i64 && c01 as i64 == 91
+				assert c10 is string && c10 as string == 'bob'
+				assert c11 is i64 && c11 as i64 == 88
+				found_table = true
+			}
+		}
+	}
+	assert found_table, 'chunked table did not re-parse as a TableData element; src=${s}'
 }
 
 // emit_xml_inline previously dropped SequenceNode / ArrayNode / MapNode
@@ -207,8 +247,8 @@ fn test_xml_inline_sequence_round_trip() {
 	}
 	out := cx.emit_xml(doc)
 	assert out.contains('<cx:seq>'), 'expected nested <cx:seq> inside <parent>; got: ${out}'
-	assert out.contains('<item>1</item>'), 'expected <item>1</item>; got: ${out}'
-	assert out.contains('<item>2</item>'), 'expected <item>2</item>; got: ${out}'
+	assert out.contains('<cx:item>1</cx:item>'), 'expected <cx:item>1</cx:item>; got: ${out}'
+	assert out.contains('<cx:item>2</cx:item>'), 'expected <cx:item>2</cx:item>; got: ${out}'
 }
 
 fn test_xml_inline_array_round_trip() {
@@ -227,8 +267,8 @@ fn test_xml_inline_array_round_trip() {
 	}
 	out := cx.emit_xml(doc)
 	assert out.contains('<cx:arr>'), 'expected nested <cx:arr> inside <parent>; got: ${out}'
-	assert out.contains('<item>a</item>'), 'expected <item>a</item>; got: ${out}'
-	assert out.contains('<item>b</item>'), 'expected <item>b</item>; got: ${out}'
+	assert out.contains('<cx:item>a</cx:item>'), 'expected <cx:item>a</cx:item>; got: ${out}'
+	assert out.contains('<cx:item>b</cx:item>'), 'expected <cx:item>b</cx:item>; got: ${out}'
 }
 
 fn test_xml_inline_map_round_trip() {
@@ -250,7 +290,7 @@ fn test_xml_inline_map_round_trip() {
 	}
 	out := cx.emit_xml(doc)
 	assert out.contains('<cx:map>'), 'expected nested <cx:map> inside <parent>; got: ${out}'
-	assert out.contains('<entry key="k">'), 'expected entry key="k"; got: ${out}'
+	assert out.contains('<cx:entry cx:key="k">'), 'expected cx:entry cx:key="k"; got: ${out}'
 }
 
 fn test_xml_emit_basic() {

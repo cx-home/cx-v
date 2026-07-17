@@ -197,21 +197,28 @@ fn test_path_emits_canonical_terse_form_in_ast_json() {
 	assert json.contains('//user/name'), 'expected canonical //user/name in AST-JSON, got: ${json}'
 }
 
-// ── no $doc bound → empty sequence (truthiness friendly, §5.5.1 D4) ─
+// ── no $doc bound → CXER0001 (code.md §1.3; XPDY0002 parity, #454) ─
+//
+// Pre-#454 this pinned a silent empty sequence; a doc-rooted query with
+// UNBOUND $doc now raises loud, consistent with reading $doc directly
+// and with the [?for] pattern-as-source generator. A BOUND $doc that
+// merely matches nothing still yields the empty sequence — that case is
+// covered by test_path_no_match_yields_empty-style cases and fixture
+// program-cxpath-009-no-match-returns-empty.
 
-fn test_path_with_no_doc_binding_returns_empty() {
+fn test_path_with_no_doc_binding_raises_unbound_doc() {
 	mut env := new_env()
 	prog := cx.parse_program('//anything') or {
 		assert false, 'parse failed: ${err}'
 		return
 	}
 	// No $doc bound in the env.
-	result := eval(prog.body, mut env) or {
-		assert false, 'eval should return empty, not error: ${err}'
-		return
+	if result := eval(prog.body, mut env) {
+		assert false, 'expected cx-err:CXER0001 (unbound \$doc), got value: ${result}'
+	} else {
+		assert err.msg().contains('CXER0001'), 'expected CXER0001, got: ${err.msg()}'
+		assert err.msg().contains('requires \$doc'), 'expected the requires-\$doc message, got: ${err.msg()}'
 	}
-	names := element_names(result)
-	assert names.len == 0, 'expected empty sequence when no $doc bound'
 }
 
 // ── chunk-2: predicates ────────────────────────────────────────────
@@ -221,7 +228,7 @@ fn test_path_predicate_attr_equality_filters_matches() {
 		assert false, 'doc parse: ${err}'
 		return
 	}
-	result := eval_path_against('//user[@active=true]', doc) or {
+	result := eval_path_against('//user[= \$_@active true]', doc) or {
 		assert false, 'eval: ${err}'
 		return
 	}
@@ -260,7 +267,7 @@ fn test_path_predicate_attr_comparison_ge() {
 		assert false, 'doc parse: ${err}'
 		return
 	}
-	result := eval_path_against('//user[@age>=18]', doc) or {
+	result := eval_path_against('//user[>= \$_@age 18]', doc) or {
 		assert false, 'eval: ${err}'
 		return
 	}
@@ -300,7 +307,7 @@ fn test_path_predicate_conjunctive() {
 		return
 	}
 	// First active user — conjunctive predicates [@active=true][1].
-	result := eval_path_against('//user[@active=true][1]', doc) or {
+	result := eval_path_against('//user[= \$_@active true][1]', doc) or {
 		assert false, 'eval: ${err}'
 		return
 	}
@@ -448,11 +455,11 @@ fn test_path_axis_attribute_emits_attribute_wrappers() {
 // ── chunk-2: ast_json canonical emit ──────────────────────────────
 
 fn test_path_emits_predicate_in_canonical_form() {
-	json := program_ast_json('//user[@active=true]') or {
+	json := program_ast_json('//user[= \$_@active true]') or {
 		assert false, 'ast_json: ${err}'
 		return
 	}
-	assert json.contains('//user[@active=true]'), 'expected canonical predicate emit, got: ${json}'
+	assert json.contains('//user[= \$_@active true]'), 'expected canonical predicate emit, got: ${json}'
 }
 
 fn test_path_emits_positional_predicate_in_canonical_form() {

@@ -104,7 +104,7 @@ fn emit_xml_node(n Node, depth int, lossless bool, mut out []string) {
 	}
 }
 
-// emit_xml_sequence renders a SequenceNode as `<cx:seq><item>…</item>…</cx:seq>`
+// emit_xml_sequence renders a SequenceNode as `<cx:seq><cx:item>…</cx:item>…</cx:seq>`
 // per (the W015 wrapping convention). Sequences emit
 // post-flatten per CXDM §1.2.
 fn emit_xml_sequence(n SequenceNode, depth int, lossless bool, mut out []string) {
@@ -115,14 +115,14 @@ fn emit_xml_sequence(n SequenceNode, depth int, lossless bool, mut out []string)
 	}
 	out << '${ind}<cx:seq>'
 	for item in n.items {
-		out << '<item>'
+		out << '<cx:item>'
 		emit_xml_inline_node(item, lossless, mut out)
-		out << '</item>'
+		out << '</cx:item>'
 	}
 	out << '</cx:seq>\n'
 }
 
-// emit_xml_array renders an ArrayNode as `<cx:arr><item>…</item>…</cx:arr>`.
+// emit_xml_array renders an ArrayNode as `<cx:arr><cx:item>…</cx:item>…</cx:arr>`.
 // Nested arrays preserve structure (ArrayNode children emit recursively).
 fn emit_xml_array(n ArrayNode, depth int, lossless bool, mut out []string) {
 	ind := xml_indent(depth)
@@ -132,15 +132,15 @@ fn emit_xml_array(n ArrayNode, depth int, lossless bool, mut out []string) {
 	}
 	out << '${ind}<cx:arr>'
 	for item in n.items {
-		out << '<item>'
+		out << '<cx:item>'
 		emit_xml_inline_node(item, lossless, mut out)
-		out << '</item>'
+		out << '</cx:item>'
 	}
 	out << '</cx:arr>\n'
 }
 
-// emit_xml_map renders a MapNode as `<cx:map><entry key="…">…</entry>…</cx:map>`.
-// Non-string keys carry a cx:key-type attribute alongside key for round-trip.
+// emit_xml_map renders a MapNode as `<cx:map><cx:entry cx:key="…">…</cx:entry>…</cx:map>` (conversions.md §2.1).
+// Non-string keys carry a cx:key-type attribute alongside cx:key for round-trip.
 fn emit_xml_map(n MapNode, depth int, lossless bool, mut out []string) {
 	ind := xml_indent(depth)
 	if n.entries.len == 0 {
@@ -155,9 +155,9 @@ fn emit_xml_map(n MapNode, depth int, lossless bool, mut out []string) {
 		} else {
 			' cx:key-type="${scalar_type_name(entry.key_type)}"'
 		}
-		out << '<entry key="${xml_escape_attr(key_str)}"${key_type_attr}>'
+		out << '<cx:entry cx:key="${xml_escape_attr(key_str)}"${key_type_attr}>'
 		emit_xml_inline_node(entry.value, lossless, mut out)
-		out << '</entry>'
+		out << '</cx:entry>'
 	}
 	out << '</cx:map>\n'
 }
@@ -166,13 +166,7 @@ fn emit_xml_eval_directive(n EvalDirectiveNode, depth int, lossless bool, mut ou
 	ind := xml_indent(depth)
 	mut attr_str := ''
 	for a in n.attrs {
-		if body_items := a.body() {
-			mut tmp := []string{}
-			for item in body_items { emit_xml_inline_node(item, lossless, mut tmp) }
-			attr_str += ' ${a.name}="${xml_escape_attr(tmp.join(''))}"'
-		} else {
-			attr_str += ' ${a.name}="${xml_escape_attr(a.str_value())}"'
-		}
+		attr_str += ' ${a.name}="${xml_escape_attr(a.str_value())}"'
 	}
 	if n.items.len == 0 {
 		out << '${ind}<cx:eval name="${n.name}"${attr_str}/>\n'
@@ -254,6 +248,18 @@ fn emit_xml_element(e Element, depth int, lossless bool, mut out []string) {
 		attr_str += ' cx:attr-types="${xml_escape_attr(at)}"'
 	}
 
+	// `[table]` block (#413, conversions.md §2.1): the table payload lives in
+	// the pooled `table` field, NOT in `items`, so the generic body walk below
+	// would emit an empty element and silently drop every row. Emit the
+	// declared columns as the reserved `cx:cols` sidecar and each row as a
+	// reserved `<cx:row>` of `<cx:cell>` children (both modes — the rows are
+	// data, not a lossless-only nicety). Inverse: xml_parser's cx:type="table"
+	// + cx:cols reconstruction.
+	if td := e.table_opt() {
+		emit_xml_table_element(e.name, attr_str, td, depth, mut out)
+		return
+	}
+
 	if e.items.len == 0 {
 		out << '${ind}<${e.name}${attr_str}/>\n'
 		return
@@ -264,7 +270,7 @@ fn emit_xml_element(e Element, depth int, lossless bool, mut out []string) {
 		out << '${ind}<${e.name}${attr_str}>'
 		for item in e.items {
 			if item is ScalarNode {
-				out << '<item>${xml_scalar_text(item as ScalarNode)}</item>'
+				out << '<cx:item>${xml_scalar_text(item as ScalarNode)}</cx:item>'
 			}
 		}
 		out << '</${e.name}>\n'
@@ -276,7 +282,7 @@ fn emit_xml_element(e Element, depth int, lossless bool, mut out []string) {
 	// array (no element cx:type) and NOT prose. Each typed scalar serializes to a
 	// per-item `<cx:TYPE>value</cx:TYPE>` carrier (ruling a, 2026-06-05); string
 	// scalars / text render bare, child elements nest. This is the lossless,
-	// bijective form (distinct from the `<item>` array shape above) and matches
+	// bijective form (distinct from the `<cx:item>` array shape above) and matches
 	// the formal-witness canonical XML. xml_parser decodes `<cx:T>` back to items.
 	// LOSSLESS routes typed-scalar bodies through the per-item `<cx:T>` carrier
 	// path so the XML→CX round-trip is faithful (conversions.md §0.2):
@@ -313,6 +319,111 @@ fn emit_xml_element(e Element, depth int, lossless bool, mut out []string) {
 		out << '${ind}<${e.name}${attr_str}>\n'
 		for item in e.items { emit_xml_node(item, depth + 1, lossless, mut out) }
 		out << '${ind}</${e.name}>\n'
+	}
+}
+
+// emit_xml_table_element renders a `[table]`-block element (#413,
+// conversions.md §2.1). The header goes into the reserved `cx:cols`
+// attribute — space-separated `name::type` tokens, exactly the canonical CX
+// header text (untyped columns are the bare name). Each row is a reserved
+// `<cx:row>` whose cells are `<cx:cell>` children in column order:
+//   • a scalar cell whose bare text re-imports (per its column's declared
+//     type) to the same value renders as escaped text;
+//   • a scalar cell the column-driven recovery would MIS-type (a string
+//     cell under a non-string column, the string 'null', whitespace-only
+//     strings, a variant that disagrees with the declared column) gets a
+//     `<cx:TYPE>` carrier — the same convention as typed-list items;
+//   • a null cell is `<cx:null/>` (distinct from the empty string `<cx:cell/>`);
+//   • collection cells reuse the cx:arr / cx:map / cx:seq carriers.
+// A header-only table (zero rows) self-closes.
+fn emit_xml_table_element(name string, attr_str string, td TableData, depth int, mut out []string) {
+	ind := xml_indent(depth)
+	mut header_parts := []string{}
+	for col in td.cols {
+		if col.type_name == '' {
+			header_parts << col.name
+		} else {
+			header_parts << '${col.name}::${col.type_name}'
+		}
+	}
+	full_attr := attr_str + ' cx:cols="${xml_escape_attr(header_parts.join(' '))}"'
+	if td.rows.len == 0 {
+		out << '${ind}<${name}${full_attr}/>\n'
+		return
+	}
+	out << '${ind}<${name}${full_attr}>\n'
+	row_ind := xml_indent(depth + 1)
+	for row in td.rows {
+		mut cells := []string{}
+		for i, cell in row {
+			ct := if i < td.cols.len { td.cols[i].type_name } else { '' }
+			cells << xml_table_cell(cell, ct)
+		}
+		out << '${row_ind}<cx:row>${cells.join('')}</cx:row>\n'
+	}
+	out << '${ind}</${name}>\n'
+}
+
+// xml_table_cell renders one table cell (see emit_xml_table_element). The
+// bare-text form is used only when xml_recover_bare_cell — the exact decode
+// the XML import applies — would reproduce the value; otherwise the cell
+// carries an explicit `<cx:TYPE>` wrapper so the round-trip stays faithful.
+fn xml_table_cell(v TableCellValue, col_type string) string {
+	match v {
+		NullValue { return '<cx:cell><cx:null/></cx:cell>' }
+		ArrayNode {
+			mut tmp := []string{}
+			emit_xml_array_inline(v, true, mut tmp)
+			return '<cx:cell>${tmp.join('')}</cx:cell>'
+		}
+		MapNode {
+			mut tmp := []string{}
+			emit_xml_map_inline(v, true, mut tmp)
+			return '<cx:cell>${tmp.join('')}</cx:cell>'
+		}
+		SequenceNode {
+			mut tmp := []string{}
+			emit_xml_sequence_inline(v, true, mut tmp)
+			return '<cx:cell>${tmp.join('')}</cx:cell>'
+		}
+		i64    { return xml_scalar_cell(v, v.str(), 'int', col_type) }
+		f64    { return xml_scalar_cell(v, format_float(v), 'float', col_type) }
+		bool   { return xml_scalar_cell(v, if v { 'true' } else { 'false' }, 'bool', col_type) }
+		string {
+			if v.len == 0 {
+				// The empty string round-trips as the empty cell (only a
+				// string cell can be empty; the import maps <cx:cell/> to '').
+				return '<cx:cell/>'
+			}
+			return xml_scalar_cell(v, v, 'string', col_type)
+		}
+	}
+}
+
+// xml_scalar_cell renders a scalar cell: bare escaped text when the
+// import-side probe reproduces the value, else the `<cx:TYPE>` carrier.
+fn xml_scalar_cell(v TableCellValue, text string, type_name string, col_type string) string {
+	if xml_bare_cell_roundtrips(v, text, col_type) {
+		return '<cx:cell>${xml_escape_text(text)}</cx:cell>'
+	}
+	return '<cx:cell><cx:${type_name}>${xml_escape_text(text)}</cx:${type_name}></cx:cell>'
+}
+
+// xml_bare_cell_roundtrips probes the import-side decode: bare text is only
+// safe when xml_recover_bare_cell(text, col_type) returns the same scalar.
+fn xml_bare_cell_roundtrips(v TableCellValue, text string, col_type string) bool {
+	// Whitespace-only text is dropped by the XML content walk — never bare.
+	if text.trim_space().len == 0 {
+		return false
+	}
+	recovered := xml_recover_bare_cell(text, col_type)
+	return match v {
+		i64       { recovered is i64 && (recovered as i64) == v }
+		f64       { recovered is f64 && (recovered as f64) == v }
+		bool      { recovered is bool && (recovered as bool) == v }
+		string    { recovered is string && (recovered as string) == v }
+		NullValue { recovered is NullValue }
+		else      { false }
 	}
 }
 
@@ -410,9 +521,9 @@ fn emit_xml_sequence_inline(n SequenceNode, lossless bool, mut out []string) {
 	}
 	out << '<cx:seq>'
 	for item in n.items {
-		out << '<item>'
+		out << '<cx:item>'
 		emit_xml_inline_node(item, lossless, mut out)
-		out << '</item>'
+		out << '</cx:item>'
 	}
 	out << '</cx:seq>'
 }
@@ -424,9 +535,9 @@ fn emit_xml_array_inline(n ArrayNode, lossless bool, mut out []string) {
 	}
 	out << '<cx:arr>'
 	for item in n.items {
-		out << '<item>'
+		out << '<cx:item>'
 		emit_xml_inline_node(item, lossless, mut out)
-		out << '</item>'
+		out << '</cx:item>'
 	}
 	out << '</cx:arr>'
 }
@@ -444,9 +555,9 @@ fn emit_xml_map_inline(n MapNode, lossless bool, mut out []string) {
 		} else {
 			' cx:key-type="${scalar_type_name(entry.key_type)}"'
 		}
-		out << '<entry key="${xml_escape_attr(key_str)}"${key_type_attr}>'
+		out << '<cx:entry cx:key="${xml_escape_attr(key_str)}"${key_type_attr}>'
 		emit_xml_inline_node(entry.value, lossless, mut out)
-		out << '</entry>'
+		out << '</cx:entry>'
 	}
 	out << '</cx:map>'
 }

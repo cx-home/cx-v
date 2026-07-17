@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 
 // a2a_real_test.v — BEHAVIORAL coverage for cx-x/a2a (#6 Y2). The pure layer
@@ -11,11 +12,7 @@ import time
 // through CX on both ends — completing the agentic triad (MCP client/server + A2A).
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // pick_port: a2a owns the disjoint band 23000-23799, salted with PID + the

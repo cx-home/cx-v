@@ -311,7 +311,7 @@ fn test_arm_order_case_when_else_else_arm_wins() {
 
 fn test_attr_compare_equal_string() {
 	arms := [
-		cx.new_when_arm('@role = "admin"', ':admin-arm'),
+		cx.new_when_arm('= \$_@role "admin"', ':admin-arm'),
 		cx.new_else_arm(':non-admin-arm'),
 	]
 	n := cx.new_match_node(?string(none), arms)
@@ -327,7 +327,7 @@ fn test_attr_compare_equal_string() {
 
 fn test_attr_compare_greater_than_int() {
 	arms := [
-		cx.new_when_arm('@age > 17', ':adult'),
+		cx.new_when_arm('> \$_@age 17', ':adult'),
 		cx.new_else_arm(':minor'),
 	]
 	n := cx.new_match_node(?string(none), arms)
@@ -353,7 +353,7 @@ fn test_attr_compare_greater_than_int() {
 
 fn test_attr_compare_not_equal_string() {
 	arms := [
-		cx.new_when_arm('@status != "ok"', ':abnormal'),
+		cx.new_when_arm('!= \$_@status "ok"', ':abnormal'),
 		cx.new_else_arm(':normal'),
 	]
 	n := cx.new_match_node(?string(none), arms)
@@ -370,7 +370,7 @@ fn test_attr_compare_not_equal_string() {
 // the pattern-AND-guard composition.
 fn test_case_where_attr_compare_combines() {
 	arms := [
-		cx.new_case_arm_guarded('_', '@score >= 60', ':pass'),
+		cx.new_case_arm_guarded('_', '>= \$_@score 60', ':pass'),
 		cx.new_else_arm(':fail'),
 	]
 	n := cx.new_match_node(?string('\$row'), arms)
@@ -384,13 +384,13 @@ fn test_case_where_attr_compare_combines() {
 	assert r.body == ':pass'
 }
 
-// ── Unsupported predicate body → graceful error ──────────────────────────────
+// ── Retired infix surface + unsupported predicate body → graceful error ──────
 
-fn test_unsupported_predicate_body_returns_error() {
-	// `@a and @b` is outside the Phase 2.19 atomic-template parser
-	// scope (boolean-keyword pre-scan kicks in); the standalone
-	// evaluator surfaces a MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED
-	// error.
+fn test_retired_infix_and_predicate_body_returns_error() {
+	// `@a and @b` is the RETIRED infix boolean surface (#110). The
+	// data-mode predicate parser hard-errors (RETIRED_PREDICATE_SURFACE)
+	// and the standalone evaluator wraps that in its
+	// MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED envelope.
 	arms := [
 		cx.new_when_arm('@a and @b', ':never'),
 		cx.new_else_arm(':fallback'),
@@ -399,9 +399,45 @@ fn test_unsupported_predicate_body_returns_error() {
 	_ := code.eval_match_node(n, ctx_with_attrs(?string(none),
 		{ 'a': 'true', 'b': 'true' })) or {
 		assert err.msg().contains('MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED')
+		assert err.msg().contains('retired')
 		return
 	}
-	assert false, 'expected MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED error'
+	assert false, 'expected retired-surface predicate parse error'
+}
+
+fn test_retired_infix_attr_compare_body_returns_error() {
+	// Infix `@name OP value` is retired at predicate parse (#110); the
+	// canonical spelling is the prefix `OP $_@name value` (covered by the
+	// attr_compare tests above).
+	arms := [
+		cx.new_when_arm('@role = "admin"', ':never'),
+		cx.new_else_arm(':fallback'),
+	]
+	n := cx.new_match_node(?string(none), arms)
+	_ := code.eval_match_node(n, ctx_with_attrs(?string(none),
+		{ 'role': 'admin' })) or {
+		assert err.msg().contains('retired')
+		return
+	}
+	assert false, 'expected retired-surface predicate parse error'
+}
+
+fn test_canonical_bool_expr_body_not_supported_standalone() {
+	// Canonical prefix `and [@a] [@b]` PARSES (kind=bool_expr) but the
+	// Phase 2.7-standalone arm evaluator does not fold it — it surfaces
+	// the graceful kind-not-supported error (the dispatcher-bridge
+	// evaluator in predicate_eval.v owns the EBV fold).
+	arms := [
+		cx.new_when_arm('and [@a] [@b]', ':never'),
+		cx.new_else_arm(':fallback'),
+	]
+	n := cx.new_match_node(?string(none), arms)
+	_ := code.eval_match_node(n, ctx_with_attrs(?string(none),
+		{ 'a': 'true', 'b': 'true' })) or {
+		assert err.msg().contains('MATCH_PREDICATE_EVAL_NOT_YET_IMPLEMENTED')
+		return
+	}
+	assert false, 'expected kind-not-supported error for bool_expr arm'
 }
 
 // ── End-to-end: parse_match + eval_match_node round-trip ─────────────────────

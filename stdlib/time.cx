@@ -145,7 +145,7 @@
   [sig """-> int"""]
   [summary """Return a monotonic clock reading in nanoseconds, for measuring elapsed time."""]
   [example [code """[?lib 'cx-stdlib/time']
-[?let [= $a [$time:monotonic-now]] [?let [= $b [$time:monotonic-now]] [>= $b $a]]]"""] [expect """cx-err:CXER0271"""]]
+[?let [= $a [$time:monotonic-now]] [= $b [$time:monotonic-now]] [>= $b $a]]"""] [expect """cx-err:CXER0271"""]]
 ]
 [fn-doc name=now-mock scope=public purity=pure
   [sig """-> datetime"""]

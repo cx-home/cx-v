@@ -37,6 +37,17 @@ import sync
 pub struct MatchEnv {
 pub mut:
 	bindings    map[string]cx.Node
+	// bindings_shared: when true, `bindings` is ALIASED from an immutable
+	// template (not a private copy) — set on per-request dispatch envs (#317)
+	// so a dispatched request pays ZERO map clones until it actually writes a
+	// binding at request scope. The alias is read-only; any in-place write to
+	// `env.bindings` MUST call cow_bindings() first to clone-on-write. The
+	// template maps (ListenerHandler.enclosing_*, XapHost.henv_*) are written
+	// only during single-threaded listener/host construction and NEVER after
+	// reactors spawn, so concurrent executor-thread readers are safe (§10.5
+	// isolation: a request's mutations land in its private CoW copy, never in
+	// the shared template — verified by http_request_env_isolation_test.v).
+	bindings_shared bool
 	closures    map[string]Closure
 	// closures_shared: when true, `closures` is ALIASED from the enclosing call
 	// frame (not a private copy) — set on closure-call envs to avoid copying the
@@ -89,6 +100,18 @@ pub mut:
 	// lambda (defining_scope=nil) — there an in-body [?fn] keeps the prior
 	// captured_bindings + caller-closures behavior.
 	cur_defining_scope &Scope = unsafe { nil }
+	// current_worker is the WorkerRecord of the concurrent [?worker] whose
+	// body this evaluation runs inside (nil on the main program thread and
+	// in every other spawned context). It is the §10.5.4 cancellation signal
+	// for the worker-side cancellation points — [?send] / [?receive] /
+	// [?try-send] / [?try-receive] / [?check-cancel] / [?sleep] / the [?for]
+	// iteration boundary — which observe `current_worker.cancelled` and
+	// report CXER0260. Thread-scoped like frame_pool: set once by
+	// run_worker_thread and propagated through same-thread env derivations
+	// (clone / clone_frame_sharing_closures / closure call envs); spawned
+	// sub-contexts ([?for :par] tasks, [?test-concurrent] tasks, service
+	// listeners) deliberately start nil.
+	current_worker &WorkerRecord = unsafe { nil }
 }
 
 // FramePool: per-thread free-list of reusable closure call-frame binding maps. See the
@@ -317,6 +340,20 @@ pub mut:
 	// would be the production choice once cooperative cancellation
 	// is wired through the worker scheduler (Phase 3.10).
 	queue    []cx.Node
+	// tokens runs parallel to `queue` (same length, mutated in lock-step
+	// through the ch_* helpers in eval.v): tokens[i] is the send-token of
+	// queue[i]. A blocked unbuffered [?send] (§10.4.2 rendezvous, worker
+	// context) uses its token to observe consumption (token gone = a
+	// receiver took the value) and to RETRACT the value when cancellation
+	// wins (§10.5.4 — a cancelled send must not leave its value behind).
+	tokens   []u64
+	// next_token mints send-tokens; 0 is never issued.
+	next_token u64
+	// mu serialises every queue/tokens/closed access across the main
+	// thread and concurrent [?worker] threads (all access goes through
+	// the ch_* helpers in eval.v). Initialised at the single construction
+	// site (eval_channel).
+	mu       &sync.RwMutex = unsafe { nil }
 }
 
 // FutureRecord tracks one [?async]'s lifecycle per spec/code.md §10.5.
@@ -344,12 +381,12 @@ pub mut:
 	done      bool
 	cancelled bool
 	result    cx.Node
-	// concurrent is set when the body runs on its own spawned V thread
-	// (CX_WORKER_THREADS=1, #58): the worker then runs alongside a blocking
+	// concurrent is set when the body runs on its own spawned V thread — the
+	// DEFAULT per §10.4.6 (#58): the worker runs alongside a blocking
 	// `[$http:serve {block:true}]` instead of monopolizing the calling thread.
 	// `done` flips (with `result`) when the thread finishes; [?wait-for]
-	// spin-waits on it. Default (flag off) keeps the synchronous run-to-
-	// completion semantics (done already true when eval_worker returns).
+	// spin-waits on it. CX_WORKER_THREADS=0 opts back into the synchronous
+	// run-to-completion path (done already true when eval_worker returns).
 	concurrent bool
 }
 
@@ -615,6 +652,21 @@ fn (mut e MatchEnv) cow_closures() {
 	}
 }
 
+// cow_bindings realizes a private copy of an aliased bindings table before an
+// in-place write — the bindings mirror of cow_closures (#317). No-op when the
+// table is already owned (bindings_shared == false), so every env except a
+// per-request template alias pays a single branch. Must be called by every
+// site that mutates `env.bindings` in place (writes into a locally
+// constructed fresh map need no guard). Child frames (clone /
+// clone_frame_sharing_closures / build_param_call_env) copy bindings into
+// fresh maps, so the flag never propagates past the request env itself.
+fn (mut e MatchEnv) cow_bindings() {
+	if e.bindings_shared {
+		e.bindings = e.bindings.clone()
+		e.bindings_shared = false
+	}
+}
+
 fn (e MatchEnv) clone() MatchEnv {
 	mut copy := MatchEnv{
 		bindings: map[string]cx.Node{}
@@ -623,6 +675,7 @@ fn (e MatchEnv) clone() MatchEnv {
 		anon_counter: e.anon_counter
 		dyn_context: e.dyn_context.clone()
 		scope:    e.scope // share the program scope (heap, read-only at call time)
+		current_worker: e.current_worker // same-thread derivation keeps the §10.5.4 cancel signal
 	}
 	for k, v in e.bindings {
 		copy.bindings[k] = v
@@ -654,6 +707,7 @@ fn (e MatchEnv) clone_frame_sharing_closures() MatchEnv {
 		anon_counter:    e.anon_counter
 		dyn_context:     e.dyn_context.clone()
 		scope:           e.scope
+		current_worker:  e.current_worker // same-thread derivation keeps the §10.5.4 cancel signal
 	}
 	for k, v in e.bindings {
 		copy.bindings[k] = v
@@ -1094,10 +1148,10 @@ fn match_attr(ap cx.ProgramPatternAttr, el cx.Element, mut env MatchEnv) bool {
 					}
 					return false
 				}
-				env.bindings[pat_val.name] = cx.ScalarNode{
-					value:     actual.value
-					data_type: cx.ScalarType.string_type
-				}
+				// Bind the attribute's TYPED value (cxdm.md §2.4) — same
+				// materialization as the `@name` read axis, so a captured
+				// atom-typed attribute stays an atom (attr_scalar_node).
+				env.bindings[pat_val.name] = attr_scalar_node(actual)
 				return true
 			}
 			// gap C: cross-binding predicate `[@name=$o/@x]`

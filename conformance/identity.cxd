@@ -381,4 +381,156 @@ E207
 }
 #]]
  ]
+
+ [; ── #82 Tier-1 identity: type-driven order-semantics ──────────────────
+    Strict canonical = Tier-1 content-address (canonical.md §1.4 / §1.2).
+    Unordered constructs (map keys) normalize → collide; ordered constructs
+    (sequences, arrays, element attributes) preserve → stay distinct;
+    presentation (comments) is stripped → collides. out_canonical equality
+    IS Tier-1 hash equality (hash = SHA-256 of these bytes). The hash-level
+    collision/non-collision is additionally proven in
+    vcx/tests/identity_tier1_order_semantics_test.v. ;]
+
+ [case id=id-024-map-key-order-normalized-a level=core
+  [tags identity canonical order-semantics map]
+  [in-cx [#
+[rec {b: 2, a: 1}]
+#]]
+  [out-canonical [#
+[rec {a: 1, b: 2}]
+#]]
+ ]
+
+ [case id=id-025-map-key-order-normalized-b level=core
+  [tags identity canonical order-semantics map]
+  [in-cx [#
+[rec {a: 1, b: 2}]
+#]]
+  [out-canonical [#
+[rec {a: 1, b: 2}]
+#]]
+ ]
+
+ [case id=id-026-sequence-order-preserved-a level=core
+  [tags identity canonical order-semantics sequence]
+  [in-cx [#
+[r (2, 1)]
+#]]
+  [out-canonical [#
+[r (2, 1)]
+#]]
+ ]
+
+ [case id=id-027-sequence-order-preserved-b level=core
+  [tags identity canonical order-semantics sequence]
+  [in-cx [#
+[r (1, 2)]
+#]]
+  [out-canonical [#
+[r (1, 2)]
+#]]
+ ]
+
+ [case id=id-028-array-order-preserved level=core
+  [tags identity canonical order-semantics array]
+  [in-cx [#
+[r ::int[3,1,2]]
+#]]
+  [out-canonical [#
+[r::int [3, 1, 2]]
+#]]
+ ]
+
+ [case id=id-029-attr-order-preserved-a level=core
+  [tags identity canonical order-semantics attribute]
+  [in-cx [#
+[rec b=2 a=1]
+#]]
+  [out-canonical [#
+[rec b=2 a=1]
+#]]
+ ]
+
+ [case id=id-030-attr-order-preserved-b level=core
+  [tags identity canonical order-semantics attribute]
+  [in-cx [#
+[rec a=1 b=2]
+#]]
+  [out-canonical [#
+[rec a=1 b=2]
+#]]
+ ]
+
+ [case id=id-031-comment-stripped-from-identity level=core
+  [tags identity canonical order-semantics comment]
+  [in-cx [#
+[; identity ignores comments ;]
+[rec a=1]
+#]]
+  [out-canonical [#
+[rec a=1]
+#]]
+ ]
+
+ [case id=id-032-anchor-stripped-from-identity level=core
+  [tags identity canonical anchor]
+  [in-cx [#
+[item &a v=42]
+#]]
+  [out-canonical [#
+[item v=42]
+#]]
+ ]
+
+ [case id=id-033-alias-expands-to-anchored-content level=core
+  [tags identity canonical anchor alias]
+  [in-cx [#
+[root [defaults &def timeout=30 retries=3] [*def]]
+#]]
+  [out-canonical [#
+[root
+  [defaults timeout=30 retries=3]
+  [defaults timeout=30 retries=3]
+]
+#]]
+ ]
+
+ [case id=id-034-alias-equivalent-to-inline level=core
+  [tags identity canonical anchor alias]
+  [in-cx [#
+[root [defaults timeout=30 retries=3] [defaults timeout=30 retries=3]]
+#]]
+  [out-canonical [#
+[root
+  [defaults timeout=30 retries=3]
+  [defaults timeout=30 retries=3]
+]
+#]]
+ ]
+
+ [case id=id-035-merge-inlines-with-host-override level=core
+  [tags identity canonical anchor merge]
+  [in-cx [#
+[root [defaults &def timeout=30 retries=3] [production *def host=prod retries=5]]
+#]]
+  [out-canonical [#
+[root
+  [defaults timeout=30 retries=3]
+  [production timeout=30 retries=5 host=prod]
+]
+#]]
+ ]
+
+ [case id=id-036-merge-equivalent-to-inline level=core
+  [tags identity canonical anchor merge]
+  [in-cx [#
+[root [defaults timeout=30 retries=3] [production timeout=30 retries=5 host=prod]]
+#]]
+  [out-canonical [#
+[root
+  [defaults timeout=30 retries=3]
+  [production timeout=30 retries=5 host=prod]
+]
+#]]
+ ]
 ]

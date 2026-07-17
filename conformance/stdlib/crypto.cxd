@@ -174,7 +174,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $h0 [$crypto:hmac-new "sha256" [$bytes:from-string-utf8 "Jefe"]]] [?let [= $h1 [$crypto:hmac-update $h0 [$bytes:from-string-utf8 "what do ya want for nothing?"]]] [$bytes:equals [$crypto:hmac-finalize $h0] [$crypto:hmac-sha256 [$bytes:from-string-utf8 "Jefe"] [$bytes:from-string-utf8 ""]]]]]
+[?let [= $h0 [$crypto:hmac-new "sha256" [$bytes:from-string-utf8 "Jefe"]]] [= $h1 [$crypto:hmac-update $h0 [$bytes:from-string-utf8 "what do ya want for nothing?"]]] [$bytes:equals [$crypto:hmac-finalize $h0] [$crypto:hmac-sha256 [$bytes:from-string-utf8 "Jefe"] [$bytes:from-string-utf8 ""]]]]
 #]]
   [out-text [#
 true
@@ -234,7 +234,7 @@ cx-err:CXER3700
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $m [$bytes:from-string-utf8 "abc"]] [$crypto:blake3-mac-verify $k $m [$crypto:blake3-keyed $k $m]]]]
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [= $m [$bytes:from-string-utf8 "abc"]] [$crypto:blake3-mac-verify $k $m [$crypto:blake3-keyed $k $m]]]
 #]]
   [out-text [#
 true
@@ -324,7 +324,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $ikm [$bytes:from-string-utf8 "input keying material"]] [?let [= $salt [$bytes:from-string-utf8 "salt"]] [?let [= $info [$bytes:from-string-utf8 "ctx"]] [$bytes:equals [$crypto:hkdf $ikm $salt $info 32] [$crypto:hkdf-expand [$crypto:hkdf-extract $salt $ikm] $info 32]]]]]
+[?let [= $ikm [$bytes:from-string-utf8 "input keying material"]] [= $salt [$bytes:from-string-utf8 "salt"]] [= $info [$bytes:from-string-utf8 "ctx"]] [$bytes:equals [$crypto:hkdf $ikm $salt $info 32] [$crypto:hkdf-expand [$crypto:hkdf-extract $salt $ikm] $info 32]]]
 #]]
   [out-text [#
 true
@@ -414,7 +414,7 @@ cx-err:CXER3703
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $k [$bytes:from-string-utf8 "secret"]] [?let [= $m [$bytes:from-string-utf8 "raw-body"]] [$crypto:hmac-verify "sha256" $k $m [$crypto:hmac-sha256 $k $m]]]]
+[?let [= $k [$bytes:from-string-utf8 "secret"]] [= $m [$bytes:from-string-utf8 "raw-body"]] [$crypto:hmac-verify "sha256" $k $m [$crypto:hmac-sha256 $k $m]]]
 #]]
   [out-text [#
 true
@@ -474,7 +474,7 @@ false
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k $pt [$bytes:from-string-utf8 "hdr"]]] [$bytes:equals [$crypto:aead-decrypt "aes-256-gcm" $k $ct [$bytes:from-string-utf8 "hdr"]] $pt]]]]
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k $pt [$bytes:from-string-utf8 "hdr"]]] [$bytes:equals [$crypto:aead-decrypt "aes-256-gcm" $k $ct [$bytes:from-string-utf8 "hdr"]] $pt]]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -489,7 +489,7 @@ cx-err:CXER0271
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [?let [= $ct [$crypto:aead-encrypt "chacha20-poly1305" $k $pt [$bytes:from-string-utf8 ""]]] [$bytes:equals [$crypto:aead-decrypt "chacha20-poly1305" $k $ct [$bytes:from-string-utf8 ""]] $pt]]]]
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [= $ct [$crypto:aead-encrypt "chacha20-poly1305" $k $pt [$bytes:from-string-utf8 ""]]] [$bytes:equals [$crypto:aead-decrypt "chacha20-poly1305" $k $ct [$bytes:from-string-utf8 ""]] $pt]]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -504,7 +504,7 @@ cx-err:CXER0271
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]] [$bytes:length $ct@tag]]]
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]] [$bytes:length $ct@tag]]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -519,7 +519,7 @@ cx-err:CXER0271
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]] [$bytes:length $ct@nonce]]]
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k [$bytes:from-string-utf8 "msg"] [$bytes:from-string-utf8 ""]]] [$bytes:length $ct@nonce]]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -609,7 +609,7 @@ cx-err:CXER0271
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $kp [$crypto:ed25519-keypair]] [?let [= $m [$bytes:from-string-utf8 "sign me"]] [$crypto:ed25519-verify $kp@public $m [$crypto:ed25519-sign $kp@private $m]]]]
+[?let [= $kp [$crypto:ed25519-keypair]] [= $m [$bytes:from-string-utf8 "sign me"]] [$crypto:ed25519-verify $kp@public $m [$crypto:ed25519-sign $kp@private $m]]]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -684,7 +684,7 @@ cx-err:CXER0271
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $a [$crypto:x25519-keypair]] [?let [= $b [$crypto:x25519-keypair]] [$bytes:equals [$crypto:x25519-shared-secret $a@private $b@public] [$crypto:x25519-shared-secret $b@private $a@public]]]]
+[?let [= $a [$crypto:x25519-keypair]] [= $b [$crypto:x25519-keypair]] [$bytes:equals [$crypto:x25519-shared-secret $a@private $b@public] [$crypto:x25519-shared-secret $b@private $a@public]]]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -699,7 +699,7 @@ cx-err:CXER0271
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $a [$crypto:x25519-keypair]] [?let [= $b [$crypto:x25519-keypair]] [$bytes:length [$crypto:x25519-shared-secret $a@private $b@public]]]]
+[?let [= $a [$crypto:x25519-keypair]] [= $b [$crypto:x25519-keypair]] [$bytes:length [$crypto:x25519-shared-secret $a@private $b@public]]]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -788,7 +788,7 @@ cx-err:CXER0271
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [?let [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k $pt [$bytes:from-string-utf8 "hdr"]]] [$bytes:equals [$crypto:aead-decrypt "aes-256-gcm" $k $ct [$bytes:from-string-utf8 "hdr"]] $pt]]]]
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [= $ct [$crypto:aead-encrypt "aes-256-gcm" $k $pt [$bytes:from-string-utf8 "hdr"]]] [$bytes:equals [$crypto:aead-decrypt "aes-256-gcm" $k $ct [$bytes:from-string-utf8 "hdr"]] $pt]]
 #]]
   [out-text [#
 true
@@ -803,7 +803,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [?let [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [?let [= $ct [$crypto:aead-encrypt "chacha20-poly1305" $k $pt [$bytes:from-string-utf8 ""]]] [$bytes:equals [$crypto:aead-decrypt "chacha20-poly1305" $k $ct [$bytes:from-string-utf8 ""]] $pt]]]]
+[?let [= $k [$bytes:from-hex "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"]] [= $pt [$bytes:from-string-utf8 "attack at dawn"]] [= $ct [$crypto:aead-encrypt "chacha20-poly1305" $k $pt [$bytes:from-string-utf8 ""]]] [$bytes:equals [$crypto:aead-decrypt "chacha20-poly1305" $k $ct [$bytes:from-string-utf8 ""]] $pt]]
 #]]
   [out-text [#
 true
@@ -848,7 +848,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $kp [$crypto:ed25519-keypair]] [?let [= $m [$bytes:from-string-utf8 "sign me"]] [$crypto:ed25519-verify $kp@public $m [$crypto:ed25519-sign $kp@private $m]]]]
+[?let [= $kp [$crypto:ed25519-keypair]] [= $m [$bytes:from-string-utf8 "sign me"]] [$crypto:ed25519-verify $kp@public $m [$crypto:ed25519-sign $kp@private $m]]]
 #]]
   [out-text [#
 true
@@ -863,7 +863,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $a [$crypto:x25519-keypair]] [?let [= $b [$crypto:x25519-keypair]] [$bytes:equals [$crypto:x25519-shared-secret $a@private $b@public] [$crypto:x25519-shared-secret $b@private $a@public]]]]
+[?let [= $a [$crypto:x25519-keypair]] [= $b [$crypto:x25519-keypair]] [$bytes:equals [$crypto:x25519-shared-secret $a@private $b@public] [$crypto:x25519-shared-secret $b@private $a@public]]]
 #]]
   [out-text [#
 true
@@ -923,7 +923,7 @@ cx-err:CXER3706
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [?let [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [$bytes:length [$crypto:hkdf-extract-sha512 $salt $ikm]]]]
+[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [$bytes:length [$crypto:hkdf-extract-sha512 $salt $ikm]]]
 #]]
   [out-text [#
 64
@@ -938,7 +938,7 @@ cx-err:CXER3706
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [?let [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [?let [= $info [$bytes:from-hex "f0f1f2f3f4f5f6f7f8f9"]] [$bytes:length [$crypto:hkdf-sha512 $ikm $salt $info 42]]]]]
+[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [= $info [$bytes:from-hex "f0f1f2f3f4f5f6f7f8f9"]] [$bytes:length [$crypto:hkdf-sha512 $ikm $salt $info 42]]]
 #]]
   [out-text [#
 42
@@ -953,7 +953,7 @@ cx-err:CXER3706
   [in-code [#
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/bytes']
-[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [?let [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [?let [= $info [$bytes:from-hex "f0f1f2f3f4f5f6f7f8f9"]] [$bytes:equals [$crypto:hkdf-sha512 $ikm $salt $info 42] [$crypto:hkdf-expand-sha512 [$crypto:hkdf-extract-sha512 $salt $ikm] $info 42]]]]]
+[?let [= $ikm [$bytes:from-hex "0b0b0b0b0b0b0b0b0b0b0b"]] [= $salt [$bytes:from-hex "000102030405060708090a0b0c"]] [= $info [$bytes:from-hex "f0f1f2f3f4f5f6f7f8f9"]] [$bytes:equals [$crypto:hkdf-sha512 $ikm $salt $info 42] [$crypto:hkdf-expand-sha512 [$crypto:hkdf-extract-sha512 $salt $ikm] $info 42]]]
 #]]
   [out-text [#
 true

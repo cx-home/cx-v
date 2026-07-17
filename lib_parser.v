@@ -386,6 +386,9 @@ fn lib_classify_resolver(s string) !ResolverKind {
 	if s.starts_with('http://') {
 		return error('CXLIB_INSECURE_TRANSPORT: HTTP scheme refused: ${s}')
 	}
+	if s.starts_with('pkg:') {
+		return ResolverKind.pkg_url
+	}
 	return ResolverKind.registered_name
 }
 

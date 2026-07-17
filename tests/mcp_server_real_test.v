@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 
 // mcp_server_real_test.v — BEHAVIORAL coverage for cx-x/mcp-server (#6 Y1).
@@ -12,11 +13,7 @@ import time
 // JSON-RPC tools/call round-trips over a real socket through CX on both ends.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // pick_port: mcp-server owns the disjoint band 22000-22799, salted with PID + the

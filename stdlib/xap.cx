@@ -5,17 +5,43 @@
    cx-stdlib module. ]
 
 [?def component   scope=public pure   [returns element] ($name $opts::map {})              [$xap-component $name $opts]]
+[; §8.1 composition engine (xap_grammar_composition.md) — pure functions of their
+   inputs (no journal, no PEP, no clock): n feature grammars → ONE grammar, the
+   never-raising conflict report, bare-term resolution ρ, and the Tier-1 hash. ]
+[?def compose        scope=public pure [returns element] (*$features)                            [$xap-compose $features]]
+[?def compose-report scope=public pure [returns element] (*$features)                            [$xap-compose-report $features]]
+[?def resolve        scope=public pure [returns string]  ($grammar::element $term::string $context::map {}) [$xap-resolve $grammar $term $context]]
+[?def grammar-hash   scope=public pure [returns string]  ($grammar::element)                     [$xap-grammar-hash $grammar]]
 [?def surface     scope=public pure   [returns element] ($name $panels $opts::map {})      [$xap-surface $name $panels]]
 [?def panel       scope=public pure   [returns element] ($component $opts::map {})         [$xap-panel $component $opts]]
 [?def render      scope=public impure [returns element] ($surface::element $opts::map {})  [$xap-render $surface $opts]]
 [?def run         scope=public impure [returns element] ($opts::map {})                    [$xap-run $opts]]
 [?def serve       scope=public impure [returns element] ($url::string $opts::map {})        [$xap-serve $url $opts]]
+[?def host        scope=public impure [returns element] ($xap::element $opts::map {})       [$xap-host $xap $opts]]
+[?def host-push   scope=public impure [returns element] ($runtime::element $feature::string) [$xap-host-push $runtime $feature]]
 [?def emit        scope=public impure [returns element] ($runtime::element $intent::element $opts::map {}) [$xap-emit $runtime $intent $opts]]
 [?def on          scope=public impure [returns null]    ($runtime::element $pattern::element $handler)     [$xap-on $runtime $pattern $handler]]
 [?def state       scope=public impure [returns element] ($runtime::element $cxpath::string) [$xap-state $runtime $cxpath]]
 [; #25 Tier-2: transient coordination channel — ephemeral viewport/selection, latest-wins, off the journal/PEP cascade ]
 [?def coord-publish scope=public impure [returns element] ($runtime::element $channel::string $frame::element) [$xap-coord-publish $runtime $channel $frame]]
 [?def coord-read    scope=public impure [returns element] ($runtime::element $channel::string) [$xap-coord-read $runtime $channel]]
+[; §6.1 distribution surface (xap_feature_distribution_market.md) — the package
+   lifecycle's toolchain face: seal/sign/publish on the publisher side,
+   fetch/verify/install/requires-closure on the consumer side. Composes the
+   store/did/vc/compose surfaces; no parallel primitive (§9). ]
+[?def pkg-tree             scope=public pure   [returns element] (*$entries)                                        [$xap-pkg-tree $entries]]
+[?def pkg-seal             scope=public impure [returns element] ($store::element $tree::element $draft::element)   [$xap-pkg-seal $store $tree $draft]]
+[?def pkg-sign             scope=public pure   [returns element] ($manifest::element $private-key::bytes)           [$xap-pkg-sign $manifest $private-key]]
+[?def pkg-publish          scope=public impure [returns element] ($store::element $name::string $version::string $manifest-hash::string) [$xap-pkg-publish $store $name $version $manifest-hash]]
+[?def pkg-fetch            scope=public impure [returns element] ($store::element $ref::string)                     [$xap-pkg-fetch $store $ref]]
+[?def pkg-verify           scope=public impure [returns element] ($store::element $ref::string $opts::map {})       [$xap-pkg-verify $store $ref $opts]]
+[?def pkg-install          scope=public impure [returns element] ($xap::element $store::element $ref::string $opts::map {}) [$xap-pkg-install $xap $store $ref $opts]]
+[?def pkg-requires-closure scope=public impure [returns element] ($store::element $manifest::element)               [$xap-pkg-requires-closure $store $manifest]]
+[?def pkg-catalog          scope=public impure [returns element] ($store::element $opts::map {})                     [$xap-pkg-catalog $store $opts]]
+[; §5/§5.1 entitlements — license = attenuating VC; the enable-time check is a
+   PEP-style question, never a DRM subsystem. ]
+[?def license-issue        scope=public pure   [returns element] ($issuer-did::string $issuer-key::bytes $subject-did::string $terms::map) [$xap-license-issue $issuer-did $issuer-key $subject-did $terms]]
+[?def license-verify       scope=public impure [returns element] ($vc::element $package::string $version::string $opts::map {}) [$xap-license-verify $vc $package $version $opts]]
 [?def dial        scope=public impure [returns element] ($runtime::element *$parts) [$xap-dial $runtime $parts]]
 [?def revoke      scope=public impure [returns element] ($runtime::element $id::string) [$xap-revoke $runtime $id]]
 [?def why-allowed scope=public impure [returns element] ($runtime::element $intent::element $opts::map {})    [$xap-why-allowed $runtime $intent $opts]]
@@ -34,6 +60,22 @@
   [sig """-> element"""]
   [summary """Construct a named component — the typed state/intent/view triple — as pure data."""]
 ]
+[fn-doc name=compose scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Compose n feature grammars into ONE grammar document — or reject with every W1-W6 conflict (CXER4870); zero arguments yield the empty grammar (the identity)."""]
+]
+[fn-doc name=compose-report scope=public purity=pure
+  [sig """-> element"""]
+  [summary """The never-raising tooling face of the compose gate — [compose-report ok=bool [conflict ...]*]; agrees with compose: it raises iff this reports ok=false."""]
+]
+[fn-doc name=resolve scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Resolve a bare or qualified verb term against a composed grammar (rho) — qualified wins, context narrows, ambiguity is CXER4871 with candidates, unknown is CXER4872."""]
+]
+[fn-doc name=grammar-hash scope=public purity=pure
+  [sig """-> string"""]
+  [summary """The Tier-1 content hash of a composed grammar under canonical form — the structural-equality oracle and the distribution supply-chain witness."""]
+]
 [fn-doc name=surface scope=public purity=pure
   [sig """-> element"""]
   [summary """Construct a named surface — a composition of placed panels — as pure data."""]
@@ -48,15 +90,23 @@
 ]
 [fn-doc name=run scope=public purity=impure
   [sig """-> element"""]
-  [summary """Wire a single-tenant runtime and register its components, surfaces, and handlers."""]
+  [summary """Wire a single-tenant runtime and register its components, surfaces, and handlers; {grammar: G} pins a composed grammar as the control vocabulary, switching on emit-side resolution and constituent-set PEP evaluation."""]
 ]
 [fn-doc name=serve scope=public purity=impure
   [sig """-> element"""]
   [summary """Run a runtime over a real socket by bootstrapping the [?http-service] engine."""]
 ]
+[fn-doc name=host-push scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Push one hosted feature's fresh contract readout to every /stream subscriber as its named SSE event — the same frame an admitted act pushes. For deployment workers whose changes bypass the intent path (source ingest, simulation ticks)."""]
+]
+[fn-doc name=host scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Boot a complete XAP from its deployment document (distribution spec, deployment host): acquire every pinned feature from the CX_REGISTRY-bound store (fail closed on pin or verification mismatch), compose the grammar (the W-gate at load), attach it to a runtime, translate the roles ladder + spec governance + agent capabilities into dials, load each feature's runtime-contract module from its verified tree, and serve the standard surface (/grammar /features /surface /surface/{f} /intent /stream). opts: url (required), store (required — the working store), tenant, block, routes (adapter path->closure map), resolve-actor (intent->actor closure). A XAP with no custom transport is zero server code."""]
+]
 [fn-doc name=emit scope=public purity=impure
   [sig """-> element"""]
-  [summary """Run the committed cascade for one intent — PEP check, journal append, ordered dispatch."""]
+  [summary """Run the committed cascade for one intent — PEP check, journal append, ordered dispatch. With a grammar attached, the term resolves through rho first (the committed event is qualified) and a derived verb is admitted by its transitive leaf constituent grants, never the wrapper's name."""]
 ]
 [fn-doc name=on scope=public purity=impure
   [sig """-> null"""]
@@ -74,6 +124,50 @@
   [sig """-> element"""]
   [summary """Read the latest frame from a transient coordination channel — the latest-wins value off the journal and PEP cascade."""]
 ]
+[fn-doc name=pkg-tree scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Build the canonical package content document from [entry path=... CONTENT] elements — sorted by path, byte-stable, so its store hash is the package's Tier-1 hash."""]
+]
+[fn-doc name=pkg-seal scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Store a package content tree, pin its Tier-1 hash into the manifest, and store the manifest beside it (the tag-object pattern) — returns [sealed hash=... manifest=...]."""]
+]
+[fn-doc name=pkg-sign scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Fill the manifest's detached [signature]: ed25519 by a publisher-DID key over the sealed Tier-1 hash."""]
+]
+[fn-doc name=pkg-publish scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Set the name@version alias to a signed manifest's hash; released aliases are immutable — re-pointing is rejected, a new artifact is a new version."""]
+]
+[fn-doc name=pkg-fetch scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Resolve a Tier-1 hash or name@version alias to its manifest document; aliases only discover hashes, trust never rests on one."""]
+]
+[fn-doc name=pkg-verify scope=public purity=impure
+  [sig """-> element"""]
+  [summary """The fail-closed trust chain: content re-hashes to the pinned Tier-1 hash, the signature verifies against the publisher DID, and every supplied attestation VC verifies — nothing stages on failure."""]
+]
+[fn-doc name=pkg-install scope=public purity=impure
+  [sig """-> element"""]
+  [summary """The consumer pipeline: fetch, verify, per-kind gate (features meet the one W1-W6 compose gate, libraries the exports-surface check, clients the client-spec check), consent-as-grants of exactly the needs set, and enable — returning the updated hash-pinned deployment document."""]
+]
+[fn-doc name=pkg-requires-closure scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Resolve the code-plane requires closure transitively into sorted hash-pinned [pin] entries — the reproducible lockfile view spanning both dependency planes."""]
+]
+[fn-doc name=pkg-catalog scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Discover published packages on any store — local (alias table) or served over cx-store:// (CXPath query pushdown, server-side) — as a sorted [catalog [package ...]] with grammar/exports summaries; opts filter by term, name, or version. Trust never rests on discovery: install re-verifies the fetched artifact."""]
+]
+[fn-doc name=license-issue scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Issue an entitlement VC — an attenuating delegation granting enable of a package (or bundle member set), shaped by the terms: version range, expiry + grace window (subscription), seats and per-seat sub-issuance (the delegation chain is the count), members (bundle). Every commercial model is a shape of this one credential."""]
+]
+[fn-doc name=license-verify scope=public purity=impure
+  [sig """-> element"""]
+  [summary """The enable-time entitlement check: the VC verifies (window plus subscription grace), the coverage holds for package@version (direct or bundle membership), and a seat credential's chain attenuates correctly — offline-capable, journal-recordable, a PEP check rather than a DRM subsystem."""]
+]
 [fn-doc name=dial scope=public purity=impure
   [sig """-> element"""]
   [summary """Set the operational-control mode at a scope by issuing a scoped authz delegation."""]
@@ -84,5 +178,5 @@
 ]
 [fn-doc name=why-allowed scope=public purity=impure
   [sig """-> element"""]
-  [summary """Explain why an actor can or cannot emit a given intent — a query over the authority model."""]
+  [summary """Explain why an actor can or cannot emit a given intent — a query over the authority model. With a grammar attached, a derived verb is answered over its transitive leaf constituent grant set — allowed only when every constituent decision permits."""]
 ]

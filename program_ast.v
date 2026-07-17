@@ -187,6 +187,15 @@ pub struct ProgramAttr {
 pub:
 	name  string      @[required]
 	value ProgramNode @[required]
+	// data_type — the D3 attribute ascription `name::T=value` (lexicon §7
+	// [L50]; grammar [55]): the canonical type name (`u16`, `bytes`,
+	// `decimal`, …) when the attribute carries a glued `::T` annotation,
+	// '' when untyped. Eval coerces the value from its ORIGINAL source
+	// token (never the auto-typed re-rendering) and rides `T` on the
+	// constructed cx.Attribute's data-type carrier, mirroring the DATA
+	// reading's typed-attribute arm exactly (#466). Attributes are
+	// scalar-only (D2), so this is never an array type.
+	data_type string
 }
 
 // ProgramDirective is the universal directive AST shape. `name` is one of
@@ -225,6 +234,13 @@ pub:
 	source    ?ProgramNode     // generator
 	expr      ?ProgramNode     // filter / binding / order-by / group-by
 	direction string       // order-by: 'asc' | 'desc' | ''
+	// par width (#94): for a `.par` clause, `par_width` = the explicit `[par N]`
+	// worker bound (N≥1), 0 = unspecified (`[par]` → default min(4,ncpu)); when
+	// `par_max` is set (`[par max]`) the bound is ncpu. Invalid widths
+	// (0 / negative / non-integer / multiple / non-`max` ident) are rejected at
+	// parse time, so a `.par` clause in the AST only ever holds a valid width.
+	par_width int
+	par_max   bool
 }
 
 // ProgramForCompYieldForm — per-iteration result shape.
@@ -450,6 +466,16 @@ pub struct ProgramLiteral {
 pub:
 	kind    ProgramLiteralKind @[required]
 	str_val string         // string_lit
+	// src — the ORIGINAL source token of a number-shaped literal
+	// (int_lit / float_lit / bigint_lit and their [L20] string fallback),
+	// spelling preserved (`0x3a7bd3e2`, `1_000`, `1.50`). Empty for every
+	// literal not produced by parse_number_literal. An enclosing `::T`
+	// ascription coerces from THIS text — never from the auto-typed value —
+	// so `[hash::bytes 0x3a7bd3e2]` keeps its hex spelling instead of
+	// int-coercing first (lexicon §7 [L50]: the annotation OVERRIDES §9
+	// auto-typing; #457). Mirrors the data reading, whose
+	// coerce_scalar_checked always receives the raw token.
+	src     string
 	int_val i64            // int_lit
 	flt_val f64            // float_lit
 	bool_val bool          // bool_lit

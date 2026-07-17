@@ -55,6 +55,7 @@
 [?def replace         scope=public pure [returns string] ($s::string $from::string $to::string)       [$str-replace $s $from $to]]
 [?def replace-first   scope=public pure [returns string] ($s::string $from::string $to::string)       [$str-replace-first $s $from $to]]
 [?def replace-n       scope=public pure [returns string] ($s::string $from::string $to::string $n::int) [$str-replace-n $s $from $to $n]]
+[?def replace-exactly scope=public pure [returns string] ($s::string $from::string $to::string)       [$str-replace-exactly $s $from $to]]
 
 [; §3.7 Pad and repeat ]
 [?def pad-start       scope=public pure [returns string] ($s::string $target::int $pad::string)   [$str-pad-start $s $target $pad]]
@@ -299,6 +300,12 @@
   [summary """Replace at most the first n occurrences of a substring with another."""]
   [example [code """[?lib 'cx-stdlib/strings']
 [$strings:replace-n "a.b.c.d" "." "-" 2]"""] [expect """'a-b-c.d'"""]]
+]
+[fn-doc name=replace-exactly scope=public purity=pure
+  [sig """-> string"""]
+  [summary """Fail-loud surgical replace: `from` MUST occur exactly once, else an [err cx-err:CXER2903] value (no silent no-op on a miss, no over-replace on ambiguity). The safety the harness Edit tool gives, for in-CX text edits."""]
+  [example [code """[?lib 'cx-stdlib/strings']
+[$strings:replace-exactly "a.b.c" "b" "X"]"""] [expect """'a.X.c'"""]]
 ]
 [fn-doc name=pad-start scope=public purity=pure
   [sig """-> string"""]

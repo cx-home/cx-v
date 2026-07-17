@@ -38,7 +38,25 @@ fn vc_child_text(e cx.Element, name string) ?string {
 	if c.items.len == 0 {
 		return none
 	}
-	return arg_string(c.items[0])
+	// A freshly ISSUED credential carries ScalarNode strings, but a PARSED one
+	// (file, store, wire — the offline-portability path every committed VC
+	// takes) carries barewords as TextNodes and dates as typed scalars.
+	// Accepting only ScalarNode-strings made every round-tripped VC verify as
+	// "malformed" while the same claim verified fresh — VCs must verify
+	// offline by construction, so extract the text of whatever node shape the
+	// parser produced.
+	first := c.items[0]
+	match first {
+		cx.ScalarNode {
+			return cx.scalar_value_str_public(first.value)
+		}
+		cx.TextNode {
+			return first.value
+		}
+		else {
+			return none
+		}
+	}
 }
 
 // vc_strip_proof returns the credential element with any `proof` child removed
@@ -74,21 +92,34 @@ fn vc_status_full(s string, id string, issuer string) cx.Node {
 
 // vc_is_revoked accepts opts.revoked as a scalar id, a sequence of ids, or a
 // [revoked-set [id …]] fold (the output of revoked-set).
+// vc_text_of extracts text from a node however the tree was built — string
+// scalars from constructed docs, atom scalars / text nodes from parsed ones
+// (the §5.1 round-trip: VC content read back from a registry file).
+fn vc_text_of(n cx.Node) ?string {
+	if n is cx.ScalarNode {
+		return cx.scalar_value_str_public(n.value)
+	}
+	if n is cx.TextNode {
+		return n.value
+	}
+	return none
+}
+
 fn vc_is_revoked(opts cx.Node, id string) bool {
 	r := xap_map_get_node(opts, 'revoked') or { return false }
-	if s := arg_string(r) {
+	if s := vc_text_of(r) {
 		return s == id
 	}
 	if r is cx.Element {
 		for it in r.items {
-			if s := arg_string(it) {
+			if s := vc_text_of(it) {
 				if s == id {
 					return true
 				}
 			} else if it is cx.Element {
 				// [id "…"] inside a [revoked-set …]
 				if it.items.len > 0 {
-					if s := arg_string(it.items[0]) {
+					if s := vc_text_of(it.items[0]) {
 						if s == id {
 							return true
 						}

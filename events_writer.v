@@ -427,10 +427,11 @@ pub fn (mut w CxEventsWriter) emit_start_table(col_spec_payload []u8) ! {
 	if cols.len == 0 {
 		return error(w.fail('W007', 'StartTable with empty col_spec'))
 	}
-	// CX-format chunked tables emit as a `:table` element. The element
-	// name is conventionally the most recent open StartElement; if no
-	// element is open the table is anonymous (uses `_`). The writer keeps
-	// this simple and uses an anonymous-name '_' if elem_stack is empty.
+	// CX-format chunked tables emit as a `[name [table[…]] rows]` element
+	// (grammar [29]/[50]). The element name is conventionally the most
+	// recent open StartElement; if no element is open the table has no
+	// name to close a head with — grammar [50] requires one — so the
+	// writer names it '_'.
 	name := if w.elem_stack.len > 0 { w.elem_stack[w.elem_stack.len - 1] } else { '_' }
 	w.in_table = true
 	w.table_name = name
@@ -690,16 +691,26 @@ fn (mut w CxEventsWriter) cx_emit_alias(name string) ! {
 // ── CX chunked-table emission ────────────────────────────────────────────────
 
 fn (mut w CxEventsWriter) cx_emit_table_open(name string, cols []TableColumn) ! {
+	// #487: emit the CURRENT tabular surface — the `[table[…]]`
+	// clause-child form of grammar [29]/[50] with glued double-colon
+	// column types ([29b]), mirroring cx_emit_table_element's header
+	// rendering. The retired v0.7 `:table[` meta-slot opener with
+	// single-colon types produced text the live grammar REJECTS
+	// (`[users :table[name:string age:int]` — a silent-corruption lane,
+	// same family as #413/#443/#464/#478 on the events-writer side).
+	// Head meta on the ENCLOSING element (attrs etc., #478) rides the
+	// StartElement event that opened it and is already on that line;
+	// StartTable itself carries only name + col_spec (streaming.md §1.1).
 	mut header_parts := []string{cap: cols.len}
 	for c in cols {
 		if c.type_name == '' {
 			header_parts << c.name
 		} else {
-			header_parts << '${c.name}:${c.type_name}'
+			header_parts << '${c.name}::${c.type_name}'
 		}
 	}
 	header := header_parts.join(' ')
-	w.write_str(w.cx_indent() + '[${name} :table[${header}]' + w.cx_nl())!
+	w.write_str(w.cx_indent() + '[${name} [table[${header}]]' + w.cx_nl())!
 }
 
 // cx_emit_table_row_group decodes the §3.11.2 plain-body bytes

@@ -30,6 +30,7 @@ module main
 import os
 import x.json2
 import cx
+import code as cxcode // aliased: a local param named `code` exists in this file
 
 // ── Wire-level: JSON-RPC framing over stdio ──────────────────────────
 
@@ -364,12 +365,10 @@ fn publish_diagnostics(uri string, mut state LspState) {
 	for d in modify_diagnostics(source) {
 		diagnostics << d
 	}
-	// CXLS005 advisory when [?map :par] / [?reduce :par]
-	// has no [?bulkhead] wrap in its :using body. Hint severity; no
-	// directive-level opt-out (standard editor suppress comments apply).
-	for d in par_diagnostics(source) {
-		diagnostics << d
-	}
+	// (CXLS005 retired, #94: `[par]` now owns its width as a bounded worker
+	// pool — `[par N]` / `[par max]`, default min(4,ncpu) — so the old
+	// "wrap the body in [?bulkhead] for bounded concurrency" hint no longer
+	// applies; `[?bulkhead]` is demoted to an experimental resilience primitive.)
 	// CXLS006 advisory when a [?for] / [?for-array]
 	// [?for-map] generator source is an open-end range (`1 to *`) with no
 	// `:take` / `:takewhile` terminator. Forcing the iterator at eval
@@ -604,7 +603,12 @@ fn handle_formatting(msg LspMessage, mut state LspState) {
 		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
 		return
 	}
-	formatted := cx.cx_text_fmt(source) or {
+	// cxcode.fmt_source is program-faithful + fail-closed (#118): a program file is
+	// never rewritten through the data emitter. The data-equivalence guard below
+	// stays as a second belt: format-on-save only applies a data-equivalent edit,
+	// so a program reformat (or any non-equivalent result) yields zero edits
+	// rather than touch the buffer.
+	formatted := cxcode.fmt_source(source) or {
 		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
 		return
 	}
@@ -619,7 +623,7 @@ fn handle_formatting(msg LspMessage, mut state LspState) {
 		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
 		return
 	}
-	refmt := cx.cx_text_fmt(formatted) or {
+	refmt := cxcode.fmt_source(formatted) or {
 		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
 		return
 	}

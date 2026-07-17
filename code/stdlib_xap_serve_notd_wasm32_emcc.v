@@ -27,21 +27,35 @@ import sync
 
 // ── §24: SSE subscriber registry (held-open event feeds per runtime) ─────────
 //
-// GET /events promotes the connection to an SSE feed: listener_callback writes
-// the prelude + holds the fd (picoev.cx_hold_fd) and registers it here. On a
-// state change (POST /intent/sign), xap_sse_push writes a surface frame to every
+// GET /events promotes the connection to an SSE feed: listener_callback holds
+// the fd (picoev.cx_hold_fd), then registers it here while writing the prelude —
+// atomically under this lock, so the prelude/initial frame is a readiness ack
+// (see xap_sse_subscribe). On a state change (POST /intent/sign), xap_sse_push
+// writes a surface frame to every
 // subscriber fd — event-driven push, no reactor blocked. Cleanup is synchronous:
 // picoev's close_conn invokes xap_sse_on_close_fd (registered via
 // cx_set_sse_on_close) under this lock BEFORE the socket closes, so a push from
 // another reactor never writes to a reused fd.
+//
+// #303: the lock is REFERENCE-typed, initialized in the module init()
+// (stdlib_codec.v) — a VALUE-typed zeroed sync.Mutex global is a silently
+// non-locking pthread mutex on Darwin; see cx_sse_topic_lock for the full
+// mechanism (identical defect, identical barrier).
 __global (
 	xap_sse_subs map[int][]int
-	xap_sse_lock sync.Mutex
+	xap_sse_lock &sync.Mutex
 )
 
-// xap_sse_subscribe adds a held SSE fd to a runtime's subscriber set.
-fn xap_sse_subscribe(rt_id int, fd int) {
+// xap_sse_subscribe writes the SSE prelude + initial frame (`ack`) to a held fd
+// and adds the fd to `rt_id`'s subscriber set — atomically, under the registry
+// lock, so the ack is a readiness barrier: a concurrent xap_sse_push either
+// snapshots before this fd exists (and the client cannot yet have read its ack)
+// or snapshots after (and its frame follows the fully-written prelude on the
+// wire). Same barrier as cx_sse_topic_subscribe — see that fn for the full
+// ordering argument.
+fn xap_sse_subscribe(rt_id int, fd int, ack string) {
 	xap_sse_lock.lock()
+	send_all(fd, ack)
 	xap_sse_subs[rt_id] << fd
 	xap_sse_lock.unlock()
 }
@@ -72,17 +86,7 @@ fn xap_sse_push(rt_id int, frame string) {
 	xap_sse_lock.unlock()
 	mut dead := []int{}
 	for fd in fds {
-		mut off := 0
-		mut ok := true
-		for off < frame.len {
-			n := unsafe { C.write(fd, voidptr(frame.str + off), usize(frame.len - off)) }
-			if n <= 0 {
-				ok = false
-				break
-			}
-			off += int(n)
-		}
-		if !ok {
+		if !write_all_fd(fd, frame) {
 			dead << fd
 		}
 	}
@@ -203,7 +207,12 @@ fn start_xap_listener(rt_id int, host string, port int, block bool, mut env Matc
 
 // ── request dispatch (text/html) ─────────────────────────────────────────────
 
-fn xap_dispatch_http(rt_id int, method string, raw_path string, body string, mut env MatchEnv) WireResp {
+fn xap_dispatch_http(rt_id int, method string, raw_path string, body string, xsp_hdrs XspReqHdrs, mut env MatchEnv) WireResp {
+	// deployment-host mode (§6.3): a runtime booted by [$xap:host] serves the
+	// standard package-driven surface instead of the component demo bridge.
+	if mut h := xap_hosts[rt_id] {
+		return xap_host_dispatch(mut h, method, raw_path, body, xsp_hdrs, mut env)
+	}
 	reg := xap_reg()
 	mut rt := reg.runtimes[rt_id] or {
 		return mk_wire(500, [], 'xap: unknown runtime\n')

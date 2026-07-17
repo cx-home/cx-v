@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 
 // recursive_def_dispatch_test.v — #53: a self-recursive (or mutually
 // recursive) [?def] called by its BAREWORD head — `[loop …]`, not `[$loop …]` —
@@ -14,7 +15,7 @@ import os
 // result then made the caller's downstream stdlib call read as "no callable".
 
 fn cx_bin() string {
-	return os.join_path(@VMODROOT, 'target', 'cx')
+	return testenv.cx_bin()
 }
 
 fn run_src(src string) os.Result {
@@ -91,6 +92,51 @@ fn test_bareword_nondef_zero_arg_is_data() {
 	r := run_src(src)
 	assert r.exit_code == 0, 'exit ${r.exit_code}: ${r.output}'
 	assert r.output.trim_space() == '[primary]', 'expected [primary] data element, got: ${r.output}'
+}
+
+// ── 6. #59: a nested USER-DEF call in argument position is APPLIED ─────────────
+//
+// Same gate as #53: `all_items_are_expr_position`. An argument that is itself a
+// bareword element whose head names a registered closure (`[f "a"]`) is a
+// value-producing CALL, not a data child. Before the fix `[g [f "a"]]` failed
+// the gate → the OUTER `g` fell through to data construction (`[g 'F(a)']`),
+// and in stringy callers the downstream stdlib read as a misleading
+// `no callable "concat"`. Nested BUILTIN / `$`-calls already applied; this
+// restores parity for user defs.
+
+fn test_issue59_nested_userdef_arg_is_applied() {
+	src := '[?def f (\$x) [\$concat "F(" \$x ")"]]\n' +
+		'[?def g (\$y) [\$concat "G[" \$y "]"]]\n' +
+		'[g [f "a"]]\n'
+	r := run_src(src)
+	assert r.exit_code == 0, 'exit ${r.exit_code}: ${r.output}'
+	assert r.output.trim_space() == "'G[F(a)]'", 'expected G[F(a)], got: ${r.output}'
+}
+
+fn test_issue59_nested_userdef_arg_numeric() {
+	src := '[?def inc (\$x) [+ \$x 1]]\n[?def dbl (\$y) [* \$y 2]]\n[dbl [inc 5]]\n'
+	r := run_src(src)
+	assert r.exit_code == 0, 'exit ${r.exit_code}: ${r.output}'
+	assert r.output.trim_space() == '12', 'expected 12 (dbl(inc(5))), got: ${r.output}'
+}
+
+fn test_issue59_three_deep_userdef_nesting() {
+	src := '[?def f (\$x) [\$concat "F(" \$x ")"]]\n' +
+		'[?def g (\$y) [\$concat "G[" \$y "]"]]\n' +
+		'[?def h (\$z) [\$concat "H{" \$z "}"]]\n' +
+		'[h [g [f "a"]]]\n'
+	r := run_src(src)
+	assert r.exit_code == 0, 'exit ${r.exit_code}: ${r.output}'
+	assert r.output.trim_space() == "'H{G[F(a)]}'", 'expected H{G[F(a)]}, got: ${r.output}'
+}
+
+// A nested non-def element argument still constructs as data (no over-broad
+// hijack): `[g [a 1]]` where `a` is not a def keeps `[a 1]` a data child.
+fn test_issue59_nested_nondef_arg_stays_data() {
+	src := '[?def g (\$y) \$y]\n[g [a 1]]\n'
+	r := run_src(src)
+	assert r.exit_code == 0, 'exit ${r.exit_code}: ${r.output}'
+	assert r.output.contains('[a 1]'), 'nested non-def element must stay data: ${r.output}'
 }
 
 // ── 5. A data element whose head is NOT a def still constructs (not hijacked) ──

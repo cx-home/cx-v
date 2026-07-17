@@ -149,6 +149,13 @@ const x_src_a2a = $embed_file('../x/a2a.cx').to_string()
 // a2a-xap — A2A tasks over the xap substrate (#6 Y2b; tasks→journal, replayable).
 const x_src_a2a_xap = $embed_file('../x/a2a-xap.cx').to_string()
 
+// term — native raw-mode terminal input (#30; termios + VT/ANSI key decoder).
+const x_src_term = $embed_file('../x/term.cx').to_string()
+
+// adjudicate — out-of-band agent adjudicator for the similar review band
+// (#376; similar.md §5.3 ruling Q4 follow-up — produces resolutions-table rows).
+const x_src_adjudicate = $embed_file('../x/adjudicate.cx').to_string()
+
 // ── Public surface ──────────────────────────────────────────────────
 
 // bundled_stdlib_names returns the 14 frozen `cx-stdlib/*` resolver
@@ -184,6 +191,7 @@ pub fn bundled_stdlib_names() []string {
 		'cx-stdlib/i18n',
 		'cx-stdlib/locale',
 		'cx-stdlib/ft',
+		'cx-stdlib/similar',
 		'cx-stdlib/prof',
 		'cx-stdlib/process',
 		'cx-stdlib/fp',
@@ -234,6 +242,7 @@ pub fn bundled_stdlib_source(name string) ?string {
 		'cx-stdlib/i18n'     { stdlib_src_i18n }
 		'cx-stdlib/locale'  { stdlib_src_locale }
 		'cx-stdlib/ft'      { stdlib_src_ft }
+		'cx-stdlib/similar' { stdlib_src_similar }
 		'cx-stdlib/prof'    { stdlib_src_prof }
 		'cx-stdlib/process' { stdlib_src_process }
 		'cx-stdlib/fp'      { stdlib_src_fp }
@@ -264,6 +273,8 @@ pub fn bundled_x_names() []string {
 		'cx-x/mcp-server',
 		'cx-x/a2a',
 		'cx-x/a2a-xap',
+		'cx-x/term',
+		'cx-x/adjudicate',
 	]
 }
 
@@ -277,6 +288,8 @@ pub fn bundled_x_source(name string) ?string {
 		'cx-x/mcp-server' { x_src_mcp_server }
 		'cx-x/a2a' { x_src_a2a }
 		'cx-x/a2a-xap' { x_src_a2a_xap }
+		'cx-x/term' { x_src_term }
+		'cx-x/adjudicate' { x_src_adjudicate }
 		else       { none }
 	}
 }
@@ -329,8 +342,16 @@ fn bundled_codec_module_names() []string {
 // (codec.md §3). Bodies forward to the registry-driven native primitives
 // (`<fmt>-parse` etc., vcx/code/stdlib_codec.v → vcx/cx/codec.v node entry
 // points). `pure` per §5 — codecs charge no capability.
+//
+// The `cx` codec additionally carries the `cx:` self-host core surface
+// (spec/modules/cx.md §2.1, #437): serialize / canonical / hash / diff /
+// patch / to-format / from-format / equal / select forward to the native
+// primitives in vcx/code/stdlib_cx.v. The same primitives are also reachable
+// with NO [?lib] at all (modules/cx.md §1 activation "Always") through the
+// call-fallback chain; the [?def]s here keep `[?lib 'cx-stdlib/cx' as=…]`
+// aliasing working like every other module.
 fn codec_module_source(fmt string) string {
-	return '[; cx-stdlib/${fmt} — codec surface (core; codec.md §3). Synthesized
+	mut src := '[; cx-stdlib/${fmt} — codec surface (core; codec.md §3). Synthesized
    from the codec registry; bodies forward to registry-driven native
    primitives. The CX tree is the universal pivot (codec.md §1). ]
 [?def parse        scope=public pure [returns any]    (\$s::string) [\$${fmt}-parse \$s]]
@@ -338,6 +359,19 @@ fn codec_module_source(fmt string) string {
 [?def emit         scope=public pure [returns string] (\$v::any)    [\$${fmt}-emit \$v]]
 [?def emit-bytes   scope=public pure [returns bytes]  (\$v::any)    [\$${fmt}-emit-bytes \$v]]
 '
+	if fmt == 'cx' {
+		src += '[?def serialize    scope=public pure [returns string] (\$v::any)    [\$cx-serialize \$v]]
+[?def canonical    scope=public pure [returns string] (\$v::any)    [\$cx-canonical \$v]]
+[?def hash         scope=public pure [returns string] (\$v::any)    [\$cx-hash \$v]]
+[?def diff         scope=public pure [returns any]    (\$a::any \$b::any) [\$cx-diff \$a \$b]]
+[?def patch        scope=public pure [returns any]    (\$v::any \$d::any) [\$cx-patch \$v \$d]]
+[?def to-format    scope=public pure [returns string] (\$v::any \$fmt::string) [\$cx-to-format \$v \$fmt]]
+[?def from-format  scope=public pure [returns any]    (\$t::string \$fmt::string) [\$cx-from-format \$t \$fmt]]
+[?def equal        scope=public pure [returns bool]   (\$a::any \$b::any) [\$cx-equal \$a \$b]]
+[?def select       scope=public pure [returns any]    (\$v::any \$p::string) [\$cx-select \$v \$p]]
+'
+	}
+	return src
 }
 
 // register_bundled_codecs registers every `cx-stdlib/<codec>` module source

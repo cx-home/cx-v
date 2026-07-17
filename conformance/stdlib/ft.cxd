@@ -67,7 +67,7 @@ conformance fixtures for cx-stdlib/ft (spec/std-lib/ft.md §6/§8).
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc "database design"], [doc "schema migrations"])]]
-  [$ft:search $idx "" 10]]
+  [$ft:search $idx [$ft:parse-query ""] 10]]
 #]]
   [out-text [#
 ()
@@ -82,7 +82,7 @@ conformance fixtures for cx-stdlib/ft (spec/std-lib/ft.md §6/§8).
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design and analytics"], [doc id="d2" "kitchen recipes for soup"])]]
-  [$ft:doc-ids [$ft:search $idx "database" 10]]]
+  [$ft:doc-ids [$ft:search $idx [$ft:parse-query "database"] 10]]]
 #]]
   [out-text [#
 ('d1')
@@ -97,7 +97,7 @@ conformance fixtures for cx-stdlib/ft (spec/std-lib/ft.md §6/§8).
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
-  [$ft:search $idx "nonexistentterm" 10]]
+  [$ft:search $idx [$ft:parse-query "nonexistentterm"] 10]]
 #]]
   [out-text [#
 ()
@@ -112,7 +112,7 @@ conformance fixtures for cx-stdlib/ft (spec/std-lib/ft.md §6/§8).
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
-  [$ft:search $idx "\"unterminated phrase" 10]]
+  [$ft:search $idx [$ft:parse-query "\"unterminated phrase"] 10]]
 #]]
   [out-err [#
 cx-err:CXER1200
@@ -127,7 +127,7 @@ cx-err:CXER1200
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index-with-opts ([doc [title "Database design"] [body "schemas and indexes"]]) {"fields" ("title")}]]
-  [$ft:search $idx "body:schemas" 10]]
+  [$ft:search $idx [$ft:parse-query "body:schemas"] 10]]
 #]]
   [out-err [#
 cx-err:CXER1202
@@ -142,7 +142,7 @@ cx-err:CXER1202
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" [title "Database design"] [body "Schemas and indexes for analytics"]], [doc id="d2" [title "Schema migrations"] [body "Database schema evolution"]])]]
-  [$ft:doc-ids [$ft:search $idx "title:database" 10]]]
+  [$ft:doc-ids [$ft:search $idx [$ft:parse-query "title:database"] 10]]]
 #]]
   [out-text [#
 ('d1')
@@ -185,7 +185,7 @@ cx-err:CXER1204
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database one"], [doc id="d2" "database two"], [doc id="d3" "database three"])]]
-  [$count [$ft:search-with-opts $idx "database" {limit: 2}]]]
+  [$count [$ft:search-with-opts $idx [$ft:parse-query "database"] {limit: 2}]]]
 #]]
   [out-text [#
 2
@@ -200,7 +200,7 @@ cx-err:CXER1204
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design and tuning"], [doc id="d2" "kitchen recipes"])]]
-  [$ft:doc-ids [$ft:search-with-opts $idx "database" {scoring: "bm25"}]]]
+  [$ft:doc-ids [$ft:search-with-opts $idx [$ft:parse-query "database"] {scoring: "bm25"}]]]
 #]]
   [out-text [#
 ('d1')
@@ -215,7 +215,7 @@ cx-err:CXER1204
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
-  [$ft:search-with-opts $idx "\"unterminated" {"limit" 10}]]
+  [$ft:search-with-opts $idx [$ft:parse-query "\"unterminated"] {"limit" 10}]]
 #]]
   [out-err [#
 cx-err:CXER1200
@@ -304,7 +304,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
-  [$ft:doc-ids [$ft:search $idx "" 10]]]
+  [$ft:doc-ids [$ft:search $idx [$ft:parse-query ""] 10]]]
 #]]
   [out-text [#
 ()
@@ -319,7 +319,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design"], [doc id="d2" "database tuning"])]]
-  [$count [$ft:doc-ids [$ft:search $idx "database" 10]]]]
+  [$count [$ft:doc-ids [$ft:search $idx [$ft:parse-query "database"] 10]]]]
 #]]
   [out-text [#
 2
@@ -334,8 +334,8 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
-  [?let [= $results [$ft:search $idx "database" 10]]
-    [$gte [$ft:score-of [$first $results]] 0.0]]]
+  [= $results [$ft:search $idx [$ft:parse-query "database"] 10]]
+  [$gte [$ft:score-of [$first $results]] 0.0]]
 #]]
   [out-text [#
 true
@@ -350,7 +350,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?lib 'cx-stdlib/strings']
-[$strings:contains [$ft:snippet [doc "the database design covers schemas and indexes"] "database" 80] "<mark>"]
+[$strings:contains [$ft:snippet [doc "the database design covers schemas and indexes"] [$ft:parse-query "database"] 80] "<mark>"]
 #]]
   [out-text [#
 true
@@ -365,7 +365,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?lib 'cx-stdlib/strings']
-[$strings:contains [$ft:snippet [doc "the database design covers schemas and indexes"] "database" 80] "database"]
+[$strings:contains [$ft:snippet [doc "the database design covers schemas and indexes"] [$ft:parse-query "database"] 80] "database"]
 #]]
   [out-text [#
 true
@@ -380,7 +380,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?lib 'cx-stdlib/strings']
-[$strings:contains [$ft:snippet-with-opts [doc "the database design covers schemas"] "database" {mark-prefix: "[[", mark-suffix: "]]"}] "[[database]]"]
+[$strings:contains [$ft:snippet-with-opts [doc "the database design covers schemas"] [$ft:parse-query "database"] {mark-prefix: "[[", mark-suffix: "]]"}] "[[database]]"]
 #]]
   [out-text [#
 true
@@ -395,7 +395,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?lib 'cx-stdlib/strings']
-[$strings:contains [$ft:snippet-with-opts [doc "the database design covers schemas"] "database" {context-chars: 40}] "<mark>"]
+[$strings:contains [$ft:snippet-with-opts [doc "the database design covers schemas"] [$ft:parse-query "database"] {context-chars: 40}] "<mark>"]
 #]]
   [out-text [#
 true
@@ -411,8 +411,8 @@ true
 [?lib 'cx-stdlib/ft']
 [?lib 'cx-stdlib/store']
 [?let [= $store [$store:open "mem:///ft-conformance"]]
-  [?let [= $_ [$store:put-doc $store [doc id="d1" "database design and analytics"]]]
-    [$ft:doc-ids [$ft:search-store $store "database" 10]]]]
+  [= $_ [$store:put-doc $store [doc id="d1" "database design and analytics"]]]
+  [$ft:doc-ids [$ft:search-store $store [$ft:parse-query "database"] 10]]]
 #]]
   [out-text [#
 ('d1')
@@ -431,7 +431,7 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index-with-opts ([doc id="d1" "Database Design"]) {case-sensitive: true}]]
-  [$ft:search-with-opts $idx "database" {case-sensitive: false}]]
+  [$ft:search-with-opts $idx [$ft:parse-query "database"] {case-sensitive: false}]]
 #]]
   [out-err [#
 cx-err:CXER1203
@@ -460,10 +460,227 @@ true
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index-with-opts ([doc id="d1" "alpha-beta-gamma"],) {tokenizer: [?fn ($text) ("alpha", "beta", "gamma")], stopwords: :none, stemmer: "none"}]]
-  [$ft:doc-ids [$ft:search $idx "beta" 10]]]
+  [$ft:doc-ids [$ft:search $idx [$ft:parse-query "beta"] 10]]]
 #]]
   [out-text [#
 ('d1')
+#]]
+ ]
+
+ [case id=ft-030-phrase-slop-hit level=core
+  [tags ft phrase slop proximity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "customer excellent support"],)]]
+  [$ft:doc-ids [$ft:search $idx [query [phrase slop=1 "customer support"]] 10]]]
+#]]
+  [out-text [#
+('d1')
+#]]
+ ]
+
+ [case id=ft-031-phrase-slop-miss-at-n-plus-1 level=core
+  [tags ft phrase slop proximity negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "customer really excellent support"],)]]
+  [$ft:doc-ids [$ft:search $idx [query [phrase slop=1 "customer support"]] 10]]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=ft-032-phrase-slop-zero-is-exact level=core
+  [tags ft phrase slop exact]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "customer support desk"],)]]
+  [$ft:doc-ids [$ft:search $idx [query [phrase slop=0 "customer support"]] 10]]]
+#]]
+  [out-text [#
+('d1')
+#]]
+ ]
+
+ [case id=ft-033-stopword-consumes-position level=core
+  [tags ft slop stopword positions decision-3a]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "state of the art"],)]]
+  [= $exact [$count [$ft:search $idx [query [phrase "state art"]] 10]]]
+  [= $slop2 [$count [$ft:search $idx [query [phrase slop=2 "state art"]] 10]]]
+  [pair exact=$exact slop2=$slop2]]
+#]]
+  [out-text [#
+[pair exact=0 slop2=1]
+#]]
+ ]
+
+ [case id=ft-034-near-window-hit-and-miss level=core
+  [tags ft near proximity window]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="hit" "acme quality plumbing"], [doc id="miss" "acme one two three four plumbing"])]]
+  [$ft:doc-ids [$ft:search $idx [query [near n=2 [term "acme"] [term "plumbing"]]] 10]]]
+#]]
+  [out-text [#
+('hit')
+#]]
+ ]
+
+ [case id=ft-035-near-ordered-rejects-reversed level=core
+  [tags ft near ordered proximity]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="rev" "plumbing by acme"],)]]
+  [= $uno [$count [$ft:search $idx [query [near n=5 [term "acme"] [term "plumbing"]]] 10]]]
+  [= $ord [$count [$ft:search $idx [query [near n=5 ordered=true [term "acme"] [term "plumbing"]]] 10]]]
+  [pair unordered=$uno ordered=$ord]]
+#]]
+  [out-text [#
+[pair unordered=1 ordered=0]
+#]]
+ ]
+
+ [case id=ft-036-near-connective-operand-shape-error level=core
+  [tags ft near error CXER1205]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "x"],)]]
+  [$ft:search $idx [query [near n=2 [all [term "a"] [term "b"]] [term "c"]]] 10]]
+#]]
+  [out-err [#
+cx-err:CXER1205
+#]]
+ ]
+
+ [case id=ft-037-search-rejects-string-query level=core
+  [tags ft query-shape error CXER1205 injection-boundary]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "x"],)]]
+  [$ft:search $idx "x" 10]]
+#]]
+  [out-err [#
+cx-err:CXER1205
+#]]
+ ]
+
+ [case id=ft-038-parse-query-canonical-mapping level=core
+  [tags ft parse-query canonical mapping]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[$ft:parse-query "database AND (mysql OR postgres) -mongodb"]
+#]]
+  [out-text [#
+[query [all [term 'database'] [any [term 'mysql'] [term 'postgres']] [none [term 'mongodb']]]]
+#]]
+ ]
+
+ [case id=ft-039-parse-query-slop-and-near level=core
+  [tags ft parse-query slop near mapping]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[pair
+  [slop [$ft:parse-query "\"customer support\"~2"]]
+  [near [$ft:parse-query "acme ONEAR/5 plumbing"]]]
+#]]
+  [out-text [#
+[pair [slop [query [phrase slop=2 'customer support']]] [near [query [near n=5 ordered=true [term 'acme'] [term 'plumbing']]]]]
+#]]
+ ]
+
+ [case id=ft-040-injection-boundary-term-stays-a-term level=core
+  [tags ft injection structural-query security]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "alpha beta"], [doc id="d2" "gamma"])]]
+  [= $user-input "alpha OR gamma"]
+  [= $structural [$count [$ft:search $idx [query [term $user-input]] 10]]]
+  [= $parsed     [$count [$ft:search $idx [$ft:parse-query $user-input] 10]]]
+  [pair structural=$structural parsed=$parsed]]
+#]]
+  [out-text [#
+[pair structural=0 parsed=2]
+#]]
+ ]
+
+ [case id=ft-041-proximity-boost-monotone level=core
+  [tags ft scoring proximity-boost ranking]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d" "acme plumbing"],)]]
+  [= $q [query [all [term "acme"] [term "plumbing"]]]]
+  [= $on  [$ft:score-of [$first [$ft:search-with-opts $idx $q {limit: 1}]]]]
+  [= $off [$ft:score-of [$first [$ft:search-with-opts $idx $q {limit: 1, proximity-boost: 0.0}]]]]
+  [> $on $off]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ft-042-proximity-boost-ranks-closer-higher level=core
+  [tags ft scoring proximity-boost ranking]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="tight" "alpha beta filler filler filler filler"], [doc id="loose" "alpha filler filler filler filler beta"])]]
+  [$ft:doc-ids [$ft:search $idx [query [all [term "alpha"] [term "beta"]]] 10]]]
+#]]
+  [out-text [#
+('tight', 'loose')
+#]]
+ ]
+
+ [case id=ft-043-boost-never-creates-match level=core
+  [tags ft scoring proximity-boost negative]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "alpha only"],)]]
+  [$ft:doc-ids [$ft:search $idx [query [all [term "alpha"] [term "zeta"]]] 10]]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=ft-044-empty-parse-query-empty-match level=core
+  [tags ft parse-query empty edge]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[?let [= $idx [$ft:index ([doc id="d1" "x"],)]]
+  [$ft:search $idx [$ft:parse-query ""] 10]]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=ft-045-fn-doc-parse-query-single-term level=core
+  [tags ft parse-query fn-doc]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/ft']
+[$ft:parse-query "database"]
+#]]
+  [out-text [#
+[query [term 'database']]
 #]]
  ]
 ]

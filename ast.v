@@ -380,8 +380,10 @@ pub mut:
 	// to decide between StartElement+per-cell-Scalar+EndElement (false)
 	// and StartTable+RowGroup*+EndTable (true) per spec/streaming.md §1.1.
 	// CX text source and non-chunked data_bin (`0x60` / `0x61`) leave it
-	// false. Not serialized in ast_bin (table content is not serialized
-	// in ast_bin per binary.v); set by the data_bin chunked reader path.
+	// false. Runtime provenance only — NOT serialized in ast_bin (the
+	// table CONTENT rides the v9 Element table record, tag 0x17, per
+	// binary.v / ast-bin.md §4.8 (#464); decoded tables restore false);
+	// set by the data_bin chunked reader path.
 	from_chunked bool
 }
 
@@ -477,8 +479,8 @@ pub fn cell_rows_from_scalars(rows [][]ScalarValue) [][]TableCellValue {
 // Attribute struct diet (gate 30.5 /).
 //
 // The previous Attribute carried four cold optional/string fields
-// inline (`data_type ?ScalarType`, `local string`, `ns_uri ?string`,
-// `body ?[]Node`) totalling 208 B per attribute struct. Spine-copy
+// inline (`data_type ?ScalarType`, `local string`, `ns_uri ?string`, and
+// the since-removed `body ?[]Node`) totalling 208 B per attribute struct. Spine-copy
 // under [?modify] cloned the attribute slice on every spine-frame,
 // paying that cost on every attribute of every spine element.
 //
@@ -492,7 +494,7 @@ pub fn cell_rows_from_scalars(rows [][]ScalarValue) [][]TableCellValue {
 //
 // Public access is via accessor methods (e.g. `a.data_type() ?string`)
 // — readers do `if dt := a.data_type() { ... }` instead of the legacy
-// direct-field unwrap. Mutators use `set_data_type` / `set_body` etc.,
+// direct-field unwrap. Mutators use `set_data_type` etc.,
 // which lazy-allocate `meta` on first non-empty set.
 //
 // ABI/wire layout is unaffected: ast_bin encoding inspects fields
@@ -545,13 +547,9 @@ pub mut:
 	// do NOT apply to unprefixed attributes — `ns_uri` stays none
 	// for unprefixed attrs even when a default ns is in scope.
 	ns_uri ?string
-	// v3.5: BracketBody attribute value — `name=[BodyItem*]`.
-	// When set, `value` is empty/unused and the attribute's content is
-	// the parsed body sequence. Used by program evaluation directives like
-	// `[?if cond :then=[BODY] :else=[BODY]]` (spec/eval.md §3.2). Auto-
-	// typing rules do not apply. Inert outside program evaluation context;
-	// round-trips as opaque structure (R5).
-	body ?[]Node
+	// (The v3.5 `body ?[]Node` BracketBody channel was REMOVED here —
+	// #396 owner ruling 1b, 2026-07-13: attributes are strictly scalar,
+	// one value channel. D2/lexicon §10 is the normative home.)
 }
 
 // ── Attribute accessors ──────────────────────────────────────────────────────
@@ -576,11 +574,6 @@ pub fn (a Attribute) local() string {
 pub fn (a Attribute) ns_uri() ?string {
 	if isnil(a.meta) { return none }
 	return a.meta.ns_uri
-}
-
-pub fn (a Attribute) body() ?[]Node {
-	if isnil(a.meta) { return none }
-	return a.meta.body
 }
 
 // ── Attribute mutators ───────────────────────────────────────────────────────
@@ -611,16 +604,10 @@ pub fn (mut a Attribute) set_ns_uri(v ?string) {
 	a.meta.ns_uri = v
 }
 
-pub fn (mut a Attribute) set_body(v ?[]Node) {
-	if isnil(a.meta) && v == none { return }
-	a.ensure_meta()
-	a.meta.body = v
-}
-
 // new_attribute constructs an Attribute with the optional metadata
 // fields expressed as a single AttributeMeta literal. Auto-allocates
 // `meta` only when at least one slot is set. Use this for callers
-// that previously built `Attribute{ name, value, data_type, local, ns_uri, body }`
+// that previously built `Attribute{ name, value, data_type, local, ns_uri }`
 // inline.
 pub fn new_attribute(name string, value ScalarValue, m AttributeMeta) Attribute {
 	if attribute_meta_is_empty(m) {
@@ -637,7 +624,7 @@ pub fn new_attribute(name string, value ScalarValue, m AttributeMeta) Attribute 
 }
 
 fn attribute_meta_is_empty(m AttributeMeta) bool {
-	if m.data_type != none || m.ns_uri != none || m.body != none {
+	if m.data_type != none || m.ns_uri != none {
 		return false
 	}
 	return m.local == ''

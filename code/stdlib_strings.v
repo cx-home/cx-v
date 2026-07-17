@@ -653,6 +653,23 @@ fn strings_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			nrep := s_arg_int(args[3]) or { return none }
 			return s_str(str_replace_n(s, from, to, nrep))
 		}
+		'str-replace-exactly' {
+			// Fail-loud surgical replace (#93): `from` MUST occur exactly once,
+			// else an err VALUE (CXER2903) — the safety the harness Edit tool
+			// gives, so a typo'd / ambiguous target can't silently no-op or
+			// over-replace.
+			s := s_arg_str(args[0]) or { return none }
+			from := s_arg_str(args[1]) or { return none }
+			to := s_arg_str(args[2]) or { return none }
+			if from == '' {
+				return s_err('cx-err:CXER2903', 'E_STRINGS_REPLACE_NOT_UNIQUE: replace-exactly requires a non-empty "from"')
+			}
+			cnt := rune_find_all(s, from).len
+			if cnt != 1 {
+				return s_err('cx-err:CXER2903', 'E_STRINGS_REPLACE_NOT_UNIQUE: "from" must occur exactly once, found ${cnt}')
+			}
+			return s_str(str_replace_n(s, from, to, 1))
+		}
 		// §3.7 Pad and repeat
 		'str-pad-start' {
 			s := s_arg_str(args[0]) or { return none }

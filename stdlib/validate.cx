@@ -4,10 +4,12 @@
    validate-shape validates a CX data record (map / element / scalar) against
    an inline [schema [field …] …] element, returning [ok $value] or
    [err [violation …] …]. Scalar constraints (type / pattern / min / max /
-   min-length / max-length / enum / required / optional) and structural
-   keywords (strict / nested schema= / extends=) forward to native
-   primitives (vcx/code/stdlib_validate.v); the record-field walk and RE2
-   pattern matching are not expressible in pure CX.
+   min-length / max-length / required / optional) and structural
+   vocabulary (strict= / [enum …] / nested [schema …] / [extends $Base])
+   forward to native primitives (vcx/code/stdlib_validate.v); the
+   record-field walk and RE2 pattern matching are not expressible in pure
+   CX. Structured schema data rides in CHILD ELEMENTS — attributes are
+   strictly scalar (code.md §6.4.1).
 
    NOTE: this const and stdlib/validate.cx are the same source — edit both. ]
 
@@ -30,10 +32,11 @@
    against an inline [schema [field …] …], returning [ok $value] on success or an
    inspectable [invalid [violation …] …] report on failure — failure is data the
    caller iterates, never a thrown error. The vocabulary covers scalar constraints
-   (type, pattern, min / max, min-length / max-length, enum, required / optional)
-   and structural keywords (strict, nested schema=, extends=, validate-with=), with
-   patterns matched under RE2. This is the data-record sibling of the document-tree
-   validator in spec/core/schema.md, sharing one scalar-constraint vocabulary."""]]
+   (type, pattern, min / max, min-length / max-length, required / optional) plus
+   the structural child elements [enum …], nested [schema …], [extends $Base] and
+   the keywords strict= / validate-with=, with patterns matched under RE2. This is
+   the data-record sibling of the document-tree validator in spec/core/schema.md,
+   sharing one scalar-constraint vocabulary."""]]
 [fn-doc name=validate-shape scope=public purity=pure
   [sig """-> element"""]
   [summary """Validate a value against an inline schema, returning [ok $value] or [invalid …]."""]
@@ -83,7 +86,7 @@
 [$validate:violation-paths
   [$validate:validate-shape
     [rec [address [zip "abc"]]]
-    [schema [field name="address" type="element" schema=[schema
+    [schema [field name="address" type="element" [schema
       [field name="zip" type="string" pattern="^\\d{5}(-\\d{4})?$"]]]]]]"""] [expect """('/address/zip')"""]]
 ]
 [fn-doc name=violation-messages scope=public purity=pure

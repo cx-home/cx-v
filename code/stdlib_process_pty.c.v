@@ -24,7 +24,7 @@ import time as vtime
 // site is comptime-excluded and spawn-pty raises CXER4009 (process.md §4.9).
 
 #flag linux -lutil
-#include "cx_pty.h"
+#include "cx_pty.c"
 
 // The openpty + posix_spawn machinery lives in the cx_pty.h C shim (it uses the
 // real system types internally); V calls just these two uniquely-named wrappers.

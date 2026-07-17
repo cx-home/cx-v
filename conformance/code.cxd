@@ -408,7 +408,7 @@ note: is the blessed path for both single-char (len=1) and slice access.
 [empty]
 #]]
   [in-code [#
-[?let [= $a 10] [?let [= $b 32] [+ $a $b]]]
+[?let [= $a 10] [= $b 32] [+ $a $b]]
 #]]
   [out-text [#
 42
@@ -954,7 +954,7 @@ cx-err:CXER0100
 [ignored]
 #]]
   [in-code [#
-[?let [= $iter [?map (1, 2, 3) [using [?fn $i [* $i 2]]]]] [?let [= $a [?to-sequence $iter]] [?let [= $b [?to-sequence $iter]] [= $a $b]]]]
+[?let [= $iter [?map (1, 2, 3) [using [?fn $i [* $i 2]]]]] [= $a [?to-sequence $iter]] [= $b [?to-sequence $iter]] [= $a $b]]
 #]]
   [out-text [#
 true
@@ -967,7 +967,7 @@ true
 [ignored]
 #]]
   [in-code [#
-[?let [= $iter [?map (1, 2, 3) [using [?fn $i [* $i 2]]]]] [?let [= $first [?to-sequence $iter]] [?let [= $second [?to-sequence $iter]] $second]]]
+[?let [= $iter [?map (1, 2, 3) [using [?fn $i [* $i 2]]]]] [= $first [?to-sequence $iter]] [= $second [?to-sequence $iter]] $second]
 #]]
   [out-text [#
 (2, 4, 6)
@@ -1036,6 +1036,44 @@ false
 #]]
   [out-text [#
 {a: 1, b: 2, c: 3}
+#]]
+ ]
+
+ [; #495 — the program renderer's map-key quoting converges on one shared
+    rule (cx_emit_envelope_map_key, beside the data lane's cx_emit_map_key
+    of #475): a key whose bare image would structurally mis-parse quotes on
+    emit, so the emitted text re-parses to the same key (a bare `$tag`
+    would read as a binding reference / reserved-envelope key; a bare
+    `cx:seq` splits at the first colon). Bare names and auto-typing images
+    stay bare — the `__cx_map__` envelope erases key types, so `{7: v}`
+    (program-dc-entry-int-key) keeps its int-key image. Two cases pin both
+    program render paths (map-as-element-child and map-as-top-result). ]
+
+ [case id=program-map-key-quote-001-element-child level=core
+  [tags map render emit quoting keys issue-495]
+  [title $-leading / colon-bearing string map keys quote when the map renders as an element child]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[m {'$tag': weird, 'cx:seq': v2, plain: ok}]
+#]]
+  [out-text [#
+[m {'$tag': weird, 'cx:seq': v2, plain: ok}]
+#]]
+ ]
+
+ [case id=program-map-key-quote-002-top-result level=core
+  [tags map render emit quoting keys issue-495]
+  [title $-leading / colon-bearing string map keys quote when the map is the top-level result]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?to-map (("$tag", weird), ("cx:seq", v2), (plain, ok))]
+#]]
+  [out-text [#
+{'$tag': weird, 'cx:seq': v2, plain: ok}
 #]]
  ]
 
@@ -1144,6 +1182,152 @@ false
 #]]
   [out-text [#
 [err code=cx-err:CXER0001 message=panic [cause [err code=parse-fail message='parse failed']]]
+#]]
+ ]
+
+ [; §9.2 implicit operand propagation at truthiness boundaries (#346): an
+    [err] reaching a condition slot short-circuits the form and surfaces as
+    its result — it is never EBV-coerced (an err element would read truthy:
+    items.len > 0). ENFORCED for [?if] (005-007). The guard/predicate
+    boundaries — [?match] :when/:where, [?filter], [?partition], [?for]
+    [where]/[takewhile]/[dropwhile] (008-014, gate=pending) — are an OPEN
+    OWNER DECISION: shipped stdlib code (xap-dist registry lookups,
+    validate shape walks) relies on err-valued guards meaning SKIP, while a
+    uniform §9.2 reading says PROPAGATE. Do not enforce until decided. ]
+
+ [case id=program-err-005-if-cond-err-propagates level=core
+  [tags errors propagation if condition ebv]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?if [/ 1 0] [then 'took-then'] [else 'took-else']]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-err-006-if-cond-err-tail-path level=core
+  [tags errors propagation if condition tail-position def]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?def f ($n)
+  [?if [/ $n 0] [then 'took-then'] [else 'took-else']]]
+[f 1]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-err-007-if-cond-err-recoverable level=core
+  [tags errors propagation if condition fallback recovery]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?fallback [?if [/ 1 0] [then 1] [else 2]] [recover-with 'saved']]
+#]]
+  [out-text [#
+'saved'
+#]]
+ ]
+
+ [case id=program-err-008-match-when-cond-err level=core
+  [tags errors propagation match multi-arm when condition]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?match 5
+  [when [/ 1 0] :bad]
+  [else :ok]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-err-009-match-case-where-guard-err level=core
+  [tags errors propagation match case where-guard]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $u [user age=20 [name Alice]]] [?match $u
+  [case [user $q] [where [/ 1 0]] :adult]
+  [else :other]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-err-010-filter-pred-err level=core
+  [tags errors propagation filter predicate]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?filter (1, 2, 3) [using [?fn $x [/ 1 0]]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-err-011-partition-pred-err level=core
+  [tags errors propagation partition predicate]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?partition (1, 2, 3) [using [?fn $x [/ 1 0]]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-err-012-for-where-err level=core
+  [tags errors propagation for where filter-clause]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2)] [where [/ 1 0]] [yield $x]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-err-013-for-takewhile-err level=core
+  [tags errors propagation for takewhile predicate]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2)] [takewhile [/ 1 0]] [yield $x]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-err-014-for-dropwhile-err level=core
+  [tags errors propagation for dropwhile predicate]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2)] [dropwhile [/ 1 0]] [yield $x]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
 #]]
  ]
 
@@ -1372,8 +1556,8 @@ cx-err:CXER0100
 #]]
   [in-code [#
 [?let [= $a [?circuit-breaker threshold=0.0 window=60s reset=30s
-                             min-samples=1 name="cb-003" [?test-err-then-ok err-count=1 ok-value=probe-ok]]] [?let [= $_ [?test-clock advance=31s]] [?let [= $b [?circuit-breaker threshold=0.0 window=60s reset=30s
-                                       min-samples=1 name="cb-003" [?test-err-then-ok err-count=1 ok-value=probe-ok]]] ([a $a], [b $b])]]]
+                             min-samples=1 name="cb-003" [?test-err-then-ok err-count=1 ok-value=probe-ok]]] [= $_ [?test-clock advance=31s]] [= $b [?circuit-breaker threshold=0.0 window=60s reset=30s
+min-samples=1 name="cb-003" [?test-err-then-ok err-count=1 ok-value=probe-ok]]] ([a $a], [b $b])]
 #]]
   [out-text [#
 ([a [err code=test-failure message='test failure']], [b 'probe-ok'])
@@ -1387,9 +1571,9 @@ cx-err:CXER0100
 #]]
   [in-code [#
 [?let [= $first [?circuit-breaker threshold=0.0 window=60s reset=30s
-                                 min-samples=1 name="cb-004" [?test-always-err]]] [?let [= $_ [?test-clock advance=31s]] [?let [= $second [?circuit-breaker threshold=0.0 window=60s reset=30s
-                                            min-samples=1 name="cb-004" [?test-always-err]]] [?let [= $third [?circuit-breaker threshold=0.0 window=60s reset=30s
-                                                min-samples=1 name="cb-004" [?test-always-err]]] ([r1 $first], [r2 $second], [r3 $third])]]]]
+                                 min-samples=1 name="cb-004" [?test-always-err]]] [= $_ [?test-clock advance=31s]] [= $second [?circuit-breaker threshold=0.0 window=60s reset=30s
+min-samples=1 name="cb-004" [?test-always-err]]] [= $third [?circuit-breaker threshold=0.0 window=60s reset=30s
+min-samples=1 name="cb-004" [?test-always-err]]] ([r1 $first], [r2 $second], [r3 $third])]
 #]]
   [out-text [#
 ([r1 [err code=test-failure message='test failure']], [r2 [err code=test-failure message='test failure']], [r3 [err code=cx-err:CXER0150 message='circuit breaker open' [until [instant 61s]]]])
@@ -1503,7 +1687,7 @@ secondary
 [ignored]
 #]]
   [in-code [#
-[?let [= $a [?rate-limit max=1 per=1s name="rl-003" a]] [?let [= $b [?rate-limit max=1 per=1s name="rl-003" b]] [?let [= $_ [?test-clock advance=1100ms]] [?let [= $c [?rate-limit max=1 per=1s name="rl-003" c]] ([a $a], [b $b], [c $c])]]]]
+[?let [= $a [?rate-limit max=1 per=1s name="rl-003" a]] [= $b [?rate-limit max=1 per=1s name="rl-003" b]] [= $_ [?test-clock advance=1100ms]] [= $c [?rate-limit max=1 per=1s name="rl-003" c]] ([a $a], [b $b], [c $c])]
 #]]
   [out-text [#
 ([a 'a'], [b [err code=cx-err:CXER0151 message='rate limit exceeded' retry-after=1s]], [c 'c'])
@@ -2285,7 +2469,7 @@ fb
   [in-code [#
 [?let [= $svc [?http-service on=http port=0 name="svc-014" grace-period=1s
                 [resource [get "/ping"]
-                   [response status=200 body="pong"]]]] [?let [= $_ [?stop $svc]] [?let [= $c [?http-client target=$test-target]] [?pipe $c [$get _ "/ping"]]]]]
+                   [response status=200 body="pong"]]]] [= $_ [?stop $svc]] [= $c [?http-client target=$test-target]] [?pipe $c [$get _ "/ping"]]]
 #]]
   [out-text [#
 [response status=503 [body [err code=cx-err:CXER0166 message='service shutting down']]]
@@ -2384,7 +2568,7 @@ fb
   [in-code [#
 [?let [= $svc [?http-service on=http port=0 name="svc-020" grace-period=5s
                 [resource [get "/quick"]
-                   [response status=200 body="done"]]]] [?let [= $_ [?stop $svc]] [?wait-for service=$svc]]]
+                   [response status=200 body="done"]]]] [= $_ [?stop $svc]] [?wait-for service=$svc]]
 #]]
   [out-text [#
 [terminated name=svc-020 reason=graceful]
@@ -2398,7 +2582,7 @@ fb
 #]]
   [in-code [#
 [?let [= $_ [?http-service on=http port=0 name="svc-021"
-              [resource [get "/"] [response status=200 body="ok"]]]] [?let [= $h [?service-handle name="svc-021"]] [?let [= $_ [?stop $h]] [terminated name="svc-021" reason="graceful"]]]]
+              [resource [get "/"] [response status=200 body="ok"]]]] [= $h [?service-handle name="svc-021"]] [= $_ [?stop $h]] [terminated name="svc-021" reason="graceful"]]
 #]]
   [out-text [#
 [terminated name=svc-021 reason=graceful]
@@ -2485,7 +2669,7 @@ the §10.4 channel / worker / select surface end-to-end:
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c1" buffer=1]] [?let [= $_ [?send "hello" to=$ch]] [?receive from=$ch]]]
+[?let [= $ch [?channel name="c1" buffer=1]] [= $_ [?send "hello" to=$ch]] [?receive from=$ch]]
 #]]
   [out-text [#
 'hello'
@@ -2498,7 +2682,7 @@ the §10.4 channel / worker / select surface end-to-end:
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c1" buffer=1]] [?let [= $_ [?send "hello" to=$ch]] [?receive from=$ch]]]
+[?let [= $ch [?channel name="c1" buffer=1]] [= $_ [?send "hello" to=$ch]] [?receive from=$ch]]
 #]]
   [out-text [#
 'hello'
@@ -2526,7 +2710,7 @@ the §10.4 channel / worker / select surface end-to-end:
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c3" buffer=1]] [?let [= $_ [?close $ch]] [?send "late" to=$ch]]]
+[?let [= $ch [?channel name="c3" buffer=1]] [= $_ [?close $ch]] [?send "late" to=$ch]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0200 message='channel closed']
@@ -2539,7 +2723,7 @@ the §10.4 channel / worker / select surface end-to-end:
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c4" buffer=2]] [?let [= $_ [?send "a" to=$ch]] [?let [= $_ [?close $ch]] [?let [= $first [?receive from=$ch]] [?let [= $second [?receive from=$ch]] ([r1 $first], [r2 $second])]]]]]
+[?let [= $ch [?channel name="c4" buffer=2]] [= $_ [?send "a" to=$ch]] [= $_ [?close $ch]] [= $first [?receive from=$ch]] [= $second [?receive from=$ch]] ([r1 $first], [r2 $second])]
 #]]
   [out-text [#
 ([r1 'a'], [r2 [err code=cx-err:CXER0200 message='channel closed']])
@@ -2552,7 +2736,7 @@ the §10.4 channel / worker / select surface end-to-end:
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c5" buffer=1]] [?let [= $_ [?send "first" to=$ch]] [?try-send "second" to=$ch timeout=50ms]]]
+[?let [= $ch [?channel name="c5" buffer=1]] [= $_ [?send "first" to=$ch]] [?try-send "second" to=$ch timeout=50ms]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0201 message='send timed out']
@@ -2578,7 +2762,7 @@ the §10.4 channel / worker / select surface end-to-end:
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c7" buffer=0]] [?let [= $_ [?close $ch]] [?close $ch]]]
+[?let [= $ch [?channel name="c7" buffer=0]] [= $_ [?close $ch]] [?close $ch]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0203 message='channel already closed']
@@ -2591,7 +2775,7 @@ the §10.4 channel / worker / select surface end-to-end:
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c8" buffer=4]] [?let [= $_ [?for [in $i (1, 2, 3, 4)] [yield [?send $i to=$ch]]]] [?for [in $j (1, 2, 3, 4)] [yield [?receive from=$ch]]]]]
+[?let [= $ch [?channel name="c8" buffer=4]] [= $_ [?for [in $i (1, 2, 3, 4)] [yield [?send $i to=$ch]]]] [?for [in $j (1, 2, 3, 4)] [yield [?receive from=$ch]]]]
 #]]
   [out-text [#
 1
@@ -2640,16 +2824,16 @@ the §10.4 channel / worker / select surface end-to-end:
 #]]
  ]
 
- [case id=program-conc-012-worker-cancel level=concurrency
-  [tags worker cancel CXER0221]
+ [case id=program-conc-012-worker-cancel-after-done-noop level=concurrency
+  [tags worker cancel signal-not-kill]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
-[?let [= $w [?worker name="w3" [body [?let [= $_ [?sleep 10s mock]] never]]]] [?let [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]]
+[?let [= $w [?worker name="w3" [body 42]]] [= $_ [?wait-for worker=$w]] [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]
 #]]
   [out-text [#
-[err code=cx-err:CXER0221 message='worker cancelled' [cause [err code=cx-err:CXER0260 message='operation cancelled']]]
+42
 #]]
  ]
 
@@ -2659,7 +2843,7 @@ the §10.4 channel / worker / select surface end-to-end:
 [ignored]
 #]]
   [in-code [#
-[?let [= $_ [?worker name="w4" [body lookupable]]] [?let [= $h [?worker-handle name="w4"]] [?wait-for worker=$h]]]
+[?let [= $_ [?worker name="w4" [body lookupable]]] [= $h [?worker-handle name="w4"]] [?wait-for worker=$h]]
 #]]
   [out-text [#
 lookupable
@@ -2672,9 +2856,9 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $a [?channel name="sa" buffer=1]] [?let [= $b [?channel name="sb" buffer=1]] [?let [= $_ [?send "from-a" to=$a]] [?select
-                 [case [from $a $msg] [picked ch="a" value=$msg]]
-                 [case [from $b $msg] [picked ch="b" value=$msg]]]]]]
+[?let [= $a [?channel name="sa" buffer=1]] [= $b [?channel name="sb" buffer=1]] [= $_ [?send "from-a" to=$a]] [?select
+[case [from $a $msg] [picked ch="a" value=$msg]]
+[case [from $b $msg] [picked ch="b" value=$msg]]]]
 #]]
   [out-text [#
 [picked ch=a value=from-a]
@@ -2702,7 +2886,7 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c16" buffer=0]] [?let [= $w [?worker name="w16" [body [?receive from=$ch]]]] [?let [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]]]
+[?let [= $ch [?channel name="c16" buffer=0]] [= $w [?worker name="w16" [body [?receive from=$ch]]]] [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0221 message='worker cancelled' [cause [err code=cx-err:CXER0260 message='operation cancelled']]]
@@ -2715,7 +2899,7 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c17" buffer=0]] [?let [= $w [?worker name="w17" [body [?send "blocked" to=$ch]]]] [?let [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]]]
+[?let [= $ch [?channel name="c17" buffer=0]] [= $w [?worker name="w17" [body [?send "blocked" to=$ch]]]] [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0221 message='worker cancelled' [cause [err code=cx-err:CXER0260 message='operation cancelled']]]
@@ -2728,11 +2912,11 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c18" buffer=6]] [?let [= $_ [?test-concurrent tasks=(
-                   [?for [in $i (1, 2, 3)] [yield [?send [a $i] to=$ch]]],
-                   [?for [in $j (1, 2, 3)] [yield [?send [b $j] to=$ch]]])]] [?let [= $items [?for [in $k (1, 2, 3, 4, 5, 6)]
-                                [yield [?receive from=$ch]]]] [pairs [a-order [?for [in [a $i] $items] [yield $i]]]
-                      [b-order [?for [in [b $j] $items] [yield $j]]]]]]]
+[?let [= $ch [?channel name="c18" buffer=6]] [= $_ [?test-concurrent tasks=(
+[?for [in $i (1, 2, 3)] [yield [?send [a $i] to=$ch]]],
+[?for [in $j (1, 2, 3)] [yield [?send [b $j] to=$ch]]])]] [= $items [?for [in $k (1, 2, 3, 4, 5, 6)]
+[yield [?receive from=$ch]]]] [pairs [a-order [?for [in [a $i] $items] [yield $i]]]
+[b-order [?for [in [b $j] $items] [yield $j]]]]]
 #]]
   [out-text [#
 [pairs [a-order (1, 2, 3)] [b-order (1, 2, 3)]]
@@ -2745,9 +2929,9 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c19" buffer=4]] [?let [= $producer [?worker name="prod"
-        [body [?let [= $_ [?for [in $i (1, 2, 3, 4)] [yield [?send $i to=$ch]]]] [?close $ch]]]]] [?let [= $consumer [?worker name="cons"
-             [body [?for [in $msg (1, 2, 3, 4)] [yield [?receive from=$ch]]]]]] [?let [= $_ [?wait-for worker=$producer]] [?wait-for worker=$consumer]]]]]
+[?let [= $ch [?channel name="c19" buffer=4]] [= $producer [?worker name="prod"
+        [body [?let [= $_ [?for [in $i (1, 2, 3, 4)] [yield [?send $i to=$ch]]]] [?close $ch]]]]] [= $consumer [?worker name="cons"
+             [body [?for [in $msg (1, 2, 3, 4)] [yield [?receive from=$ch]]]]]] [= $_ [?wait-for worker=$producer]] [?wait-for worker=$consumer]]
 #]]
   [out-text [#
 1
@@ -2757,6 +2941,13 @@ lookupable
 #]]
  ]
 
+ [# §10.5.4 cooperative cancellation in a pure loop: the worker's only exit is
+    observing the cancel signal — [?check-cancel] in the takewhile predicate
+    (or the [?for] iteration-boundary cancellation point) reports CXER0260
+    once [?cancel] lands. Deterministic by construction: the body CANNOT run
+    to completion before the cancel, so [?wait-for] always surfaces the
+    WORKER_CANCELLED chain regardless of scheduling (the earlier finite-loop
+    shape raced the cancel under load — 2026-07-04 cold-gate flake). #]
  [case id=program-conc-020-check-cancel-pure-loop level=concurrency
   [tags cancel check-cancel CXER0260]
   [in-cx [#
@@ -2764,10 +2955,9 @@ lookupable
 #]]
   [in-code [#
 [?let [= $w [?worker name="w20"
-              [body [?for [in $i (1, 2, 3, 4, 5)]
-                     [yield [?let [= $c [?check-cancel]] [?if [= $c@code "cx-err:CXER0260"]
-                                  [then $c]
-                                  [else $i]]]]]]]] [?let [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]]
+              [body [?for [in $i [$range 1 *]]
+                     [takewhile [?match [?check-cancel] [case [err @code="cx-err:CXER0260"] false] [else true]]]
+                     [yield $i]]]]] [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0221 message='worker cancelled' [cause [err code=cx-err:CXER0260 message='operation cancelled']]]
@@ -2819,7 +3009,7 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $f [?async [?let [= $_ [?sleep 10s mock]] never]]] [?let [= $_ [?cancel $f]] [?await $f]]]
+[?let [= $f [?async [?let [= $_ [?sleep 10s mock]] never]]] [= $_ [?cancel $f]] [?await $f]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0260 message='operation cancelled']
@@ -2832,7 +3022,7 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $a [?async 1]] [?let [= $b [?async 2]] [?let [= $c [?async 3]] [?await-all ($a, $b, $c)]]]]
+[?let [= $a [?async 1]] [= $b [?async 2]] [= $c [?async 3]] [?await-all ($a, $b, $c)]]
 #]]
   [out-text [#
 (1, 2, 3)
@@ -2845,7 +3035,7 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $a [?async 1]] [?let [= $b [?async [err code='down' message='service down']]] [?let [= $c [?async 3]] [?await-all ($a, $b, $c)]]]]
+[?let [= $a [?async 1]] [= $b [?async [err code='down' message='service down']]] [= $c [?async 3]] [?await-all ($a, $b, $c)]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0240 message='[?await-all] saw a non-done future' [causes [err code=down message='service down']]]
@@ -2858,7 +3048,7 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $a [?async 1]] [?let [= $b [?async [?let [= $_ [?sleep 10s mock]] never]]] [?let [= $_ [?cancel $b]] [?await-all ($a, $b)]]]]
+[?let [= $a [?async 1]] [= $b [?async [?let [= $_ [?sleep 10s mock]] never]]] [= $_ [?cancel $b]] [?await-all ($a, $b)]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0240 message='[?await-all] saw a non-done future' [causes [err code=cx-err:CXER0260 message='operation cancelled']]]
@@ -2871,7 +3061,7 @@ lookupable
 [ignored]
 #]]
   [in-code [#
-[?let [= $fast [?async fast]] [?let [= $slow [?async [?let [= $_ [?sleep 10s mock]] slow]]] [?await-any ($fast, $slow)]]]
+[?let [= $fast [?async fast]] [= $slow [?async [?let [= $_ [?sleep 10s mock]] slow]]] [?await-any ($fast, $slow)]]
 #]]
   [out-text [#
 fast
@@ -2884,7 +3074,7 @@ fast
 [ignored]
 #]]
   [in-code [#
-[?let [= $bad [?async [err code='bad' message='bad']]] [?let [= $good [?async good]] [?await-any ($bad, $good)]]]
+[?let [= $bad [?async [err code='bad' message='bad']]] [= $good [?async good]] [?await-any ($bad, $good)]]
 #]]
   [out-text [#
 good
@@ -2897,7 +3087,7 @@ good
 [ignored]
 #]]
   [in-code [#
-[?let [= $err [?async [err code='first-err' message='first error']]] [?let [= $ok [?async [?let [= $_ [?sleep 10s mock]] slow]]] [?await-race ($err, $ok)]]]
+[?let [= $err [?async [err code='first-err' message='first error']]] [= $ok [?async [?let [= $_ [?sleep 10s mock]] slow]]] [?await-race ($err, $ok)]]
 #]]
   [out-text [#
 [err code=first-err message='first error']
@@ -2910,7 +3100,7 @@ good
 [ignored]
 #]]
   [in-code [#
-[?let [= $fast [?async fast]] [?let [= $slow [?async [?let [= $_ [?sleep 10s mock]] slow]]] [?let [= $winner [?await-race ($fast, $slow)]] [?let [= $slow-state [?await $slow]] [pair [winner $winner] [slow-state $slow-state]]]]]]
+[?let [= $fast [?async fast]] [= $slow [?async [?let [= $_ [?sleep 10s mock]] slow]]] [= $winner [?await-race ($fast, $slow)]] [= $slow-state [?await $slow]] [pair [winner $winner] [slow-state $slow-state]]]
 #]]
   [out-text [#
 [pair [winner 'fast'] [slow-state [err code=cx-err:CXER0260 message='operation cancelled']]]
@@ -2923,7 +3113,7 @@ good
 [ignored]
 #]]
   [in-code [#
-[?let [= $f [?async [?sleep 10s mock]]] [?let [= $_ [?cancel $f]] [?await $f]]]
+[?let [= $f [?async [?sleep 10s mock]]] [= $_ [?cancel $f]] [?await $f]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0260 message='operation cancelled']
@@ -2936,7 +3126,7 @@ good
 [ignored]
 #]]
   [in-code [#
-[?let [= $f [?async [?for [in $i (1, 2, 3)] [yield [* $i $i]]]]] [?let [= $_ [?cancel $f]] [?await $f timeout=100ms]]]
+[?let [= $f [?async [?for [in $i (1, 2, 3)] [yield [* $i $i]]]]] [= $_ [?cancel $f]] [?await $f timeout=100ms]]
 #]]
   [out-text [#
 (1, 4, 9)
@@ -2949,7 +3139,7 @@ good
 [ignored]
 #]]
   [in-code [#
-[?let [= $f [?async 7]] [?let [= $_ [?await $f]] [shape state=$f@state value=$f@value]]]
+[?let [= $f [?async 7]] [= $_ [?await $f]] [shape state=$f@state value=$f@value]]
 #]]
   [out-text [#
 [shape state=done value=7]
@@ -3001,7 +3191,7 @@ instant
 [ignored]
 #]]
   [in-code [#
-[?let [= $f [?async [?sleep 60s mock]]] [?let [= $_ [?cancel $f]] [?await $f]]]
+[?let [= $f [?async [?sleep 60s mock]]] [= $_ [?cancel $f]] [?await $f]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0260 message='operation cancelled']
@@ -3162,16 +3352,16 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=program-str-004-call-hole-rejected level=core
-  [tags str string-interpolation parse-error call-hole]
+ [case id=program-str-004-computed-hole level=core
+  [tags str string-interpolation computed-hole]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
-[?str "{[$f 1]}"]
+[?str "sum={[+ 1 2]}"]
 #]]
-  [out-err [#
-cx-err:CXER0100
+  [out-text [#
+'sum=3'
 #]]
  ]
 
@@ -3410,7 +3600,7 @@ prerequisite for renderability per §10.1.1.
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="viz-ch" buffer=4]] [?let [= $w [?worker name="viz-w" [body [?receive from=$ch]]]] [?send "msg" to=$ch]]]
+[?let [= $ch [?channel name="viz-ch" buffer=4]] [= $w [?worker name="viz-w" [body [?receive from=$ch]]]] [?send "msg" to=$ch]]
 #]]
   [out-text [#
 [?let [= $ch [?channel name="viz-ch" buffer=4]] [?let [= $w [?worker name="viz-w" [body [?receive from=$ch]]]] [?send "msg" to=$ch]]]
@@ -3452,7 +3642,7 @@ prerequisite for renderability per §10.1.1.
 [ignored]
 #]]
   [in-code [#
-[?let [= $a [?async [step n=1]]] [?let [= $b [?async [step n=2]]] [?await-all ($a, $b)]]]
+[?let [= $a [?async [step n=1]]] [= $b [?async [step n=2]]] [?await-all ($a, $b)]]
 #]]
   [out-text [#
 [?let [= $a [?async [step n=1]]] [?let [= $b [?async [step n=2]]] [?await-all ($a, $b)]]]
@@ -3465,7 +3655,7 @@ prerequisite for renderability per §10.1.1.
 [ignored]
 #]]
   [in-code [#
-[?let [= $f [?async [?sleep 10s mock]]] [?let [= $_ [?cancel $f]] [?await $f]]]
+[?let [= $f [?async [?sleep 10s mock]]] [= $_ [?cancel $f]] [?await $f]]
 #]]
   [out-text [#
 [?let [= $f [?async [?sleep 10s mock]]] [?let [= $_ [?cancel $f]] [?await $f]]]
@@ -4036,7 +4226,7 @@ false
 [ignored]
 #]]
   [in-code [#
-[?let [= $l "cx"] [?let [= $h "main"] [code lang=$l hl=$h "body"]]]
+[?let [= $l "cx"] [= $h "main"] [code lang=$l hl=$h "body"]]
 #]]
   [out-text [#
 [code lang=cx hl=main 'body']
@@ -4086,7 +4276,7 @@ false
   [user active=true  [name Carol]]]
 #]]
   [in-code [#
-//user[@active=true]
+//user[= $_@active true]
 #]]
   [out-text [#
 [user active=true [name 'Alice']]
@@ -4119,7 +4309,7 @@ false
   [user active=true  [name Carol]]]
 #]]
   [in-code [#
-[$count //user[@active=true]]
+[$count //user[= $_@active true]]
 #]]
   [out-text [#
 2
@@ -4242,6 +4432,350 @@ cx-err:CXER0100
 #]]
  ]
 
+ [; Absolute ('/'-rooted) PathExpr per grammar [130] `'/' StepList` (#391):
+    anchored at the DOCUMENT node, so the head step's child axis holds
+    exactly the root element. Previously the program parser rejected the
+    form outright ("unexpected token '/' in expression position") while
+    the same bytes parsed in a data reading — the #391 mode-flip repro 3. ]
+
+ [case id=program-cxpath-013-absolute-root-chain level=core
+  [tags cxpath absolute-path issue-391]
+  [in-cx [#
+[users
+  [user [name Alice] [email a@x.com]]
+  [user [name Bob]   [email b@x.com]]]
+#]]
+  [in-code [#
+/users/user/name
+#]]
+  [out-text [#
+[name 'Alice']
+[name 'Bob']
+#]]
+ ]
+
+ [case id=program-cxpath-014-absolute-selects-root level=core
+  [tags cxpath absolute-path root issue-391]
+  [in-cx [#
+[users [user [name Alice]]]
+#]]
+  [in-code [#
+[$count /users]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-015-absolute-root-name-mismatch-empty level=core
+  [tags cxpath absolute-path no-match empty-sequence issue-391]
+  [in-cx [#
+[users [user [name Alice]]]
+#]]
+  [in-code [#
+/user
+#]]
+  [out-text [##]]
+ ]
+
+ [case id=program-cxpath-016-absolute-wildcard-root level=core
+  [tags cxpath absolute-path wildcard issue-391]
+  [in-cx [#
+[doc [a] [b]]
+#]]
+  [in-code [#
+[$count /*]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-bind-001-spec-worked-example level=core
+  [tags cxpath bind step-binding issue-434]
+  [in-cx [#
+[teams
+  [team name="alpha" [member role="lead"] [member] [member]]
+  [team name="beta" [member]]]
+#]]
+  [in-code [#
+[$count //team (bind $t)/member[and [= $_@role "lead"] [>= [$count $t/member] 3]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-bind-002-same-step-predicate level=core
+  [tags cxpath bind step-binding same-step issue-434]
+  [in-cx [#
+[teams
+  [team name="alpha" [member]]
+  [team name="beta" [member]]]
+#]]
+  [in-code [#
+//team (bind $t)[= $t@name "alpha"]
+#]]
+  [out-text [#
+[team name=alpha [member]]
+#]]
+ ]
+
+ [case id=program-cxpath-bind-003-per-branch-focus level=core
+  [tags cxpath bind step-binding subsequent-step issue-434]
+  [in-cx [#
+[teams
+  [team name="alpha" [member id=1] [member id=2]]
+  [team name="beta" [member id=3]]]
+#]]
+  [in-code [#
+[$count //team (bind $t)/member[= $t@name "alpha"]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-cxpath-bind-004-multi-bind level=core
+  [tags cxpath bind step-binding multi-bind issue-434]
+  [in-cx [#
+[teams
+  [team name="alpha" [member role="lead"] [member]]
+  [team name="beta" [member role="lead"]]]
+#]]
+  [in-code [#
+[$count //team (bind $t)/member (bind $m)[and [= $t@name "alpha"] [$exists $m@role]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-bind-005-shadow-and-restore level=core
+  [tags cxpath bind step-binding shadowing issue-434]
+  [in-cx [#
+[teams
+  [team name="alpha" [member] [member] [member]]
+  [team name="beta" [member]]]
+#]]
+  [in-code [#
+[?let [= $t "outer"]
+ [pair
+  [n [$count //team (bind $t)/member[>= [$count $t/member] 3]]]
+  [restored $t]]]
+#]]
+  [out-text [#
+[pair [n 3] [restored 'outer']]
+#]]
+ ]
+
+ [case id=program-cxpath-bind-006-not-visible-outside-path level=core
+  [tags cxpath bind step-binding scope error issue-434]
+  [in-cx [#
+[teams
+  [team name="alpha" [member]]]
+#]]
+  [in-code [#
+[?let [= $n [$count //team (bind $t)/member]] $t]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-cxpath-bind-007-reserved-underscore level=core
+  [tags cxpath bind step-binding reserved error issue-434]
+  [in-cx [#
+[teams
+  [team name="alpha" [member]]]
+#]]
+  [in-code [#
+//team (bind $_)/member
+#]]
+  [out-err [#
+cx-err:CXER0232
+#]]
+ ]
+
+ [case id=program-cxpath-bind-008-modify-focus level=core
+  [tags cxpath bind step-binding modify issue-434]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [teams
+              [team name="alpha" [member id=1]]
+              [team name="beta" [member id=2]]]]
+ [?modify $d //team (bind $t)/member[= $t@name "alpha"] [set-attr flagged true]]]
+#]]
+  [out-text [#
+[teams [team name=alpha [member id=1 flagged=true]] [team name=beta [member id=2]]]
+#]]
+ ]
+
+ [case id=program-modify-outer-pred-001-unbound-binding-raises level=core
+  [tags modify cxpath predicate outer-binding error issue-471]
+  [in-cx [#
+[teams
+  [team name="alpha" [member id=1]]
+  [team name="beta" [member id=2]]]
+#]]
+  [in-code [#
+[?modify $doc //team/member[= $qqq@name "alpha"] [set-attr flagged true]]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-modify-outer-pred-002-unbound-in-nested-body level=core
+  [tags modify cxpath predicate outer-binding nested error issue-471]
+  [in-cx [#
+[teams
+  [team name="alpha" [member id=1]]
+  [team name="beta" [member id=2]]]
+#]]
+  [in-code [#
+[?modify $doc //team/member[and [= $_@id 1] [= $qqq@name "alpha"]] [set-attr flagged true]]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-modify-outer-pred-003-bound-outer-filters level=core
+  [tags modify cxpath predicate outer-binding let issue-471]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [teams
+              [team name="alpha" [member id=1]]
+              [team name="beta" [member id=2]]]]
+ [?let [= $flag "alpha"]
+  [?modify $d //team[= $_@name $flag]/member [set-attr flagged true]]]]
+#]]
+  [out-text [#
+[teams [team name=alpha [member id=1 flagged=true]] [team name=beta [member id=2]]]
+#]]
+ ]
+
+ [case id=program-modify-outer-pred-004-plain-predicate-regression level=core
+  [tags modify cxpath predicate regression issue-471]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [teams
+              [team name="alpha" [member id=1]]
+              [team name="beta" [member id=2]]]]
+ [?modify $d //team/member[= $_@id 1] [set-attr flagged true]]]
+#]]
+  [out-text [#
+[teams [team name=alpha [member id=1 flagged=true]] [team name=beta [member id=2]]]
+#]]
+ ]
+
+ [case id=program-modify-outer-pred-005-reserved-position-regression level=core
+  [tags modify cxpath predicate reserved-binding regression issue-471]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [teams
+              [team name="alpha" [member id=1]]
+              [team name="beta" [member id=2]]]]
+ [?modify $d //team/member[= $_position 1] [set-attr flagged true]]]
+#]]
+  [out-text [#
+[teams [team name=alpha [member id=1 flagged=true]] [team name=beta [member id=2]]]
+#]]
+ ]
+
+ [case id=program-cxpath-attr-tail-001-predicate-then-slash-attr level=core
+  [tags cxpath attr-tail predicate issue-472]
+  [in-cx [#
+[teams
+  [team name="alpha" [member id=1] [member id=2]]
+  [team name="beta" [member id=3]]]
+#]]
+  [in-code [#
+//team/member[= $_@id 1]/@id
+#]]
+  [out-text [#
+[id 1]
+#]]
+ ]
+
+ [case id=program-cxpath-attr-tail-002-binding-path-glued-tail level=core
+  [tags cxpath attr-tail predicate binding-path issue-472]
+  [in-cx [#
+[teams
+  [team name="alpha" [member id=1] [member id=2]]
+  [team name="beta" [member id=3]]]
+#]]
+  [in-code [#
+$doc//team/member[= $_@id 1]@id
+#]]
+  [out-text [#
+[id 1]
+#]]
+ ]
+
+ [case id=program-cxpath-attr-tail-003-glued-rooted-tail-rejected level=core
+  [tags cxpath attr-tail predicate error issue-472]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+//team/member[= $_@id 1]@id
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cxpath-attr-tail-004-glued-rooted-tail-no-predicate-rejected level=core
+  [tags cxpath attr-tail error issue-472]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+//team/member@id
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cxpath-unbound-doc-001-descendant-rooted level=core
+  [tags cxpath unbound-doc error issue-454]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def helper ($x) $x]
+
+[result [$count //user]]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-cxpath-unbound-doc-002-absolute-rooted level=core
+  [tags cxpath unbound-doc error absolute-path issue-454]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+/users/user
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
  [case id=program-cxpath-bare-fn-001-count-wildcard level=core
   [tags cxpath bare-fn count]
   [in-cx [#
@@ -4277,7 +4811,7 @@ cx-err:CXER0100
   [user active=true]]
 #]]
   [in-code [#
-[$count //user[@active=true]]
+[$count //user[= $_@active true]]
 #]]
   [out-text [#
 2
@@ -4535,8 +5069,8 @@ cx-err:CXER0100
   [user active=true]]
 #]]
   [in-code [#
-[?def $n count(//user[@active=true])]
-[?def $top head((//user[@active=true]))[1:3]]
+[?def $n count(//user[= $_@active true])]
+[?def $top head((//user[= $_@active true]))[1:3]]
 ($n, $top)
 #]]
   [out-err [#
@@ -4798,8 +5332,8 @@ cx-err:CXER0100
 #]]
   [in-code [#
 [?let [= $users [u-set [u name="A" email="a@x.com"] [u name="B" email="b@x.com"]]] [?match "A"
-   [case "A" $users//u[@name="A"]/@email]
-   [case "B" $users//u[@name="B"]/@email]
+   [case "A" $users//u[= $_@name "A"]/@email]
+   [case "B" $users//u[= $_@name "B"]/@email]
    [else ""]]]
 #]]
   [out-text [#
@@ -4813,7 +5347,7 @@ cx-err:CXER0100
 [empty]
 #]]
   [in-code [#
-[?let [= $u [users [u name="X"]]] [?match true [case true $u//u[@name="X"]/@name] [else ""]]]
+[?let [= $u [users [u name="X"]]] [?match true [case true $u//u[= $_@name "X"]/@name] [else ""]]]
 #]]
   [out-text [#
 [name 'X']
@@ -4826,7 +5360,7 @@ cx-err:CXER0100
 [empty]
 #]]
   [in-code [#
-[?let [= $u [users [u id=1 name="A"] [u id=2 name="B"]]] [?for [in $r $u//u] [yield $u//u[@id=$r/@id]/@name]]]
+[?let [= $u [users [u id=1 name="A"] [u id=2 name="B"]]] [?for [in $r $u//u] [yield $u//u[= $_@id $r/@id]/@name]]]
 #]]
   [out-text [#
 [name 'A']
@@ -4925,10 +5459,155 @@ cx-err:CXER0100
 #]]
   [out-text [#
 :http-404
+#]]
+ ]
+
+ [case id=program-atom-008-attr-read-preserves-atom-type level=core
+  [tags atom attribute-read typed-value cxdm-2-4]
+  [in-cx [#
+[event kind=:active]
+#]]
+  [in-code [#
+$doc@kind
+#]]
+  [out-text [#
+:active
+#]]
+ ]
+
+ [case id=program-atom-009-attr-atom-equals-atom-literal level=core
+  [tags atom attribute-read equality operand step-terminating-colon]
+  [in-cx [#
+[event kind=:active]
+#]]
+  [in-code [#
+[= $doc@kind :active]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-atom-010-attr-atom-not-string level=core
+  [tags atom attribute-read type-strict string no-coercion]
+  [in-cx [#
+[event kind=:active]
+#]]
+  [in-code [#
+[= $doc@kind "active"]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-atom-011-atom-literal-first-operand level=core
+  [tags atom attribute-read equality operand-order]
+  [in-cx [#
+[event kind=:active]
+#]]
+  [in-code [#
+[= :active $doc@kind]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-atom-012-atom-operand-after-path-in-construction level=core
+  [tags atom attribute-read element-construction operand step-terminating-colon]
+  [in-cx [#
+[event kind=:active]
+#]]
+  [in-code [#
+[pair $doc@kind :extra]
+#]]
+  [out-text [#
+[pair :active :extra]
+#]]
+ ]
+
+ [case id=program-atom-013-glued-qname-attr-still-folds level=core
+  [tags attribute-read qname namespace glued adjacency]
+  [in-cx [#
+[x ns:attr=7]
+#]]
+  [in-code [#
+[= $doc@ns:attr 7]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-atom-014-let-bound-attr-atom-comparison level=core
+  [tags atom attribute-read let equality step-terminating-colon]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $e [x kind=:active]] [= $e@kind :active]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-atom-015-pattern-capture-preserves-atom-type level=core
+  [tags atom attribute-capture pattern match typed-value]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $e [user kind=:admin]] [?match $e [case [user @kind=$k] $k] [else :none]]]
+#]]
+  [out-text [#
+:admin
 
 ---
 
 ## Fixtures (modify — `spec/core/code.md` §8.10)
+#]]
+ ]
+
+ [case id=program-atom-016-dotted-atom-match level=core
+  [tags atom dotted issue-397 match]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?match :order.placed [case :order.placed "hit"] [else "miss"]]
+#]]
+  [out-text [#
+'hit'
+#]]
+ ]
+
+ [case id=program-atom-017-dotted-atom-is-one-opaque-name level=core
+  [tags atom dotted issue-397 equality]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $t :order.placed]
+      [= $u :order]
+  [?if [= $t $u] [then "same"] [else "different"]]]
+#]]
+  [out-text [#
+'different'
+#]]
+ ]
+
+ [case id=program-atom-018-detached-dot-not-a-continuation level=core
+  [tags atom dotted issue-397 adjacency]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $x :order . placed] $x]
+#]]
+  [out-err [#
+cx-err:CXER0100
 #]]
  ]
 
@@ -4938,7 +5617,7 @@ cx-err:CXER0100
 [users [user id=1 [name Alice]] [user id=2 [name Bob]]]
 #]]
   [in-code [#
-[?modify $doc //user[@id=1]/@name [set "Alicia"]]
+[?modify $doc //user[= $_@id 1]/@name [set "Alicia"]]
 #]]
   [out-text [#
 [users [user id=1 name=Alicia [name 'Alice']] [user id=2 [name 'Bob']]]
@@ -4966,7 +5645,7 @@ cx-err:CXER0100
   [user active=false [name Bob]]]
 #]]
   [in-code [#
-[?modify $doc //user[@active=false] [delete]]
+[?modify $doc //user[= $_@active false] [delete]]
 #]]
   [out-text [#
 [users [user active=true [name 'Alice']]]
@@ -4979,7 +5658,7 @@ cx-err:CXER0100
 [users [user id=1 [name Alice]]]
 #]]
   [in-code [#
-[?modify $doc //user[@id=1] [set-attr active true] [rename person]]
+[?modify $doc //user[= $_@id 1] [set-attr active true] [rename person]]
 #]]
   [out-text [#
 [users [person id=1 active=true [name 'Alice']]]
@@ -4994,7 +5673,7 @@ cx-err:CXER0100
   [user active=false [name Bob]]]
 #]]
   [in-code [#
-[?modify $doc //user[@active=false] [delete]]
+[?modify $doc //user[= $_@active false] [delete]]
 #]]
   [out-text [#
 [users [user active=true [name 'Alice']]]
@@ -5007,7 +5686,7 @@ cx-err:CXER0100
 [users [user name=Alice]]
 #]]
   [in-code [#
-[?let [= $orig $doc] [?let [= $new [?modify $doc //user/@name [set "Bob"]]] [pair orig=$orig/user@name new=$new/user@name]]]
+[?let [= $orig $doc] [= $new [?modify $doc //user/@name [set "Bob"]]] [pair orig=$orig/user@name new=$new/user@name]]
 #]]
   [out-text [#
 [pair orig=Alice new=Bob]
@@ -5100,7 +5779,7 @@ cx-err:CXER0100
   [user name=Bob   email=b@x.com]]
 #]]
   [in-code [#
-[?pipe $doc [?modify //user [set-attr verified true]] [?modify //user[@name="Bob"] [delete-attr email]]]
+[?pipe $doc [?modify //user [set-attr verified true]] [?modify //user[= $_@name "Bob"] [delete-attr email]]]
 #]]
   [out-text [#
 [users [user name=Alice email='a@x.com' verified=true] [user name=Bob verified=true]]
@@ -5139,7 +5818,7 @@ cx-err:CXER0100
 [doc [foo v=keep] [foo v=skip] [foo v=keep]]
 #]]
   [in-code [#
-[?modify $doc //foo[@v=keep] [set-attr touched true]]
+[?modify $doc //foo[= $_@v keep] [set-attr touched true]]
 #]]
   [out-text [#
 [doc [foo v=keep touched=true] [foo v=skip] [foo v=keep touched=true]]
@@ -5170,7 +5849,7 @@ that lock was always independent of this set.
 
 | Fixture | Resolution (2026-05-30) |
 |---|---|
-| `program-modify-001-set-attribute` | ✅ supported. Under design (a) `/@name` is the `name` *attribute* of `user[@id=1]`; `[set "Alicia"]` creates it → `[user id=1 name=Alicia [name Alice]]`. The `[name Alice]` child is element-axis and invisible to `/@name`. Fixture out_text updated to impl output. |
+| `program-modify-001-set-attribute` | ✅ supported. Under design (a) `/@name` is the `name` *attribute* of `user[= $_@id 1]`; `[set "Alicia"]` creates it → `[user id=1 name=Alicia [name Alice]]`. The `[name Alice]` child is element-axis and invisible to `/@name`. Fixture out_text updated to impl output. |
 | `program-modify-003-original-unchanged` | ✅ supported. Rewritten to an attribute-based doc (`[users [user name=Alice]]`); `$orig/user@name` vs `$new/user@name` demonstrate immutability under design (a). Surfaced + fixed a §6.2 bug: a single-focus pure-child-chain terminal `@attr` now unwraps to the scalar value-as-string (`vcx/code/eval.v` walk_binding_path_seq; spec §6.2 "Terminal attribute unwrap"). |
 | `program-modify-009-pipeline-multi-step` | ✅ supported. Rewritten to an attribute-based doc; `[@name="Bob"]` matches the `name` attribute and `[delete-attr email]` removes the `email` attribute, preserving the pipeline-multi-step coverage under design (a). |
 
@@ -5317,6 +5996,20 @@ true
 #]]
   [out-text [#
 12
+#]]
+ ]
+
+ [case id=program-def-no-outer-capture level=core
+  [tags def scope isolation no-capture two-pass]
+  [in-cx [#
+[doc [x 42]]
+#]]
+  [in-code [#
+[?def probe () $doc]
+[probe]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0001 message='cx-err:CXER0001: unbound variable $doc']
 #]]
  ]
 
@@ -5691,6 +6384,114 @@ cx-err:CXER0208
 #]]
  ]
 
+ [; Implicit $doc selection in a one-source homoiconic program (code.md
+    §1.3): $doc binds to the first DATA root — the first top-level element
+    literal in source order — never to a program-directive root's status
+    value, wherever the directive sits (#435: a leading [?lib]/[?def]
+    captured $doc as [result status=ok …] and every document query silently
+    matched nothing). ]
+
+ [case id=program-doc-implicit-lib-first level=core
+  [tags doc-binding homoiconic root-order lib]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+
+[users [user name="ada"] [user name="bob"]]
+
+[result [$count //user]]
+#]]
+  [out-text [#
+[result 2]
+#]]
+ ]
+
+ [case id=program-doc-implicit-def-first level=core
+  [tags doc-binding homoiconic root-order def]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def helper ($x) [$concat "h-" $x]]
+
+[users [user name="ada"] [user name="bob"]]
+
+[result [$count //user]]
+#]]
+  [out-text [#
+[result 2]
+#]]
+ ]
+
+ [case id=program-doc-implicit-lib-first-pattern-generator level=core
+  [tags doc-binding homoiconic root-order lib pattern-generator for]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+
+[users [user name="ada"] [user name="bob"]]
+
+[?for [user $u] [yield $u@name]]
+#]]
+  [out-text [#
+'ada'
+'bob'
+#]]
+ ]
+
+ [case id=program-doc-implicit-data-first-lib-between level=core
+  [tags doc-binding homoiconic root-order lib regression]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[users [user name="ada"] [user name="bob"]]
+
+[?lib 'cx-stdlib/strings']
+
+[result [$strings:upper "x"] [$count //user]]
+#]]
+  [out-text [#
+[result 'X' 2]
+#]]
+ ]
+
+ [case id=program-doc-implicit-first-data-root-wins level=core
+  [tags doc-binding homoiconic root-order multi-data-root]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[users [user name="ada"] [user name="bob"]]
+
+[teams [team name="core"]]
+
+[result [$count //user] [$count //team]]
+#]]
+  [out-text [#
+[result 2 0]
+#]]
+ ]
+
+ [case id=program-doc-implicit-directive-only-unbound-CXER0001 level=core
+  [tags doc-binding homoiconic root-order lib CXER0001 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+
+[result $doc]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
  [case id=module-lockfile-roundtrip level=core
   [tags lib lockfile roundtrip gate-35.2]
   [in-cx [#
@@ -6058,7 +6859,7 @@ cx-err:CXER0216
   [user age=22 [name Carol]]]
 #]]
   [in-code [#
-[?for [in $u //user[$_@age >= 18]] [yield $u/name]]
+[?for [in $u //user[>= $_@age 18]] [yield $u/name]]
 #]]
   [out-text [#
 Alice
@@ -6076,7 +6877,7 @@ Carol
     [p third-para]]]
 #]]
   [in-code [#
-[?for [in $p //section/p[$_position = 1]] [yield $p]]
+[?for [in $p //section/p[= $_position 1]] [yield $p]]
 #]]
   [out-text [#
 [p 'first-para']
@@ -6093,7 +6894,7 @@ Carol
     [p last]]]
 #]]
   [in-code [#
-[?for [in $p //section/p[$_position = $_last]] [yield $p]]
+[?for [in $p //section/p[= $_position $_last]] [yield $p]]
 #]]
   [out-text [#
 [p 'last']
@@ -6111,7 +6912,7 @@ Carol
   [row r5]]
 #]]
   [in-code [#
-[?for [in $r //row[$_position >= 2 and $_position <= 4]] [yield $r]]
+[?for [in $r //row[and [>= $_position 2] [<= $_position 4]]] [yield $r]]
 #]]
   [out-text [#
 [row 'r2']
@@ -6129,7 +6930,7 @@ Carol
   [team [member [role lead]]]]
 #]]
   [in-code [#
-[?for [in $t //team[count($_/member[$_/role = "lead"]) >= 1]] [yield $t]]
+[?for [in $t //team[>= [$count $_/member[= $_/role "lead"]] 1]] [yield $t]]
 #]]
   [out-text [#
 [team [member [role 'lead']] [member [role 'eng']]]
@@ -6167,7 +6968,7 @@ a
   [user active=true  [name Carol]]]
 #]]
   [in-code [#
-[?for [in $u //user[@active=true]] [yield $u/name]]
+[?for [in $u //user[= $_@active true]] [yield $u/name]]
 #]]
   [out-text [#
 Alice
@@ -6220,7 +7021,7 @@ Carol
   [row c]]
 #]]
   [in-code [#
-[?for [in $r //row[$_last = 3]] [yield $r]]
+[?for [in $r //row[= $_last 3]] [yield $r]]
 #]]
   [out-text [#
 [row 'a']
@@ -6237,7 +7038,7 @@ Carol
   [item b]]
 #]]
   [in-code [#
-[?for [in $i //item[contains(now(), "T")]] [yield $i]]
+[?for [in $i //item[$contains [$now] "T"]] [yield $i]]
 #]]
   [out-err [#
 cx-err:CXER0230
@@ -6709,7 +7510,7 @@ $doc//item/../..
   [user active=true name=Carol]]
 #]]
   [in-code [#
-$doc/user[@active=true]
+$doc/user[= $_@active true]
 #]]
   [out-text [#
 [user active=true name=Alice]
@@ -6726,7 +7527,7 @@ $doc/user[@active=true]
   [user age=22 name=Carol]]
 #]]
   [in-code [#
-$doc/user[@age > 25]
+$doc/user[> $_@age 25]
 #]]
   [out-text [#
 [user age=30 name=Alice]
@@ -6774,7 +7575,7 @@ $doc/user[2]
   [user name=Carol]]
 #]]
   [in-code [#
-$doc/user[last()]
+$doc/user[= $_position $_last]
 #]]
   [out-text [#
 [user name=Carol]
@@ -6826,7 +7627,7 @@ $doc/user[and [= $_@active true] [> $_@age 25]]
   [user active=true name=Carol]]
 #]]
   [in-code [#
-$doc/user[@active=true]/@name
+$doc/user[= $_@active true]/@name
 #]]
   [out-text [#
 [name 'Alice']
@@ -6843,7 +7644,7 @@ $doc/user[@active=true]/@name
   [user active=true [name Carol]]]
 #]]
   [in-code [#
-$doc/user[@active=true]/name
+$doc/user[= $_@active true]/name
 #]]
   [out-text [#
 [name 'Alice']
@@ -6860,7 +7661,7 @@ $doc/user[@active=true]/name
     [user active=false name=Bob]]]
 #]]
   [in-code [#
-$doc//user[@active=true]/@name
+$doc//user[= $_@active true]/@name
 #]]
   [out-text [#
 [name 'Alice']
@@ -6917,7 +7718,7 @@ $doc//user[@active=true]/@name
 # per §6.4.5; reused CXER0100 (structural misuse), CXER0271 (eval cap denied),
 # CXER4114 (depth cap).
 
- [case id=dc-element-string level=core
+ [case id=program-dc-element-string level=core
   [tags dc computed-name element]
   [in-cx [#
 [empty]
@@ -6930,7 +7731,7 @@ $doc//user[@active=true]/@name
 #]]
  ]
 
- [case id=dc-element-atom-stripped level=core
+ [case id=program-dc-element-atom-stripped level=core
   [tags dc computed-name element atom]
   [in-cx [#
 [empty]
@@ -6943,7 +7744,7 @@ $doc//user[@active=true]/@name
 #]]
  ]
 
- [case id=dc-element-int-not-ncname level=core
+ [case id=program-dc-element-int-not-ncname level=core
   [tags dc computed-name element error]
   [in-cx [#
 [empty]
@@ -6956,7 +7757,7 @@ cx-err:CXER0236
 #]]
  ]
 
- [case id=dc-element-nonscalar level=core
+ [case id=program-dc-element-nonscalar level=core
   [tags dc computed-name element error]
   [in-cx [#
 [empty]
@@ -6969,7 +7770,7 @@ cx-err:CXER0235
 #]]
  ]
 
- [case id=dc-element-empty-absence level=core
+ [case id=program-dc-element-empty-absence level=core
   [tags dc computed-name element absence]
   [in-cx [#
 [empty]
@@ -6982,7 +7783,7 @@ cx-err:CXER0235
 #]]
  ]
 
- [case id=dc-attr-computed level=core
+ [case id=program-dc-attr-computed level=core
   [tags dc computed-name attr]
   [in-cx [#
 [empty]
@@ -6995,7 +7796,7 @@ cx-err:CXER0235
 #]]
  ]
 
- [case id=dc-attr-int-not-ncname level=core
+ [case id=program-dc-attr-int-not-ncname level=core
   [tags dc computed-name attr error]
   [in-cx [#
 [empty]
@@ -7008,7 +7809,7 @@ cx-err:CXER0236
 #]]
  ]
 
- [case id=dc-attr-empty-omitted level=core
+ [case id=program-dc-attr-empty-omitted level=core
   [tags dc computed-name attr absence]
   [in-cx [#
 [empty]
@@ -7021,7 +7822,7 @@ cx-err:CXER0236
 #]]
  ]
 
- [case id=dc-attr-misplaced-in-body level=core
+ [case id=program-dc-attr-misplaced-in-body level=core
   [tags dc computed-name attr error]
   [in-cx [#
 [empty]
@@ -7034,7 +7835,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-entry-string-key level=core
+ [case id=program-dc-entry-string-key level=core
   [tags dc computed-name entry map]
   [in-cx [#
 [empty]
@@ -7047,7 +7848,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-entry-int-key level=core
+ [case id=program-dc-entry-int-key level=core
   [tags dc computed-name entry map]
   [in-cx [#
 [empty]
@@ -7060,7 +7861,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-entry-empty-omitted level=core
+ [case id=program-dc-entry-empty-omitted level=core
   [tags dc computed-name entry map absence]
   [in-cx [#
 [empty]
@@ -7073,7 +7874,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-entry-misplaced level=core
+ [case id=program-dc-entry-misplaced level=core
   [tags dc computed-name entry error]
   [in-cx [#
 [empty]
@@ -7086,7 +7887,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-name-rename level=core
+ [case id=program-dc-name-rename level=core
   [tags dc computed-name modify rename]
   [in-cx [#
 [users [user name="old"]]
@@ -7099,7 +7900,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-name-set-attr level=core
+ [case id=program-dc-name-set-attr level=core
   [tags dc computed-name modify set-attr]
   [in-cx [#
 [users [user name="old"]]
@@ -7112,7 +7913,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-quote-data-literal level=core
+ [case id=program-dc-quote-data-literal level=core
   [tags dc quasiquote quote]
   [in-cx [#
 [empty]
@@ -7125,7 +7926,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-unquote-value level=core
+ [case id=program-dc-unquote-value level=core
   [tags dc quasiquote unquote]
   [in-cx [#
 [empty]
@@ -7138,7 +7939,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-unquote-empty-removed level=core
+ [case id=program-dc-unquote-empty-removed level=core
   [tags dc quasiquote unquote absence]
   [in-cx [#
 [empty]
@@ -7151,7 +7952,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-unquote-sequence-err level=core
+ [case id=program-dc-unquote-sequence-err level=core
   [tags dc quasiquote unquote error]
   [in-cx [#
 [empty]
@@ -7164,7 +7965,7 @@ cx-err:CXER0237
 #]]
  ]
 
- [case id=dc-splice-siblings level=core
+ [case id=program-dc-splice-siblings level=core
   [tags dc quasiquote splice]
   [in-cx [#
 [empty]
@@ -7177,7 +7978,7 @@ cx-err:CXER0237
 #]]
  ]
 
- [case id=dc-splice-empty-nothing level=core
+ [case id=program-dc-splice-empty-nothing level=core
   [tags dc quasiquote splice absence]
   [in-cx [#
 [empty]
@@ -7190,7 +7991,7 @@ cx-err:CXER0237
 #]]
  ]
 
- [case id=dc-splice-in-attr-err level=core
+ [case id=program-dc-splice-in-attr-err level=core
   [tags dc quasiquote splice error]
   [in-cx [#
 [empty]
@@ -7203,7 +8004,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-bare-var-inert level=core
+ [case id=program-dc-bare-var-inert level=core
   [tags dc quasiquote two-color]
   [in-cx [#
 [empty]
@@ -7216,7 +8017,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-eval-scalar level=core
+ [case id=program-dc-eval-scalar level=core
   [tags dc tree-eval]
   [in-cx [#
 [empty]
@@ -7229,7 +8030,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-eval-quoted-code level=core
+ [case id=program-dc-eval-quoted-code level=core
   [tags dc tree-eval quote]
   [in-cx [#
 [empty]
@@ -7242,7 +8043,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-eval-empty-absence level=core
+ [case id=program-dc-eval-empty-absence level=core
   [tags dc tree-eval absence]
   [in-cx [#
 [empty]
@@ -7255,7 +8056,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-eval-context level=core
+ [case id=program-dc-eval-context level=core
   [tags dc tree-eval context]
   [in-cx [#
 [empty]
@@ -7268,7 +8069,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=dc-eval-depth-cap level=core
+ [case id=program-dc-eval-depth-cap level=core
   [tags dc tree-eval error]
   [in-cx [#
 [empty]
@@ -7281,7 +8082,7 @@ cx-err:CXER4114
 #]]
  ]
 
- [case id=dc-eval-cap-denied level=core
+ [case id=program-dc-eval-cap-denied level=core
   [tags dc tree-eval capability error]
   [in-cx [#
 [empty]
@@ -7294,7 +8095,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=dc-eval-not-evaluable level=core
+ [case id=program-dc-eval-not-evaluable level=core
   [tags dc tree-eval error]
   [in-cx [#
 [empty]
@@ -7307,7 +8108,7 @@ cx-err:CXER0238
 #]]
  ]
 
- [case id=dc-eval-pure-def-violation level=core
+ [case id=program-dc-eval-pure-def-violation level=core
   [tags dc tree-eval purity error]
   [in-cx [#
 [empty]
@@ -7321,7 +8122,7 @@ cx-err:CXER0233
 #]]
  ]
 
- [case id=dc-eval-tree-call-pure-def-violation level=core
+ [case id=program-dc-eval-tree-call-pure-def-violation level=core
   [tags dc tree-eval purity error]
   [in-cx [#
 [empty]
@@ -7335,7 +8136,7 @@ cx-err:CXER0233
 #]]
  ]
 
- [case id=dc-trifecta-build-and-run level=core
+ [case id=program-dc-trifecta-build-and-run level=core
   [tags dc tree-eval quasiquote computed-name with-caps trifecta]
   [in-cx [#
 [empty]
@@ -7526,37 +8327,37 @@ cx-err:CXER0233
     ═══════════════════════════════════════════════════════════════════════════ #]
 
  [# ── P2-21 [$range] as a value in every expression position (C-gen-1) ── #]
- [case id=gen-range-001-value-render level=core
+ [case id=program-gen-range-001-value-render level=core
   [tags range prefix value expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$range 1 5] #]]
   [out-text [# (1, 2, 3, 4, 5) #]]
  ]
- [case id=gen-range-002-count level=core
+ [case id=program-gen-range-002-count level=core
   [tags range prefix value count expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$count [$range 1 5]] #]]
   [out-text [# 5 #]]
  ]
- [case id=gen-range-003-sum level=core
+ [case id=program-gen-range-003-sum level=core
   [tags range prefix value sum expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$sum [$range 1 5]] #]]
   [out-text [# 15 #]]
  ]
- [case id=gen-range-004-reverse level=core
+ [case id=program-gen-range-004-reverse level=core
   [tags range prefix value reverse expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$reverse [$range 1 4]] #]]
   [out-text [# (4, 3, 2, 1) #]]
  ]
- [case id=gen-range-005-let level=core
+ [case id=program-gen-range-005-let level=core
   [tags range prefix value let expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [$range 1 4]] $r] #]]
   [out-text [# (1, 2, 3, 4) #]]
  ]
- [case id=gen-range-006-for-source-prefix level=core
+ [case id=program-gen-range-006-for-source-prefix level=core
   [tags range prefix for-comp source F11 expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?for [in $x [$range 1 5]] [yield $x]] #]]
@@ -7568,31 +8369,31 @@ cx-err:CXER0233
 5
 #]]
  ]
- [case id=gen-range-007-stride level=core
+ [case id=program-gen-range-007-stride level=core
   [tags range prefix stride expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$range 1 10 2] #]]
   [out-text [# (1, 3, 5, 7, 9) #]]
  ]
- [case id=gen-range-008-descending level=core
+ [case id=program-gen-range-008-descending level=core
   [tags range prefix stride descending expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$range 10 1 -2] #]]
   [out-text [# (10, 8, 6, 4, 2) #]]
  ]
- [case id=gen-range-009-step-expr level=core
+ [case id=program-gen-range-009-step-expr level=core
   [tags range prefix stride expr-step expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$range 1 10 [+ 1 1]] #]]
   [out-text [# (1, 3, 5, 7, 9) #]]
  ]
- [case id=gen-range-010-step-zero-error level=core
+ [case id=program-gen-range-010-step-zero-error level=core
   [tags range prefix step-zero error]
   [in-cx [# [empty] #]]
   [in-code [# [$range 1 5 0] #]]
   [out-text [# [err code=cx-err:CXER0100 message='range: step cannot be zero'] #]]
  ]
- [case id=gen-range-011-sign-mismatch-empty level=core
+ [case id=program-gen-range-011-sign-mismatch-empty level=core
   [tags range prefix empty-result expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$range 1 5 -1] #]]
@@ -7600,19 +8401,19 @@ cx-err:CXER0233
  ]
 
  [# ── P2-21 numeric domain: float (count-based) + datetime (duration) (C-gen-2) ── #]
- [case id=gen-range-float-001-step level=core
+ [case id=program-gen-range-float-001-step level=core
   [tags range float count-based step]
   [in-cx [# [empty] #]]
   [in-code [# [$range 0.0 1.0 0.25] #]]
   [out-text [# (0.0, 0.25, 0.5, 0.75, 1.0) #]]
  ]
- [case id=gen-range-float-002-count level=core
+ [case id=program-gen-range-float-002-count level=core
   [tags range float count]
   [in-cx [# [empty] #]]
   [in-code [# [$count [$range 0.0 1.0 0.25]] #]]
   [out-text [# 5 #]]
  ]
- [case id=gen-range-float-003-step-required level=core
+ [case id=program-gen-range-float-003-step-required level=core
   [tags range float step-required error]
   [in-cx [# [empty] #]]
   [in-code [# [$range 0.0 1.0] #]]
@@ -7621,13 +8422,13 @@ cx-err:CXER0233
  [# datetime ranges step by a duration literal. Datetime endpoints are sourced
     from in-cx data (datetime literals do not lex in code-expression position;
     the spec form `[$range $t0 $t1 24h]` binds $t0/$t1 from data or time builtins). #]
- [case id=gen-range-datetime-001-duration-step level=core
+ [case id=program-gen-range-datetime-001-duration-step level=core
   [tags range datetime duration step count]
   [in-cx [# [span [from 2026-01-01T00:00:00Z] [to 2026-01-03T00:00:00Z]] #]]
   [in-code [# [$count [$range $doc/from $doc/to 24h]] #]]
   [out-text [# 3 #]]
  ]
- [case id=gen-range-datetime-002-numeric-step-error level=core
+ [case id=program-gen-range-datetime-002-numeric-step-error level=core
   [tags range datetime numeric-step error]
   [in-cx [# [span [from 2026-01-01T00:00:00Z] [to 2026-01-03T00:00:00Z]] #]]
   [in-code [# [$range $doc/from $doc/to 1] #]]
@@ -7635,7 +8436,7 @@ cx-err:CXER0233
  ]
 
  [# ── P2-21 open-end [$range lo *] — lazy Iterator (C-gen-3) ── #]
- [case id=gen-range-open-001-take-prefix level=core
+ [case id=program-gen-range-open-001-take-prefix level=core
   [tags range open prefix take expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?for [in $x [$range 1 *]] [take 5] [yield $x]] #]]
@@ -7647,7 +8448,7 @@ cx-err:CXER0233
 5
 #]]
  ]
- [case id=gen-range-open-002-stride level=core
+ [case id=program-gen-range-open-002-stride level=core
   [tags range open prefix stride take expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?for [in $x [$range 1 * 2]] [take 5] [yield $x]] #]]
@@ -7659,7 +8460,7 @@ cx-err:CXER0233
 9
 #]]
  ]
- [case id=gen-range-open-003-unbounded-force-error level=core
+ [case id=program-gen-range-open-003-unbounded-force-error level=core
   [tags range open unbounded force error]
   [in-cx [# [empty] #]]
   [in-code [# [$count [$range 1 *]] #]]
@@ -7667,19 +8468,19 @@ cx-err:CXER0233
  ]
 
  [# ── P2-21 illegal `*` positions — parse error (grounded today; advisory until enforced with C-gen-3) ── #]
- [case id=gen-range-illegal-001-star-lo level=core
+ [case id=program-gen-range-illegal-001-star-lo level=core
   [tags range star illegal-position parse-error expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$range * 5] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
- [case id=gen-range-illegal-002-star-stride level=core
+ [case id=program-gen-range-illegal-002-star-stride level=core
   [tags range star illegal-position parse-error expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$range 1 5 *] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
- [case id=gen-range-illegal-003-star-general-arg level=core
+ [case id=program-gen-range-illegal-003-star-general-arg level=core
   [tags range star illegal-position parse-error expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$identity *] #]]
@@ -7687,19 +8488,19 @@ cx-err:CXER0233
  ]
 
  [# ── P2-31 NO-INFIX-RANGE: retired infix to/by is a parse error (C-gen-1) ── #]
- [case id=gen-no-infix-001-to level=core
+ [case id=program-gen-no-infix-001-to level=core
   [tags range no-infix to parse-error expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?for [in $x 1 to 5] [yield $x]] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
- [case id=gen-no-infix-002-by level=core
+ [case id=program-gen-no-infix-002-by level=core
   [tags range no-infix by parse-error expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?for [in $x 1 to 10 by 2] [yield $x]] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
- [case id=gen-no-infix-003-to-star level=core
+ [case id=program-gen-no-infix-003-to-star level=core
   [tags range no-infix to-star parse-error expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?for [in $x 1 to *] [take 5] [yield $x]] #]]
@@ -7707,7 +8508,7 @@ cx-err:CXER0233
  ]
 
  [# ── P2-22 [$iterate f seed] — functional progression (C-gen-4) ── #]
- [case id=gen-iterate-001-finite-take level=core
+ [case id=program-gen-iterate-001-finite-take level=core
   [tags iterate functional take]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -7722,7 +8523,7 @@ cx-err:CXER0233
 16
 #]]
  ]
- [case id=gen-iterate-002-unbounded-force-error level=core
+ [case id=program-gen-iterate-002-unbounded-force-error level=core
   [tags iterate unbounded force error]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -7731,7 +8532,7 @@ cx-err:CXER0233
 #]]
   [out-text [# [err code=cx-err:CXER0100 message='infinite generator cannot be fully materialised — use [take] / [takewhile]'] #]]
  ]
- [case id=gen-iterate-003-noncallable-error level=core
+ [case id=program-gen-iterate-003-noncallable-error level=core
   [tags iterate non-callable error]
   [in-cx [# [empty] #]]
   [in-code [# [$iterate 5 1] #]]
@@ -7739,7 +8540,7 @@ cx-err:CXER0233
  ]
 
  [# ── P2-22 [$unfold f seed] — general anamorphism (C-gen-4) ── #]
- [case id=gen-unfold-001-finite level=core
+ [case id=program-gen-unfold-001-finite level=core
   [tags unfold anamorphism finite]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -7748,7 +8549,7 @@ cx-err:CXER0233
 #]]
   [out-text [# (5, 4, 3, 2, 1) #]]
  ]
- [case id=gen-unfold-002-map-state-fib level=core
+ [case id=program-gen-unfold-002-map-state-fib level=core
   [tags unfold anamorphism map-state fib]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -7766,7 +8567,7 @@ cx-err:CXER0233
 13
 #]]
  ]
- [case id=gen-unfold-003-malformed-step-error level=core
+ [case id=program-gen-unfold-003-malformed-step-error level=core
   [tags unfold malformed-step error]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -7775,7 +8576,7 @@ cx-err:CXER0233
 #]]
   [out-text [# [err code=cx-err:CXER0100 message='unfold: f must return () or a 2-element [value, next-state] array'] #]]
  ]
- [case id=gen-unfold-004-noncallable-error level=core
+ [case id=program-gen-unfold-004-noncallable-error level=core
   [tags unfold non-callable error]
   [in-cx [# [empty] #]]
   [in-code [# [$unfold 5 1] #]]
@@ -7783,13 +8584,13 @@ cx-err:CXER0233
  ]
 
  [# ── N-GEN-3 kind contract (behavioral): finite forces eagerly; open is known-infinite ── #]
- [case id=gen-kind-001-finite-eager level=core
+ [case id=program-gen-kind-001-finite-eager level=core
   [tags range kind sequence eager expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [$count [$range 1 3]] #]]
   [out-text [# 3 #]]
  ]
- [case id=gen-kind-002-open-bounded-realizes level=core
+ [case id=program-gen-kind-002-open-bounded-realizes level=core
   [tags range kind iterator lazy bounded expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?for [in $x [$range 1 *]] [take 3] [yield $x]] #]]
@@ -7944,7 +8745,7 @@ cx-err:CXER0233
 #]]
   [in-code [#
 [?let [= $users [u-set [u name="A" email="a@x.com"] [u name="B" email="b@x.com"]]] [?for [in $o ([o user="A"], [o user="B"])]
-  [yield $users//u[@name=$o/@user]/@email]]]
+  [yield $users//u[= $_@name $o/@user]/@email]]]
 #]]
   [out-text [#
 [email 'a@x.com']
@@ -7959,7 +8760,7 @@ cx-err:CXER0233
 #]]
   [in-code [#
 [?let [= $cat [cats [c id=1 name="Cat A"] [c id=2 name="Cat B"]]] [?for [in $p ([p name="X" cat=1], [p name="Y" cat=2])]
-  [yield $cat//c[@id=$p/@cat]/@name]]]
+  [yield $cat//c[= $_@id $p/@cat]/@name]]]
 #]]
   [out-text [#
 [name 'Cat A']
@@ -7974,7 +8775,7 @@ cx-err:CXER0233
 #]]
   [in-code [#
 [?let [= $scores [s-set [s id=1 val=10] [s id=2 val=20]]] [?for [in $r ([r id=1], [r id=2])]
-  [yield $scores//s[@id=$r/@id]/@val]]]
+  [yield $scores//s[= $_@id $r/@id]/@val]]]
 #]]
   [out-text [#
 [val 10]
@@ -8024,6 +8825,103 @@ cx-err:CXER0233
 [q 2]
 [q 3]
 [q 5]
+#]]
+ ]
+
+ # ── Single-match node-set queries keep sequence shape (code.md §6.2) ──
+ # A node-set query (descendant / wildcard / predicate / parent axis) over
+ # a binding yields a SEQUENCE regardless of cardinality. A single match
+ # must not collapse to the bare element — [$count] would then count the
+ # element's items (container arity) instead of the one match.
+
+ [case id=program-cxpath-single-match-seq-001-count-descendant level=core
+  [tags cxpath count node-set single-match descendant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [doc [rect w=3]]] [$count $d//rect]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-single-match-seq-002-count-descendant-ns level=core
+  [tags cxpath count node-set single-match descendant namespace]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [doc [svg:rect w=3]]] [$count $d//svg:rect]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-single-match-seq-003-empty-descendant level=core
+  [tags cxpath empty node-set single-match descendant]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [doc [rect w=3]]] [$empty $d//rect]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-cxpath-single-match-seq-004-count-predicate level=core
+  [tags cxpath count node-set single-match predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [order [item q=2] [item q=3] [item q=5]]] [$count $d/item[= $_@q 3]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-single-match-seq-005-count-no-match level=core
+  [tags cxpath count node-set descendant empty]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [doc [rect w=3]]] [$count $d//missing]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=program-cxpath-single-match-seq-006-render level=core
+  [tags cxpath node-set single-match descendant render]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [doc [rect w=3]]] $d//rect]
+#]]
+  [out-text [#
+[rect w=3]
+#]]
+ ]
+
+ [case id=program-cxpath-single-match-seq-007-rebind-count level=core
+  [tags cxpath count node-set single-match rebind]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $d [doc [rect w=3]]] [?let [= $r $d//rect] [$count $r]]]
+#]]
+  [out-text [#
+1
 #]]
  ]
 
@@ -8448,6 +9346,641 @@ cx-err:CXER0100
 #]]
  ]
 
+ [; Float EBV (#382): cxdm.md §6 rule 2 — int and float share the numeric
+    truthiness rule (value ≠ 0, and not NaN). Pinned across every boolean
+    position: [?if], [?match] [where] guards, bare and $-head logical
+    operators, and CXPath predicate bodies (which also pin the #384
+    absence-marker rule: an absent attribute is the empty sequence, falsy).
+    No NaN cases exist because CX floats are finite-only (normative,
+    code.md §6.5): pure CX arithmetic raises CXER0101 before a NaN or
+    ±Inf can arise, so the "(and not NaN)" EBV clause is FFI-defensive
+    and unpinnable from pure CX. ]
+
+ [case id=program-if-bare-then-else-err level=core
+  [tags control-flow if malformed-body fail-closed CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if true 'a' 'b']
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-if-bare-false-cond-err level=core
+  [tags control-flow if malformed-body fail-closed CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if false 'a' 'b']
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-if-typo-clause-err level=core
+  [tags control-flow if malformed-body fail-closed typo CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if true [thn 'a']]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-if-falsy-no-else-empty level=core
+  [tags control-flow if falsy no-else absence control]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[out [ok [?if false [then 'a']]]]
+#]]
+  [out-text [#
+[out [ok ()]]
+#]]
+ ]
+
+ [case id=program-if-float-001-nonzero-truthy level=core
+  [tags control-flow if float ebv truthiness]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if 0.98 [then "hot"] [else "cold"]]
+#]]
+  [out-text [#
+'hot'
+#]]
+ ]
+
+ [case id=program-if-float-002-zero-falsy level=core
+  [tags control-flow if float ebv truthiness]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if 0.0 [then "hot"] [else "cold"]]
+#]]
+  [out-text [#
+'cold'
+#]]
+ ]
+
+ [case id=program-if-float-003-typed-attr-read level=core
+  [tags control-flow if float ebv attr typed-read]
+  [in-cx [#
+[pairs
+  [pair score=0.98 [name a]]
+  [pair score=0.0 [name b]]
+  [pair [name c]]]
+#]]
+  [in-code [#
+[?for [pair $p]
+      [yield [?if $p@score [then [hot $p/name]] [else [cold $p/name]]]]]
+#]]
+  [out-text [#
+[hot 'a']
+[cold 'b']
+[cold 'c']
+#]]
+ ]
+
+ [case id=program-match-float-001-where-guard level=core
+  [tags control-flow match where guard float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?match 0.98 [case $s [where $s] "nz"] [else "z"]]
+#]]
+  [out-text [#
+'nz'
+#]]
+ ]
+
+ [case id=program-match-float-002-where-guard-zero level=core
+  [tags control-flow match where guard float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?match 0.0 [case $s [where $s] "nz"] [else "z"]]
+#]]
+  [out-text [#
+'z'
+#]]
+ ]
+
+ [case id=program-logic-float-001-not-nonzero level=core
+  [tags logical operator not float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[not 0.5]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-float-002-not-zero level=core
+  [tags logical operator not float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[not 0.0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-logic-float-003-dollar-not level=core
+  [tags logical operator not head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$not 0.5]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-float-004-dollar-and level=core
+  [tags logical operator and head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$and 0.98 true]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-logic-float-005-dollar-and-zero level=core
+  [tags logical operator and head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$and 0.0 true]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-float-006-dollar-or-zero level=core
+  [tags logical operator or head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$or 0.0 false]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-float-007-dollar-or-nonzero level=core
+  [tags logical operator or head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$or 0.75 false]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-cxpath-float-001-predicate-ebv level=core
+  [tags cxpath predicate float ebv absence]
+  [in-cx [#
+[pairs
+  [pair score=0.98 [name a]]
+  [pair score=0.0 [name b]]
+  [pair [name c]]]
+#]]
+  [in-code [#
+[$count //pair[$_@score]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-float-002-predicate-survivor level=core
+  [tags cxpath predicate float ebv absence]
+  [in-cx [#
+[pairs
+  [pair score=0.98 [name a]]
+  [pair score=0.0 [name b]]
+  [pair [name c]]]
+#]]
+  [in-code [#
+[?for [in $p //pair[$_@score]] [yield $p/name]]
+#]]
+  [out-text [#
+a
+#]]
+ ]
+
+ [; EBV unification (#383): owner ruling 2026-07-13 — the cxdm.md EBV table
+    wins wholesale over code.md's old not() prose row. (1) A present named
+    element is TRUTHY regardless of contents (node presence, XPath-style) —
+    presence-vs-absence is the load-bearing distinction, and the existence-test
+    idiom [?if //flag …] must hold for empty marker elements. (2) A singleton
+    sequence wrapper RECURSES into its item — wrapping a value in a `(…)`
+    singleton never changes its truth. Containers keep the empty-is-falsy
+    convention ([] / {} falsy, non-empty truthy). Both eval truthiness sites
+    (bare-operator dispatch and $-head/[?if]/guard dispatch) now share ONE
+    EBV fn, so bare [not x] and [$not x] agree by construction. Non-scalar
+    node kinds (text / comment / PI) are truthy by presence per the same
+    node rule; no pure-CX pin exists for them because a bare text/comment/PI
+    node is not constructable as a standalone condition value from program
+    code — the arm is exercised structurally, like the NaN note above. ]
+
+ [case id=program-if-elem-001-empty-elem-truthy level=core
+  [tags control-flow if element ebv presence issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if [flag] [then "present"] [else "absent"]]
+#]]
+  [out-text [#
+'present'
+#]]
+ ]
+
+ [case id=program-if-elem-002-existence-idiom level=core
+  [tags control-flow if cxpath existence marker-element ebv issue-383]
+  [in-cx [#
+[app [flag]]
+#]]
+  [in-code [#
+[?if //flag [then "on"] [else "off"]]
+#]]
+  [out-text [#
+'on'
+#]]
+ ]
+
+ [case id=program-if-elem-003-existence-no-match level=core
+  [tags control-flow if cxpath existence absence ebv issue-383]
+  [in-cx [#
+[app [flag]]
+#]]
+  [in-code [#
+[?if //missing [then "on"] [else "off"]]
+#]]
+  [out-text [#
+'off'
+#]]
+ ]
+
+ [case id=program-logic-elem-001-bare-not-empty-elem level=core
+  [tags logical operator not element ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[not [e]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-elem-002-dollar-not-empty-elem level=core
+  [tags logical builtin not element ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$not [e]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-elem-003-dollar-and-empty-elem level=core
+  [tags logical builtin and element ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$and [e] true]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-logic-elem-004-dollar-or-empty-elem level=core
+  [tags logical builtin or element ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$or false [e]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-match-elem-001-where-guard-elem level=core
+  [tags control-flow match where guard element ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?match [e] [case $x [where $x] "present"] [else "none"]]
+#]]
+  [out-text [#
+'present'
+#]]
+ ]
+
+ [case id=program-if-seq-001-wrapped-zero-falsy level=core
+  [tags control-flow if sequence singleton-wrapper ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if (0) [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'f'
+#]]
+ ]
+
+ [case id=program-if-seq-002-wrapped-float-zero-falsy level=core
+  [tags control-flow if sequence singleton-wrapper float ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if (0.0) [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'f'
+#]]
+ ]
+
+ [case id=program-if-seq-003-wrapped-empty-string-falsy level=core
+  [tags control-flow if sequence singleton-wrapper string ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if ("") [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'f'
+#]]
+ ]
+
+ [case id=program-if-seq-004-wrapped-nonzero-truthy level=core
+  [tags control-flow if sequence singleton-wrapper ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if (7) [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'t'
+#]]
+ ]
+
+ [case id=program-if-seq-005-multi-item-truthy level=core
+  [tags control-flow if sequence ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if (0, 0) [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'t'
+#]]
+ ]
+
+ [case id=program-if-seq-006-wrapped-elem-truthy level=core
+  [tags control-flow if sequence singleton-wrapper element ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if ([e]) [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'t'
+#]]
+ ]
+
+ [case id=program-logic-seq-001-dollar-not-wrapped-zero level=core
+  [tags logical builtin not sequence singleton-wrapper ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$not (0)]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-if-container-001-empty-array-falsy level=core
+  [tags control-flow if array container ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if [] [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'f'
+#]]
+ ]
+
+ [case id=program-if-container-002-empty-map-falsy level=core
+  [tags control-flow if map container ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if {} [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'f'
+#]]
+ ]
+
+ [case id=program-if-container-003-nonempty-map-truthy level=core
+  [tags control-flow if map container ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if {a: 1} [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'t'
+#]]
+ ]
+
+ [; Iterator EBV (#388): owner ruling 2026-07-13 — an Iterator in a boolean
+    position has NO EBV and raises a LOUD, catchable CXER0100 (the same code
+    family as materializing an unbounded iterator without a bound). EBV must
+    never force a lazy stream: network-backed source kinds (net_accept /
+    http_accept / sse_events / net_line / net_chunk) would block or perform
+    I/O inside a condition, and combinator kinds run user closures per pull.
+    Presence-truthy and silent-falsy were both rejected (wrapper-changes-
+    truth incoherence / the #382 silent-surprise class). The error flows
+    through both channels — err VALUE at value positions, EvalError at
+    predicate walks — and [?fallback] catches either. A FINITE [$range] is
+    an eager Sequence, not an Iterator, and keeps its ordinary sequence EBV. ]
+
+ [case id=program-if-iter-001-open-range-err level=core
+  [tags control-flow if iterator ebv error issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if [$range 1 *] [then "t"] [else "f"]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-if-iter-002-iterate-err level=core
+  [tags control-flow if iterator ebv error issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def dbl ($x) [* $x 2]]
+[?if [$iterate $dbl 1] [then "t"] [else "f"]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-logic-iter-001-bare-not-err level=core
+  [tags logical operator not iterator ebv error issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[not [$range 1 *]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-logic-iter-002-dollar-not-err level=core
+  [tags logical builtin not iterator ebv error issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$not [$range 1 *]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-logic-iter-003-dollar-and-err level=core
+  [tags logical builtin and iterator ebv error issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$and true [$range 1 *]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-match-iter-001-where-guard-err level=core
+  [tags control-flow match where guard iterator ebv error issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?match 5 [case $x [where [$range 1 *]] "g"] [else "e"]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-for-iter-001-where-guard-err level=core
+  [tags comprehension for where guard iterator ebv error issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?for [in $x (1, 2)] [where [$range 1 *]] [yield $x]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-if-iter-003-fallback-catch level=core
+  [tags control-flow if iterator ebv error fallback catch issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?fallback [?if [$range 1 *] [then "t"] [else "f"]] [recover-with "caught"]]
+#]]
+  [out-text [#
+'caught'
+#]]
+ ]
+
+ [case id=program-if-iter-004-finite-range-truthy level=core
+  [tags control-flow if range sequence ebv issue-388]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if [$range 1 3] [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'t'
+#]]
+ ]
+
  [case id=program-cmp-binary-lt level=core
   [tags comparison operator binary]
   [in-cx [#
@@ -8468,6 +10001,175 @@ true
 #]]
   [in-code [#
 [< 1 2 3]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cmp-ordered-string-int-err level=core
+  [tags comparison operator ordered type-strict CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[> '30' 26]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cmp-ordered-string-string-err level=core
+  [tags comparison operator ordered type-strict CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[> '30' '26']
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cmp-ordered-int-string-err level=core
+  [tags comparison operator ordered type-strict CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[> 30 '26']
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cmp-ordered-lt-string-err level=core
+  [tags comparison operator ordered type-strict CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[< 5 'x']
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cmp-ordered-bool-err level=core
+  [tags comparison operator ordered type-strict CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[> true false]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cmp-ordered-atom-err level=core
+  [tags comparison operator ordered type-strict CXER0100 error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[> :b :a]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cmp-ordered-absence-false level=core
+  [tags comparison operator ordered absence]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[> () 5]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-cmp-ordered-mixed-numeric level=core
+  [tags comparison operator ordered numeric promotion]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[> 30 25.5]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-cmp-ordered-ge-equal level=core
+  [tags comparison operator ordered numeric]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[>= 26 26]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-cmp-ordered-atomize-text-node level=core
+  [tags comparison operator ordered atomization text-node]
+  [in-cx [#
+[doc [n 7]]
+#]]
+  [in-code [#
+[> $doc/n 5]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-cmp-ordered-string-attr-err level=core
+  [tags comparison operator ordered atomization string-attr type-strict CXER0100 error]
+  [in-cx [#
+[doc [box w="5"]]
+#]]
+  [in-code [#
+[> $doc/box@w 3]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-cmp-ordered-eq-cross-kind-control level=core
+  [tags comparison operator equality cross-kind control]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[out [a [= '30' 30]] [b [!= '30' 30]]]
+#]]
+  [out-text [#
+[out [a false] [b true]]
+#]]
+ ]
+
+ [case id=program-cmp-ordered-guard-err-propagates level=core
+  [tags comparison operator ordered for-guard err-propagation CXER0100 error]
+  [in-cx [#
+[doc [r a='30'] [r a='28']]
+#]]
+  [in-code [#
+[?for [in $x $doc/r] [where [> $x@a 26]] [yield $x]]
 #]]
   [out-err [#
 cx-err:CXER0100
@@ -8884,6 +10586,86 @@ cx-err:CXER3000
 #]]
  ]
 
+ [; ── #319 native-stack guard (E_STACK_EXHAUSTED, §9.4/§9.5) ─────────────
+    Non-tail eval recursion has no trampoline (only tail calls do), so its
+    depth is bounded by the host thread stack. The evaluator probes the
+    remaining headroom at every node and raises the CATCHABLE value-form
+    `cx-err:CXER0272` with margin to spare — deep non-tail recursion either
+    completes or raises the coded err, NEVER a SIGSEGV. The depths below are
+    far past any plausible stack (1e6 levels), so the err outcome is
+    deterministic across build modes; the tail-call twin MUST still complete
+    (TCO trampoline regression guard, #60). Crash-shape (signal-level) and
+    small-rlimit variants live in vcx/tests/eval_stack_guard_test.v — a
+    SIGSEGV would kill this in-process harness. ;]
+
+ [case id=program-stack-guard-non-tail-deep level=core
+  [tags recursion stack-guard error-shape CXER0272]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def sum1 ($n)
+  [?if [= $n 0]
+    [then 0]
+    [else [+ 1 [sum1 [- $n 1]]]]]]
+[sum1 1000000]
+#]]
+  [out-err [#
+cx-err:CXER0272
+#]]
+ ]
+
+ [case id=program-stack-guard-recoverable-by-fallback level=core
+  [tags recursion stack-guard fallback errors-are-values CXER0272]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def sum1 ($n)
+  [?if [= $n 0]
+    [then 0]
+    [else [+ 1 [sum1 [- $n 1]]]]]]
+[?fallback [sum1 1000000] [recover-with "recovered"]]
+#]]
+  [out-text [#
+'recovered'
+#]]
+ ]
+
+ [case id=program-stack-guard-tail-call-completes level=core
+  [tags recursion stack-guard tail-call tco]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def loop ($n $acc)
+  [?if [= $n 0]
+    [then $acc]
+    [else [loop [- $n 1] [+ $acc 1]]]]]
+[loop 200000 0]
+#]]
+  [out-text [#
+200000
+#]]
+ ]
+
+ [case id=program-stack-guard-worker-thread level=concurrency
+  [tags recursion stack-guard worker CXER0220 CXER0272]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?def sum1 ($n)
+  [?if [= $n 0]
+    [then 0]
+    [else [+ 1 [sum1 [- $n 1]]]]]]
+[?let [= $w [?worker name="wdeep" [body [sum1 1000000]]]] [?wait-for worker=$w]]
+#]]
+  [out-err [#
+cx-err:CXER0272
+#]]
+ ]
+
  [case id=program-num-err-idiv-type level=core
   [tags numeric idiv error-shape type-mismatch]
   [in-cx [#
@@ -8929,11 +10711,11 @@ cx-err:CXER3000
 [empty]
 #]]
   [in-code [#
-[?def boom ($x) $x/@nope]
-[?let [= $b [thing here=1]] [boom $b]]
+[?def boom ($x) [/ $x 0]]
+[?let [= $b 1] [boom $b]]
 #]]
   [out-text [#
-[err code=cx-err:CXER0001 message='cx-err:CXER0001: no attribute "nope"']
+[err code=cx-err:CXER0101 message='division by zero']
 #]]
  ]
 
@@ -9308,7 +11090,7 @@ cx-err:CXER0100
 [empty]
 #]]
   [in-code [#
-[?let [= $w [2:4]] [?let [= $xs ("a", "b", "c", "d", "e")] [?let [= $ys (10, 20, 30, 40, 50)] ($xs[$w], $ys[$w])]]]
+[?let [= $w [2:4]] [= $xs ("a", "b", "c", "d", "e")] [= $ys (10, 20, 30, 40, 50)] ($xs[$w], $ys[$w])]
 #]]
   [out-text [#
 (('b', 'c', 'd'), (20, 30, 40))
@@ -9321,7 +11103,7 @@ cx-err:CXER0100
 [empty]
 #]]
   [in-code [#
-[?let [= $w [2:[- $_last 1]]] [?let [= $xs (1, 2, 3, 4, 5)] [?let [= $ys ("a", "b", "c", "d")] ($xs[$w], $ys[$w])]]]
+[?let [= $w [2:[- $_last 1]]] [= $xs (1, 2, 3, 4, 5)] [= $ys ("a", "b", "c", "d")] ($xs[$w], $ys[$w])]
 #]]
   [out-text [#
 ((2, 3, 4), ('b', 'c'))
@@ -9429,6 +11211,278 @@ cx-err:CXER0100
 #]]
   [out-err [#
 cx-err:CXER0100
+#]]
+ ]
+
+ [; ── Table sequence view (D22, #404) — code.md §6.6 D22 / §7 "Table
+    sources". A :table-bearing element atomizes to its row sequence
+    (ordered maps, typed cells) for [?for] sources, slices, and the
+    sequence built-ins; CXPath does NOT navigate into rows. ;]
+
+ [case id=program-table-d22-001-forcomp-typed-filter level=core
+  [tags table d22 for comprehension where typed]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+]
+#]]
+  [in-code [#
+[?for [in $u $input//users] [in $r $u] [where [> $r.age 26]] [yield $r.name]]
+#]]
+  [out-text [#
+'alice'
+#]]
+ ]
+
+ [case id=program-table-d22-002-col-label-slice level=core
+  [tags table d22 slice column-label]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]] $t[*, "name"]]
+#]]
+  [out-text [#
+('alice', 'bob')
+#]]
+ ]
+
+ [case id=program-table-d22-003-cell-typed level=core
+  [tags table d22 slice column-label cell]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]] $t[1, "age"]]
+#]]
+  [out-text [#
+30
+#]]
+ ]
+
+ [case id=program-table-d22-004-label-range level=core
+  [tags table d22 slice column-label range]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]] $t[1:2, "name":"age"]]
+#]]
+  [out-text [#
+(('alice', 30), ('bob', 25))
+#]]
+ ]
+
+ [case id=program-table-d22-005-row-full-axis level=core
+  [tags table d22 slice row map]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]] [out [a $t[2, *]] [b $t[2]]]]
+#]]
+  [out-text [#
+[out [a {name: 'bob', age: 25}] [b {name: 'bob', age: 25}]]
+#]]
+ ]
+
+ [case id=program-table-d22-006-seq-builtins level=core
+  [tags table d22 count first last empty]
+  [in-cx [#
+[data
+ [users [table[name::string age::int]]
+  alice 30
+  bob 25
+ ]
+ [log [table[id::int]]
+ ]]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]]
+ [?let [= $l [$first $input//log]]
+  [out [n [$count $t]] [f [$first $t]] [z [$last $t]]
+       [ln [$count $l]] [le [$empty $l]]
+       [liter [?for [in $r $l] [yield $r]]]]]]
+#]]
+  [out-text [#
+[out [n 2] [f {name: 'alice', age: 30}] [z {name: 'bob', age: 25}] [ln 0] [le true] [liter ()]]
+#]]
+ ]
+
+ [case id=program-table-d22-007-cxpath-unchanged level=core
+  [tags table d22 cxpath negative]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]] [out [a $t//row] [b [$count $t/*]]]]
+#]]
+  [out-text [#
+[out [a ()] [b 0]]
+#]]
+ ]
+
+ [case id=program-table-d22-008-orderby level=core
+  [tags table d22 for order-by]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+]
+#]]
+  [in-code [#
+[?for [in $u $input//users] [in $r $u] [order-by $r.age] [yield $r.name]]
+#]]
+  [out-text [#
+'bob'
+'alice'
+#]]
+ ]
+
+ [case id=program-table-d22-009-null-cell-bool-guard level=core
+  [tags table d22 null bool where]
+  [in-cx [#
+[people [table[name::string age::int active::bool]]
+ alice 30 true
+ bob null false
+]
+#]]
+  [in-code [#
+[?let [= $p [$first $input//people]]
+ [out [a $p[2, "age"]] [b [?for [in $r $p] [where $r.active] [yield $r.name]]]]]
+#]]
+  [out-text [#
+[out [a null] [b ('alice')]]
+#]]
+ ]
+
+ [case id=program-table-d22-010-positional-col-err level=core
+  [tags table d22 slice map error]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]] $t[1, 2]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-table-d22-011-map-row-collabel level=core
+  [tags table d22 slice column-label map-row]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $rows ([?to-map (("name", "A"), ("age", 1))], [?to-map (("name", "B"), ("age", 2))])]
+ $rows[*, "name"]]
+#]]
+  [out-text [#
+('A', 'B')
+#]]
+ ]
+
+ [case id=program-table-478-001-attrs-literal level=core
+  [tags table attrs elementmeta issue-478]
+  [doc [#
+# 478 (program lane): an ATTRIBUTED `[table[…]]`-block element literal
+# inside a program parses via the data-reader seam — the attribute run
+# precedes the `[table[` clause (grammar [29]/[50]), so the program
+# parser re-checks for the clause opener after the attrs and delegates
+# the span. The element (attrs included) evaluates to itself.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [users region=west [table[name age::int]] alice 30 bob 25]] $t]
+#]]
+  [out-text [#
+[users region=west [table[name age::int]]
+  alice 30
+  bob 25
+]
+#]]
+ ]
+
+ [case id=program-table-478-002-attrs-dynamic-err level=core
+  [tags table attrs dynamic error issue-478]
+  [doc [#
+# 478 (program lane, fail-closed): a DYNAMIC attribute value on a
+# `[table[…]]` element literal cannot ride the data reading — the
+# parser rejects it loudly rather than silently literalizing `$x`
+# (the tabular form is data-only; rows have no expression production).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x west] [users region=$x [table[a]] 1]]
+#]]
+  [out-err [#
+must be a scalar literal
+#]]
+ ]
+
+ [case id=program-table-484-001-nested-literal level=core
+  [tags table nested composition issue-484]
+  [doc [#
+# 484 (program lane): a table-bearing element literal nested inside
+# another element literal parses as ordinary composition — the program
+# reading's element-literal body loop detects the `[table[` clause-child
+# opener on the CHILD and delegates that span to the data reader, same
+# as at top level.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [wrap [users [table[name age::int]] alice 30]]] $t]
+#]]
+  [out-text [#
+[wrap [users [table[name age::int]]
+  alice 30
+]]
+#]]
+ ]
+
+ [case id=program-table-484-002-misplaced-opener-err level=core
+  [tags table reserved-name error issue-484]
+  [doc [#
+# 484 (program lane, fail-closed): the reserved glued `[table[` opener
+# with no enclosing element head (anonymous table) is not grammatical —
+# grammar [50]'s tabular alternative requires a Name. The program
+# reading delegates the span to the data reader, which rejects loudly;
+# both engines converge on the rejection.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [table[name age] Ada 36]] $t]
+#]]
+  [out-err [#
+outside ElementMeta position
 #]]
  ]
 
@@ -10277,67 +12331,67 @@ cx-err:CXER0281
 
  [# ── §8.13 [?else] — value-or-default coalesce. GROUNDED bind-first desugar
        siblings pin each truth-table row; the [?else] form is advisory. ── #]
- [case id=sap-else-01-err-defaults level=core
+ [case id=program-sap-else-01-err-defaults level=core
   [tags sap else err default expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else [/ 10 0] 'safe'] #]]
   [out-text [# 'safe' #]]
  ]
- [case id=sap-else-02-empty-defaults level=core
+ [case id=program-sap-else-02-empty-defaults level=core
   [tags sap else empty absence default expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else () 'd'] #]]
   [out-text [# 'd' #]]
  ]
- [case id=sap-else-03-null-passes level=core
+ [case id=program-sap-else-03-null-passes level=core
   [tags sap else null passthrough expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else null 'fallback'] #]]
   [out-text [# null #]]
  ]
- [case id=sap-else-04-false-passes level=core
+ [case id=program-sap-else-04-false-passes level=core
   [tags sap else falsey passthrough expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else false 'fallback'] #]]
   [out-text [# false #]]
  ]
- [case id=sap-else-05-zero-passes level=core
+ [case id=program-sap-else-05-zero-passes level=core
   [tags sap else falsey zero passthrough expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else 0 'fallback'] #]]
   [out-text [# 0 #]]
  ]
- [case id=sap-else-06-emptystr-passes level=core
+ [case id=program-sap-else-06-emptystr-passes level=core
   [tags sap else falsey empty-string passthrough expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else '' 'fallback'] #]]
   [out-text [# '' #]]
  ]
- [case id=sap-else-07-emptyarray-passes level=core
+ [case id=program-sap-else-07-emptyarray-passes level=core
   [tags sap else falsey empty-array passthrough expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else [] 'fallback'] #]]
   [out-text [# [] #]]
  ]
- [case id=sap-else-08-emptymap-passes level=core
+ [case id=program-sap-else-08-emptymap-passes level=core
   [tags sap else falsey empty-map passthrough expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else {} 'fallback'] #]]
   [out-text [# {} #]]
  ]
- [case id=sap-else-09-invalid-passes level=core
+ [case id=program-sap-else-09-invalid-passes level=core
   [tags sap else invalid passthrough expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else [invalid [violation field=age]] 'd'] #]]
   [out-text [# [invalid [violation field=age]] #]]
  ]
- [case id=sap-else-10-value-passes level=core
+ [case id=program-sap-else-10-value-passes level=core
   [tags sap else value passthrough expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else 42 'd'] #]]
   [out-text [# 42 #]]
  ]
- [case id=sap-else-11-lazy-default level=core
+ [case id=program-sap-else-11-lazy-default level=core
   [tags sap else lazy-default expected-red]
   [in-cx [# [empty] #]]
   [in-code [# [?else 42 [/ 1 0]] #]]
@@ -10345,7 +12399,7 @@ cx-err:CXER0281
  ]
 
  [# ── §8.2 [?match] — bind-first GROUNDED; inline scrutinee advisory. ── #]
- [case id=sap-match-01-catch-bindfirst level=core
+ [case id=program-sap-match-01-catch-bindfirst level=core
   [tags sap match v1a grounded]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10356,7 +12410,7 @@ cx-err:CXER0281
 #]]
   [out-text [# [recovered code=cx-err:CXER0101] #]]
  ]
- [case id=sap-match-02-inline-scrutinee level=core
+ [case id=program-sap-match-02-inline-scrutinee level=core
   [tags sap match inline scrutinee]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10368,115 +12422,115 @@ cx-err:CXER0281
  ]
 
  [# ── O1 uniform pattern grammar. GROUNDED anchors enforced; gaps advisory. ── #]
- [case id=sap-O1-00-wildcard level=core
+ [case id=program-sap-O1-00-wildcard level=core
   [tags sap O1 match wildcard grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r 42] [?match $r [case _ [any]] [else [no]]]] #]]
   [out-text [# [any] #]]
  ]
- [case id=sap-O1-01-attr-predicate level=core
+ [case id=program-sap-O1-01-attr-predicate level=core
   [tags sap O1 match attr predicate grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [err code=rate-limited]] [?match $r [case [err @code=rate-limited] retry-later] [else other]]] #]]
   [out-text [# retry-later #]]
  ]
- [case id=sap-O1-01p-attr-plain-equality level=core
+ [case id=program-sap-O1-01p-attr-plain-equality level=core
   [tags sap O1 match attr plain rule9]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [err code=rate-limited]] [?match $r [case [err code=rate-limited] retry-later] [else other]]] #]]
   [out-text [# retry-later #]]
  ]
- [case id=sap-O1-01b-attr-capture level=core
+ [case id=program-sap-O1-01b-attr-capture level=core
   [tags sap O1 match attr capture rule10]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [err code=rate-limited]] [?match $r [case [err @code=$c] {got: $c}] [else other]]] #]]
   [out-text [# {got: 'rate-limited'} #]]
  ]
- [case id=sap-O1-02-map-literal level=core
+ [case id=program-sap-O1-02-map-literal level=core
   [tags sap O1 match map literal grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r {a: 1}] [?match $r [case {a: 1} [y]] [else [n]]]] #]]
   [out-text [# [y] #]]
  ]
- [case id=sap-O1-02b-map-capture level=core
+ [case id=program-sap-O1-02b-map-capture level=core
   [tags sap O1 match map capture rule11]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r {role: admin, age: 30}] [?match $r [case {role: $who} {role: $who}] [else [no]]]] #]]
   [out-text [# {role: admin} #]]
  ]
- [case id=sap-O1-02c-map-rest level=core
+ [case id=program-sap-O1-02c-map-rest level=core
   [tags sap O1 match map rest rule11]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r {role: admin, age: 30}] [?match $r [case {role: $who, *$rest} {r: $who, rest: $rest}] [else [n]]]] #]]
   [out-text [# {r: admin, rest: {age: 30}} #]]
  ]
- [case id=sap-O1-03-seq-closed level=core
+ [case id=program-sap-O1-03-seq-closed level=core
   [tags sap O1 match sequence closed-arity grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r (1, 2, 3)] [?match $r [case (1, 2) [two]] [case (1, 2, 3) [three]] [else [no]]]] #]]
   [out-text [# [three] #]]
  ]
- [case id=sap-O1-03b-seq-spread level=core
+ [case id=program-sap-O1-03b-seq-spread level=core
   [tags sap O1 match sequence spread rule12]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r (1, 2, 3)] [?match $r [case (1, *$rest) {rest: $rest}] [else [no]]]] #]]
   [out-text [# {rest: (2, 3)} #]]
  ]
- [case id=sap-O1-04-array-literal level=core
+ [case id=program-sap-O1-04-array-literal level=core
   [tags sap O1 match array literal rule13]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [1, 2, 3]] [?match $r [case [1, $x, 3] {mid: $x}] [else [no]]]] #]]
   [out-text [# {mid: 2} #]]
  ]
- [case id=sap-O1-04b-array-rest level=core
+ [case id=program-sap-O1-04b-array-rest level=core
   [tags sap O1 match array rest rule13]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [1, 2, 3]] [?match $r [case [1, *$rest] {rest: $rest}] [else [no]]]] #]]
   [out-text [# {rest: [2, 3]} #]]
  ]
- [case id=sap-O1-05-typetest-int level=core
+ [case id=program-sap-O1-05-typetest-int level=core
   [tags sap O1 match type-test typed-bind rule14]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r 42] [?match $r [case $n::int {int: $n}] [else [other]]]] #]]
   [out-text [# {int: 42} #]]
  ]
- [case id=sap-O1-06-typetest-anon-str level=core
+ [case id=program-sap-O1-06-typetest-anon-str level=core
   [tags sap O1 match type-test anonymous rule14]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r 'hi'] [?match $r [case _::int [is-int]] [case _::string [is-str]] [else [other]]]] #]]
   [out-text [# [is-str] #]]
  ]
- [case id=sap-O1-07-typetest-float level=core
+ [case id=program-sap-O1-07-typetest-float level=core
   [tags sap O1 type-test scalar float]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r 3.14] [?match $r [case _::float [f]] [else [n]]]] #]]
   [out-text [# [f] #]]
  ]
- [case id=sap-O1-08-typetest-bool level=core
+ [case id=program-sap-O1-08-typetest-bool level=core
   [tags sap O1 type-test scalar bool]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r true] [?match $r [case _::bool [b]] [else [n]]]] #]]
   [out-text [# [b] #]]
  ]
- [case id=sap-O1-09-typetest-null level=core
+ [case id=program-sap-O1-09-typetest-null level=core
   [tags sap O1 type-test scalar null]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r null] [?match $r [case _::null [z]] [else [n]]]] #]]
   [out-text [# [z] #]]
  ]
- [case id=sap-O1-10-typetest-atom level=core
+ [case id=program-sap-O1-10-typetest-atom level=core
   [tags sap O1 type-test scalar atom]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r :ok] [?match $r [case _::atom [a]] [else [n]]]] #]]
   [out-text [# [a] #]]
  ]
- [case id=sap-O1-11-attr-type-test level=core
+ [case id=program-sap-O1-11-attr-type-test level=core
   [tags sap O1 match attr type-test rule14]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [user age=30]] [?match $r [case [user @age::int] [num-age]] [else [n]]]] #]]
   [out-text [# [num-age] #]]
  ]
- [case id=sap-O1-12-scalar-spread-nonmatch level=core
+ [case id=program-sap-O1-12-scalar-spread-nonmatch level=core
   [tags sap O1 negative scalar spread non-match]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r 42] [?match $r [case (*$rest) [no]] [else [ok]]]] #]]
@@ -10484,33 +12538,33 @@ cx-err:CXER0281
  ]
 
  [# ── O4 path/@attr distributes over a sequence (advisory). ── #]
- [case id=sap-O4-01-path-over-seq level=core
+ [case id=program-sap-O4-01-path-over-seq level=core
   [tags sap O4 path cxpath sequence distribute]
   [in-cx [# [empty] #]]
-  [in-code [# [?let [= $s ([a x=1], [a x=2])] [?let [= $q $s/@x] $q]] #]]
+  [in-code [# [?let [= $s ([a x=1], [a x=2])] [= $q $s/@x] $q] #]]
   [out-text [# (1, 2) #]]
  ]
- [case id=sap-O4-02-empty-in-empty-out level=core
+ [case id=program-sap-O4-02-empty-in-empty-out level=core
   [tags sap O4 path empty absence]
   [in-cx [# [empty] #]]
-  [in-code [# [?let [= $s ()] [?let [= $q $s/@x] $q]] #]]
+  [in-code [# [?let [= $s ()] [= $q $s/@x] $q] #]]
   [out-text [# () #]]
  ]
- [case id=sap-O4-03-missing-attr-skipped level=core
+ [case id=program-sap-O4-03-missing-attr-skipped level=core
   [tags sap O4 path optional-read skip]
   [in-cx [# [empty] #]]
-  [in-code [# [?let [= $s ([a x=1], [a])] [?let [= $q $s/@x] $q]] #]]
+  [in-code [# [?let [= $s ([a x=1], [a])] [= $q $s/@x] $q] #]]
   [out-text [# (1) #]]
  ]
- [case id=sap-O4-04-nonelement-skipped level=core
+ [case id=program-sap-O4-04-nonelement-skipped level=core
   [tags sap O4 path non-element skip]
   [in-cx [# [empty] #]]
-  [in-code [# [?let [= $s ([a x=1], 'str')] [?let [= $q $s/@x] $q]] #]]
+  [in-code [# [?let [= $s ([a x=1], 'str')] [= $q $s/@x] $q] #]]
   [out-text [# (1) #]]
  ]
 
  [# ── O2 [?fallback] binds $err in recover-with (advisory). ── #]
- [case id=sap-O2-01-fallback-binds-err level=core
+ [case id=program-sap-O2-01-fallback-binds-err level=core
   [tags sap O2 fallback recover-with]
   [in-cx [# [empty] #]]
   [in-code [# [?fallback [/ 10 0] [recover-with [recovered code=$err/@code]]] #]]
@@ -10518,25 +12572,25 @@ cx-err:CXER0281
  ]
 
  [# ── C3z §9.6 [?with-error-hook] — raise-stage observe / enrich / O3 sugar. ── #]
- [case id=sap-hook-01-observe-fires-at-raise-before-recovery level=core
+ [case id=program-sap-hook-01-observe-fires-at-raise-before-recovery level=core
   [tags sap C3z error-hook observe raise recovery-independent]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $pre [?with-error-hook [observe [?fn ($e) [?test-counter name=obs op=inc]]] [?else [/ 10 0] recovered]]] ($pre, [?test-counter name=obs])] #]]
   [out-text [# (recovered, 1) #]]
  ]
- [case id=sap-hook-02-O3-sugar-equivalence level=core
+ [case id=program-sap-hook-02-O3-sugar-equivalence level=core
   [tags sap C3z O3 error-hook observe using sugar desugar-equivalence]
   [in-cx [# [empty] #]]
-  [in-code [# [?let [= $a [?with-error-hook [observe [?fn ($e) [?test-counter name=s3 op=inc]]] [?else [/ 1 0] x]]] [?let [= $b [?with-error-hook [observe [using [?fn ($e) [?test-counter name=s3 op=inc]]]] [?else [/ 1 0] x]]] [?test-counter name=s3]]] #]]
+  [in-code [# [?let [= $a [?with-error-hook [observe [?fn ($e) [?test-counter name=s3 op=inc]]] [?else [/ 1 0] x]]] [= $b [?with-error-hook [observe [using [?fn ($e) [?test-counter name=s3 op=inc]]]] [?else [/ 1 0] x]]] [?test-counter name=s3]] #]]
   [out-text [# 2 #]]
  ]
- [case id=sap-hook-03-enrich-derived-err-propagates level=core
+ [case id=program-sap-hook-03-enrich-derived-err-propagates level=core
   [tags sap C3z error-hook enrich propagate no-recovery]
   [in-cx [# [empty] #]]
   [in-code [# [?match [?with-error-hook [enrich [?fn ($e) [err code=enriched-by-hook]]] [/ 10 0]] [case [err @code=enriched-by-hook] [derived]] [else [no]]] #]]
   [out-text [# [derived] #]]
  ]
- [case id=sap-hook-04-observe-silent-on-success level=core
+ [case id=program-sap-hook-04-observe-silent-on-success level=core
   [tags sap C3z error-hook observe negative no-phantom-fire]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $v [?with-error-hook [observe [?fn ($e) [?test-counter name=nf op=inc]]] 7]] ($v, [?test-counter name=nf])] #]]
@@ -10544,7 +12598,7 @@ cx-err:CXER0281
  ]
 
  [# ── §8.9 [?pipe] reshape. ── #]
- [case id=sap-pipe-01-bare-stages level=core
+ [case id=program-sap-pipe-01-bare-stages level=core
   [tags sap pipe bare-stage grounded]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10553,36 +12607,36 @@ cx-err:CXER0281
 #]]
   [out-text [# 7 #]]
  ]
- [case id=sap-pipe-02-absence-continues level=core
+ [case id=program-sap-pipe-02-absence-continues level=core
   [tags sap pipe absence continues grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?pipe () [$count]] #]]
   [out-text [# 0 #]]
  ]
- [case id=sap-pipe-03-infix-removed level=core
+ [case id=program-sap-pipe-03-infix-removed level=core
   [tags sap pipe no-infix removed negative grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?def add1 ($x) [+ $x 1]] 5 | [$add1] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
- [case id=sap-pipe-04-through-removed level=core
+ [case id=program-sap-pipe-04-through-removed level=core
   [tags sap pipe no-through removed negative]
   [in-cx [# [empty] #]]
   [in-code [# [?def add1 ($x) [+ $x 1]] [?pipe 5 [through [$add1]]] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
- [case id=sap-pipe-05-noncallable-stage level=core
+ [case id=program-sap-pipe-05-noncallable-stage level=core
   [tags sap pipe stage-invocation non-callable negative]
   [in-cx [# [empty] #]]
   [in-code [# [?def add1 ($x) [+ $x 1]] [?pipe 5 add1 {a: 1}] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
- [# sap-pipe-06: a tap runs its side effect and the value passes through.
+ [# program-sap-pipe-06: a tap runs its side effect and the value passes through.
     `$fields` is a NAMED param ([153c] `$fields={}`), so the fields map is
     supplied as the named arg `fields={v: _}` — the threaded value is bound
     to `_` (so `{v: _}` = `{v: 6}`); no append (the stage already places the
     value via `_`). #]
- [case id=sap-pipe-06-tap-passes level=core
+ [case id=program-sap-pipe-06-tap-passes level=core
   [tags sap pipe tap observe]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10592,7 +12646,7 @@ cx-err:CXER0281
 #]]
   [out-text [# 7 #]]
  ]
- [case id=sap-pipe-07-tap-error-survives level=core
+ [case id=program-sap-pipe-07-tap-error-survives level=core
   [tags sap pipe tap never-derail]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10602,7 +12656,7 @@ cx-err:CXER0281
 #]]
   [out-text [# 7 #]]
  ]
- [case id=sap-pipe-08-skip-on-err level=core
+ [case id=program-sap-pipe-08-skip-on-err level=core
   [tags sap pipe short-circuit railway]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10614,7 +12668,7 @@ cx-err:CXER0281
 cx-err:CXER0101
 #]]
  ]
- [case id=sap-pipe-09-tap-skipped-after-err level=core
+ [case id=program-sap-pipe-09-tap-skipped-after-err level=core
   [tags sap pipe tap skip-after-err]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10630,20 +12684,20 @@ cx-err:CXER0101
 
  [# ── §8.8/§9.3 [?try]/[catch]/[on-error] RETIRED (C3c): both surfaces raise
        CXER0100 — the negatives below are enforced. ── #]
- [case id=sap-try-01-removed-negative level=core
+ [case id=program-sap-try-01-removed-negative level=core
   [tags sap no-legacy try removed negative]
   [in-cx [# [empty] #]]
   [in-code [# [?try [/ 10 0] [catch $err 0]] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
- [case id=sap-try-02-on-error-removed-negative level=core
+ [case id=program-sap-try-02-on-error-removed-negative level=core
   [tags sap no-legacy on-error removed negative]
   [in-cx [# [empty] #]]
   [in-code [# [?for [in $x (1, 2)] [on-error $e skip] [yield [/ 10 $x]]] #]]
   [out-err [# cx-err:CXER0100 #]]
  ]
  [# V2: the retired per-iteration recovery clause ≡ yield-body [?match] — the migrated replacement is grounded. #]
- [case id=sap-try-03-onerror-equiv-match level=core
+ [case id=program-sap-try-03-onerror-equiv-match level=core
   [tags sap match per-iteration v2 grounded]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10661,13 +12715,13 @@ cx-err:CXER0101
 
  [# ── §9.3 catchability taxonomy — every catchable class is a value-form err
        reachable by [?match] (bind-first, grounded today). ── #]
- [case id=sap-catch-01-arith level=core
+ [case id=program-sap-catch-01-arith level=core
   [tags sap catchability arithmetic grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [/ 1 0]] [?match $r [case [err $e] [c code=$e/@code]] [else ok]]] #]]
   [out-text [# [c code=cx-err:CXER0101] #]]
  ]
- [case id=sap-catch-02-unbound level=core
+ [case id=program-sap-catch-02-unbound level=core
   [tags sap catchability unbound grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [$nope 1]] [?match $r [case [err $e] caught] [else ok]]] #]]
@@ -10675,31 +12729,31 @@ cx-err:CXER0101
  ]
  [# ── §9.1.2.1 null-totality matrix — operations on null yield a defined value
        or a clean [err], NEVER a crash (grounded today; pins the totality claim). #]
- [case id=sap-null-01-arith-clean-err level=core
+ [case id=program-sap-null-01-arith-clean-err level=core
   [tags sap null-totality arithmetic grounded]
   [in-cx [# [empty] #]]
   [in-code [# [?match [?let [= $r [+ null 5]] $r] [case [err $e] [total]] [else [also-total]]] #]]
   [out-text [# [total] #]]
  ]
- [case id=sap-null-02-concat-value level=core
+ [case id=program-sap-null-02-concat-value level=core
   [tags sap null-totality string grounded]
   [in-cx [# [empty] #]]
   [in-code [# [$concat null 'x'] #]]
   [out-text [# 'nullx' #]]
  ]
- [case id=sap-null-03-eq level=core
+ [case id=program-sap-null-03-eq level=core
   [tags sap null-totality equality grounded]
   [in-cx [# [empty] #]]
   [in-code [# [= null null] #]]
   [out-text [# true #]]
  ]
- [case id=sap-null-04-count level=core
+ [case id=program-sap-null-04-count level=core
   [tags sap null-totality collection grounded]
   [in-cx [# [empty] #]]
   [in-code [# [$count null] #]]
   [out-text [# 1 #]]
  ]
- [case id=sap-null-05-first level=core
+ [case id=program-sap-null-05-first level=core
   [tags sap null-totality collection grounded]
   [in-cx [# [empty] #]]
   [in-code [# [$first null] #]]
@@ -10711,15 +12765,15 @@ cx-err:CXER0101
        these deterministic. NOTE: an `[err]`-pattern attr value carrying a colon
        (`cx-err:CXER0260`) MUST be quoted in a `[case]` pattern so it parses as a
        value rather than a stray `:` token (same quote convention as D008). ── #]
- [case id=sap-cancel-01-checkcancel-after-cancel level=core gate=enforced
+ [case id=program-sap-cancel-01-checkcancel-after-cancel level=core gate=enforced
   [tags sap concurrency cancel CXER0260 precedence]
   [in-cx [# [empty] #]]
   [in-code [#
 [?let [= $f [?async [?check-cancel]]]
-  [?let [= $_ [?cancel $f]]
-    [?match [?await $f]
-      [case [err @code='cx-err:CXER0260'] [cancelled]]
-      [else [other]]]]]
+  [= $_ [?cancel $f]]
+  [?match [?await $f]
+    [case [err @code='cx-err:CXER0260'] [cancelled]]
+    [else [other]]]]
 #]]
   [out-text [# [cancelled] #]]
  ]
@@ -10727,7 +12781,7 @@ cx-err:CXER0101
  [# §10.5.7.1 RAII over handles — an [?async] future handle satisfies the
     [?with-open] closeable contract; closing it cancels-and-joins. A completed
     body's value is preserved; the close is a clean exit edge. #]
- [case id=sap-raii-01-with-open-future level=core gate=enforced
+ [case id=program-sap-raii-01-with-open-future level=core gate=enforced
   [tags sap concurrency raii with-open future]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10738,7 +12792,7 @@ cx-err:CXER0101
 
  [# §10.5.7.1 RAII over handles — a [?worker] handle satisfies the closeable
     contract; [?with-open] closes (cancels-and-joins) it on scope exit. #]
- [case id=sap-raii-02-with-open-worker level=core gate=enforced
+ [case id=program-sap-raii-02-with-open-worker level=core gate=enforced
   [tags sap concurrency raii with-open worker]
   [in-cx [# [empty] #]]
   [in-code [#
@@ -10754,17 +12808,17 @@ cx-err:CXER0101
     host granted the capability. (The runner grants in full; the revocation is
     in-program, proving the §6.5.1 effect system is the cancellation-safety
     substrate.) #]
- [case id=sap-revoke-01-cap-revoked-after-cancel level=core gate=enforced
+ [case id=program-sap-revoke-01-cap-revoked-after-cancel level=core gate=enforced
   [tags sap concurrency cancel revoke CXER0271 capability]
   [in-cx [# [empty] #]]
   [in-code [#
 [?lib 'cx-stdlib/env']
 [?let [= $f [?async [$env:var 'HOME']]]
-  [?let [= $_ [?cancel $f]]
-    [?match [?await $f]
-      [case [err @code='cx-err:CXER0271'] [revoked]]
-      [case [err @code='cx-err:CXER0260'] [cancelled]]
-      [else [other]]]]]
+  [= $_ [?cancel $f]]
+  [?match [?await $f]
+    [case [err @code='cx-err:CXER0271'] [revoked]]
+    [case [err @code='cx-err:CXER0260'] [cancelled]]
+    [else [other]]]]
 #]]
   [out-text [# [revoked] #]]
  ]
@@ -10772,16 +12826,16 @@ cx-err:CXER0101
  [# §10.5.7.2 precedence — cancellation is checked BEFORE the capability at every
     cancellation point: a cancelled task that hits a cancellation point ([?await]
     on the cancelled future) reports the meaningful CXER0260, not CXER0271. #]
- [case id=sap-revoke-02-cancel-before-cap-precedence level=core gate=enforced
+ [case id=program-sap-revoke-02-cancel-before-cap-precedence level=core gate=enforced
   [tags sap concurrency cancel revoke CXER0260 precedence]
   [in-cx [# [empty] #]]
   [in-code [#
 [?let [= $f [?async [?sleep 10ms]]]
-  [?let [= $_ [?cancel $f]]
-    [?match [?await $f]
-      [case [err @code='cx-err:CXER0260'] [cancelled]]
-      [case [err @code='cx-err:CXER0271'] [revoked]]
-      [else [other]]]]]
+  [= $_ [?cancel $f]]
+  [?match [?await $f]
+    [case [err @code='cx-err:CXER0260'] [cancelled]]
+    [case [err @code='cx-err:CXER0271'] [revoked]]
+    [else [other]]]]
 #]]
   [out-text [# [cancelled] #]]
  ]
@@ -10829,6 +12883,470 @@ line two'
   [out-text [#
 'alpha
 beta'
+#]]
+ ]
+
+ [case id=program-cx-pi-001-include-preserved-in-element level=core
+  [tags cx-pi cx-directive include preserve issue-421 code-md-13]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[config [?cx include=defaults.cx] [a 1]]
+#]]
+  [out-text [#
+[config [?cx include=defaults.cx] [a 1]]
+#]]
+ ]
+
+ [case id=program-cx-pi-002-bare-config-pi-preserved level=core
+  [tags cx-pi cx-directive config preserve issue-421 grammar-34]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?cx version=1.0]
+#]]
+  [out-text [#
+[?cx version=1.0]
+#]]
+ ]
+
+ [case id=program-cx-pi-003-unknown-cx-key-preserved level=core
+  [tags cx-pi cx-directive unknown-key preserve issue-421 grammar-34]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?cx bogus=1]
+#]]
+  [out-text [#
+[?cx bogus=1]
+#]]
+ ]
+
+ [case id=program-cx-pi-004-unknown-directive-fails-closed level=core
+  [tags cx-pi unknown-directive CXER0100 fail-closed issue-421]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?notarealdirective]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ # ── #457 — `::T` ascription over auto-typed literal tokens ──────────────────
+ # Lexicon §7 [L50]/[L51]: an explicit ascription OVERRIDES §9 auto-typing —
+ # the ORIGINAL source token is what coerces to T, exactly as the data reading
+ # does (parser coerce_scalar_checked). Pre-fix the program reading auto-typed
+ # `0x…` to int (clamping over-i64 hex to i64 max) BEFORE the ascription
+ # applied, silently corrupting short-hex bytes values.
+
+ [case id=program-bytes-ascription-001-short-hex level=core
+  [tags type-annotation bytes hex issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[hash::bytes 0x3a7bd3e2]
+#]]
+  [out-text [#
+[hash::bytes 0x3a7bd3e2]
+#]]
+ ]
+
+ [case id=program-bytes-ascription-002-hex-8byte level=core
+  [tags type-annotation bytes hex overflow issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[magic::bytes 0x89504e470d0a1a0a]
+#]]
+  [out-text [#
+[magic::bytes 0x89504e470d0a1a0a]
+#]]
+ ]
+
+ [case id=program-bytes-ascription-003-long-hex level=core
+  [tags type-annotation bytes hex long issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[sig::bytes 0x3a7bd3e23a7bd3e23a]
+#]]
+  [out-text [#
+[sig::bytes 0x3a7bd3e23a7bd3e23a]
+#]]
+ ]
+
+ [case id=program-bytes-ascription-004-typed-array level=core
+  [tags type-annotation bytes hex typed-array issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[hashes::bytes[] 0x3a7bd3e2 0xdeadbeef]
+#]]
+  [out-text [#
+[hashes::bytes[] 0x3a7bd3e2 0xdeadbeef]
+#]]
+ ]
+
+ [case id=program-bytes-ascription-006-quoted-base64 level=core
+  [tags type-annotation bytes base64 issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[data::bytes 'SGVsbG8=']
+#]]
+  [out-text [#
+[data::bytes SGVsbG8=]
+#]]
+ ]
+
+ [case id=program-bytes-ascription-007-eq-stability level=core
+  [tags type-annotation bytes hex eq issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [h::bytes 0x3a7bd3e2]]
+  [?if [= $a [h::bytes 0x3a7bd3e2]] [then :same] [else :diff]]]
+#]]
+  [out-text [#
+:same
+#]]
+ ]
+
+ [case id=program-string-ascription-001-hex-token level=core
+  [tags type-annotation string hex issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[x::string 0x2a]
+#]]
+  [out-text [#
+[x::string '0x2a']
+#]]
+ ]
+
+ [case id=program-int-ascription-001-hex-overflow-err level=core
+  [tags type-annotation int hex overflow CXER0109 issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[x::int 0x89504e470d0a1a0a]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=program-float-ascription-001-hex-token-err level=core
+  [tags type-annotation float hex CXER0109 issue-457]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[x::float 0x2a]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [; #438 (2026-07-14): ONE canonical spelling for an empty item inside a
+    rendered sequence. The program reading preserves sequence rank (cxdm
+    §2 MODE FORK SEQ-NEST), so a sequence may legitimately hold empty
+    items — and each renders as the literal empty sequence, never as a
+    bare hole between commas. Pre-fix the multi-value/absence wrapper
+    (the empty result an empty comprehension or a no-branch conditional
+    produces) rendered as the EMPTY STRING in item position while a
+    literal empty-sequence item rendered as its paren form: two empties,
+    two spellings, and the emitted text did not re-parse as CX
+    (bijectivity, canonical.md §1). Post-fix every rendered collection
+    item uses the paren sequence form — the same convention element-body
+    position has used since program-conc-018. ]
+
+ [case id=program-render-seq-empty-item-001-one-spelling level=core
+  [tags render sequence empty absence bijective issue-438]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([?if false [then 1] [else ()]],
+ [?for [in $x ()] [yield $x]],
+ [?if true [then ()] [else 1]],
+ ())
+#]]
+  [out-text [#
+((), (), (), ())
+#]]
+ ]
+
+ [case id=program-render-seq-empty-item-002-nested level=core
+  [tags render sequence empty absence nested issue-438]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+(1, ([?for [in $x ()] [yield $x]], ()))
+#]]
+  [out-text [#
+(1, ((), ()))
+#]]
+ ]
+
+ [case id=program-render-seq-empty-item-003-single level=core
+  [tags render sequence empty absence single issue-438]
+  [; A 1-item sequence whose item is a COMPUTED empty spells exactly like
+     the literal — pre-fix this printed a bare paren pair that was really
+     an open paren, a hole, and a close paren. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([?for [in $x ()] [yield $x]])
+#]]
+  [out-text [#
+(())
+#]]
+ ]
+
+ [; ── #466 program-reading attribute ascription `name::T=value` ──────────
+    The PROGRAM element literal shares the D3 typed-attribute production
+    with the DATA reading (grammar [55]; lexicon [L50] — the annotation is
+    valid in attribute position and OVERRIDES §9 auto-typing). Pre-#466
+    every case below was a parse error ("unexpected token '::' in
+    expression position"). Coercion is checked (M-ERR-2/D-H): malformed →
+    CXER0109; array annotation → CXER0100 (scalar-only attributes, D2). ]
+
+ [case id=program-attr-ascription-001-sized-u16 level=core
+  [tags element attribute ascription sized-int issue-466]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [e n::u16=8080]] $x]
+#]]
+  [out-text [#
+[e n::u16=8080]
+#]]
+ ]
+
+ [case id=program-attr-ascription-002-int-hex-coerce level=core
+  [tags element attribute ascription int hex issue-466]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [e n::int=0x2a]] $x]
+#]]
+  [out-text [#
+[e n=42]
+#]]
+ ]
+
+ [case id=program-attr-ascription-003-bytes-src-verbatim level=core
+  [tags element attribute ascription bytes hex issue-466]
+  [; The ascription coerces the ORIGINAL token (ProgramLiteral.src), so
+     the hex spelling survives — the attr-position dual of #457. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [e h::bytes=0x3a7bd3e2]] $x]
+#]]
+  [out-text [#
+[e h::bytes=0x3a7bd3e2]
+#]]
+ ]
+
+ [case id=program-attr-ascription-004-computed-value level=core
+  [tags element attribute ascription binding issue-466]
+  [; A computed ($-bound) value coerces under the ascription too — a
+     program-only surface with no data-reading counterpart. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $p 8080] [e n::u16=$p]]
+#]]
+  [out-text [#
+[e n::u16=8080]
+#]]
+ ]
+
+ [case id=program-attr-ascription-005-computed-range-err level=core
+  [tags element attribute ascription error CXER0109 issue-466]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $p 99999] [e n::u8=$p]]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=program-attr-ascription-006-malformed-err level=core
+  [tags element attribute ascription error CXER0109 issue-466]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [e n::int=abc]] $x]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=program-attr-ascription-007-array-type-err level=core
+  [tags element attribute ascription array-type error CXER0100 issue-466]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [e n::int[]=1]] $x]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-attr-ascription-008-atom-typed-read level=core
+  [tags element attribute ascription atom cxpath issue-466]
+  [; The @n read produces the TYPED value (cxdm §2.4): an atom, equal to
+     :busy and not to the string "busy" (no atom↔string coercion, §5.1). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [e n::atom=busy]] [= $x@n :busy]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-attr-ascription-009-decimal-hex-err level=core
+  [tags element attribute ascription decimal hex error CXER0109 issue-466]
+  [; OWNER RULING (#466 item 3): hex under ::decimal REJECTS loudly
+     (CXER0109) — decimal is a base-10 value type; hex there is a
+     mistake (M-ERR-2 fail-loud). Supersedes the former verbatim pin;
+     same outcome in the data reading (extended.cxd 016g). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [e n::decimal=0x2a]] $x]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=program-attr-ascription-010-element-directive level=core
+  [tags element attribute ascription computed-name issue-466]
+  [; The [?element] body grammar is identical to the static element body
+     (grammar [127s]), so the typed attribute parses there too. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?element "svc" port::u16=8080 [child 1]]
+#]]
+  [out-text [#
+[svc port::u16=8080 [child 1]]
+#]]
+ ]
+
+ [case id=program-body-ascription-011-bigint-typed level=core
+  [tags element ascription bigint issue-466]
+  [; #466 item 4: the ascribed-body ::bigint item is bigint-typed in eval
+     (pre-fix it was a string-typed scalar rendering quoted while the
+     data reading rendered it bare). Payload is an over-i64 base-10
+     integer — the bigint carrier's home turf. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [x::bigint 123456789012345678901]] $x]
+#]]
+  [out-text [#
+[x::bigint 123456789012345678901]
+#]]
+ ]
+
+ [case id=program-body-ascription-011b-bigint-hex-err level=core
+  [tags element ascription bigint hex error CXER0109 issue-466]
+  [; OWNER RULING (#466 item 3): hex under ::bigint REJECTS loudly
+     (CXER0109) — bigint is a base-10 value type. Same outcome in the
+     data reading (extended.cxd 016h). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [x::bigint 0x2a]] $x]
+#]]
+  [out-err [#
+cx-err:CXER0109
+#]]
+ ]
+
+ [case id=program-body-ascription-012-period-typed level=core
+  [tags element ascription period issue-466]
+  [; #466 item 4: ::period items are period-typed in eval (pre-fix the
+     string-typed scalar rendered quoted 'P1Y'). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [x::period P1Y]] $x]
+#]]
+  [out-text [#
+[x::period P1Y]
+#]]
+ ]
+
+ [case id=program-body-ascription-013-decimal-underscores level=core
+  [tags element ascription decimal underscores issue-466]
+  [; #466 item 4: underscore group separators strip under ::decimal in
+     eval exactly as in the data reading (single coercion home). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [x::decimal 1_000.50]] $x]
+#]]
+  [out-text [#
+[x::decimal '1000.50']
+#]]
+ ]
+
+ [case id=program-body-ascription-014-atom-number-err level=core
+  [tags element ascription atom error CXER0109 issue-466]
+  [; #466 item 2: ::atom demands a denotable atom name ([L40]); a number
+     token fails loud in BOTH readings instead of minting an atom whose
+     render `:42` would not re-parse. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [x::atom 42]] $x]
+#]]
+  [out-err [#
+cx-err:CXER0109
 #]]
  ]
 ]

@@ -65,3 +65,33 @@ fn test_module_shaped_source_after_bracketed_comment() {
 		assert false, 'module-shaped source after bracketed comment failed: ${err}'
 	}
 }
+
+// ── #312 hazard semantics (the EBNF now spec's the balanced rule; these pin
+// the two documented hazards so the spec text and the engine can't drift):
+// a lone '[' in comment prose swallows to EOF → the comment never terminates
+// and the parse FAILS (never a silent partial parse).
+
+fn test_lone_open_bracket_in_comment_is_unterminated() {
+	src := '[; press the [ key to start ]\n[?def f scope=public pure [returns int] () [1]]\n'
+	if _ := cx.parse_program(src) {
+		assert false, 'lone [ in comment prose must leave the comment unterminated (parse error)'
+	} else {
+		// expected: unterminated comment surfaces as a parse error
+	}
+}
+
+// a lone ']' ends the comment at depth zero — the comment VALUE stops there,
+// and what follows must be valid on its own (here it is, so the parse holds
+// and the trailing form is real code, not comment prose).
+
+fn test_lone_close_bracket_ends_comment_at_depth_zero() {
+	src := '[;short] [p text]'
+	doc := cx.parse(src) or {
+		assert false, 'comment closed at depth-zero ] must leave a valid parse: ${err}'
+		return
+	}
+	assert doc.elements.len == 1, 'the form after the early-closed comment is CODE, got ${doc.elements.len} roots'
+	root := doc.elements[0]
+	assert root is cx.Element, 'expected an element root after the early-closed comment'
+	assert (root as cx.Element).name == 'p'
+}

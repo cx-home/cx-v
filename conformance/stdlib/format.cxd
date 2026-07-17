@@ -303,8 +303,12 @@ cx-err:CXER2702
 [?lib 'cx-stdlib/format']
 [$format:emit-stream [user] {}]
 #]]
+  [; #473: the chunk is a STRING whose content is the emitted text — the
+     sequence item quotes so the image re-parses as that string. The old
+     bare image re-parsed as a sequence holding the ELEMENT — a silent
+     string-to-node type flip through the text lane. ]
   [out-text [#
-([user])
+('[user]')
 #]]
  ]
 

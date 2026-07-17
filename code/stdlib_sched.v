@@ -1045,7 +1045,9 @@ fn sch_invoke(t &SchedTimer, mut env MatchEnv) {
 							cx.Attribute{ name: 'timer', value: cx.ScalarValue(t.name) },
 						]
 					}
-					ch.queue << tick
+					// Locked enqueue: the channel may be shared with
+					// concurrent [?worker] threads (eval.v ch_* discipline).
+					ch_enqueue(mut ch, tick)
 				}
 			}
 		}

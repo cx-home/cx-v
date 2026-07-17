@@ -714,7 +714,7 @@ cx-err:CXER1901
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[?let [= $a [$random:seed 42]] [?let [= $f [$random:next-float]] [and [>= $f 0.0] [< $f 1.0]]]]
+[?let [= $a [$random:seed 42]] [= $f [$random:next-float]] [and [>= $f 0.0] [< $f 1.0]]]
 #]]
   [out-text [#
 true
@@ -728,7 +728,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[?let [= $a [$random:seed 42]] [?let [= $b [$random:next-bool]] [or [= $b true] [= $b false]]]]
+[?let [= $a [$random:seed 42]] [= $b [$random:next-bool]] [or [= $b true] [= $b false]]]
 #]]
   [out-text [#
 true

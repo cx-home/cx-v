@@ -34,15 +34,78 @@ import crypto.blake3
 // A document valid under the DATA reading is re-emitted canonically. Input that
 // is not valid data but IS a valid PROGRAM (operator heads like `[* a b]`,
 // directives, `[$call]`s) is returned UNCHANGED — `cx fmt` no longer rejects
-// valid programs (#42), and thus also serves as a structure/bracket check. A
-// lossless canonical *program* formatter is follow-on work; until then programs
-// pass through. Input invalid under both readings surfaces the program error.
+// valid programs (#42), and thus also serves as a structure/bracket check.
+// A lossless canonical *program* formatter is follow-on work; until then
+// programs pass through. Input invalid under BOTH readings surfaces whichever
+// parser's diagnostic sits FURTHEST into the source (#391): the two readers
+// fail at unrelated places (the program tokenizer chokes on data-only markers
+// like `&anchor` long before the data parser's real offender), and the
+// further error is the one nearest the byte a human must actually fix.
 pub fn cx_text_fmt(input string) !string {
+	mut data_err_msg := ''
 	if doc := parse(input) {
 		return emit_cx(doc)
+	} else {
+		data_err_msg = err.msg()
 	}
-	parse_program(input)!
+	parse_program(input) or {
+		// Program intent wins outright: a token-level `[?directive` scan is
+		// string-aware (a directive mentioned inside a quoted string is one
+		// string token) and stays available when the DATA reading failed —
+		// the case the eval boundary's node-level scan (#11) cannot cover.
+		// `cx run` reports the program diagnostic for such files; `cx fmt`
+		// must agree (#391).
+		if program_tokens_carry_directive(input) {
+			return err
+		}
+		if data_error_is_further(data_err_msg, err) {
+			return error(data_err_msg)
+		}
+		return err
+	}
 	return input
+}
+
+// program_tokens_carry_directive reports whether the tokenized program
+// reading of `src` contains a REGISTERED `[?directive` opener — unambiguous
+// program intent. The lexer folds `[?name` into one directive_name token for
+// ANY identifier (membership is a parse-level concern), so the registered-
+// names check happens here: an unregistered `[?custom]` stays data-shaped
+// (prolog PIs, `[?cx …]` decls), exactly like the eval boundary's node-level
+// scan (#11). Lexes only; returns false when the source does not even
+// tokenize (nothing to claim intent from).
+fn program_tokens_carry_directive(src string) bool {
+	tokens := tokenize(src) or { return false }
+	for t in tokens {
+		if t.kind == .directive_name && t.text in directive_names {
+			return true
+		}
+	}
+	return false
+}
+
+// data_error_is_further reports whether the DATA parser's diagnostic (a
+// `line:col: message` string, parser.v make_error) points further into the
+// source than the PROGRAM parser's structured ParseError. Ties go to the
+// program error (the historical default). Unparseable positions → false.
+fn data_error_is_further(data_err_msg string, prog_err IError) bool {
+	head := data_err_msg.all_before(': ')
+	parts := head.split(':')
+	if parts.len != 2 {
+		return false
+	}
+	dl := parts[0].int()
+	dc := parts[1].int()
+	if dl <= 0 || dc <= 0 {
+		return false
+	}
+	if prog_err is ParseError {
+		return dl > prog_err.pos.line || (dl == prog_err.pos.line && dc > prog_err.pos.col)
+	}
+	if prog_err is LexError {
+		return dl > prog_err.pos.line || (dl == prog_err.pos.line && dc > prog_err.pos.col)
+	}
+	return false
 }
 
 // cx_text_canonical parses the input, strips presentation nodes,
@@ -53,11 +116,199 @@ pub fn cx_text_fmt(input string) !string {
 // §1.2.
 pub fn cx_text_canonical(input string) !string {
 	doc := parse(input)!
-	mut stripped := canonicalize_doc(doc)
+	resolved := resolve_anchors_doc(doc)!
+	mut stripped := canonicalize_doc(resolved)
 	canonicalize_namespaces(mut stripped)
 	canonicalize_ids(mut stripped)
 	canonicalize_collection_literals(mut stripped)
 	return emit_cx(stripped)
+}
+
+// resolve_anchors_doc performs the strict-canonical anchor resolution pass
+// (spec/core/canonical.md §2.8, the Resolved-AST step of ast.md): each
+// `[*name]` AliasNode is replaced by a deep copy of the anchored element's
+// resolved content; each `*name` MergeRef inlines the anchored element's
+// attributes and items into the host (host values override merged values by
+// attribute name); every `&name` AnchorDef is dropped. The result has no
+// anchor/merge/alias structure, so two documents that differ only in how they
+// share data (inline vs anchored/merged) have identical strict-canonical bytes
+// — i.e. the same Tier-1 identity (§1.4).
+//
+// Ordering (made explicit here; proposed for §2.8 in spec/02-working): merged
+// attributes form the base in anchor order, a colliding host attribute replaces
+// in place, host-only attributes append after; items are the anchor's resolved
+// items followed by the host's. A dangling MergeRef is a no-op strip (lint L003
+// is warn-level, abi.md), while a dangling Alias or any cyclic reference is a
+// hard error (no resolved form exists → no canonical form, §1.3).
+fn resolve_anchors_doc(doc Document) !Document {
+	mut table := map[string]Element{}
+	// One scan populates the anchor table AND reports whether any anchor / alias /
+	// merge structure exists at all. Both halves must run (|| would short-circuit
+	// the second and under-populate the table).
+	saw_prolog := collect_anchors(doc.prolog, mut table)
+	saw_elements := collect_anchors(doc.elements, mut table)
+	if !saw_prolog && !saw_elements {
+		return doc // no anchor/alias/merge anywhere → nothing to resolve (common case)
+	}
+	mut stack := []string{}
+	new_prolog := resolve_anchor_nodes(doc.prolog, table, mut stack)!
+	new_elements := resolve_anchor_nodes(doc.elements, table, mut stack)!
+	return Document{
+		prolog:   new_prolog
+		doctype:  doc.doctype
+		elements: new_elements
+	}
+}
+
+// collect_anchors walks the full tree (element bodies + collection values),
+// records every `&name` → its defining element (first definition wins, so a
+// duplicate anchor name is deterministic), and returns whether ANY anchor /
+// alias / merge structure was seen — so a doc with a stray alias-but-no-anchor
+// is still routed through resolution (where it errors as dangling) rather than
+// silently skipped.
+fn collect_anchors(nodes []Node, mut table map[string]Element) bool {
+	mut saw := false
+	for n in nodes {
+		match n {
+			Element {
+				if a := n.anchor() {
+					saw = true
+					if a !in table {
+						table[a] = n
+					}
+				}
+				if _ := n.merge() {
+					saw = true
+				}
+				if collect_anchors(n.items, mut table) {
+					saw = true
+				}
+			}
+			AliasNode {
+				saw = true
+			}
+			SequenceNode {
+				if collect_anchors(n.items, mut table) {
+					saw = true
+				}
+			}
+			ArrayNode {
+				if collect_anchors(n.items, mut table) {
+					saw = true
+				}
+			}
+			MapNode {
+				for e in n.entries {
+					if collect_anchors([e.value], mut table) {
+						saw = true
+					}
+				}
+			}
+			else {}
+		}
+	}
+	return saw
+}
+
+fn resolve_anchor_nodes(nodes []Node, table map[string]Element, mut stack []string) ![]Node {
+	mut out := []Node{cap: nodes.len}
+	for n in nodes {
+		out << resolve_anchor_node(n, table, mut stack)!
+	}
+	return out
+}
+
+fn resolve_anchor_node(n Node, table map[string]Element, mut stack []string) !Node {
+	match n {
+		AliasNode {
+			target := table[n.name] or {
+				return error('strict canonical: alias [*${n.name}] references no anchor &${n.name} (spec/core/canonical.md §2.8)')
+			}
+			if n.name in stack {
+				return error('strict canonical: cyclic anchor reference via [*${n.name}]')
+			}
+			stack << n.name
+			resolved := resolve_anchor_element(target, table, mut stack)!
+			stack.delete_last()
+			return Node(resolved)
+		}
+		Element {
+			return Node(resolve_anchor_element(n, table, mut stack)!)
+		}
+		SequenceNode {
+			mut c := n
+			c.items = resolve_anchor_nodes(n.items, table, mut stack)!
+			return Node(c)
+		}
+		ArrayNode {
+			mut c := n
+			c.items = resolve_anchor_nodes(n.items, table, mut stack)!
+			return Node(c)
+		}
+		MapNode {
+			mut entries := n.entries.clone()
+			for i := 0; i < entries.len; i++ {
+				entries[i].value = resolve_anchor_node(entries[i].value, table, mut stack)!
+			}
+			return Node(MapNode{
+				entries: entries
+			})
+		}
+		else {
+			return n
+		}
+	}
+}
+
+fn resolve_anchor_element(e Element, table map[string]Element, mut stack []string) !Element {
+	// Merge base: the resolved anchored element's attrs + items (if `*name` set and
+	// the anchor exists). A dangling merge inlines nothing (L003 warn-level).
+	mut base_attrs := []Attribute{}
+	mut base_items := []Node{}
+	if mname := e.merge() {
+		if target := table[mname] {
+			if mname in stack {
+				return error('strict canonical: cyclic merge reference via *${mname}')
+			}
+			stack << mname
+			rt := resolve_anchor_element(target, table, mut stack)!
+			stack.delete_last()
+			base_attrs = rt.attrs.clone()
+			base_items = rt.items.clone()
+		}
+	}
+	// Attributes: merged base, host overrides in place by name, host-only append.
+	mut out_attrs := base_attrs.clone()
+	for ha in e.attrs {
+		mut replaced := false
+		for i := 0; i < out_attrs.len; i++ {
+			if out_attrs[i].name == ha.name {
+				out_attrs[i] = ha
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			out_attrs << ha
+		}
+	}
+	// Items: merged base (already resolved) then the host's own resolved items.
+	mut out_items := base_items.clone()
+	for it in e.items {
+		out_items << resolve_anchor_node(it, table, mut stack)!
+	}
+	// Rebuild without anchor/merge meta (§2.8 drops both); id / data_type /
+	// body_ref are preserved exactly as canonicalize_node does, namespace meta is
+	// recomputed by canonicalize_namespaces downstream.
+	mut canon := new_element(e.name, ElementMeta{
+		data_type: e.data_type()
+		id:        e.id()
+		body_ref:  e.body_ref()
+	}, out_attrs, out_items)
+	if td := e.table_opt() {
+		canon = canon.with_table(td)
+	}
+	return canon
 }
 
 // cx_text_hash returns the lowercase hex SHA-256 of the strict

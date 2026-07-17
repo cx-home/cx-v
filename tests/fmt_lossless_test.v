@@ -1,6 +1,7 @@
 module main
 
 import cx
+import code
 
 // v0.8.0 — `cx fmt` lossless + idempotent contract (canonical.md §2.1).
 //
@@ -176,4 +177,67 @@ fn test_canonical_still_strips_comments() {
 	canon := cx.cx_text_canonical('[a 1]  # keep me') or { panic('canonical: ${err}') }
 	assert !canon.contains('# keep me'), 'canonical must strip comments: |${canon}|'
 	assert canon.contains('[a 1]')
+}
+
+// ── #400: fmt must not corrupt [?match] programs ─────────────────────────────
+// The program emitter used to render match clause children in the RETIRED
+// `:label` colon-slot spelling — a TEXT fixed point whose reparse held bare
+// atoms where the source held clauses, so `cx fmt` rewrote a valid runnable
+// match into text that failed evaluation. Two guards now hold:
+//   (1) emit_match_directive is parse_match_clause's exact inverse (clause
+//       surface out), and
+//   (2) fmt's meaning checks compare position-insensitive AST SHAPES, not
+//       just canonical text, so any future non-injective emitter output
+//       fails closed to the original text.
+
+fn test_fmt_match_keeps_clause_surface() {
+	src := '[?match :a [case :a :ok]]'
+	out := code.fmt_source(src) or { panic('fmt: ${err}') }
+	assert out.contains('[case :a :ok]'), 'clause surface lost: |${out}|'
+	assert !out.contains(':case'), 'retired colon-slot spelling leaked: |${out}|'
+}
+
+fn test_fmt_match_full_clause_vocabulary_round_trips() {
+	src := '[?match $x [case [user @age=$a] [where [>= $a 18]] "adult"] [when [= $x 1] "one"] [else "other"]]'
+	out := code.fmt_source(src) or { panic('fmt: ${err}') }
+	assert out == src, 'canonical match surface must be a fixed point: |${out}|'
+}
+
+fn test_fmt_match_output_still_evaluates() {
+	src := '[?match :a [case :a "hit"] [else "miss"]]'
+	out := code.fmt_source(src) or { panic('fmt: ${err}') }
+	res := code.eval_code('', out, 'text') or { panic('fmt output must evaluate: ${err}') }
+	assert res.contains('hit'), 'fmt changed the match result: |${res}|'
+}
+
+fn test_fmt_fails_closed_on_shape_changing_spelling() {
+	// The old colon-slot text parses (as bare atoms in argument position) but
+	// its canonical emit reparses to a DIFFERENT shape — fmt must return the
+	// input unchanged rather than bless the rewrite.
+	src := '[?match :a :case :a :yield :ok]'
+	out := code.fmt_source(src) or { panic('fmt: ${err}') }
+	assert out == src, 'shape-changing spelling must fail closed to the input: |${out}|'
+}
+
+// ── #455: fmt lane agreement when a [; comment ] child precedes an attr ─────
+// Comments are lexical trivia (lexicon.ebnf §1 [L3]); a bare `key=value` line
+// after a `[; … ]` child is the same ATTRIBUTE it is without the comment.
+// Pre-fix the data reader broke the attribute run at `[;`, so fmt_source's
+// meaning-preservation check failed and the CLI fell back to the faithful
+// PROGRAM formatter — dropping the comment and flipping every attr value to
+// quoted style (`env="dev"`). With one parse the data formatter round-trips.
+fn test_fmt_source_attr_after_comment_child_no_quote_flip() {
+	src := '[config
+ [; c ]
+ env=dev
+ [server host=localhost]
+]'
+	out := code.fmt_source(src) or { panic('fmt: ${err}') }
+	assert out.contains('[; c ]'), 'fmt must preserve the comment; got: ${out}'
+	assert out.contains('env=dev'), 'fmt must keep the bare attr spelling; got: ${out}'
+	assert !out.contains('env="dev"'), 'no quoting-style flip (#455); got: ${out}'
+	assert out.contains('host=localhost'), 'sibling attrs keep bare spelling; got: ${out}'
+	// Idempotence: the fixed doc is a fmt fixpoint.
+	twice := code.fmt_source(out) or { panic('fmt(fmt): ${err}') }
+	assert out == twice, 'fmt must be idempotent on the fixed doc'
 }

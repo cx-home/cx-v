@@ -33,8 +33,8 @@ fn test_agent_denied_without_dial() {
 fn test_deny_appends_nothing() {
 	prog := guestbook_setup +
 		"[?let [= \$rt [\$xap:run {tenant: \"demo\" components: (guestbook)}]]
-[?let [= \$x [\$xap:emit \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]
-  [\$xap:state \$rt \"/guestbook\"]]]"
+[= \$x [\$xap:emit \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]
+  [\$xap:state \$rt \"/guestbook\"]]"
 	out := code.eval_code('', prog, 'text') or {
 		assert false, 'eval failed: ${err}'
 		return
@@ -47,9 +47,9 @@ fn test_deny_appends_nothing() {
 fn test_agent_admitted_after_dial() {
 	prog := guestbook_setup +
 		"[?let [= \$rt [\$xap:run {tenant: \"demo\" components: (guestbook)}]]
-[?let [= \$d [\$xap:dial \$rt [from id=\"principal:dana\"] [to id=\"agent:greeter-1\"] [scope :guestbook] [setting :semi-auto]]]
-[?let [= \$b [\$xap:emit \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]
-  [\$xap:state \$rt \"/guestbook\"]]]]"
+[= \$d [\$xap:dial \$rt [from id=\"principal:dana\"] [to id=\"agent:greeter-1\"] [scope :guestbook] [setting :semi-auto]]]
+[= \$b [\$xap:emit \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]
+  [\$xap:state \$rt \"/guestbook\"]]"
 	out := code.eval_code('', prog, 'text') or {
 		assert false, 'eval failed: ${err}'
 		return
@@ -62,8 +62,8 @@ fn test_agent_admitted_after_dial() {
 fn test_principal_inherent_authority() {
 	prog := guestbook_setup +
 		"[?let [= \$rt [\$xap:run {tenant: \"demo\" components: (guestbook)}]]
-[?let [= \$h [\$xap:emit \$rt [do :sign [name \"Ada\"]] {actor: \"principal:dana\"}]]
-  [\$xap:state \$rt \"/guestbook\"]]]"
+[= \$h [\$xap:emit \$rt [do :sign [name \"Ada\"]] {actor: \"principal:dana\"}]]
+  [\$xap:state \$rt \"/guestbook\"]]"
 	out := code.eval_code('', prog, 'text') or {
 		assert false, 'eval failed: ${err}'
 		return
@@ -76,8 +76,8 @@ fn test_principal_inherent_authority() {
 fn test_why_allowed_revoke_flips() {
 	prog_allowed := guestbook_setup +
 		"[?let [= \$rt [\$xap:run {tenant: \"demo\" components: (guestbook)}]]
-[?let [= \$d [\$xap:dial \$rt [from id=\"principal:dana\"] [to id=\"agent:greeter-1\"] [scope :guestbook] [setting :semi-auto]]]
-  [\$xap:why-allowed \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]]"
+[= \$d [\$xap:dial \$rt [from id=\"principal:dana\"] [to id=\"agent:greeter-1\"] [scope :guestbook] [setting :semi-auto]]]
+  [\$xap:why-allowed \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]"
 	out_allowed := code.eval_code('', prog_allowed, 'text') or {
 		assert false, 'eval failed: ${err}'
 		return
@@ -86,9 +86,9 @@ fn test_why_allowed_revoke_flips() {
 
 	prog_revoked := guestbook_setup +
 		"[?let [= \$rt [\$xap:run {tenant: \"demo\" components: (guestbook)}]]
-[?let [= \$d [\$xap:dial \$rt [from id=\"principal:dana\"] [to id=\"agent:greeter-1\"] [scope :guestbook] [setting :semi-auto]]]
-[?let [= \$r [\$xap:revoke \$rt \"d-dial-guestbook\"]]
-  [\$xap:why-allowed \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]]]"
+[= \$d [\$xap:dial \$rt [from id=\"principal:dana\"] [to id=\"agent:greeter-1\"] [scope :guestbook] [setting :semi-auto]]]
+[= \$r [\$xap:revoke \$rt \"d-dial-guestbook\"]]
+  [\$xap:why-allowed \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]"
 	out_revoked := code.eval_code('', prog_revoked, 'text') or {
 		assert false, 'eval failed: ${err}'
 		return
@@ -100,9 +100,9 @@ fn test_why_allowed_revoke_flips() {
 fn test_emit_denied_after_revoke() {
 	prog := guestbook_setup +
 		"[?let [= \$rt [\$xap:run {tenant: \"demo\" components: (guestbook)}]]
-[?let [= \$d [\$xap:dial \$rt [from id=\"principal:dana\"] [to id=\"agent:greeter-1\"] [scope :guestbook] [setting :semi-auto]]]
-[?let [= \$r [\$xap:revoke \$rt \"d-dial-guestbook\"]]
-  [\$xap:emit \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]]]"
+[= \$d [\$xap:dial \$rt [from id=\"principal:dana\"] [to id=\"agent:greeter-1\"] [scope :guestbook] [setting :semi-auto]]]
+[= \$r [\$xap:revoke \$rt \"d-dial-guestbook\"]]
+  [\$xap:emit \$rt [do :sign [name \"Lin\"]] {actor: \"agent:greeter-1\"}]]"
 	out := code.eval_code('', prog, 'text') or {
 		assert false, 'eval failed: ${err}'
 		return

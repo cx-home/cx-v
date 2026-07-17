@@ -1036,4 +1036,299 @@
 [prose it's broken when binding's API uses Bob's name.]
 #]]
  ]
+
+ [case id=036-comment-brackets-balance level=core
+  [tags comment brackets]
+  [in-cx [#
+[;see [?let] and [$store:put-doc $s $d] before editing]
+[p text]
+#]]
+  [out-ast [#
+{
+  "type": "Document",
+  "prolog": [
+    {"type": "Comment", "value": "see [?let] and [$store:put-doc $s $d] before editing"}
+  ],
+  "elements": [
+    {
+      "type": "Element",
+      "name": "p",
+      "items": [{"type": "Text", "value": "text"}]
+    }
+  ]
+}
+#]]
+  [out-xml [#
+<!--see [?let] and [$store:put-doc $s $d] before editing-->
+<p>text</p>
+#]]
+  [out-cx [#
+[;see [?let] and [$store:put-doc $s $d] before editing]
+[p text]
+#]]
+ ]
+
+ [; D2 enforcement (lexicon.ebnf §10, graduated 2026-06-03; #391): an
+    attribute value is ALWAYS a single scalar. A paren-, brace-, or
+    bracket-opened value (other than the hash-raw string form) is the
+    REMOVED node-valued-attribute feature and must be a parse error. Before
+    this the parser neither accepted the removed feature cleanly nor
+    rejected it — a nested form like the listener case below silently
+    SCRAMBLED into a half-string, half-stray-child reading (fmt -w would
+    corrupt the file). Rich/list data goes in a child element; the string
+    escape hatch is the hash-raw form. ]
+
+ [case id=037-attr-value-paren-rejected level=core
+  [tags parser attribute scalar-only d2 issue-391]
+  [in-cx [#
+[m x=($a $b)]
+#]]
+  [out-err [#
+scalar-only
+#]]
+ ]
+
+ [case id=038-attr-value-map-rejected level=core
+  [tags parser attribute scalar-only d2 issue-391]
+  [in-cx [#
+[m x={k: 1}]
+#]]
+  [out-err [#
+scalar-only
+#]]
+ ]
+
+ [case id=039-attr-value-element-rejected level=core
+  [tags parser attribute scalar-only d2 issue-391]
+  [in-cx [#
+[listener fd=6 local=([addr host="a"] [addr host="b"])]
+#]]
+  [out-err [#
+scalar-only
+#]]
+ ]
+
+ [case id=040-attr-value-bracket-element-rejected level=core
+  [tags parser attribute scalar-only d2 issue-391]
+  [in-cx [#
+[m x=[q]]
+#]]
+  [out-err [#
+scalar-only
+#]]
+ ]
+
+ [case id=041-attr-value-directive-bracket-rejected level=core
+  [tags parser attribute scalar-only d2 issue-396 directive]
+  [in-cx [#
+[?cx custom=[q]]
+[root]
+#]]
+  [out-err [#
+scalar-only
+#]]
+ ]
+
+ [; #455 (2026-07-14): a [; comment ] child MUST NOT terminate the element
+    head's attribute run. Comments are lexical trivia (lexicon.ebnf §1
+    rules L2/L3: "skipped; never reach the parser") — a document with a
+    comment between attributes means exactly what it means without the
+    comment. Pre-fix the DATA reader broke the ElementMeta loop at every
+    bracket opener, comment openers included, so a bare key=value line
+    AFTER a comment child parsed as TEXT while the program reading (fmt,
+    json, eval) read the SAME line as an ATTRIBUTE — a lane split in the
+    strict-canonical (hash-bearing) form. Cases 042-044 pin the three #455
+    repros across out-cx (lossless), out-canonical (strict), and out-json. ]
+
+ [case id=042-attr-after-comment-child level=core
+  [tags parser attribute comment trivia issue-455]
+  [in-cx [#
+[config
+ [; c ]
+ env=dev
+ [server host=localhost]
+]
+#]]
+  [out-cx [#
+[config env=dev
+  [; c ]
+  [server host=localhost]
+]
+#]]
+  [out-canonical [#
+[config env=dev
+  [server host=localhost]
+]
+#]]
+  [out-json [#
+{"config": {"env": "dev", "server": {"host": "localhost"}}}
+#]]
+ ]
+
+ [case id=043-attr-before-comment-child level=core
+  [tags parser attribute comment trivia issue-455]
+  [in-cx [#
+[config
+ env=dev
+ [; c ]
+ [server host=localhost]
+]
+#]]
+  [out-cx [#
+[config env=dev
+  [; c ]
+  [server host=localhost]
+]
+#]]
+  [out-canonical [#
+[config env=dev
+  [server host=localhost]
+]
+#]]
+  [out-json [#
+{"config": {"env": "dev", "server": {"host": "localhost"}}}
+#]]
+ ]
+
+ [case id=044-attr-after-comment-no-siblings level=core
+  [tags parser attribute comment trivia issue-455]
+  [in-cx [#
+[config
+ [; c ]
+ env=dev
+]
+#]]
+  [out-cx [#
+[config env=dev]
+#]]
+  [; The comment does not survive the lossless emit HERE because a
+     child-free element emits inline, and inline positions have no
+     canonical home for a comment (pre-existing fmt policy, pinned in
+     fmt_lossless_test.v). The #455 point this case pins is the attr
+     reading: env=dev stays an ATTRIBUTE in every lane. ]
+  [out-canonical [#
+[config env=dev]
+#]]
+  [out-json [#
+{"config": {"env": "dev"}}
+#]]
+ ]
+
+ [; #469 (2026-07-15): the remaining comment-trivia zones after #455.
+    Comments are lexical trivia (lexicon.ebnf §1 rules L2/L3) — a document
+    means exactly what it means without them, in EVERY position. Cases
+    045-046 pin body-text inertness (a comment between bare text runs no
+    longer splits the run into separate canonical text nodes — the strict
+    canonical and hash are those of the comment-free document); case 047
+    pins ElementMeta line-comment retention (lossless fmt keeps `# …` in
+    that zone exactly as #455 keeps `[; … ]`); case 048 pins the pooled
+    table emitter re-emitting the comments the parser retains before a
+    `[table[…]]` head. ]
+
+ [case id=045-comment-between-text-runs level=core
+  [tags parser comment trivia text canonical issue-469]
+  [in-cx [#
+[config a [; c ] b]
+#]]
+  [; The comment interrupts a bare text run: the run reads as ONE text node
+     ("a b", exactly the comment-free reading). The comment is retained on
+     the element for fmt, but an inline emit has no canonical home for it
+     (the pre-existing policy case 044 pins), so out-cx is comment-free. ]
+  [out-cx [#
+[config a b]
+#]]
+  [out-canonical [#
+[config a b]
+#]]
+  [out-json [#
+{"config": "a b"}
+#]]
+ ]
+
+ [case id=046-line-comment-between-text-runs level=core
+  [tags parser comment trivia text canonical issue-469]
+  [in-cx [#
+[config a
+ # c
+ b
+]
+#]]
+  [out-cx [#
+[config a b]
+#]]
+  [out-canonical [#
+[config a b]
+#]]
+  [out-json [#
+{"config": "a b"}
+#]]
+ ]
+
+ [case id=047-line-comment-elementmeta-retained level=core
+  [tags parser comment trivia fmt lossless issue-469]
+  [in-cx [#
+[config
+ # c
+ [child v]
+]
+#]]
+  [; #455 retained `[; … ]` block comments in ElementMeta position; the
+     `# …` line-comment form gets the same retention (it was silently
+     discarded by the LOSSLESS formatter). Strict canonical still strips
+     it — the hash is comment-insensitive as before. ]
+  [out-cx [#
+[config
+  # c
+  [child v]
+]
+#]]
+  [out-canonical [#
+[config
+  [child v]
+]
+#]]
+  [out-json [#
+{"config": {"child": "v"}}
+#]]
+ ]
+
+ [case id=048-comment-before-table-head level=core
+  [tags parser comment trivia table fmt lossless issue-469]
+  [in-cx [#
+[users [; c ] [table[name age]]
+ alice 30
+ bob 25
+]
+#]]
+  [; #455 made the parser RETAIN a comment between the element name and the
+     `[table[…]]` head (it rides as an item on the pooled table element); the
+     pooled table emitter now re-emits it — each retained comment goes on
+     its own line between the name and the `[table[…]]` clause, a position
+     the reader collects back into the same item slot (fixpoint). ]
+  [out-cx [#
+[users
+  [; c ]
+  [table[name age]]
+  alice 30
+  bob 25
+]
+#]]
+  [out-canonical [#
+[users [table[name age]]
+  alice 30
+  bob 25
+]
+#]]
+ ]
+
+ [; #396 owner ruling 1b (2026-07-13): the pipe-block attr form is retired
+    too (extended.cxd 041 pins the rejection) — attributes have ONE value
+    channel, a scalar; the hash-raw string form is the sole bracket-opened
+    escape hatch, and it yields the CONTENT as a string in BOTH readers. ]
+
+ [; The hash-raw attr STRING form — the one legal bracket opener, D2's
+    escape hatch — keeps its coverage in extended.cxd ("attr-value hash-raw
+    direct"): raw islands close at the first hash-bracket terminator, so
+    that fixture needs the doubled-hash escaping convention and lives where
+    it already has it. ]
 ]

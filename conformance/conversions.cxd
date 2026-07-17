@@ -1,0 +1,414 @@
+[test-suite name=conversions
+  [doc [#
+# CX Conformance — conversions.md §0.2 typed-lane tests (#444 / #458)
+# Version: 1.0 — 2026-07-15
+# Covers: the per-type per-format rows of spec/conversions.md §0.2 —
+#   JSON default (idiomatic, lossy) and lossless (`cx:type` sidecar),
+#   YAML default (`!!cx:T` tags for atom/decimal/bigint, native dates,
+#   `!!binary` bytes) and lossless (+ sized / temporal tags),
+#   TOML default (lossy string images), and the YAML import inverses.
+#
+# Sections:
+#   in_cx  + out_json / out_json_lossless : default vs sidecar emit
+#   in_cx  + out_yaml / out_yaml_lossless : default vs tagged emit
+#   in_cx  + out_toml                     : lossy TOML row
+#   in_yaml + out_cx / out_json           : tag / native import inverses
+#
+# The JSON import inverse (sidecar consumption) lives in
+# vcx/tests/conversion_lossless_test.v — the canonical strict JSON parser is
+# registered from the `code` layer, which this cx-only runner cannot import.
+#]]
+
+ [case id=conv-001-typed-map-json-sidecar level=core
+  [tags conversion lossless json sidecar typing]
+  [title JSON lossless — typed map fields emit idiomatic values plus one cx:type sidecar]
+  [in-cx [#
+{status: :ok, when: 2023-01-15, at: 2023-01-15T10:00:00Z, wait: 1h30m, big: 99999999999999999999}
+#]]
+  [out-json [#
+{"status": ":ok", "when": "2023-01-15", "at": "2023-01-15T10:00:00Z", "wait": "1h30m", "big": "99999999999999999999"}
+#]]
+  [out-json-lossless [#
+{"status": ":ok", "when": "2023-01-15", "at": "2023-01-15T10:00:00Z", "wait": "1h30m", "big": "99999999999999999999", "cx:type": {"status": "atom", "when": "date", "at": "datetime", "wait": "duration", "big": "bigint"}}
+#]]
+ ]
+
+ [case id=conv-002-typed-map-yaml-tags level=core
+  [tags conversion lossless yaml tags typing]
+  [title YAML — atom/decimal/bigint tag in BOTH modes, dates stay native, temporal spans tag in lossless mode only]
+  [in-cx [#
+{status: :ok, when: 2023-01-15, at: 2023-01-15T10:00:00Z, wait: 1h30m, big: 99999999999999999999}
+#]]
+  [out-yaml [#
+status: !!cx:atom "ok"
+when: 2023-01-15
+at: 2023-01-15T10:00:00Z
+wait: 1h30m
+big: !!cx:bigint "99999999999999999999"
+#]]
+  [out-yaml-lossless [#
+status: !!cx:atom "ok"
+when: 2023-01-15
+at: 2023-01-15T10:00:00Z
+wait: !!cx:duration "1h30m"
+big: !!cx:bigint "99999999999999999999"
+#]]
+ ]
+
+ [case id=conv-003-decimal-element level=core
+  [tags conversion lossless decimal]
+  [title decimal — JSON string + sidecar, YAML !!cx:decimal in both modes, TOML lossy string]
+  [in-cx [#
+[score::decimal 3.14]
+#]]
+  [out-json [#
+{"score": "3.14"}
+#]]
+  [; lossless = the #475 `$tag` structure envelope (conversions.md §2.2.1):
+     the element shape survives, the decimal child rides the per-item
+     carrier / native tag ]
+  [out-json-lossless [#
+{"$tag": "score", "$type": "decimal", "$children": [{"cx:decimal": "3.14"}]}
+#]]
+  [out-yaml [#
+score: !!cx:decimal "3.14"
+#]]
+  [out-yaml-lossless [#
+$tag: score
+$type: decimal
+$children:
+  - !!cx:decimal "3.14"
+#]]
+  [out-toml [#
+score = "3.14"
+#]]
+ ]
+
+ [case id=conv-004-sized-numeric level=core
+  [tags conversion lossless sized typing]
+  [title sized numerics — native number by default; sidecar / !!cx:u16 tag preserve the width name in lossless mode]
+  [in-cx [#
+[port::u16 8080]
+#]]
+  [out-json [#
+{"port": 8080}
+#]]
+  [; lossless: the width name rides the envelope's `$type`; the child value
+     stays the native number in both lanes ]
+  [out-json-lossless [#
+{"$tag": "port", "$type": "u16", "$children": [8080]}
+#]]
+  [out-yaml [#
+port: 8080
+#]]
+  [out-yaml-lossless [#
+$tag: port
+$type: u16
+$children:
+  - 8080
+#]]
+  [out-toml [#
+port = 8080
+#]]
+ ]
+
+ [case id=conv-005-typed-attrs-sidecar level=core
+  [tags conversion lossless json attribute envelope]
+  [title typed attributes — the envelope's $attr-types names them (the JSON image of XML's cx:attr-types); values keep idiomatic images]
+  [in-cx [#
+[event kind=:click when::date=2023-01-15]
+#]]
+  [out-json-lossless [#
+{"$tag": "event", "$attrs": {"kind": "click", "when": "2023-01-15"}, "$attr-types": {"kind": "atom", "when": "date"}}
+#]]
+ ]
+
+ [case id=conv-006-yaml-tag-import-inverse level=core
+  [tags conversion lossless yaml tags import]
+  [title YAML import inverse — !!cx:T tags reconstruct the typed scalars (the exact lossless-emit output re-imports)]
+  [in-yaml [#
+status: !!cx:atom "ok"
+when: 2023-01-15
+at: 2023-01-15T10:00:00Z
+wait: !!cx:duration "1h30m"
+big: !!cx:bigint "99999999999999999999"
+score: !!cx:decimal "3.14"
+width: !!cx:u16 "8080"
+#]]
+  [; out-cx asserts the CX-text image for the kinds canonical text can carry
+    in map-value position; `score` re-renders through YAML (below) because a
+    decimal keeps its type in the VALUE MODEL but canonical map-value text has
+    no decimal spelling (it prints as 3.14 — same emitter limit as strings,
+    see the issue filed off this wave); `width` collapses to int per
+    scalar_type_from_name's documented sized-name collapse. ]
+  [out-cx [#
+{status: :ok, when: 2023-01-15, at: 2023-01-15T10:00:00Z, wait: 1h30m, big: 99999999999999999999, score: 3.14, width: 8080}
+#]]
+  [out-yaml [#
+status: !!cx:atom "ok"
+when: 2023-01-15
+at: 2023-01-15T10:00:00Z
+wait: 1h30m
+big: !!cx:bigint "99999999999999999999"
+score: !!cx:decimal "3.14"
+width: 8080
+#]]
+ ]
+
+ [case id=conv-007-yaml-native-autotyping level=core
+  [tags conversion yaml import typing]
+  [title YAML import auto-typing per §5.1 — dates/datetimes native, temporal spans, over-i64 bigint promotion; unknown tags preserved verbatim]
+  [in-yaml [#
+when: 2023-01-15
+at: 2023-01-15T10:00:00Z
+wait: 1h30m
+big: 99999999999999999999
+odd: !!python/none whatever
+#]]
+  [out-yaml [#
+when: 2023-01-15
+at: 2023-01-15T10:00:00Z
+wait: 1h30m
+big: !!cx:bigint "99999999999999999999"
+odd: "!!python/none whatever"
+#]]
+ ]
+
+ [case id=conv-008-string-shape-protection level=core
+  [tags conversion yaml emit quoting typing]
+  [title plain STRINGS shaped like typed scalars quote on YAML emit so the round trip keeps them strings]
+  [in-cx [#
+{s1: '2023-01-15', s2: '1h30m', s3: '99999999999999999999'}
+#]]
+  [out-yaml [#
+s1: "2023-01-15"
+s2: "1h30m"
+s3: "99999999999999999999"
+#]]
+  [out-json [#
+{"s1": "2023-01-15", "s2": "1h30m", "s3": "99999999999999999999"}
+#]]
+ ]
+
+ [; #458 — bytes text-lane contract (conversions.md §0.2 bytes row): JSON and
+    TOML default = base64 string ("no padding-stripping", §2.2); JSON lossless
+    adds the cx:type sidecar; YAML = string with !!binary tag (both modes);
+    MD = base64 text (one-way — MD has no type protocol, so the base64 text
+    re-imports as a plain string; import gap noted on the issue). The XML lane
+    (cx:type="bytes" + hex text) already conformed and is untouched.
+    0x48656c6c6f is "Hello" — base64 SGVsbG8=. ]
+
+ [case id=conv-010-bytes-default-lanes level=core
+  [tags conversion bytes base64]
+  [title bytes emit base64 across the text lanes — never the bare 0x hex image]
+  [in-cx [#
+[hash::bytes 0x48656c6c6f]
+#]]
+  [out-json [#
+{"hash": "SGVsbG8="}
+#]]
+  [out-json-lossless [#
+{"$tag": "hash", "$type": "bytes", "$children": [{"cx:bytes": "SGVsbG8="}]}
+#]]
+  [out-yaml [#
+hash: !!binary "SGVsbG8="
+#]]
+  [out-yaml-lossless [#
+$tag: hash
+$type: bytes
+$children:
+  - !!binary "SGVsbG8="
+#]]
+  [out-toml [#
+hash = "SGVsbG8="
+#]]
+  [out-md [#
+<!-- [hash SGVsbG8=] -->
+#]]
+ ]
+
+ [case id=conv-011-binary-tag-import-inverse level=core
+  [tags conversion bytes yaml import]
+  [title YAML !!binary import inverse — the tagged base64 payload reconstructs the bytes scalar (re-emits tagged)]
+  [in-yaml [#
+hash: !!binary "SGVsbG8="
+raw: !!binary bm90LXBhZGRlZA==
+#]]
+  [out-yaml [#
+hash: !!binary "SGVsbG8="
+raw: !!binary "bm90LXBhZGRlZA=="
+#]]
+  [out-json [#
+{"hash": "SGVsbG8=", "raw": "bm90LXBhZGRlZA=="}
+#]]
+ ]
+
+ [case id=conv-012-bytes-attr level=core
+  [tags conversion bytes attribute envelope]
+  [title bytes-typed attribute rides the same lanes ($attr-types names it in lossless JSON; value is base64)]
+  [in-cx [#
+[blob sum::bytes=0x00ff10]
+#]]
+  [out-json-lossless [#
+{"$tag": "blob", "$attrs": {"sum": "AP8Q"}, "$attr-types": {"sum": "bytes"}}
+#]]
+  [out-yaml [#
+blob:
+  sum: !!binary "AP8Q"
+#]]
+ ]
+
+ [case id=conv-009-table-payload-not-dropped level=core
+  [tags conversion lossless table envelope]
+  [title a :table payload rides $cols/$rows in the lossless lanes — header text, row order and cell types all recoverable (§2.2.1)]
+  [in-cx [#
+[users [table[name::string age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [out-json-lossless [#
+{"$tag": "users", "$type": "table", "$cols": ["name::string", "age::int"], "$rows": [["alice", 30], ["bob", 25]]}
+#]]
+  [out-yaml-lossless [#
+$tag: users
+$type: table
+$cols:
+  - name::string
+  - age::int
+$rows:
+  - - alice
+    - 30
+  - - bob
+    - 25
+#]]
+ ]
+
+ [; #473 — the CX-text mirror of conv-008: a STRING map value whose bare
+    image would auto-type (number / bool / null / atom / date / datetime /
+    duration / period / bigint shapes) quotes on CX emit, so the canonical
+    text re-imports the same string — no silent type flip through the CX
+    text lane. The imported YAML quoted scalars are plain strings in the
+    value model (conv-008 proved the YAML emit side; this pins the CX emit
+    side). Typed values are NOT affected: conv-006 keeps `wait: 1h30m` /
+    `big: 9…9` bare for genuine duration/bigint scalars. ]
+
+ [case id=conv-013-map-value-string-shape-cx-lane level=core
+  [tags conversion emit quoting typing cx issue-473]
+  [title type-shaped STRING map values quote on CX emit so the text lane re-imports them as strings]
+  [in-yaml [#
+i: "1937"
+f: "3.14"
+b: "true"
+n: "null"
+a: ":click"
+d: "2023-01-15"
+t: "2023-01-15T10:00:00Z"
+w: "1h30m"
+p: "3mo"
+big: "99999999999999999999"
+h: "0x1F"
+#]]
+  [out-cx [#
+{i: '1937', f: '3.14', b: 'true', n: 'null', a: ':click', d: '2023-01-15', t: '2023-01-15T10:00:00Z', w: '1h30m', p: '3mo', big: '99999999999999999999', h: '0x1F'}
+#]]
+  [out-json [#
+{"i": "1937", "f": "3.14", "b": "true", "n": "null", "a": ":click", "d": "2023-01-15", "t": "2023-01-15T10:00:00Z", "w": "1h30m", "p": "3mo", "big": "99999999999999999999", "h": "0x1F"}
+#]]
+ ]
+
+ [; #475 — the `$tag` structure envelope (conversions.md §2.2.1/§2.3.1):
+    element documents emit a reserved-key envelope in lossless mode so the
+    element-vs-map shape, attr-vs-child distinction, mixed-content order and
+    element metadata all survive CX→json|yaml→CX byte-identically
+    (strict-canonical eq). The JSON import inverse lives in
+    vcx/tests/conversion_lossless_test.v (the strict JSON parser is
+    registered from the `code` layer this runner cannot import); the YAML
+    import inverse is pinned here (conv-015/conv-016). The examples/*.cx
+    corpus round-trips end-to-end in
+    vcx/tests/lossless_examples_matrix_test.v. ]
+
+ [case id=conv-014-envelope-mixed-content level=core
+  [tags conversion lossless envelope mixed-content issue-475]
+  [title mixed content keeps its run order in the envelope — text runs are plain strings, inline elements nest]
+  [in-cx [#
+[p 'seen ' [em twice] ' today']
+#]]
+  [out-json-lossless [#
+{"$tag": "p", "$children": ["seen ", {"$tag": "em", "$children": ["twice"]}, " today"]}
+#]]
+  [out-yaml-lossless [#
+$tag: p
+$children:
+  - "seen "
+  - $tag: em
+    $children:
+      - twice
+  - " today"
+#]]
+ ]
+
+ [case id=conv-015-envelope-yaml-import-inverse level=core
+  [tags conversion lossless envelope yaml import issue-475]
+  [title YAML envelope import inverse — the exact lossless-emit output reconstructs the element document]
+  [in-yaml [#
+$tag: p
+$children:
+  - "seen "
+  - $tag: em
+    $children:
+      - twice
+  - " today"
+#]]
+  [out-cx [#
+[p 'seen ' [em twice] ' today']
+#]]
+ ]
+
+ [case id=conv-016-envelope-doc-meta-yaml-import level=core
+  [tags conversion lossless envelope yaml import meta issue-475]
+  [title $doc multi-root wrapper + $anchor/$merge meta reconstruct on YAML import]
+  [in-yaml [#
+$doc:
+  - $tag: defaults
+    $anchor: base
+    $attrs:
+      host: x
+  - $tag: dev
+    $merge: base
+#]]
+  [out-cx [#
+[defaults &base host=x]
+[dev *base]
+#]]
+ ]
+
+ [case id=conv-017-envelope-reserved-key-escape level=core
+  [tags conversion lossless envelope escaping issue-475]
+  [title a user map key that looks reserved escapes behind cx:k: on lossless emit and unescapes on import]
+  [in-cx [#
+[m {'$tag': weird}]
+#]]
+  [out-json-lossless [#
+{"$tag": "m", "$children": [{"cx:k:$tag": "weird"}]}
+#]]
+  [out-yaml-lossless [#
+$tag: m
+$children:
+  - cx:k:$tag: weird
+#]]
+ ]
+
+ [case id=conv-018-envelope-escape-yaml-import level=core
+  [tags conversion lossless envelope escaping yaml import issue-475]
+  [title cx:k: escape import inverse — the escaped key comes back as an ordinary map key and never reads as protocol]
+  [in-yaml [#
+$tag: m
+$children:
+  - cx:k:$tag: weird
+#]]
+  [out-cx [#
+[m {'$tag': weird}]
+#]]
+ ]
+]

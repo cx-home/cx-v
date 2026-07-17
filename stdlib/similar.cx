@@ -1,0 +1,71 @@
+[; cx-stdlib/similar — graded similarity & approximate matching.
+
+   Public surface per spec/std-lib/similar.md §4. The module owns the
+   backing of the core `~` operator, the predicate constructor, the
+   scorers, and the normalizers — NEVER the verbs (§3.1 "no parallel
+   namespace"): join / distinct / group-by / contains / sort / validate
+   go graded by being handed a similarity predicate, and `~` itself is
+   a core operator form, not a module function.
+
+   A similarity predicate is pure DATA — a [similar-predicate …] element
+   carrying scorer, normalizers, per-field weights, decision cuts,
+   tolerance/scale, and the known-verdicts resolutions tier (§5.4).
+   Scoring bottoms out in native primitives (vcx/code/stdlib_similar.v):
+   Jaro-Winkler / Levenshtein / Damerau-Levenshtein / token & phonetic
+   scorers, the recursive value-kind comparison, and the Hungarian
+   optimal-assignment join selection are not expressible in pure CX.
+   The tokenization/stemming pipeline is DELEGATED to ft (§4.3).
+   Errors are values (CXER4900/CXER4901, §7).
+
+   NOTE: this file and the const in vcx/code/stdlib_similar.v are the
+   same source — edit both. ]
+
+[; §4.1 the predicate constructor — opts: {score, normalize, weights,
+   decide, tolerance, ordered, resolutions} ]
+[?def predicate scope=public pure [returns element] ($opts::map {}) [$similar-predicate $opts]]
+
+[; §4.2 direct scorer access — raw score in [0,1], no banding ]
+[?def score scope=public pure [returns float] ($scorer::atom $a::any $b::any) [$similar-score $scorer $a $b]]
+
+[; §3.1 sort-row key spec: rank by nearness to a reference ]
+[?def similarity-to scope=public pure [returns element] ($x::any $pred::any {}) [$similar-similarity-to $x $pred]]
+
+[; result accessors — score-of is a pure CX attr read; band-of is
+   native so the band comes back as a true ATOM (attr reads are
+   string-typed) ]
+[?def score-of scope=public pure [returns float] ($r::element) $r@score]
+[?def band-of  scope=public pure [returns any]   ($r::element) [$similar-band-of $r]]
+
+[; co-located docs ]
+[module-doc name=similar
+  [scope """Graded comparison as a generalization of exact equality: where = returns a boolean, the core ~ operator returns a score in [0,1] plus evidence, and a decision policy maps the score to :match / :review / :no-match bands. This module owns the operator's backing — the predicate constructor, string/phonetic/token/numeric/temporal scorers, and normalizers delegated to ft's tokenization pipeline. Constructs go graded by being handed a predicate: join, distinct, group-by, contains, sort, and validate accept one in their options map; a [similar …] result reads truthy in a boolean position iff band=:match. Thresholds are caller-supplied and never baked in."""]]
+[fn-doc name=predicate scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Build a similarity-predicate value from an options map: scorer, normalizers, per-field weights, decision cuts, tolerance/scale, and known-verdict resolutions."""]
+  [example [code """[?lib 'cx-stdlib/similar']
+[$similar:score-of [~ "acme corp" "corp acme" [$similar:predicate {score: :token-set}]]]"""] [expect """1.0"""]]
+]
+[fn-doc name=score scope=public purity=pure
+  [sig """-> float"""]
+  [summary """Apply one named scorer directly to a pair of values and return the raw score in [0,1], with no banding."""]
+  [example [code """[?lib 'cx-stdlib/similar']
+[$similar:score :levenshtein "flaw" "lawn"]"""] [expect """0.5"""]]
+]
+[fn-doc name=similarity-to scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Build the sort key spec that ranks values by nearness to a reference — similarity is relational, so sort requires one (nearest first)."""]
+  [example [code """[?lib 'cx-stdlib/similar']
+[$sort ("acme corp", "globex", "acme inc") {by: [$similar:similarity-to "acme"]}]"""] [expect """('acme inc', 'acme corp', 'globex')"""]]
+]
+[fn-doc name=score-of scope=public purity=pure
+  [sig """-> float"""]
+  [summary """Read the score off a [similar …] comparison report."""]
+  [example [code """[?lib 'cx-stdlib/similar']
+[$similar:score-of [~ "acme" "acme"]]"""] [expect """1.0"""]]
+]
+[fn-doc name=band-of scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Read the decision band off a [similar …] comparison report — :match, :review, or :no-match (absent for a predicate built with no decide policy)."""]
+  [example [code """[?lib 'cx-stdlib/similar']
+[$similar:band-of [~ "acme" "acme"]]"""] [expect """:match"""]]
+]

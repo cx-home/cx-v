@@ -4,11 +4,14 @@
 // cx table info FILE — column count / row count / types / size
 // cx table dump FILE --to=cx — round-trip CX → canonical CX (Table API)
 // cx table load FILE --to=cx — symmetric inverse (currently same as dump)
-// cx table dump FILE --to=parquet — errors "binding does not ship Parquet
-// adapter"
-// cx table dump FILE --to=arrow — errors with same deferral message
+// cx table dump FILE --to=parquet — native Parquet via libcx_arrow (dlopen)
+// cx table dump FILE --to=arrow — native Arrow IPC via libcx_arrow (dlopen)
+// cx table load FILE --from=parquet|arrow — native import (symmetric)
 //
-// Parquet / Arrow output goes live once libcx_arrow Phase C lands.
+// Parquet / Arrow I/O is live (libcx_arrow Phase C, -d cx_arrow_files). The CLI
+// stays Arrow-free and dlopens libcx_arrow only when those formats are used;
+// see table_arrow.v. Requires libcx_arrow built with -d cx_arrow_files (and the
+// user-supplied libarrow/libparquet) — otherwise a clear "rebuild" error.
 
 module main
 
@@ -175,46 +178,29 @@ fn run_table_dump(args []string) {
 	}
 }
 
-// run_table_dump_parquet writes the supplied tables to a Parquet file
-// at o.output by shelling out to the Python binding's cxlib.parquet
-// helper. Requires pyarrow (installed via `pip install cxlib[parquet]`).
-// The shell-out keeps the V CLI free of native Parquet linkage while
-// preserving the cross-binding canonical-bytes contract (X8) — Python
-// is the reference Parquet writer.
+// run_table_dump_parquet writes the supplied tables to a Parquet file at
+// o.output natively via libcx_arrow (no Python/pyarrow). Tables are serialised
+// to CXCol data_bin, then handed to the dlopen'd native writer.
 fn run_table_dump_parquet(o &TableOpts, tables []cx.Table) ! {
 	out_path := if o.output != '' { o.output } else { 'out.parquet' }
-	// Serialise tables to CXCol chunked-table bytes, write to a temp
-	// file, then call: python3 -m cxlib.parquet dump TMP_CXCol OUT.parquet
-	mut tmp := os.join_path(os.temp_dir(), 'cx_table_dump_${os.getpid()}.cxcol')
-	defer { os.rm(tmp) or {} }
-	// Emit chunked-table CXCol containing all tables (one per chunk).
-	mut combined := ''
-	for t in tables { combined += t.to_cx() }
-	doc := cx.parse(combined)!
-	cxcol_bytes := cx.emit_data_bin_chunked(doc, cx.ChunkedEmitOptions{})!
-	os.write_file_array(tmp, cxcol_bytes)!
-	result := os.execute('python3 -m cxlib.parquet dump ${tmp} ${out_path}')
-	if result.exit_code != 0 {
-		return error('Python parquet helper failed (exit ${result.exit_code}): ${result.output}')
-	}
+	native_arrow_write('parquet', table_cxcol_bytes(tables)!, out_path)!
 }
 
-// run_table_dump_arrow writes the supplied tables to an Arrow IPC file
-// at o.output by shelling out to the Python binding's cxlib.arrow
-// helper (which delegates to pyarrow's IPC writer).
+// run_table_dump_arrow writes the supplied tables to an Arrow IPC file at
+// o.output natively via libcx_arrow (no Python/pyarrow).
 fn run_table_dump_arrow(o &TableOpts, tables []cx.Table) ! {
 	out_path := if o.output != '' { o.output } else { 'out.arrow' }
-	mut tmp := os.join_path(os.temp_dir(), 'cx_table_dump_${os.getpid()}.cxcol')
-	defer { os.rm(tmp) or {} }
+	native_arrow_write('arrow', table_cxcol_bytes(tables)!, out_path)!
+}
+
+// table_cxcol_bytes serialises tables to CXCol chunked-table data_bin bytes.
+fn table_cxcol_bytes(tables []cx.Table) ![]u8 {
 	mut combined := ''
-	for t in tables { combined += t.to_cx() }
-	doc := cx.parse(combined)!
-	cxcol_bytes := cx.emit_data_bin_chunked(doc, cx.ChunkedEmitOptions{})!
-	os.write_file_array(tmp, cxcol_bytes)!
-	result := os.execute('python3 -m cxlib.arrow dump ${tmp} ${out_path}')
-	if result.exit_code != 0 {
-		return error('Python arrow helper failed (exit ${result.exit_code}): ${result.output}')
+	for t in tables {
+		combined += t.to_cx()
 	}
+	doc := cx.parse(combined)!
+	return cx.emit_data_bin_chunked(doc, cx.ChunkedEmitOptions{})!
 }
 
 // ── load ─────────────────────────────────────────────────────────────────────
@@ -256,36 +242,20 @@ fn run_table_load(args []string) {
 	}
 }
 
-// X2: load a Parquet file via the Python binding's
-// cxlib.parquet helper. Reads framed CXCol bytes back from a temp
-// file, then re-emits as canonical CX text per the existing dump
-// pattern.
+// run_table_load_parquet reads a Parquet file natively via libcx_arrow (no
+// Python/pyarrow) into CXCol data_bin, then re-emits as canonical CX text.
 fn run_table_load_parquet(o &TableOpts) ! {
 	if o.input_file == '' {
 		return error('cx table load --from=parquet requires an input FILE')
 	}
-	mut tmp := os.join_path(os.temp_dir(), 'cx_table_load_${os.getpid()}.cxcol')
-	defer { os.rm(tmp) or {} }
-	result := os.execute('python3 -m cxlib.parquet load ${o.input_file} ${tmp}')
-	if result.exit_code != 0 {
-		return error('Python parquet helper failed (exit ${result.exit_code}): ${result.output}')
-	}
-	framed := os.read_bytes(tmp)!
-	cx_text := cx.from_data_bin(framed)!
-	write_output_text(o, cx_text)
+	framed := native_arrow_read('parquet', o.input_file)!
+	write_output_text(o, cx.from_data_bin(framed)!)
 }
 
 fn run_table_load_arrow(o &TableOpts) ! {
 	if o.input_file == '' {
 		return error('cx table load --from=arrow requires an input FILE')
 	}
-	mut tmp := os.join_path(os.temp_dir(), 'cx_table_load_${os.getpid()}.cxcol')
-	defer { os.rm(tmp) or {} }
-	result := os.execute('python3 -m cxlib.arrow load ${o.input_file} ${tmp}')
-	if result.exit_code != 0 {
-		return error('Python arrow helper failed (exit ${result.exit_code}): ${result.output}')
-	}
-	framed := os.read_bytes(tmp)!
-	cx_text := cx.from_data_bin(framed)!
-	write_output_text(o, cx_text)
+	framed := native_arrow_read('arrow', o.input_file)!
+	write_output_text(o, cx.from_data_bin(framed)!)
 }

@@ -1,0 +1,381 @@
+[test-suite name=yaml
+  [doc [#
+# CX Conformance — YAML import (YAML → CX) tests
+# Version: 1.0 — 2026-07-14
+# Covers: spec/conversions.md §5.1 (YAML → CX) block-structure import.
+#
+# Filed from #412: a block sequence of mappings (`- k: v` items with
+# continuation lines) must import each item as a complete Map — not collapse
+# the first line to a scalar and hoist the continuation keys onto the parent.
+#
+# Sections:
+#   in_yaml + out_cx   : parse YAML, emit canonical CX (lossless value model)
+#   in_yaml + out_json : parse YAML, emit semantic JSON (typing assertions)
+#   in_yaml + out_yaml : parse YAML, re-emit YAML (yaml_to_yaml normalization)
+#]]
+
+ [case id=yaml-001-books-seq-of-maps level=core
+  [tags yaml import sequence mapping]
+  [title examples/books.yaml verbatim — block seq of 3 four-key mappings (#412 repro)]
+  [in-yaml [#
+library:
+  book:
+  - author: J.R.R. Tolkien
+    available: true
+    title: The Hobbit
+    year: 1937
+  - author: Frank Herbert
+    available: false
+    title: Dune
+    year: 1965
+  - author: William Gibson
+    available: true
+    title: Neuromancer
+    year: 1984
+#]]
+  [out-cx [#
+{library: {book: [{author: J.R.R. Tolkien, available: true, title: The Hobbit, year: 1937}, {author: Frank Herbert, available: false, title: Dune, year: 1965}, {author: William Gibson, available: true, title: Neuromancer, year: 1984}]}}
+#]]
+ ]
+
+ [case id=yaml-002-root-seq-of-maps level=core
+  [tags yaml import sequence mapping]
+  [title document root is a block seq of multi-key mappings]
+  [in-yaml [#
+- a: 1
+  b: 2
+- a: 3
+  b: 4
+#]]
+  [out-cx [#
+[{a: 1, b: 2}, {a: 3, b: 4}]
+#]]
+ ]
+
+ [case id=yaml-003-seq-consumption-boundary level=core
+  [tags yaml import sequence mapping]
+  [title seq items at key indent; following sibling key must not be swallowed]
+  [in-yaml [#
+items:
+- name: x
+  n: 1
+- name: y
+  n: 2
+count: 2
+#]]
+  [out-cx [#
+{items: [{name: x, n: 1}, {name: y, n: 2}], count: 2}
+#]]
+ ]
+
+ [case id=yaml-004-nested-seq-of-maps level=core
+  [tags yaml import sequence mapping nested]
+  [title mapping items containing their own block sequences]
+  [in-yaml [#
+teams:
+  - name: red
+    members:
+      - ann
+      - bob
+  - name: blue
+    members:
+      - cid
+#]]
+  [out-cx [#
+{teams: [{name: red, members: ['ann', 'bob']}, {name: blue, members: ['cid']}]}
+#]]
+ ]
+
+ [case id=yaml-005-mixed-seq level=core
+  [tags yaml import sequence mixed]
+  [title seq mixing scalars, a compact mapping, and a nested seq]
+  [in-yaml [#
+- plain
+- 42
+- k: v
+- - 1
+  - 2
+#]]
+  [out-cx [#
+['plain', 42, {k: v}, [1, 2]]
+#]]
+ ]
+
+ [case id=yaml-006-seq-of-seqs level=core
+  [tags yaml import sequence nested]
+  [title block seq whose items are block seqs (`- - x`)]
+  [in-yaml [#
+- - a
+  - b
+- - c
+#]]
+  [out-cx [#
+[['a', 'b'], ['c']]
+#]]
+ ]
+
+ [case id=yaml-007-map-of-seqs level=core
+  [tags yaml import mapping sequence]
+  [title mapping of block seqs (regression guard — worked before the fix)]
+  [in-yaml [#
+a:
+  - 1
+  - 2
+b:
+  - 3
+#]]
+  [out-cx [#
+{a: [1, 2], b: [3]}
+#]]
+ ]
+
+ [case id=yaml-008-deep-nesting level=core
+  [tags yaml import sequence mapping nested]
+  [title seq of maps of seqs of maps]
+  [in-yaml [#
+envs:
+  - name: dev
+    services:
+      - id: api
+        port: 8080
+      - id: web
+        port: 3000
+  - name: prod
+    services:
+      - id: api
+        port: 80
+#]]
+  [out-cx [#
+{envs: [{name: dev, services: [{id: api, port: 8080}, {id: web, port: 3000}]}, {name: prod, services: [{id: api, port: 80}]}]}
+#]]
+ ]
+
+ [case id=yaml-009-quoted-keys level=core
+  [tags yaml import mapping quoting]
+  [title quoted mapping keys unquote (the CX→YAML emitter quotes keys, so roundtrip depends on this)]
+  [in-yaml [#
+"items": 1
+'two words': 2
+plain: 3
+#]]
+  [out-cx [#
+{items: 1, 'two words': 2, plain: 3}
+#]]
+ ]
+
+ [case id=yaml-010-quoted-scalar-colon level=core
+  [tags yaml import quoting scalar]
+  [title quoted scalars containing colon-space stay scalars — as values and as seq items]
+  [in-yaml [#
+k: 'a: b'
+seq:
+  - 'x: y'
+  - "p: q"
+#]]
+  [out-json [#
+{"k": "a: b", "seq": ["x: y", "p: q"]}
+#]]
+ ]
+
+ [case id=yaml-011-empty-flow-containers level=core
+  [tags yaml import flow empty]
+  [title empty flow containers import as empty Array / Map — the exact empty-container output of the CX-to-YAML emitter]
+  [in-yaml [#
+a: []
+b: {}
+nested:
+  - []
+  - {}
+#]]
+  [out-cx [#
+{a: [], b: {}, nested: [[], {}]}
+#]]
+  [out-json [#
+{"a": [], "b": {}, "nested": [[], {}]}
+#]]
+ ]
+
+ [case id=yaml-012-bare-dash-items level=core
+  [tags yaml import sequence]
+  [title bare `-` items with the mapping body on following lines]
+  [in-yaml [#
+-
+  a: 1
+-
+  b: 2
+#]]
+  [out-cx [#
+[{a: 1}, {b: 2}]
+#]]
+ ]
+
+ [case id=yaml-013-seq-item-null-key level=core
+  [tags yaml import sequence mapping null]
+  [title compact mapping item whose first key has no value]
+  [in-yaml [#
+- author:
+  title: T
+#]]
+  [out-json [#
+[{"author": null, "title": "T"}]
+#]]
+ ]
+
+ [case id=yaml-014-seq-of-maps-roundtrip level=core
+  [tags yaml import roundtrip sequence mapping]
+  [title yaml_to_yaml — a block seq of mappings survives import + re-emit]
+  [in-yaml [#
+rows:
+  - id: 1
+    mark: a
+  - id: 2
+    mark: b
+#]]
+  [out-yaml [#
+rows:
+  - id: 1
+    mark: a
+  - id: 2
+    mark: b
+#]]
+ ]
+
+ [case id=yaml-015-empty-container-roundtrip level=core
+  [tags yaml import roundtrip flow empty]
+  [title yaml_to_yaml — empty containers re-emit inline (not dangling on their own line)]
+  [in-yaml [#
+a: []
+b: {}
+#]]
+  [out-yaml [#
+a: []
+b: {}
+#]]
+ ]
+
+ [case id=yaml-016-scalar-typing-in-seq level=core
+  [tags yaml import sequence typing]
+  [title scalar auto-typing inside compact mapping items]
+  [in-yaml [#
+- flag: true
+  ratio: 1.5
+  none: null
+  count: 7
+#]]
+  [out-json [#
+[{"flag": true, "ratio": 1.5, "none": null, "count": 7}]
+#]]
+ ]
+
+ [; #440 — non-empty flow-style collections import as real Arrays / Maps
+    (conversions.md §5.1: sequence→Array, mapping→Map, style-independent).
+    Before the fix they imported as literal strings — silent mistyping. ]
+
+ [case id=yaml-017-flow-seq-and-map level=core
+  [tags yaml import flow sequence mapping]
+  [title the issue-440 repro — non-empty flow seq / flow map as mapping values]
+  [in-yaml [#
+a: [1, 2]
+m: {k: v}
+#]]
+  [out-cx [#
+{a: [1, 2], m: {k: v}}
+#]]
+  [out-json [#
+{"a": [1, 2], "m": {"k": "v"}}
+#]]
+ ]
+
+ [case id=yaml-018-flow-nested-mixed level=core
+  [tags yaml import flow nested typing]
+  [title nested flow collections with mixed member types]
+  [in-yaml [#
+x: [1, [2, 3], {k: [4]}]
+top: {m: {n: 5}, l: [true, null, 1.5]}
+#]]
+  [out-cx [#
+{x: [1, [2, 3], {k: [4]}], top: {m: {n: 5}, l: [true, null, 1.5]}}
+#]]
+ ]
+
+ [case id=yaml-019-flow-quoted-members level=core
+  [tags yaml import flow quoting]
+  [title quoted flow members — commas, colons and brackets inside quotes are content]
+  [in-yaml [#
+q: ["a, b", 'c: d', "e]f", plain]
+keys: {"k 1": 1, 'two words': 2}
+#]]
+  [out-cx [#
+{q: ['a, b', 'c: d', 'e]f', 'plain'], keys: {'k 1': 1, 'two words': 2}}
+#]]
+ ]
+
+ [case id=yaml-020-flow-in-block-positions level=core
+  [tags yaml import flow sequence]
+  [title flow collections as block-seq items and as the document root]
+  [in-yaml [#
+- [1, 2]
+- {k: v}
+#]]
+  [out-cx [#
+[[1, 2], {k: v}]
+#]]
+ ]
+
+ [case id=yaml-021-flow-root-map level=core
+  [tags yaml import flow mapping]
+  [title a document whose root line IS a flow map — not misread as a block mapping with a brace-prefixed key]
+  [in-yaml [#
+{k: v, n: 2}
+#]]
+  [out-cx [#
+{k: v, n: 2}
+#]]
+ ]
+
+ [; #441 — the CX→YAML emitter quotes a string only when its plain form would
+    re-read as another type. Before the fix a swallowed atof64 error quoted
+    EVERY string containing `.` or `e` ("The Hobbit", "year"), and `E` was not
+    checked at all (a string `1E5` emitted bare and re-imported as a float). ]
+
+ [case id=yaml-023-emit-idiomatic-quoting level=core
+  [tags yaml emit quoting]
+  [title strings containing dots or the letter e emit bare when they cannot re-read as numbers]
+  [in-cx [#
+{library: {title: The Hobbit, year: 1937, home: hello.world, ip: 0.0.0.0}}
+#]]
+  [out-yaml [#
+library:
+  title: The Hobbit
+  year: 1937
+  home: hello.world
+  ip: 0.0.0.0
+#]]
+ ]
+
+ [case id=yaml-024-emit-number-shaped-strings-quoted level=core
+  [tags yaml emit quoting typing]
+  [title number-shaped STRINGS stay quoted (including uppercase-E exponents); non-numbers with dots stay bare]
+  [in-cx [#
+{n: '1937', f: '1E5', pi: '3.14', v: 3.14.15}
+#]]
+  [out-yaml [#
+n: "1937"
+f: "1E5"
+pi: "3.14"
+v: 3.14.15
+#]]
+ ]
+
+ [case id=yaml-022-flow-malformed-fallback level=core
+  [tags yaml import flow fallback]
+  [title malformed flow (unterminated bracket) falls back to a plain scalar, siblings unaffected]
+  [in-yaml [#
+bad: [1, 2 extra
+ok: [3]
+#]]
+  [out-json [#
+{"bad": "[1, 2 extra", "ok": [3]}
+#]]
+ ]
+]

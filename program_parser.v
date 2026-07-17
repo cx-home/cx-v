@@ -35,6 +35,13 @@ pub:
 	// boundary's data-fallback (#11) consults this: an unknown directive is
 	// program intent and MUST stay fail-loud, never silently re-read as data.
 	unknown_directive bool
+	// `program_committed` marks a syntax error the parser hit AFTER it had
+	// unambiguously committed to a program construct — e.g. an infix comparison
+	// inside a recognized `[where …]` clause (#18). Like `unknown_directive`,
+	// this is program intent, so the eval boundary's data-fallback MUST NOT
+	// silently re-read the source as data; the helpful diagnostic (pointing at
+	// the prefix form) must surface instead of a data echo.
+	program_committed bool
 }
 
 pub fn (e ParseError) msg() string {
@@ -210,20 +217,17 @@ fn (mut p ProgramParser) parse_atom() !ProgramNode {
 		}
 		.dollar {
 			binding := p.parse_binding_with_path()!
-			// Call on a path-less binding: `$f(x)`. The binding's name
-			// resolves to a callable at evaluation time. Path-bearing
-			// binding-calls (`$obj/method(x)`) are not yet supported
-			// at the parser level; spec/code.md §6.3 leaves the surface
-			// underspecified.
-			//
-			// the `(` must be byte-adjacent to the binding to
-			// read as a paren-call; a space-separated `(` is a separate
-			// operand (a sequence literal). Without this, `[= $xs (1,2,3)]`
-			// is mis-parsed as `[= $xs(1,2,3)]` (a 1-item `=` element with a
-			// paren-call) and `binding_clause` rejects it.
+			// Paren-call on a binding `$f(x)` is RETIRED — there is no
+			// paren-call anywhere in the language (code.md §6.3); the
+			// call surface is head-dispatch `[$f x]`. The byte-adjacency
+			// test keeps `[= $xs (1,2,3)]` (space-separated sequence
+			// operand) parsing as before.
 			if p.peek_kind() == .lparen && binding.path.len == 0
 			   && p.cur_adjacent_to_prev() {
-				return p.parse_call_after_callee(binding.name, binding.pos)!
+				return ParseError{
+					message: 'paren-call `\$${binding.name}(…)` is retired — there is no paren-call anywhere in the language; write the head-dispatch form `[\$${binding.name} …]` (code.md §6.3)'
+					pos:     p.peek().pos
+				}
 			}
 			// BindingPostfix: `$binding[SliceAxes]`. Positional
 			// disambiguation per the disambiguation table — the
@@ -350,22 +354,35 @@ fn (mut p ProgramParser) parse_atom() !ProgramNode {
 			// and the remaining 10 axes land in subsequent chunks.
 			return p.parse_path_expr()!
 		}
+		.slash {
+			// CXPath absolute ('/'-rooted) path expression per grammar [130]
+			// `'/' StepList`: `/name`, `/name/child`, `/*` (#391). BYTE-
+			// ADJACENCY gates the reading (the same discipline as the QName /
+			// step-trailing-colon folds): the first step must touch the
+			// slash, so a detached `/` in expression position stays an error
+			// instead of silently becoming an empty path.
+			nxt := p.peek_at(1)
+			if p.peek_kind_at(1) in [.ident, .star]
+				&& nxt.pos.offset == p.peek().pos.offset + 1 {
+				return p.parse_path_expr()!
+			}
+			return ParseError{
+				message: "unexpected token '${p.peek().text}' in expression position"
+				pos:     p.peek().pos
+			}
+		}
 		.ident {
 			return p.parse_call_or_ident_value()!
 		}
 		.at {
-			// Inside a CXPath predicate body, bare `@name` desugars to
-			// `$_@name` (general-predicate context-item
-			// sugar). Outside predicate bodies, `@name` in expression
-			// position is a parse error.
+			// Bare `@name` as an OPERAND is retired everywhere — one
+			// spelling per construct: the context-relative attribute
+			// value is `$_@name` (the `[@name]` existence-test notation
+			// atom is unaffected; it is handled at the predicate level).
 			if p.predicate_depth > 0 {
-				at_pos := p.peek().pos
-				p.advance() // '@'
-				name_tok := p.expect(.ident, 'name after @ in predicate body')!
-				return ProgramBinding{
-					name: '_'
-					path: [ProgramPathStep{ kind: .attr, name: name_tok.text }]
-					pos:  at_pos
+				return ParseError{
+					message: 'bare `@name` operand in a CXPath predicate is retired — write the explicit context path `\$_@name` (code.md §5.5.2)'
+					pos:     p.peek().pos
 				}
 			}
 			return ParseError{
@@ -395,38 +412,103 @@ fn (mut p ProgramParser) parse_atom_literal() !ProgramLiteral {
 		}
 	}
 	name_tok := p.advance()
-	// reserved atom names rejected at lex time.
-	if name_tok.text == 'true' || name_tok.text == 'false' || name_tok.text == 'null' {
+	// Dotted atoms ([L40] `':' Ident ('.' Ident)*`, #397 owner ruling
+	// 2026-07-13): fold BYTE-ADJACENT `.` + ident continuations into one
+	// atom name (`:order.placed`) — the same adjacency discipline as the
+	// QName / step-trailing-colon folds, and the same charset the DATA
+	// reader's is_atom_name admits, so the two readings stay in lockstep.
+	// A detached dot (whitespace either side) is NOT a continuation.
+	mut name := name_tok.text
+	mut end_offset := name_tok.pos.offset + name_tok.text.len
+	for p.peek_kind() == .dot && p.peek().pos.offset == end_offset
+		&& p.peek_kind_at(1) == .ident
+		&& p.peek_at(1).pos.offset == end_offset + 1 {
+		p.advance() // consume '.'
+		seg := p.advance()
+		name += '.' + seg.text
+		end_offset = seg.pos.offset + seg.text.len
+	}
+	// Terminal `.*` glob segment ([L40] `('.' '*')?`): one byte-adjacent
+	// star as the ENTIRE final segment (`:order.*` — the bus.md §2.2
+	// prefix-glob spelling). Opaque at the atom level; consumers assign
+	// the glob meaning.
+	if p.peek_kind() == .dot && p.peek().pos.offset == end_offset
+		&& p.peek_kind_at(1) == .star
+		&& p.peek_at(1).pos.offset == end_offset + 1 {
+		p.advance() // consume '.'
+		p.advance() // consume '*'
+		name += '.*'
+	}
+	// reserved atom names rejected at parse time (single-segment only — a
+	// dotted name can never be read as the bool/null scalar).
+	if name == 'true' || name == 'false' || name == 'null' {
 		return ParseError{
-			message: "atom literal ':${name_tok.text}' is reserved; use bare '${name_tok.text}' for the bool/null scalar"
+			message: "atom literal ':${name}' is reserved; use bare '${name}' for the bool/null scalar"
 			pos:     colon_tok.pos
 		}
 	}
 	return ProgramLiteral{
 		kind:    .atom_lit
-		str_val: name_tok.text
+		str_val: name
 		pos:     colon_tok.pos
 	}
 }
 
-// parse_path_expr parses a descendant-rooted CXPath expression.
-// Chunk-1 grammar: '//' Step ('/' Step)* — where Step is a name
-// (element NodeTest) or '*' (any-element wildcard). The leading '//'
-// makes the first step's axis descendant-or-self; subsequent steps
-// default to the child axis (per spec/code.md §5.5.1 desugar table).
-// Explicit axis prefixes (`axis::name`), predicates (`[...]`), and the
-// absolute '/'-rooted form land in later chunks.
+// parse_path_expr parses a rooted CXPath expression per grammar [130]:
+// `'//' StepList` (descendant-rooted) or `'/' StepList` (absolute,
+// anchored at the document root — #391). A leading `//` makes the first
+// step's axis descendant-or-self, a leading `/` makes it child (the
+// document node's child axis holds exactly the root element); subsequent
+// steps default to the child axis (per spec/code.md §5.5.1 desugar
+// table). The bare relative StepList form is still a later chunk.
 fn (mut p ProgramParser) parse_path_expr() !ProgramPathExpr {
 	start := p.peek().pos
-	p.expect(.double_slash, "'//'")!
-	first := p.parse_path_step(ProgramPathAxis.descendant_or_self)!
+	mut leading := ProgramPathLeading.descendant
+	mut first_axis := ProgramPathAxis.descendant_or_self
+	if p.peek_kind() == .slash {
+		p.advance() // consume '/'
+		leading = .absolute
+		first_axis = ProgramPathAxis.child
+	} else {
+		p.expect(.double_slash, "'//'")!
+	}
+	first := p.parse_path_step(first_axis)!
 	mut steps := [first]
 	for p.peek_kind() == .slash {
 		p.advance() // consume '/'
 		steps << p.parse_path_step(ProgramPathAxis.child)!
 	}
+	// Glued `@attr` tail on a ROOTED path (#472): `//team/member@id` /
+	// `//team/member[pred]@id`. Grammar [130a] separates rooted-path steps
+	// with '/' (canonical.md §2.12.6: a `/` between EVERY pair of steps);
+	// the attribute step is spelled `/@attr` (the `attribute::` axis sigil,
+	// canonical.md §2.12.3). The glued `@attr` tail is BindingPath-only
+	// surface ([135a] BindingStep / [162] BindingPostfix — `$x@attr`).
+	// Without this diagnostic the unconsumed `@` token surfaced as a
+	// generic syntax error and the eval boundary silently re-read the
+	// whole resource as DATA — the rooted path degraded to a text run,
+	// rc=0 (silent wrong answer). When a step carries a parsed predicate
+	// the parser has unambiguously committed to a program construct
+	// (fused [159b] predicate bodies are not prose), so the error is
+	// marked program_committed and MUST NOT data-fallback; the bare
+	// no-predicate shape stays fallback-eligible because `//host/share@snap`
+	// -like prose is legitimate data text.
+	if p.peek_kind() == .at && p.cur_adjacent_to_prev() {
+		mut has_pred := false
+		for s in steps {
+			if s.predicates.len > 0 {
+				has_pred = true
+				break
+			}
+		}
+		return ParseError{
+			message:           "CXPath attribute step in a rooted path follows a '/' separator — write `…/name/@attr` (grammar [130a], canonical.md §2.12.6), not a glued `name@attr` tail; the glued form is \$-binding-path surface only ([135a])"
+			pos:               p.peek().pos
+			program_committed: has_pred
+		}
+	}
 	return ProgramPathExpr{
-		leading: .descendant
+		leading: leading
 		steps:   steps
 		pos:     start
 	}
@@ -474,6 +556,24 @@ fn is_path_step_terminator(s string) bool {
 	return false
 }
 
+// colon_glues_qname reports whether the `:` at the cursor continues the
+// just-consumed NodeTest name as a QName (`prefix:local` / `prefix:*`).
+// A QName is a single lexical token (lexicon [L11]): PROGRAM mode folds
+// `Ident ':' Ident` back together only when the three tokens are
+// byte-adjacent, matching DATA mode's scannerless in-name scan (which
+// can never span whitespace). A space-separated `:name` after a path
+// step is therefore an atom literal [L40] (or a directive `:label`)
+// that terminates the step — e.g. `[= $e@kind :active]` compares the
+// attribute against the atom; it does not read attribute `kind:active`.
+fn (p ProgramParser) colon_glues_qname() bool {
+	if p.peek_kind() != .colon || !p.cur_adjacent_to_prev() {
+		return false
+	}
+	colon := p.peek()
+	after := p.peek_at(1)
+	return after.pos.offset == colon.pos.offset + colon.text.len
+}
+
 // parse_path_step parses one Step of a PathExpr per grammar [131]:
 //   Step ::= (AxisSpecifier '::')? NodeTest Predicate*
 // Chunk-1 accepted a bare NodeTest only. Chunk-2 adds explicit axis
@@ -518,7 +618,7 @@ fn (mut p ProgramParser) parse_path_step(implicit_axis ProgramPathAxis) !Program
 	mut ns_prefix := ''
 	if p.peek_kind() == .star {
 		p.advance()
-		if p.peek_kind() == .colon {
+		if p.colon_glues_qname() {
 			// '*:' LocalName — match any namespace, specific local name.
 			// '*:*' is also accepted: the any-ns + any-local form; it
 			// degenerates to plain '*' (every element) since the matcher's
@@ -548,7 +648,7 @@ fn (mut p ProgramParser) parse_path_step(implicit_axis ProgramPathAxis) !Program
 		//
 		// '*' after ':' is never ambiguous (it's the `Prefix:*`
 		// namespace-wildcard form), so that path is taken unconditionally.
-		if p.peek_kind() == .colon
+		if p.colon_glues_qname()
 		   && !(p.peek_kind_at(1) == .ident
 		        && is_path_step_terminator(p.peek_at(1).text)) {
 			// `Prefix:*` or `Prefix:LocalName` — namespace-prefixed
@@ -589,12 +689,27 @@ fn (mut p ProgramParser) parse_path_step(implicit_axis ProgramPathAxis) !Program
 	// is a separate operand/clause (e.g. `[?if //admin [then …] [else …]]`),
 	// not a predicate on the path step.
 	mut preds := []ProgramPathPredicate{}
-	for p.peek_kind() == .lbrack && p.lbrack_adjacent_to_prev() {
+	for (p.peek_kind() == .lbrack || p.peek_kind() == .directive_name)
+	   && p.lbrack_adjacent_to_prev() {
 		// in a [?modify] focus path, a `[NAME …]` whose head is a
 		// modify-action name begins an action clause, not a predicate.
-		if p.in_modify_focus && p.peek_kind_at(1) == .ident
+		if p.in_modify_focus && p.peek_kind() == .lbrack && p.peek_kind_at(1) == .ident
 		   && is_modify_action_name(p.peek_at(1).text) {
 			break
+		}
+		// Directive-fused predicate ([159b]): `step[?match $_ …]` — the
+		// lexer merges `[?name` into one directive_name token, so the
+		// predicate's brackets ARE the directive's brackets.
+		if p.peek_kind() == .directive_name {
+			dstart := p.peek().pos
+			p.predicate_depth++
+			dnode := p.parse_atom() or {
+				p.predicate_depth--
+				return err
+			}
+			p.predicate_depth--
+			preds << ProgramPathPredicate{ kind: .expr, body: dnode, pos: dstart }
+			continue
 		}
 		preds << p.parse_path_predicate()!
 	}
@@ -704,17 +819,22 @@ fn (mut p ProgramParser) parse_path_predicate() !ProgramPathPredicate {
 			return p.parse_path_predicate_general(start)!
 		}
 		.at, .at_bang {
-			// `[@…]` attribute test — but if it's `[@a op v and …]`
-			// (compound), defer to general parsing. The atomic
-			// fast-path requires the bracket body to be *just* an
-			// attribute test, so check after parse_pattern_attr
-			// whether the next token is `]`.
+			// `[@name]` / `[@!name]` / `[@name::T]` — the operator-free
+			// notation atoms ([159a]). The retired infix comparison
+			// `[@a=v]` and any compound continuation raise CXER0100 with
+			// the prefix rewrite (grammar [132]–[134] retirement).
 			save_pos := p.pos
 			pa := p.parse_pattern_attr() or {
 				p.pos = save_pos
 				return p.parse_path_predicate_general(start)!
 			}
 			if p.peek_kind() == .rbrack {
+				if pa.kind == .equality || pa.kind == .comparison {
+					return ParseError{
+						message: 'infix attribute comparison `[@${pa.name}${pa.op}…]` in a CXPath predicate is retired — predicates are homoiconic CX code; write the prefix operator form `[${pa.op} $_@${pa.name} …]` (code.md §5.5.2)'
+						pos:     start
+					}
+				}
 				p.advance() // consume ']'
 				return ProgramPathPredicate{
 					kind:       .attr_test
@@ -725,13 +845,10 @@ fn (mut p ProgramParser) parse_path_predicate() !ProgramPathPredicate {
 					pos:        start
 				}
 			}
-			// Compound — rewind and re-parse as a general expression.
-			// This only matters for forms like `[@a=true and @b=false]`
-			// which use infix `and`; the atomic path can't represent
-			// them. The rewind is safe because parse_pattern_attr only
-			// consumed atoms; no side effects.
-			p.pos = save_pos
-			return p.parse_path_predicate_general(start)!
+			return ParseError{
+				message: 'infix CXPath predicate body is retired — predicates are homoiconic CX code; write a prefix form, e.g. `[and [= $_@a v] [= $_@b w]]` (code.md §5.5.2)'
+				pos:     start
+			}
 		}
 		else {
 			return p.parse_path_predicate_general(start)!
@@ -739,68 +856,60 @@ fn (mut p ProgramParser) parse_path_predicate() !ProgramPathPredicate {
 	}
 }
 
-// parse_path_predicate_general parses a non-atomic predicate body as
-// a general ProgramExpr. Special-cases the XPath sugar
-// `[last()]` → `[$_position = $_last]`. The body parses with `$_`,
-// `$_position`, `$_last` available as ordinary bindings (the evaluator
-// injects them on entry to the predicate body).
+// reserved_word_operator_heads — the reserved operator WORDS of the
+// closed §6.5 set (the symbolic ones have their own token kinds). A
+// predicate body whose leading ident is one of these is a fused
+// OperatorForm interior, never a step-existence NodeTest.
+const reserved_word_operator_heads = ['and', 'or', 'not', 'cast', 'union',
+	'intersect', 'except']
+
+// parse_path_predicate_general parses a general predicate body per
+// grammar [159]/[159a]/[159b]: the body is homoiconic CX code, with
+// FUSED BRACKETS — when the body is a form, the predicate's own
+// brackets serve as the form's brackets. The retired XPath-parity
+// infix sublanguage ([132]–[134]) raises CXER0100 with the prefix
+// rewrite. The body evaluates with `$_`, `$_position`, `$_last`
+// injected by the evaluator.
 fn (mut p ProgramParser) parse_path_predicate_general(start Position) !ProgramPathPredicate {
-	// `[last()]` sugar (amendment): a bare `last()` call
-	// inside a predicate body means "the last position" (XPath 3.1).
-	// The bare ident `last` outside predicate context remains a normal
-	// user-callable; the desugaring is predicate-only.
-	if p.peek_kind() == .ident && p.peek().text == 'last'
-	   && p.peek_kind_at(1) == .lparen && p.peek_kind_at(2) == .rparen
-	   && p.peek_kind_at(3) == .rbrack {
-		p.advance() // 'last'
-		p.advance() // '('
-		p.advance() // ')'
-		p.advance() // ']'
-		// Synthetic marker the evaluator recognizes. The body is a
-		// ProgramCall named '__pred_last' with no args; eval handles
-		// it as "keep only the final candidate".
-		marker := ProgramCall{
-			name:         '__pred_last'
-			args:         []
-			fallible:     false
-			must_succeed: false
-			pos:          start
+	k := p.peek_kind()
+	// Retired: paren-call bodies `[count(*) > 1]`, `[last()]`,
+	// `[contains(...)]` — there is no paren-call anywhere (code.md §6.3).
+	if k == .ident && p.peek_kind_at(1) == .lparen {
+		fname := p.peek().text
+		hint := if fname == 'last' && p.peek_kind_at(2) == .rparen {
+			'write `[= $_position $_last]`'
+		} else {
+			'use the head-dispatch builtin with the context binding, e.g. `[> [\$count \$_/*] 1]`'
 		}
-		return ProgramPathPredicate{
-			kind: .expr
-			body: ProgramNode(marker)
-			pos:  start
+		return ParseError{
+			message: 'paren-call `${fname}(…)` in a CXPath predicate is retired — there is no paren-call anywhere in the language; ${hint} (code.md §6.3)'
+			pos:     p.peek().pos
 		}
 	}
-	p.predicate_depth++
-	// Element-literal-as-predicate-body shape: when the predicate body
-	// starts with an element-head token (ident, operator like `=`, `<`,
-	// `+`), the predicate brackets do double-duty as element-literal
-	// brackets. The body is parsed via parse_cx_element_from_inside,
-	// which consumes through the matching `]`. This admits the directive
-	// form `[and [= @a v] [> @b w]]` directly without requiring nested
-	// brackets `[[and ...]]`.
-	if is_element_head_token(p.peek_kind()) {
-		// Distinguish from the `[fn(args)]` general-call shape: when
-		// an ident is followed by `(`, parse as a bare function call
-		// (`[count(*) > 0]` etc.). Otherwise treat as element-literal
-		// (e.g. `[and ...]`, `[= a b]`).
-		if p.peek_kind() == .ident && p.peek_kind_at(1) == .lparen {
-			// `count(...) >= N` etc. — a FunctionCall primary that may be
-			// the LHS of an infix comparison. Route through the infix
-			// parser so the trailing CompOp / `and` / `or` is consumed.
-			body := p.parse_pred_infix() or {
-				p.predicate_depth--
-				return err
-			}
-			p.predicate_depth--
-			p.expect(.rbrack, "']' closing CXPath predicate")!
+	// Fused element / operator body, or bare step-existence NodeTest.
+	if is_element_head_token(k) {
+		// `[name]` — step-existence notation atom ([159a]):
+		// keeps the candidate iff `[$exists $_/name]`.
+		if k == .ident && p.peek_kind_at(1) == .rbrack
+		   && p.peek().text !in reserved_word_operator_heads {
+			nm_tok := p.advance()
+			p.advance() // ']'
 			return ProgramPathPredicate{
 				kind: .expr
-				body: body
+				body: step_exists_body(nm_tok.text, start)
 				pos:  start
 			}
 		}
+		// `[axis::name]` step existence — binding-paths do not carry
+		// XPath axes yet ([135a] subset), so the desugar target
+		// `[$exists $_/axis::name]` has no evaluable form. Precise error.
+		if k == .ident && p.peek_kind_at(1) == .double_colon {
+			return ParseError{
+				message: 'axis-qualified step-existence predicate `[${p.peek().text}::…]` is not yet supported (binding paths carry no axis steps); restructure with an explicit path'
+				pos:     p.peek().pos
+			}
+		}
+		p.predicate_depth++
 		body_lit := p.parse_cx_element_from_inside(start) or {
 			p.predicate_depth--
 			return err
@@ -813,79 +922,130 @@ fn (mut p ProgramParser) parse_path_predicate_general(start Position) !ProgramPa
 			pos:  start
 		}
 	}
-	body := p.parse_pred_infix() or {
+	// `$…` bodies: EBV of a binding/path, or a fused CallBody
+	// `[$fn arg …]` ([159b]).
+	if k == .dollar {
+		p.predicate_depth++
+		binding := p.parse_binding_with_path() or {
+			p.predicate_depth--
+			return err
+		}
+		nk := p.peek_kind()
+		if nk == .rbrack {
+			p.predicate_depth--
+			p.advance() // ']'
+			return ProgramPathPredicate{
+				kind: .expr
+				body: ProgramNode(binding)
+				pos:  start
+			}
+		}
+		// Retired infix continuation after the primary: targeted hint.
+		if nk == .eq || nk == .neq || nk == .lt || nk == .le || nk == .gt || nk == .ge {
+			op := p.peek().text
+			p.predicate_depth--
+			return ParseError{
+				message: 'infix comparison in a CXPath predicate is retired — write the prefix operator form `[${op} \$… …]` (code.md §5.5.2)'
+				pos:     p.peek().pos
+			}
+		}
+		if nk == .ident && (p.peek().text == 'and' || p.peek().text == 'or') {
+			p.predicate_depth--
+			return ParseError{
+				message: 'infix `${p.peek().text}` in a CXPath predicate is retired — write the prefix form `[${p.peek().text} P Q]` (code.md §5.5.2)'
+				pos:     p.peek().pos
+			}
+		}
+		// CallBody: `$fn arg…` — the fused ProgramCall interior. The
+		// head must be path-less (grammar [159b]).
+		if binding.path.len > 0 {
+			p.predicate_depth--
+			return ParseError{
+				message: "unexpected token after binding path in CXPath predicate (a fused call head `[\$fn …]` may not carry path steps)"
+				pos:     p.peek().pos
+			}
+		}
+		mut args := []ProgramNode{}
+		mut arg_labels := []string{}
+		for p.peek_kind() != .rbrack && p.peek_kind() != .eof {
+			// Partial-application hole `_`, mirroring [125] call args.
+			if p.peek_kind() == .ident && p.peek().text == '_' {
+				hpos := p.advance().pos
+				args << ProgramNode(ProgramCall{ name: program_hole_name, args: [], explicit_call: false, pos: hpos })
+				arg_labels << ''
+				continue
+			}
+			// Named argument `name=value` ([125c]).
+			if p.peek_kind() == .ident && p.peek_kind_at(1) == .eq {
+				arg_name_tok := p.advance()
+				p.advance() // '='
+				args << p.parse_expr() or {
+					p.predicate_depth--
+					return err
+				}
+				arg_labels << arg_name_tok.text
+				continue
+			}
+			args << p.parse_expr() or {
+				p.predicate_depth--
+				return err
+			}
+			arg_labels << ''
+		}
 		p.predicate_depth--
-		return err
+		p.expect(.rbrack, "']' closing CXPath predicate")!
+		call := ProgramCall{
+			name:          binding.name
+			args:          args
+			arg_labels:    arg_labels
+			explicit_call: true
+			pos:           start
+		}
+		return ProgramPathPredicate{
+			kind: .expr
+			body: ProgramNode(call)
+			pos:  start
+		}
 	}
-	p.predicate_depth--
-	p.expect(.rbrack, "']' closing CXPath predicate")!
-	return ProgramPathPredicate{
-		kind: .expr
-		body: body
-		pos:  start
+	// Literal EBV bodies — `[:atom]` / `[true]` / `["s"]`: a constant
+	// coerced via EBV (cxdm.md §6). INT is claimed by positional
+	// selection; other scalar literals are admitted per [159a].
+	if k == .colon || k == .bool_lit || k == .string_lit {
+		p.predicate_depth++
+		lit := p.parse_atom() or {
+			p.predicate_depth--
+			return err
+		}
+		p.predicate_depth--
+		p.expect(.rbrack, "']' closing CXPath predicate")!
+		return ProgramPathPredicate{
+			kind: .expr
+			body: lit
+			pos:  start
+		}
+	}
+	// Anything else (stray operators, `(`) is not an admitted predicate
+	// body per [159a].
+	return ParseError{
+		message: "unexpected token '${p.peek().text}' opening a CXPath predicate body — admitted bodies are a positional INT, an attribute test `@name`/`@!name`, a step-existence `name`, a `\$…` binding/path or fused call, a scalar literal (EBV), or a fused prefix form (grammar [159a]/[159b])"
+		pos:     p.peek().pos
 	}
 }
 
-// parse_pred_infix parses a CXPath predicate body using XPath-style
-// INFIX surface, a deliberate parity exception to CX's prefix element
-// form (grammar [132a]/[133]; code.md §5.5.2 + §6.3). The body grammar:
-//
-//   OrExpr   ::= AndExpr ('or' AndExpr)*
-//   AndExpr  ::= CmpExpr ('and' CmpExpr)*
-//   CmpExpr  ::= Primary (CompOp Primary)?        CompOp ∈ = != < <= > >=
-//   Primary  ::= parse_atom  (bindings w/ @attr + path, literals,
-//                FunctionCall `count(...)`, bare `@name`/`$_` sugar,
-//                nested prefix elements `[and …]`)
-//
-// Each infix node desugars to the prefix operator-headed element
-// (`[>= $_@age 18]`, `[and …]`, `[= $_position 1]`) that
-// `eval_operator_element` already dispatches — a `.cx_element`
-// ProgramLiteral whose `name` is the operator string. So eval_node /
-// filter_path_predicates_idx need no new arms. Comparison is
-// non-associative (single CompOp per CmpExpr); `and` binds tighter than
-// `or`, both left-associative.
-fn (mut p ProgramParser) parse_pred_infix() !ProgramNode {
-	return p.parse_pred_or()!
-}
-
-fn pred_op_element(op string, left ProgramNode, right ProgramNode, pos Position) ProgramNode {
-	return ProgramNode(ProgramLiteral{
-		kind:  .cx_element
-		name:  op
-		items: [left, right]
-		pos:   pos
+// step_exists_body builds the desugar target of the `[name]`
+// step-existence notation atom: `[$exists $_/name]` ([159a]).
+fn step_exists_body(name string, pos Position) ProgramNode {
+	ctx := ProgramBinding{
+		name: '_'
+		path: [ProgramPathStep{ kind: .child, name: name }]
+		pos:  pos
+	}
+	return ProgramNode(ProgramCall{
+		name:          'exists'
+		args:          [ProgramNode(ctx)]
+		explicit_call: true
+		pos:           pos
 	})
-}
-
-fn (mut p ProgramParser) parse_pred_or() !ProgramNode {
-	mut left := p.parse_pred_and()!
-	for p.peek_kind() == .ident && p.peek().text == 'or' {
-		op_pos := p.advance().pos
-		right := p.parse_pred_and()!
-		left = pred_op_element('or', left, right, op_pos)
-	}
-	return left
-}
-
-fn (mut p ProgramParser) parse_pred_and() !ProgramNode {
-	mut left := p.parse_pred_cmp()!
-	for p.peek_kind() == .ident && p.peek().text == 'and' {
-		op_pos := p.advance().pos
-		right := p.parse_pred_cmp()!
-		left = pred_op_element('and', left, right, op_pos)
-	}
-	return left
-}
-
-fn (mut p ProgramParser) parse_pred_cmp() !ProgramNode {
-	left := p.parse_atom()!
-	k := p.peek_kind()
-	if k == .eq || k == .neq || k == .lt || k == .le || k == .gt || k == .ge {
-		op_tok := p.advance()
-		right := p.parse_atom()!
-		return pred_op_element(op_tok.text, left, right, op_tok.pos)
-	}
-	return left
 }
 
 // parse_number_literal turns a `number_lit` token into an int_lit or
@@ -903,6 +1063,7 @@ fn parse_number_literal(t ProgramToken) !ProgramLiteral {
 			return ProgramLiteral{
 				kind:    .int_lit
 				int_val: v
+				src:     t.text
 				pos:     t.pos
 			}
 		}
@@ -914,6 +1075,7 @@ fn parse_number_literal(t ProgramToken) !ProgramLiteral {
 			return ProgramLiteral{
 				kind:    .int_lit
 				int_val: -v
+				src:     t.text
 				pos:     t.pos
 			}
 		}
@@ -925,6 +1087,7 @@ fn parse_number_literal(t ProgramToken) !ProgramLiteral {
 		return ProgramLiteral{
 			kind:    .float_lit
 			flt_val: cleaned.f64()
+			src:     t.text
 			pos:     t.pos
 		}
 	}
@@ -945,12 +1108,14 @@ fn parse_number_literal(t ProgramToken) !ProgramLiteral {
 		return ProgramLiteral{
 			kind:    .int_lit
 			int_val: v
+			src:     t.text
 			pos:     t.pos
 		}
 	}
 	return ProgramLiteral{
 		kind:    .bigint_lit
 		str_val: normalize_bigint_digits(cleaned)
+		src:     t.text
 		pos:     t.pos
 	}
 }
@@ -974,6 +1139,7 @@ fn number_literal_as_string(t ProgramToken) ProgramLiteral {
 	return ProgramLiteral{
 		kind:    .string_lit
 		str_val: t.text
+		src:     t.text
 		pos:     t.pos
 	}
 }
@@ -1019,7 +1185,7 @@ fn (p ProgramParser) cur_adjacent_to_prev() bool {
 // as a namespace local-name; in that case the bare name is returned and
 // the `:label` is left for the enclosing directive parser.
 fn (mut p ProgramParser) fold_binding_step_prefix(name string) !string {
-	if p.peek_kind() == .colon
+	if p.colon_glues_qname()
 	   && !(p.peek_kind_at(1) == .ident
 	        && is_path_step_terminator(p.peek_at(1).text)) {
 		p.advance() // consume ':'
@@ -1170,7 +1336,19 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 		// adjacent (`$x/item[1]`, `$u/user[@active]`), so this is a
 		// near-zero-regression tightening.
 		mut preds := []ProgramPathPredicate{}
-		for p.peek_kind() == .lbrack && p.lbrack_adjacent_to_prev() {
+		for (p.peek_kind() == .lbrack || p.peek_kind() == .directive_name)
+		   && p.lbrack_adjacent_to_prev() {
+			if p.peek_kind() == .directive_name {
+				dstart := p.peek().pos
+				p.predicate_depth++
+				dnode := p.parse_atom() or {
+					p.predicate_depth--
+					return err
+				}
+				p.predicate_depth--
+				preds << ProgramPathPredicate{ kind: .expr, body: dnode, pos: dstart }
+				continue
+			}
 			preds << p.parse_path_predicate()!
 		}
 		steps << ProgramPathStep{
@@ -1674,6 +1852,8 @@ fn (mut p ProgramParser) parse_call_or_ident_value() !ProgramNode {
 	name_tok := p.advance()
 	qname := p.fold_qualified_name(name_tok)
 	if p.peek_kind() != .lparen {
+		// Bare reference — a first-class function VALUE (D1), e.g. a
+		// [?pipe] stage name. Never a call.
 		return ProgramCall{
 			name:         qname
 			args:         []
@@ -1682,83 +1862,23 @@ fn (mut p ProgramParser) parse_call_or_ident_value() !ProgramNode {
 			pos:          name_tok.pos
 		}
 	}
-	return p.parse_call_after_callee(qname, name_tok.pos)!
+	// `name(args)` is RETIRED everywhere — the former XPath-parity
+	// FunctionCall carve-out is gone (code.md §6.3, grammar [132]–[134]
+	// retirement); the call surface is head-dispatch `[$name …]`.
+	return ParseError{
+		message: 'paren-call `${qname}(…)` is retired — there is no paren-call anywhere in the language; write the head-dispatch form `[\$${qname} …]` (code.md §6.3)'
+		pos:     p.peek().pos
+	}
 }
 
-// parse_call_after_callee handles `(args) ['?'|'!']?` after the callee
-// has already been resolved (either an ident or a $-binding). Shared
-// by parse_call_or_ident_value and the dollar branch of parse_atom.
 // program_hole_name marks an partial-application hole `_` in
 // a call-argument position. Emitted as a sentinel ProgramCall; eval_call
 // detects it and builds a partial instead of calling.
+// (The paren-call arg parsers that used to live here — parse_call_arg /
+// parse_call_arg_labeled / parse_call_after_callee — were removed with
+// the paren-call surface itself; `[$fn …]` head-dispatch is the only
+// call form, per code.md §6.3.)
 pub const program_hole_name = '__cx_hole__'
-
-// parse_call_arg parses one call argument, recognising a bare `_` (an
-// ident `_` immediately before `,` or `)`) as a partial-application hole
-// `_` keeps its pattern-wildcard meaning everywhere else;
-// the hole reading applies only in call-argument position.
-fn (mut p ProgramParser) parse_call_arg() !ProgramNode {
-	if p.peek_kind() == .ident && p.peek().text == '_'
-	   && (p.peek_kind_at(1) == .comma || p.peek_kind_at(1) == .rparen) {
-		hole_pos := p.peek().pos
-		p.advance()
-		return ProgramCall{ name: program_hole_name, args: [], explicit_call: false, pos: hole_pos }
-	}
-	return p.parse_expr()!
-}
-
-// parse_call_arg_labeled parses one call argument, returning its value
-// node and its label ('' for positional). A `:label value` form
-// (named argument) is recognised when `:ident` is followed by a
-// value token; `:atom` directly before `,`/`)` stays a positional atom
-// literal. Positional args go through parse_call_arg (hole-aware);
-// named-arg values use parse_expr (holes are positional-only, D4).
-fn (mut p ProgramParser) parse_call_arg_labeled() !(ProgramNode, string) {
-	if p.peek_kind() == .colon && p.peek_kind_at(1) == .ident {
-		next2 := p.peek_kind_at(2)
-		if next2 != .comma && next2 != .rparen && next2 != .eof {
-			p.advance() // ':'
-			label_tok := p.advance()
-			value := p.parse_expr()!
-			return value, label_tok.text
-		}
-	}
-	return p.parse_call_arg()!, ''
-}
-
-fn (mut p ProgramParser) parse_call_after_callee(name string, pos Position) !ProgramNode {
-	p.expect(.lparen, "'('")!
-	mut args := []ProgramNode{}
-	mut arg_labels := []string{}
-	if p.peek_kind() != .rparen {
-		node0, lbl0 := p.parse_call_arg_labeled()!
-		args << node0
-		arg_labels << lbl0
-		for p.peek_kind() == .comma {
-			p.advance()
-			node, lbl := p.parse_call_arg_labeled()!
-			args << node
-			arg_labels << lbl
-		}
-	}
-	p.expect(.rparen, "')'")!
-	mut fallible := false
-	mut must_succeed := false
-	match p.peek_kind() {
-		.qmark { fallible = true; p.advance() }
-		.bang  { must_succeed = true; p.advance() }
-		else   {}
-	}
-	return ProgramCall{
-		name:         name
-		args:         args
-		arg_labels:   arg_labels
-		fallible:     fallible
-		must_succeed: must_succeed
-		explicit_call: true
-		pos:          pos
-	}
-}
 
 // parse_dollar_call_from_inside parses the head-dispatch call
 // form `[$fn arg…]`: a path-less `$name` head (the function value to
@@ -2031,6 +2151,7 @@ fn is_element_head_token(k ProgramTokenKind) bool {
 	return k == .ident || k == .star || k == .plus || k == .minus
 	   || k == .slash || k == .eq || k == .neq
 	   || k == .lt || k == .le || k == .gt || k == .ge
+	   || k == .tilde
 }
 
 // contains_top_level_comma_before_rbrack scans from the current
@@ -2117,7 +2238,16 @@ fn bare_attr_value_literal(ident_tok ProgramToken) ProgramNode {
 // item — the latter was the cxparse Class-D D1 split. The leading `null`
 // keyword still yields the null scalar (homoiconic bare-value rule), since a
 // lone `null` has no colon tail to fold.
-fn (mut p ProgramParser) fold_bare_attr_value(first ProgramToken) ProgramNode {
+//
+// The fold stops where the DATA BareValue and the PROGRAM attr grammar
+// diverge: `href=https://x.com/a/b` is one BareValue in DATA, but a PROGRAM
+// attribute value is an expression (grammar [127c] — the same rule that
+// admits `select=//a/b` as a CXPath PathExpr), so after `https` the `://`
+// cannot be more string. Rather than leave the orphaned `: //` to fail
+// later with a baffling atom-literal error, detect the scheme-like shape
+// (ident ':' '//', byte-adjacent) here and fail with the actionable fix:
+// quote the value.
+fn (mut p ProgramParser) fold_bare_attr_value(attr_name string, first ProgramToken) !ProgramNode {
 	mut text := first.text
 	mut end_off := first.pos.offset + first.text.len
 	// Byte-adjacency (next offset == running end) proves there was no
@@ -2130,6 +2260,15 @@ fn (mut p ProgramParser) fold_bare_attr_value(first ProgramToken) ProgramNode {
 		text = '${text}:${local.text}'
 		end_off = local.pos.offset + local.text.len
 	}
+	if p.peek_kind() == .colon && p.peek().pos.offset == end_off
+		&& p.peek_kind_at(1) == .double_slash
+		&& p.peek_at(1).pos.offset == p.peek().pos.offset + 1 {
+		run := p.bare_value_run_text(first.pos.offset, '${text}://…')
+		return ParseError{
+			message: "a bare `${attr_name}=${run}` is read as an expression, where `//` starts a CXPath step — quote the value (${attr_name}='${run}') to carry a literal URL string"
+			pos:     first.pos
+		}
+	}
 	if text == first.text {
 		return bare_attr_value_literal(first)
 	}
@@ -2138,6 +2277,27 @@ fn (mut p ProgramParser) fold_bare_attr_value(first ProgramToken) ProgramNode {
 		str_val: text
 		pos:     first.pos
 	}
+}
+
+// bare_value_run_text recovers the full DATA-grammar BareValue run
+// ([L70]: up to whitespace / '[' / ']' / '=' / quote) starting at
+// `start_off`, so the quote-the-value hint can show the exact source
+// text to quote. Falls back to the tokens already folded when the
+// parser was constructed without source (legacy token-only callers).
+fn (p &ProgramParser) bare_value_run_text(start_off int, fallback string) string {
+	if start_off < 0 || start_off >= p.source.len {
+		return fallback
+	}
+	mut end := start_off
+	for end < p.source.len {
+		c := p.source[end]
+		if c == ` ` || c == `\t` || c == `\n` || c == `\r` || c == `[` || c == `]`
+			|| c == `=` || c == `'` || c == `"` {
+			break
+		}
+		end++
+	}
+	return p.source[start_off..end]
 }
 
 // parse_cx_element_from_inside parses `[name body…]` as a CX literal
@@ -2186,6 +2346,29 @@ fn (mut p ProgramParser) parse_cx_element_from_inside(start Position) !ProgramLi
 	mut slots := []ProgramSlot{}
 	mut attrs := []ProgramAttr{}
 	for p.peek_kind() != .rbrack && p.peek_kind() != .eof {
+		// #478: ElementMeta precedes the TableBlock — grammar [29]/[50] put
+		// the `[table[` clause AFTER the attribute run
+		// (`[users region=west [table[…]] …]`), so the head-position check
+		// above cannot see it. Re-check at the first NON-attribute body
+		// token: if only attributes have been consumed so far and the
+		// cursor sits on the `[table[` clause-child opener, the element is
+		// the tabular form — delegate the whole span to the data reader
+		// (which attaches the attrs and rejects a conflicting glued `::T`).
+		// A DYNAMIC attribute value (binding / call / paren expr) cannot
+		// ride the data reading — reject it loudly rather than silently
+		// literalizing `$x` (the tabular form is data-only; rows have no
+		// expression production either).
+		if p.source.len > 0 && items.len == 0 && p.at_table_clause_opener() {
+			for a in attrs {
+				if !program_attr_is_scalar_literal(a.value) {
+					return ParseError{
+						message: 'attribute `${a.name}` on a `[table[…]]` element literal must be a scalar literal — the tabular form is data-only (grammar [29]/[50], #478)'
+						pos:     start
+					}
+				}
+			}
+			return p.reparse_table_element_as_node(start)!
+		}
 		if p.peek_kind() == .colon && p.peek_kind_at(1) == .ident {
 			// A `:NAME` token in element-literal body position is ALWAYS an
 			// atom literal — a positional body item (`[cast $p :int]`,
@@ -2197,6 +2380,18 @@ fn (mut p ProgramParser) parse_cx_element_from_inside(start Position) !ProgramLi
 			// slots. No dual-accept; the slot reshape is gone.
 			atom := p.parse_atom_literal()!
 			items << ProgramNode(atom)
+			continue
+		}
+		// Typed element-construction attribute `name::T=value` (D3;
+		// lexicon §7 [L50]; grammar [55]) — the attribute ascription the
+		// DATA reading has always had; the program element literal shares
+		// the production (#466). Claimed only when the FULL glued shape is
+		// ahead (name byte-adjacent to `::`, annotation, byte-adjacent
+		// `=`); a bare `name::T` with no `=` is NOT an attribute (the data
+		// reader hands it to the body — e.g. schema `[attr id::string …]`
+		// forms) and keeps its current program-mode reading.
+		if p.attr_ascription_ahead() {
+			attrs << p.parse_typed_attr()!
 			continue
 		}
 		// Element-construction attribute: `name=value`. The value is
@@ -2212,12 +2407,7 @@ fn (mut p ProgramParser) parse_cx_element_from_inside(start Position) !ProgramLi
 		if p.peek_kind() == .ident && p.peek_kind_at(1) == .eq {
 			attr_name := p.advance()
 			p.advance() // '='
-			value := if p.peek_kind() == .ident && p.peek_kind_at(1) != .lparen {
-				ident_tok := p.advance()
-				p.fold_bare_attr_value(ident_tok)
-			} else {
-				p.parse_atom()!
-			}
+			value := p.parse_attr_value(attr_name.text)!
 			attrs << ProgramAttr{
 				name:  attr_name.text
 				value: value
@@ -2256,13 +2446,32 @@ fn (p &ProgramParser) at_table_block_body(head_name string, head_tok ProgramToke
 		return true
 	}
 	// named: body opens with `[table[…]]`
-	if p.peek_kind() == .lbrack && p.peek_kind_at(1) == .ident
-	   && p.pos + 2 < p.tokens.len && p.tokens[p.pos + 1].text == 'table'
-	   && p.peek_kind_at(2) == .lbrack
-	   && p.tokens[p.pos + 2].pos.offset == p.tokens[p.pos + 1].pos.offset + 'table'.len {
-		return true
+	return p.at_table_clause_opener()
+}
+
+// program_attr_is_scalar_literal reports whether an element-literal
+// attribute value is a plain scalar literal — the only attribute shape
+// that can ride the data reading when the element turns out to be the
+// tabular form (#478). Bindings, calls, paren exprs, and collection
+// literals are dynamic / non-scalar and are rejected at the seam.
+fn program_attr_is_scalar_literal(n ProgramNode) bool {
+	if n is ProgramLiteral {
+		return n.kind in [.string_lit, .int_lit, .bigint_lit, .float_lit, .bool_lit,
+			.duration_lit, .period_lit, .date_lit, .datetime_lit, .atom_lit]
 	}
 	return false
+}
+
+// at_table_clause_opener reports whether the cursor sits on the `[table[`
+// clause-child opener (the "named" TableBlock shape). Split out of
+// at_table_block_body so the element-literal body loop can re-check after
+// an attribute run (#478: ElementMeta precedes the TableBlock, so
+// `[users region=west [table[…]] …]` reaches the opener mid-body).
+fn (p &ProgramParser) at_table_clause_opener() bool {
+	return p.peek_kind() == .lbrack && p.peek_kind_at(1) == .ident
+		&& p.pos + 2 < p.tokens.len && p.tokens[p.pos + 1].text == 'table'
+		&& p.peek_kind_at(2) == .lbrack
+		&& p.tokens[p.pos + 2].pos.offset == p.tokens[p.pos + 1].pos.offset + 'table'.len
 }
 
 // reparse_table_element_as_node delegates the whole element opened at `start`
@@ -2311,6 +2520,91 @@ fn (mut p ProgramParser) reparse_table_element_as_node(start Position) !ProgramL
 		node:    node
 		str_val: span
 		pos:     start
+	}
+}
+
+// parse_attr_value reads one element-construction attribute VALUE (the
+// cursor is just past the `=`). A bare identifier not followed by `(`
+// parses as a string scalar via the data-parser convention
+// (fold_bare_attr_value); everything else is a full expression atom
+// (literal, binding, paren expr). Shared by the untyped `name=value` and
+// typed `name::T=value` attribute productions in both the static element
+// literal and the [?element] body.
+fn (mut p ProgramParser) parse_attr_value(attr_name string) !ProgramNode {
+	if p.peek_kind() == .ident && p.peek_kind_at(1) != .lparen {
+		ident_tok := p.advance()
+		return p.fold_bare_attr_value(attr_name, ident_tok)!
+	}
+	return p.parse_atom()!
+}
+
+// attr_ascription_ahead reports whether the cursor sits at a GLUED typed
+// attribute `name::T=…` (D3; lexicon §7 [L50]; grammar [55]): an ident,
+// a byte-adjacent `::`, a byte-adjacent annotation token run (TypeName,
+// TypeName`[]`, or `[]`), then a byte-adjacent `=`. Pure lookahead — no
+// tokens are consumed and no validity judgement is made (an unknown type
+// tag is still claimed here and rejected by parse_typed_attr with
+// CXER0107, mirroring the head-annotation diagnostics). A `name::T`
+// without the trailing glued `=` is NOT claimed, matching the DATA
+// reader's rewind-to-body rule for typed body elements.
+fn (p &ProgramParser) attr_ascription_ahead() bool {
+	if p.peek_kind() != .ident || p.peek_kind_at(1) != .double_colon {
+		return false
+	}
+	name_tok := p.peek()
+	dc := p.peek_at(1)
+	if dc.pos.offset != name_tok.pos.offset + name_tok.text.len {
+		return false
+	}
+	mut j := 2
+	mut end := dc.pos.offset + 2
+	if p.peek_kind_at(2) == .ident {
+		t := p.peek_at(2)
+		if t.pos.offset != end {
+			return false
+		}
+		end += t.text.len
+		j = 3
+		if p.peek_kind_at(3) == .lbrack && p.peek_kind_at(4) == .rbrack
+		   && p.peek_at(3).pos.offset == end && p.peek_at(4).pos.offset == end + 1 {
+			end += 2
+			j = 5
+		}
+	} else if p.peek_kind_at(2) == .lbrack && p.peek_kind_at(3) == .rbrack
+	   && p.peek_at(2).pos.offset == end && p.peek_at(3).pos.offset == end + 1 {
+		end += 2
+		j = 4
+	} else {
+		return false
+	}
+	return p.peek_kind_at(j) == .eq && p.peek_at(j).pos.offset == end
+}
+
+// parse_typed_attr parses one typed element-construction attribute
+// `name::T=value` (the caller has verified attr_ascription_ahead). The
+// annotation is validated exactly like a head annotation (unknown tag →
+// CXER0107; malformed → CXER0100). Attributes are scalar-only (D2), so an
+// array annotation is rejected with the same diagnostic as the DATA
+// reader. The value expression parses exactly like an untyped attribute
+// value; the ORIGINAL token spelling rides on the value literal's `src`
+// (ProgramLiteral.src) so eval's ascription coerces the source token, not
+// an auto-typed re-rendering (#457/#466).
+fn (mut p ProgramParser) parse_typed_attr() !ProgramAttr {
+	attr_name := p.advance()
+	ta := p.read_head_type_annotation()!
+	if ta.ends_with('[]') {
+		return ParseError{
+			code:    'cx-err:CXER0100'
+			message: 'attribute `${attr_name.text}` may not carry an array type `::${ta}` — attributes are scalar-only (D2) (cx-err:CXER0100)'
+			pos:     attr_name.pos
+		}
+	}
+	p.expect(.eq, "'=' (typed attribute)")!
+	value := p.parse_attr_value(attr_name.text)!
+	return ProgramAttr{
+		name:      attr_name.text
+		value:     value
+		data_type: ta
 	}
 }
 
@@ -2401,15 +2695,16 @@ fn (mut p ProgramParser) parse_computed_element_body(start Position) !ProgramNod
 			items << ProgramNode(atom)
 			continue
 		}
+		// Typed attribute `name::T=value` — same production as the static
+		// element body (D3; [L50]; grammar [55]/[127s]).
+		if p.attr_ascription_ahead() {
+			attrs << p.parse_typed_attr()!
+			continue
+		}
 		if p.peek_kind() == .ident && p.peek_kind_at(1) == .eq {
 			attr_name := p.advance()
 			p.advance() // '='
-			value := if p.peek_kind() == .ident && p.peek_kind_at(1) != .lparen {
-				ident_tok := p.advance()
-				p.fold_bare_attr_value(ident_tok)
-			} else {
-				p.parse_atom()!
-			}
+			value := p.parse_attr_value(attr_name.text)!
 			attrs << ProgramAttr{
 				name:  attr_name.text
 				value: value
@@ -2987,6 +3282,22 @@ fn (mut p ProgramParser) parse_directive() !ProgramNode {
 	// carrying the name verbatim; the parser does not see a separate
 	// `ldirective` opener. The closing `]` is a normal rbrack.
 	name_tok := p.expect(.directive_name, 'directive name')!
+	// `[?cx …]` is the CXDirective / PI-config namespace (grammar [34];
+	// the [59a] note: the bare name `cx` is NOT an EvalName), NOT a §4.1
+	// program directive — classify it BEFORE the registry lookup (#421).
+	// The program reading of a CXDirective IS the data reading (code.md
+	// §13: resolution is opt-in; with no include root the directive is
+	// preserved verbatim), so the verbatim span is delegated to the data
+	// reader and carried as a `node_lit` literal — the same DATA↔PROGRAM
+	// seam as `[#…#]` / `&…;` / `[!…]`. A byte-adjacent `:` after the
+	// head (`[?cx:fn …]`) is the module EvalDirective form, NOT a
+	// CXDirective (grammar [59a] disambiguation note) — it stays on the
+	// registry path below and fails closed there.
+	if name_tok.text == 'cx'
+	   && !(p.peek_kind() == .colon
+	   && p.peek().pos.offset == name_tok.pos.offset + 2 + name_tok.text.len) {
+		return p.parse_cx_config_directive(name_tok)!
+	}
 	// Registry membership check per spec/code.md §4.1. The 'test-*'
 	// prefix is reserved for fixture-only helpers per conformance/
 	// code.txt §Format (the "Fixture-only test helpers" subsection);
@@ -3317,7 +3628,8 @@ fn (mut p ProgramParser) parse_match_clause(mut slots []ProgramSlot) ! {
 					op := p.peek().text
 					return ParseError{
 						message: '[where] takes a PREFIX predicate — write `[where [${op} LHS RHS]]` (e.g. `[where [= \$x/@attr value]]`), not infix `LHS ${op} RHS`'
-						pos:     p.peek().pos
+						pos:               p.peek().pos
+						program_committed: true
 					}
 				}
 				p.expect(.rbrack, "']' (closing [where] clause)")!
@@ -3445,6 +3757,67 @@ fn (mut p ProgramParser) parse_with_open_body(start Position) !ProgramDirective 
 // token's `pos.offset` points at the opening `[` (lexer
 // read_directive_name), so the span runs from there to the matching
 // `]`. Bracket depth starts at 1 for the directive's own opener.
+// parse_cx_config_directive captures the verbatim source span of a
+// `[?cx …]` CXDirective (grammar [34] — the PI/config namespace; NOT a
+// §4.1 program directive, per the grammar [59a] note "the bare name
+// `cx` is NOT an EvalName") and delegates it to the proven data reader,
+// carrying the parsed node as a `node_lit` literal (the DATA↔PROGRAM
+// seam, mirroring `[#…#]` / `&…;` / `[!…]` / `:table` blocks). Eval
+// returns the node verbatim, so with no include root supplied a
+// `[?cx include=…]` directive is preserved unresolved per code.md §13.2
+// (resolution is opt-in) and a bare `[?cx version=…]` / unknown-key
+// config PI round-trips — the program reading of the construct IS the
+// data reading. The cursor is just past the `directive_name` token; the
+// token's `pos.offset` points at the opening `[` (lexer
+// read_directive_name). Bracket depth starts at 1 for the directive's
+// own opener; string literals are single tokens, so `]` inside quoted
+// attr values cannot unbalance the scan.
+fn (mut p ProgramParser) parse_cx_config_directive(name_tok ProgramToken) !ProgramNode {
+	if p.source.len == 0 {
+		return ParseError{
+			message: '[?cx] requires source text (token-only parse unsupported)'
+			pos:     name_tok.pos
+		}
+	}
+	start_off := name_tok.pos.offset
+	mut depth := 1
+	mut end_off := -1
+	for p.peek_kind() != .eof {
+		t := p.advance()
+		match t.kind {
+			.lbrack { depth++ }
+			.directive_name { depth++ }
+			.rbrack {
+				depth--
+				if depth == 0 {
+					end_off = t.pos.offset + 1
+					break
+				}
+			}
+			else {}
+		}
+	}
+	if end_off < 0 {
+		return ParseError{
+			message: "[?cx] unterminated (missing ']')"
+			pos:     name_tok.pos
+		}
+	}
+	span := p.source[start_off..end_off]
+	node := parse_data_node(span) or {
+		return ParseError{
+			message: 'invalid [?cx] directive: ${err.msg()}'
+			pos:     name_tok.pos
+		}
+	}
+	return ProgramLiteral{
+		kind:    .node_lit
+		node:    node
+		str_val: span
+		pos:     name_tok.pos
+	}
+}
+
 fn (mut p ProgramParser) parse_module_directive(name_tok ProgramToken) !ProgramNode {
 	if p.source.len == 0 {
 		return ParseError{
@@ -3715,29 +4088,26 @@ fn scan_str_template(tmpl string, pos Position) ![]ProgramSlot {
 fn parse_str_hole(src string, pos Position) !ProgramNode {
 	if src.trim_space() == '' {
 		return ParseError{
-			message: '[?str] empty interpolation hole `{}` — a binding-path is required'
-			pos:     pos
+			message:           '[?str] empty interpolation hole `{}` — an expression is required'
+			pos:               pos
+			program_committed: true
 		}
 	}
-	// Re-parse the hole body through the full program parser. A parse
-	// failure (or any non-binding-path shape) is a malformed hole.
+	// #66: an interpolation hole may be ANY expression — a binding-path
+	// (`$x`, `$x/child`), arithmetic (`[+ $a $b]`), a call (`[$strings:upper $s]`),
+	// etc. — not just a binding-path. Re-parse the hole body through the full
+	// program parser; eval_str evaluates it and renders the resulting SCALAR.
+	// (A hole that evaluates to a non-scalar — element / sequence / map — raises
+	// CXER0100 at eval per render_str_hole_value; holes still cannot contain a
+	// literal `}` since the template scan stops at the first `}`.)
 	prog := parse_program(src) or {
 		return ParseError{
-			message: '[?str] malformed interpolation hole `{${src}}`: not a binding-path expression'
-			pos:     pos
+			message:           '[?str] malformed interpolation hole `{${src}}`: ${err.msg()}'
+			pos:               pos
+			program_committed: true
 		}
 	}
-	body := prog.body
-	if body is ProgramBinding {
-		return body
-	}
-	if body is ProgramPathExpr {
-		return body
-	}
-	return ParseError{
-		message: '[?str] interpolation hole `{${src}}` is not a binding-path expression — only `\$binding`, `\$x/child`, and `\$x//y[@pred]` holes are admitted (calls and other expressions are not; bind first, then interpolate)'
-		pos:     pos
-	}
+	return prog.body
 }
 
 // ── Modify ───────────────────────────────────────────────────────
@@ -4186,7 +4556,8 @@ fn (mut p ProgramParser) parse_for_comp_body(start Position, outer_form ProgramF
 								op := p.peek().text
 								return ParseError{
 									message: '[where] takes a PREFIX predicate — write `[where [${op} LHS RHS]]` (e.g. `[where [= \$x/@attr value]]`), not infix `LHS ${op} RHS`'
-									pos:     p.peek().pos
+									pos:               p.peek().pos
+									program_committed: true
 								}
 							}
 							p.expect(.rbrack, "']' (closing [where …])")!
@@ -4265,8 +4636,57 @@ fn (mut p ProgramParser) parse_for_comp_body(start Position, outer_form ProgramF
 							}
 						}
 						'par' {
-							p.expect(.rbrack, "']' (closing [par])")!
-							clauses << ProgramForClause{ kind: .par }
+							// `[par]` / `[par N]` / `[par max]` (#94). Width = the
+							// max concurrent workers (a bounded pool). N must be a
+							// positive integer; `max` is the only keyword; anything
+							// else is a parse error (no silent fallback).
+							mut pw := 0
+							mut pmax := false
+							nk := p.peek_kind()
+							if nk == .rbrack {
+								// bare [par] → default width
+							} else if nk == .number_lit {
+								wtok := p.advance()
+								if wtok.text.contains('.') || wtok.text.contains('e')
+									|| wtok.text.contains('E') {
+									return ParseError{
+										message:           '[par] width must be a positive integer, got "${wtok.text}"'
+										pos:               wtok.pos
+										program_committed: true
+									}
+								}
+								w := wtok.text.int()
+								if w < 1 {
+									return ParseError{
+										message:           '[par] width must be ≥ 1, got ${w}'
+										pos:               wtok.pos
+										program_committed: true
+									}
+								}
+								pw = w
+							} else if nk == .ident && p.peek().text == 'max' {
+								p.advance()
+								pmax = true
+							} else {
+								t := p.peek()
+								return ParseError{
+									message:           '[par] expects an integer width or `max`, got "${t.text}"'
+									pos:               t.pos
+									program_committed: true
+								}
+							}
+							// A second token before `]` (e.g. `[par 8 9]`) is rejected
+							// fail-loud (program intent), not silently data-fallback.
+							if p.peek_kind() != .rbrack {
+								t := p.peek()
+								return ParseError{
+									message:           '[par] takes at most one width token, got extra "${t.text}"'
+									pos:               t.pos
+									program_committed: true
+								}
+							}
+							p.advance() // consume ]
+							clauses << ProgramForClause{ kind: .par, par_width: pw, par_max: pmax }
 						}
 						'stream' {
 							p.expect(.rbrack, "']' (closing [stream])")!

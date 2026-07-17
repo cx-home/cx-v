@@ -768,7 +768,12 @@ fn jrn_store_put_doc(store_id int, doc cx.Node) ?string {
 
 fn jrn_store_get_doc_text(store_id int, hash string) ?string {
 	ms := store_lookup(store_id) or { return none }
-	return ms.docs[hash] or { none }
+	// Route through the doc abstraction so the journal resolves docs on EVERY
+	// backend (object-graph stores keep docs in the graph, not the flat map).
+	if !store_doc_present(ms, hash) {
+		return none
+	}
+	return store_doc_text(ms, hash) or { none }
 }
 
 fn jrn_store_set_alias(store_id int, name string, hash string) {

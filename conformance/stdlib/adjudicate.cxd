@@ -1,0 +1,255 @@
+[test-suite name=adjudicate
+  [doc [#
+Conformance fixtures for cx-x/adjudicate — the out-of-band agent adjudicator for
+the similar review band (spec/03-approved/x/adjudicate.md; cx-private #376, the
+similar.md §5.3 ruling-Q4 follow-up). NB cx-x/adjudicate is an EXPERIMENTAL
+x/-TIER module (D3): bundled + gated but exempt from the frozen-std stability
+promise. Programs name the tier explicitly via [?lib 'cx-x/adjudicate'].
+
+These fixtures cover the PURE surface — verdict parsing, resolution-record
+building, prompt structure, the decisive filter — plus the live-consumer seam:
+records built here feed [$similar:predicate {resolutions: …}] and short-circuit
+per similar.md §5.4 with decided-by provenance. The effectful surface
+(adjudicate-pair / adjudicate, which POST to an /api/chat endpoint via
+cx-x/llm:complete) is proven by a live loopback round-trip in
+vcx/tests/adjudicate_real_test.v (a mock Ollama server), the same split the
+llm/http modules use.
+
+prompt-of's text is NOT version-stable (x/ tier; prompt engineering may evolve):
+cases pin STRUCTURE (payloads rendered canonically, the verdict vocabulary,
+conditional score/evidence lines) via strings:contains, never the full text.
+
+Every expected output below was re-derived by RUNNING the program against the
+shipped binary (cx <file> — the single oracle).
+
+   Case families:
+     001-006 verdict-of parsing (precedence, case-fold, safe default)
+     007-009 resolution-of record shape (string / map / element payloads)
+     010-011 prompt-of structural pins (score/evidence presence)
+     012-013 decisive filter (order-preserving, empty identity)
+     014-016 resolutions-tier round-trip (the §5.4 consumer is live:
+             short-circuit, orientation-insensitivity, no-match flip)
+#]]
+
+ [# ---- verdict-of parsing ------------------------------------------ #]
+
+ [case id=adjudicate-001-verdict-match level=core
+  [tags adjudicate verdict-of match]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:verdict-of "match"]
+#]]
+  [out-text [#
+:match
+#]]
+ ]
+
+ [case id=adjudicate-002-verdict-no-match level=core
+  [tags adjudicate verdict-of no-match]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:verdict-of "no-match"]
+#]]
+  [out-text [#
+:no-match
+#]]
+ ]
+
+ [case id=adjudicate-003-verdict-no-match-spaced-cased level=core
+  [tags adjudicate verdict-of no-match case-fold]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:verdict-of "No match."]
+#]]
+  [out-text [#
+:no-match
+#]]
+ ]
+
+ [case id=adjudicate-004-verdict-review-cased level=core
+  [tags adjudicate verdict-of review case-fold]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:verdict-of "REVIEW"]
+#]]
+  [out-text [#
+:review
+#]]
+ ]
+
+ [case id=adjudicate-005-verdict-unparseable-safe-default level=core
+  [tags adjudicate verdict-of review safe-default]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:verdict-of "I cannot decide from this evidence alone"]
+#]]
+  [out-text [#
+:review
+#]]
+ ]
+
+ [case id=adjudicate-006-verdict-precedence-no-match-over-match level=core
+  [tags adjudicate verdict-of precedence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:verdict-of "It reads like a match, though arguably a no-match on the dates"]
+#]]
+  [out-text [#
+:no-match
+#]]
+ ]
+
+ [# ---- resolution-of record shape ---------------------------------- #]
+
+ [case id=adjudicate-007-resolution-string-payloads level=core
+  [tags adjudicate resolution-of shape]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:resolution-of :no-match "erik" "acme corp" "acme corp."]
+#]]
+  [out-text [#
+[resolution verdict=:no-match decided-by=erik [left 'acme corp'] [right 'acme corp.']]
+#]]
+ ]
+
+ [case id=adjudicate-008-resolution-map-payloads level=core
+  [tags adjudicate resolution-of shape map]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:resolution-of :match "agent:mistral" {name: "Jon Smith", dob: 1985-03-12} {name: "John Smith", dob: 1985-03-12}]
+#]]
+  [out-text [#
+[resolution verdict=:match decided-by=agent:mistral [left {name: 'Jon Smith', dob: '1985-03-12'}] [right {name: 'John Smith', dob: '1985-03-12'}]]
+#]]
+ ]
+
+ [case id=adjudicate-009-resolution-element-payloads level=core
+  [tags adjudicate resolution-of shape element]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:resolution-of :review "agent:mistral" [v [name "acme corp"]] [v [name "acme gmbh"]]]
+#]]
+  [out-text [#
+[resolution verdict=:review decided-by=agent:mistral [left [v [name 'acme corp']]] [right [v [name 'acme gmbh']]]]
+#]]
+ ]
+
+ [# ---- prompt-of structural pins ----------------------------------- #]
+
+ [case id=adjudicate-010-prompt-structure-with-score level=core
+  [tags adjudicate prompt-of structure]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[?lib 'cx-stdlib/strings' :as strings]
+[?let [= $p [$adj:prompt-of [pair score=0.9 band=:review [left "alpha beta"] [right "alpha bta"]]]]
+  ([$strings:contains $p "'alpha beta'"],
+   [$strings:contains $p "'alpha bta'"],
+   [$strings:contains $p "no-match"],
+   [$strings:contains $p "review"],
+   [$strings:contains $p "automatic score: 0.9"])]
+#]]
+  [out-text [#
+(true, true, true, true, true)
+#]]
+ ]
+
+ [case id=adjudicate-011-prompt-scoreless-with-evidence level=core
+  [tags adjudicate prompt-of structure evidence]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[?lib 'cx-stdlib/strings' :as strings]
+[?let [= $p [$adj:prompt-of [pair [left "a"] [right "b"] [evidence [scorer :jaro-winkler]]]]]
+  ([$strings:contains $p "automatic score:"],
+   [$strings:contains $p "scoring evidence:"],
+   [$strings:contains $p ":jaro-winkler"])]
+#]]
+  [out-text [#
+(false, true, true)
+#]]
+ ]
+
+ [# ---- decisive filter ---------------------------------------------- #]
+
+ [case id=adjudicate-012-decisive-drops-review-keeps-order level=core
+  [tags adjudicate decisive filter]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[?let
+  [= $r1 [$adj:resolution-of :match "erik" "x" "y"]]
+  [= $r2 [$adj:resolution-of :review "erik" "p" "q"]]
+  [= $r3 [$adj:resolution-of :no-match "erik" "m" "n"]]
+  [$adj:decisive ($r1, $r2, $r3)]]
+#]]
+  [out-text [#
+([resolution verdict=:match decided-by=erik [left 'x'] [right 'y']], [resolution verdict=:no-match decided-by=erik [left 'm'] [right 'n']])
+#]]
+ ]
+
+ [case id=adjudicate-013-decisive-empty-identity level=core
+  [tags adjudicate decisive empty]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[$adj:decisive ()]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [# ---- resolutions-tier round-trip (the §5.4 consumer is live) ------ #]
+
+ [case id=adjudicate-014-record-short-circuits-consumer level=core
+  [tags adjudicate resolutions similar resume short-circuit]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[?lib 'cx-stdlib/similar' :as similar]
+[?let [= $r [$adj:resolution-of :match "agent:mistral" "acme corp" "acme corp."]]
+  [~ "acme corp" "acme corp." [$similar:predicate {decide: {match: 0.99, review: 0.85}, resolutions: ($r)}]]]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [resolved decided-by=agent:mistral :match]]]
+#]]
+ ]
+
+ [case id=adjudicate-015-record-orientation-insensitive level=core
+  [tags adjudicate resolutions similar orientation]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[?lib 'cx-stdlib/similar' :as similar]
+[?let [= $r [$adj:resolution-of :match "agent:mistral" "acme corp" "acme corp."]]
+  [~ "acme corp." "acme corp" [$similar:predicate {decide: {match: 0.99, review: 0.85}, resolutions: ($r)}]]]
+#]]
+  [out-text [#
+[similar score=1.0 band=:match [evidence [resolved decided-by=agent:mistral :match]]]
+#]]
+ ]
+
+ [case id=adjudicate-016-record-flips-to-no-match level=core
+  [tags adjudicate resolutions similar no-match]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/adjudicate' :as adj]
+[?lib 'cx-stdlib/similar' :as similar]
+[?let [= $r [$adj:resolution-of :no-match "agent:mistral" "globex" "globex inc"]]
+  [~ "globex" "globex inc" [$similar:predicate {decide: {match: 0.9, review: 0.8}, resolutions: ($r)}]]]
+#]]
+  [out-text [#
+[similar score=0.0 band=:no-match [evidence [resolved decided-by=agent:mistral :no-match]]]
+#]]
+ ]
+]

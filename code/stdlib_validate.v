@@ -13,7 +13,16 @@ import cx
 // differs and is implemented natively below.
 //
 // ── value model ──────────────────────────────────────────────────────
-//   schema  → [schema [field name=… type=… …] … strict=.. extends=.. ]
+//   schema  → [schema [extends $Base]? [field name=… type=… …] … strict=..]
+//             Structured schema data rides in CHILD ELEMENTS — attributes
+//             are strictly scalar (code.md §6.4.1; #466/#268 ruling):
+//               [field … [enum v …]]      enum membership set
+//               [field … [schema …]]      nested schema (type="element")
+//               [schema [extends $B] …]   base-schema composition
+//             The retired enum=[…] / schema=[…] / extends=$B ATTR forms
+//             fail loud: at construction (CXER0100, scalar-only attrs) or,
+//             when a scalar-carried keyword still reaches the walk, as a
+//             malformed schema with a migration hint (CXER1603).
 //   record  → an element whose child elements are the fields:
 //             [rec [email "a@b.co"] [score 87]] — field `email`'s value
 //             is the field element's single body item.
@@ -322,32 +331,45 @@ fn val_is_scalar_comparable(n cx.Node) bool {
 	}
 }
 
-// val_enum_members reads the enum= members off a [field …] element.
-//
-// At the native boundary the `enum=[v …]` attribute has already been
-// evaluated to a STRING value carrying the serialized array literal
-// (e.g. `['red', 'green', 'blue']` or `[[bad-member]]`). Re-parse that
-// text into its item nodes; an element member (e.g. `[bad-member]`) is a
-// non-comparable enum value (→ CXER1604, surfaced by the caller). Returns
-// (members, ok) where ok=false signals an unparseable enum= body.
-fn val_enum_members(field cx.Element) ([]cx.Node, bool) {
-	for a in field.attrs {
-		if a.name == 'enum' {
-			// inline BracketBody (program-eval contexts) — preferred.
-			if body := a.body() {
-				return val_collection_items_of(body), true
-			}
-			// data-element path: the attr is a string holding the array
-			// literal text. Parse it and flatten the single array item.
-			txt := cx.scalar_value_str_public(a.value)
-			if txt.trim_space() == '' {
-				return []cx.Node{}, true
-			}
-			doc := cx.parse(txt) or { return []cx.Node{}, false }
-			return val_collection_items_of(doc.elements), true
+// val_child_element returns the first child element of `el` named `name`,
+// or none. The home of the child-element schema vocabulary lookups
+// ([enum …] / [schema …] / [extends …]).
+fn val_child_element(el cx.Element, name string) ?cx.Element {
+	for child in el.items {
+		if child is cx.Element && child.name == name {
+			return child
 		}
 	}
-	return []cx.Node{}, true
+	return none
+}
+
+// val_has_attr reports whether `el` carries an attribute named `name` —
+// used to detect the RETIRED attr-collection schema vocabulary
+// (enum= / schema= / extends=) for the loud cutover (CXER1603 with a
+// migration hint). A collection-VALUED attr never gets this far
+// (construction rejects it with CXER0100, §6.4.1); this catches the
+// scalar-carried spellings (quoted / bareword).
+fn val_has_attr(el cx.Element, name string) bool {
+	for a in el.attrs {
+		if a.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// val_enum_members reads the enum membership set off a [field …] element:
+// the body items of its [enum …] CHILD element (validate.md §3.5; the
+// retired `enum=[v …]` attr form is rejected by the caller). Members are
+// the child's discrete items; a single array/sequence item flattens, so
+// `[enum "red" "green"]` and `[enum "red", "green"]` carry the same set.
+// An element member (e.g. `[enum [bad-member]]`) is a non-comparable enum
+// value (→ CXER1604, surfaced by the caller).
+fn val_enum_members(field cx.Element) []cx.Node {
+	if enum_el := val_child_element(field, 'enum') {
+		return val_collection_items_of(enum_el.items)
+	}
+	return []cx.Node{}
 }
 
 // val_collection_items_of flattens a parsed array/sequence wrapper into
@@ -387,35 +409,12 @@ fn val_schema_fields(schema cx.Element) []cx.Element {
 	return fields
 }
 
-// val_nested_schema returns the [schema …] element attached to a
-// `type="element"` field via `schema=`. At the native boundary the
-// `schema=[schema …]` attribute has been evaluated to a STRING carrying
-// the serialized nested-schema element text; re-parse it. The inline
-// BracketBody path (program-eval contexts) is preferred when present.
-// Returns none when no schema= is present or it does not parse to a
-// [schema …] element.
+// val_nested_schema returns the nested [schema …] CHILD element of a
+// `type="element"` field (validate.md §4.3; the retired `schema=[schema …]`
+// attr form is rejected by the caller). Returns none when the field has
+// no [schema …] child.
 fn val_nested_schema(field cx.Element) ?cx.Element {
-	for a in field.attrs {
-		if a.name == 'schema' {
-			if body := a.body() {
-				for n in body {
-					if n is cx.Element && n.name == 'schema' {
-						return n
-					}
-				}
-			}
-			txt := cx.scalar_value_str_public(a.value)
-			if txt.trim_space() != '' {
-				doc := cx.parse(txt) or { return none }
-				for n in doc.elements {
-					if n is cx.Element && n.name == 'schema' {
-						return n
-					}
-				}
-			}
-		}
-	}
-	return none
+	return val_child_element(field, 'schema')
 }
 
 // ── core validation walk ─────────────────────────────────────────────
@@ -450,6 +449,19 @@ fn val_validate_record(record cx.Node, schema cx.Element, prefix string, depth i
 
 	mut declared := map[string]bool{}
 	for field in fields {
+		// RETIRED attr-collection vocabulary — loud cutover (#466/#268
+		// ruling): enum= / schema= moved to [enum …] / [schema …] child
+		// elements. A scalar-carried old spelling is a malformed schema
+		// with a migration hint (a collection-valued one never gets here —
+		// construction rejects it with CXER0100, §6.4.1).
+		if val_has_attr(field, 'enum') {
+			return mk_err('cx-err:CXER1603',
+				'E_VALIDATE_SCHEMA_MALFORMED: the enum= attribute is retired — spell the members as an [enum v …] child element ([field … [enum v …]], validate.md §3.5)'), false
+		}
+		if val_has_attr(field, 'schema') {
+			return mk_err('cx-err:CXER1603',
+				'E_VALIDATE_SCHEMA_MALFORMED: the schema= attribute is retired — nest the schema as a [schema …] child element ([field type="element" [schema …]], validate.md §4.3)'), false
+		}
 		fname := val_attr_str(field, 'name') or { continue }
 		declared[fname] = true
 		fpath := '${prefix}/${fname}'
@@ -479,7 +491,7 @@ fn val_validate_record(record cx.Node, schema cx.Element, prefix string, depth i
 			}
 		}
 
-		// nested-schema validation (§4.3): type="element" + schema=.
+		// nested-schema validation (§4.3): type="element" + [schema …] child.
 		if !field_failed {
 			if nested := val_nested_schema(field) {
 				before := viols.len
@@ -561,9 +573,9 @@ fn val_validate_record(record cx.Node, schema cx.Element, prefix string, depth i
 			}
 		}
 
-		// enum membership (§3.5).
+		// enum membership (§3.5) — the [enum …] child element's members.
 		if !field_failed {
-			members, _ := val_enum_members(field)
+			members := val_enum_members(field)
 			if members.len > 0 {
 				for m in members {
 					if !val_is_scalar_comparable(m) {
@@ -624,67 +636,57 @@ fn val_validate_record(record cx.Node, schema cx.Element, prefix string, depth i
 	return cx.ScalarNode{ value: cx.ScalarValue(cx.NullValue{}), data_type: .null_type }, true
 }
 
-// val_schema_extends_chain resolves the merged field set of a schema that
-// carries `extends=Base`. Returns the effective [schema …] element with
-// the base's fields prepended (child fields override by name) and a
-// merged strict / validate-with carried on the returned element. On an
-// extends= cycle returns an error VALUE (CXER1603).
+// val_resolve_schema resolves the merged field set of a schema that
+// carries an `[extends BASE]` child (validate.md §3.7). Returns the
+// effective [schema …] element with the base's fields prepended (child
+// fields override by name) and the child's own strict / validate-with
+// carried on the returned element. On an unresolvable / cyclic extends
+// returns an error VALUE (CXER1603).
 //
-// The base arrives one of two idiomatic ways (both resolved here, mirroring
-// `val_nested_schema`'s nested `schema=` handling):
-//   - inline literal `extends=[schema …]` → captured as the attribute body;
-//   - a value reference `extends=$BaseConst` (the CX way to reference a bound
-//     schema value, §3.7) → the evaluator substitutes `$BaseConst` in the
-//     user's env and serialises the resulting `[schema …]` element into the
-//     attribute's scalar value, which we re-parse below.
-// A bareword `extends=Base` (no `$`) is a literal symbol, not a value
-// reference; it carries no schema → unresolved → CXER1603 (the cycle/missing
-// signal — e.g. a self-referential `[?const CYCLE [schema extends=$CYCLE …]]`
-// whose const is mid-definition).
+// The base is the [extends …] child's single item, arriving one of two
+// idiomatic ways:
+//   - a value reference `[extends $BaseConst]` (the CX way to reference a
+//     bound schema value, §3.7) → the evaluator substitutes the bound
+//     [schema …] element as the child's item;
+//   - an inline literal `[extends [schema …]]`.
+// A bare word (`[extends Base]`, no `$`) is a literal symbol, not a value
+// reference; it carries no schema value → unresolved → CXER1603 (the
+// cycle/missing signal — e.g. a self-referential
+// `[?const CYCLE [schema [extends CYCLE] …]]` whose const is
+// mid-definition).
+//
+// The RETIRED `extends=` attr spelling is a malformed schema with a
+// migration hint (CXER1603) — attributes are strictly scalar (§6.4.1),
+// so the old value-reference form cannot even construct (CXER0100).
 fn val_resolve_schema(schema cx.Element) (cx.Element, cx.Node, bool) {
-	// detect extends=
-	mut has_extends := false
-	mut base_schema := ?cx.Element(none)
-	for a in schema.attrs {
-		if a.name == 'extends' {
-			has_extends = true
-			if body := a.body() {
-				for n in body {
-					if n is cx.Element && n.name == 'schema' {
-						base_schema = n
-					}
-				}
-			}
-			// `extends=$Base` value-reference form: the substituted schema
-			// element is serialised into the scalar value — re-parse it.
-			if base_schema == none {
-				txt := cx.scalar_value_str_public(a.value)
-				if txt.trim_space() != '' {
-					if doc := cx.parse(txt) {
-						for n in doc.elements {
-							if n is cx.Element && n.name == 'schema' {
-								base_schema = n
-							}
-						}
-					}
-				}
-			}
-		}
+	if val_has_attr(schema, 'extends') {
+		return cx.Element{}, mk_err('cx-err:CXER1603',
+			'E_VALIDATE_SCHEMA_MALFORMED: the extends= attribute is retired — spell the base as an [extends \$Base] child element ([schema [extends \$Base] [field …] …], validate.md §3.7)'), false
 	}
-	if !has_extends {
+	extends_el := val_child_element(schema, 'extends') or {
 		return schema, cx.Node(val_bool(true)), true
 	}
+	mut base_schema := ?cx.Element(none)
+	if extends_el.items.len == 1 {
+		it := extends_el.items[0]
+		if it is cx.Element && it.name == 'schema' {
+			base_schema = it
+		}
+	}
 	base := base_schema or {
-		// extends= present but unresolvable → cycle / malformed (§4.7).
+		// [extends …] present but its item is not a [schema …] value →
+		// cycle / missing base (§4.7).
 		return cx.Element{}, mk_err('cx-err:CXER1603',
-			'E_VALIDATE_SCHEMA_MALFORMED: unresolved extends= (cycle or missing base schema)'), false
+			'E_VALIDATE_SCHEMA_MALFORMED: unresolved [extends …] (cycle or missing base schema — reference a bound schema value as [extends \$Base])'), false
 	}
 	// recursively resolve the base (base may itself extend).
 	resolved_base, berr, bok := val_resolve_schema(base)
 	if !bok {
 		return cx.Element{}, berr, false
 	}
-	// merge: base fields first, child fields override by name.
+	// merge: base fields first, child fields override by name. The
+	// [extends …] child itself is consumed here and dropped from the
+	// merged element.
 	mut child_names := map[string]bool{}
 	for f in val_schema_fields(schema) {
 		if nm := val_attr_str(f, 'name') {
@@ -700,6 +702,9 @@ fn val_resolve_schema(schema cx.Element) (cx.Element, cx.Node, bool) {
 		merged_items << bf
 	}
 	for it in schema.items {
+		if it is cx.Element && it.name == 'extends' {
+			continue
+		}
 		merged_items << it
 	}
 	// carry the child's own attrs (strict / validate-with); the base's
@@ -933,7 +938,7 @@ fn val_backfill_path(v cx.Element, path string) cx.Node {
 
 // ── bundled module source ────────────────────────────────────────────
 //
-// val_validate_shape_collect runs declarative validation (resolving extends=)
+// val_validate_shape_collect runs declarative validation (resolving [extends …])
 // and returns the [ok …] / [invalid …] result PLUS the pending custom-validator
 // descriptors the env-hook must apply. On a malformed-schema / structural
 // condition it returns the control-flow err value and an empty pending list.
@@ -953,7 +958,7 @@ fn val_validate_shape_collect(value cx.Node, schema cx.Element) (cx.Node, []ValP
 
 // validate_stdlib_builtin_env is the evaluator-env-aware entry for
 // `validate-shape`: it applies `validate-with=` custom validators (§3.6), which
-// need the env to invoke a user `[?def]`. (`extends=$Base` composition is
+// need the env to invoke a user `[?def]`. (`[extends $Base]` composition is
 // resolved env-free in val_resolve_schema — the value reference is substituted
 // by the evaluator at the call site.) Tried before the env-free chain; returns
 // the final [ok …] / [invalid …] result, or none for non-validate-shape names
@@ -999,7 +1004,7 @@ fn validate_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?c
 }
 
 // The canonical cx-stdlib/validate surface. The declarative checks
-// forward to native primitives; custom validators (§3.6) and extends=<const>
+// forward to native primitives; custom validators (§3.6) and [extends $Const]
 // references are applied by validate_stdlib_builtin_env (evaluator-env-aware
 // dispatch), which has the env to invoke a user `[?def]` / resolve a `[?const]`.
 // NOTE: this const is $embed_file-d from stdlib/validate.cx — edit that file.

@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 import net
 import net.unix
@@ -23,11 +24,7 @@ import net.unix
 // fails fast against the stub rather than hanging on a blocking accept.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // Disjoint PID + nanosecond-salted band (26600-26699) so the concurrent

@@ -1,6 +1,7 @@
 @[has_globals]
 module picoev
 
+import os
 import sync
 
 // ── cx patch — held-open fds for SSE (§24) ───────────────────────────────────
@@ -20,21 +21,38 @@ import sync
 // closed, closing the reuse race. `cx_release_fd` clears the mark.
 type CxSseCloseFn = fn (int)
 
+// CxDeferCloseFn — cx-private #275 (handlers off reactors): consulted by
+// close_conn BEFORE closing a socket. Returning true means a dispatch job for
+// this fd is in flight on an executor thread: picoev deregisters the fd from
+// its loop but LEAVES THE SOCKET OPEN — the executor performs the final
+// cx_close_socket_fd when the job completes. Keeping the fd number allocated
+// until then is what makes a late response write unable to land on a recycled
+// fd (the same reuse race the SSE held-set closes for pushes).
+type CxDeferCloseFn = fn (int) bool
+
 __global (
-	cx_held_fds     [max_fds]bool
-	cx_held_lock    sync.Mutex
-	cx_sse_on_close CxSseCloseFn
+	cx_held_fds            [max_fds]u8
+	cx_sse_on_close        CxSseCloseFn
+	cx_dispatch_defer_close CxDeferCloseFn
 )
 
-// cx_hold_fd marks `fd` as a held-open (SSE) connection: exempt from the idle
-// timeout, owned by the cx SSE layer until it closes.
+fn C.atomic_load_byte(voidptr) u8
+fn C.atomic_store_byte(voidptr, u8)
+
+// The held set is per-fd byte ATOMICS, not a lock-guarded bool array: the
+// marks are set/cleared on every dispatched request (#275) as well as per SSE
+// stream, from reactors and executor threads alike — and the original
+// VALUE-typed sync.Mutex global was a zeroed (non-functional on Darwin)
+// pthread mutex anyway. Single-flag reads/writes have no compound invariant
+// across fds; seq_cst byte atomics give the ordering the close path needs.
+
+// cx_hold_fd marks `fd` as held open: exempt from the idle timeout, owned by
+// the cx layer (an SSE stream, or an in-flight dispatch job) until released.
 pub fn cx_hold_fd(fd int) {
 	if fd < 0 || fd >= max_fds {
 		return
 	}
-	cx_held_lock.lock()
-	cx_held_fds[fd] = true
-	cx_held_lock.unlock()
+	C.atomic_store_byte(&cx_held_fds[fd], 1)
 }
 
 // cx_release_fd clears the held mark for `fd`.
@@ -42,20 +60,15 @@ pub fn cx_release_fd(fd int) {
 	if fd < 0 || fd >= max_fds {
 		return
 	}
-	cx_held_lock.lock()
-	cx_held_fds[fd] = false
-	cx_held_lock.unlock()
+	C.atomic_store_byte(&cx_held_fds[fd], 0)
 }
 
-// cx_is_held reports whether `fd` is a held-open SSE connection.
+// cx_is_held reports whether `fd` is currently held open.
 pub fn cx_is_held(fd int) bool {
 	if fd < 0 || fd >= max_fds {
 		return false
 	}
-	cx_held_lock.lock()
-	held := cx_held_fds[fd]
-	cx_held_lock.unlock()
-	return held
+	return C.atomic_load_byte(&cx_held_fds[fd]) != 0
 }
 
 // cx_set_sse_on_close registers the cx callback invoked (with the fd) just
@@ -63,6 +76,18 @@ pub fn cx_is_held(fd int) bool {
 // from its subscriber set synchronously and avoid pushing to a reused fd.
 pub fn cx_set_sse_on_close(cb CxSseCloseFn) {
 	cx_sse_on_close = cb
+}
+
+// cx_set_dispatch_defer_close registers the #275 in-flight-dispatch probe —
+// see CxDeferCloseFn.
+pub fn cx_set_dispatch_defer_close(cb CxDeferCloseFn) {
+	cx_dispatch_defer_close = cb
+}
+
+// cx_close_socket_fd is the executor-side final close for a deferred-close fd
+// (already deregistered from every loop by close_conn).
+pub fn cx_close_socket_fd(fd int) {
+	close_socket(fd)
 }
 
 // cx patch — shared-listener multi-reactor support.
@@ -92,6 +117,16 @@ pub fn listen_socket(config Config) !int {
 // `listen_fd` is registered with the standard accept_callback. Run N of
 // these, each on its own thread via serve(), for a multi-reactor server.
 pub fn new_with_listen_fd(config Config, listen_fd int) !&Picoev {
+	// Same SIGPIPE immunity as new() — this is the constructor the cx serve
+	// path ACTUALLY uses (spawn_shared_reactors), so the process-wide ignore
+	// must live here too. It also covers CLIENT-side writes with no
+	// per-socket guard: mbedtls opens its own raw C socket (no SO_NOSIGPIPE,
+	// no MSG_NOSIGNAL), so a TLS fetch whose peer reset the connection —
+	// e.g. the weather fetch against a keep-alive server — killed the whole
+	// process silently despite the server-side fd guards.
+	$if !windows {
+		os.signal_ignore(.pipe)
+	}
 	mut pv := &Picoev{
 		num_loops:      1
 		cb:             config.cb

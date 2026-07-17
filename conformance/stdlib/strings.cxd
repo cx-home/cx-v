@@ -630,6 +630,34 @@ true
 #]]
  ]
 
+ [case id=strings-045b-replace-exactly level=core
+  [tags strings replace-exactly]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:replace-exactly "a.b.c" "b" "X"]
+#]]
+  [out-text [#
+'a.X.c'
+#]]
+ ]
+
+ [case id=strings-045c-replace-exactly-ambiguous level=core
+  [tags strings replace-exactly CXER2903]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:replace-exactly "a.a.a" "a" "X"]
+#]]
+  [out-text [#
+[result status=err code=cx-err:CXER2903 message='E_STRINGS_REPLACE_NOT_UNIQUE: "from" must occur exactly once, found 3']
+#]]
+ ]
+
  [case id=strings-046-pad-start level=core
   [tags strings pad-start]
   [in-cx [#

@@ -1,6 +1,7 @@
 module main
 
 import os
+import testenv
 import time
 import net
 
@@ -19,11 +20,7 @@ import net
 //     [$http:sse-connect] + [?for [$http:sse-events]] client collects them.
 
 fn cx_binary() string {
-	abs := os.real_path('vcx/target/cx')
-	if !os.is_file(abs) {
-		panic('vcx/target/cx not found at ${abs} — run `make build-vcx` first')
-	}
-	return abs
+	return testenv.cx_bin()
 }
 
 // Disjoint PID + nanosecond-salted band (26000-26099) so the concurrent

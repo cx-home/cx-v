@@ -1,6 +1,7 @@
 module main
 
 import code
+import cx
 
 // ── Phase 3.11 follow-up: json/yaml/xml/csv/tsv renderers ──────────────────
 //
@@ -117,11 +118,12 @@ fn test_xml_sequence_lifts_to_cx_seq() {
 		assert false, 'eval failed: ${err}'
 		return
 	}
-	// Top-level sequence routes through emit_xml_sequence as `<cx:seq>`.
+	// Top-level sequence routes through emit_xml_sequence as `<cx:seq>` with
+	// the reserved `<cx:item>` per-item wrapper (conversions.md §2.1, #392).
 	assert out.contains('<cx:seq>'), 'expected cx:seq wrapper; got: ${out}'
-	assert out.contains('<item>1</item>'), 'expected <item>1</item>; got: ${out}'
-	assert out.contains('<item>2</item>'), 'got: ${out}'
-	assert out.contains('<item>3</item>'), 'got: ${out}'
+	assert out.contains('<cx:item>1</cx:item>'), 'expected <cx:item>1</cx:item>; got: ${out}'
+	assert out.contains('<cx:item>2</cx:item>'), 'got: ${out}'
+	assert out.contains('<cx:item>3</cx:item>'), 'got: ${out}'
 }
 
 fn test_xml_array_lifts_to_cx_arr() {
@@ -130,6 +132,36 @@ fn test_xml_array_lifts_to_cx_arr() {
 		return
 	}
 	assert out.contains('<cx:arr>'), 'expected cx:arr wrapper; got: ${out}'
+}
+
+// #392 regression: a collection marker NESTED under a plain element must
+// normalize to its cx-native node before the XML emitter runs. Before the
+// flatten_slots recursion fix this leaked the internal marker verbatim —
+// `<tags><__cx_arr__>webapi</__cx_arr__></tags>` — concatenated items, no
+// per-item boundaries, unrecoverable on import.
+fn test_xml_nested_array_emits_spec_carrier_not_marker() {
+	out := code.eval_code('', '[tags ["web", "api"]]', 'xml') or {
+		assert false, 'eval failed: ${err}'
+		return
+	}
+	assert !out.contains('__cx_arr__'), 'internal marker leaked into XML: ${out}'
+	assert out.contains('<tags><cx:arr><cx:item>web</cx:item><cx:item>api</cx:item></cx:arr></tags>'),
+		'expected the conversions.md cx:arr/cx:item mapping; got: ${out}'
+}
+
+// #392: the spec'd import inverse — the cx:arr/cx:item carrier decodes back
+// to an Array, so the emit→import round-trip recovers ["web", "api"] instead
+// of the pre-fix concatenated "webapi".
+fn test_xml_array_round_trip_recovers_items() {
+	xml_out := code.eval_code('', '[tags ["web", "api"]]', 'xml') or {
+		assert false, 'eval failed: ${err}'
+		return
+	}
+	back := cx.convert_by_name(xml_out, 'xml', 'cx', false) or {
+		assert false, 'xml import failed: ${err}'
+		return
+	}
+	assert back.contains("['web', 'api']"), 'round-trip lost the array shape; got: ${back}'
 }
 
 // ── CSV / TSV: sequence-of-records → header + rows ─────────────────────────
@@ -191,4 +223,72 @@ fn test_csv_rejects_pure_value_sequence() {
 		assert err.msg().contains('cx-err:CXER0100')
 		assert err.msg().contains('not a sequence of records')
 	}
+}
+
+// ── #438: one spelling for empty items in rendered sequences ────────────────
+// The program reading preserves sequence rank (cxdm §2 MODE FORK SEQ-NEST),
+// so a sequence may hold empty items. Pre-fix the multi-value/absence
+// wrapper (empty [?for] result, no-branch conditional) rendered as a BARE
+// HOLE between commas while literal `()` items rendered as `()` — two
+// spellings of empty in one sequence, and `((), , (), ())` did not re-parse
+// as CX (it fell back to the data reading as a string). Rendered program
+// output MUST re-parse (bijectivity, canonical.md §1).
+
+const seq_empty_items_src = '([?if false [then 1] [else ()]],
+ [?for [in \$x ()] [yield \$x]],
+ [?if true [then ()] [else 1]],
+ ())'
+
+fn test_render_seq_empty_items_one_spelling() {
+	out := code.eval_code('', seq_empty_items_src, 'text') or {
+		assert false, 'eval failed: ${err}'
+		return
+	}
+	assert out == '((), (), (), ())', 'every empty item renders as (); got: ${out}'
+}
+
+fn test_render_seq_empty_items_reparse_equal_value() {
+	out := code.eval_code('', seq_empty_items_src, 'text') or {
+		assert false, 'eval failed: ${err}'
+		return
+	}
+	// The emitted text is itself a CX program whose value renders back to
+	// the same text — the render fixpoint that makes the output re-parse
+	// to an equal value rather than degrade to a data-fallback string.
+	again := code.eval_code('', out, 'text') or {
+		assert false, 're-parse of rendered output failed: ${err}'
+		return
+	}
+	assert again == out, 'rendered output must re-parse to an equal value; got: ${again}'
+	assert !again.starts_with("'"), 'output degraded to a data-fallback string: ${again}'
+}
+
+fn test_render_seq_empty_items_nested() {
+	out := code.eval_code('', '(1, ([?for [in \$x ()] [yield \$x]], ()))', 'text') or {
+		assert false, 'eval failed: ${err}'
+		return
+	}
+	assert out == '(1, ((), ()))', 'nested empties keep the paren spelling; got: ${out}'
+	again := code.eval_code('', out, 'text') or {
+		assert false, 're-parse failed: ${err}'
+		return
+	}
+	assert again == out, 'nested render must be a re-parse fixpoint; got: ${again}'
+}
+
+fn test_render_seq_empty_single() {
+	// A 1-item sequence whose item is empty. The program reading preserves
+	// rank, and the literal `(())` already rendered as `(())` — the
+	// computed-empty item must spell the same way (pre-fix this printed
+	// `()`, which was really `(` + hole + `)`).
+	out := code.eval_code('', '([?for [in \$x ()] [yield \$x]])', 'text') or {
+		assert false, 'eval failed: ${err}'
+		return
+	}
+	assert out == '(())', 'single empty item spells like the (()) literal; got: ${out}'
+	lit := code.eval_code('', '(())', 'text') or {
+		assert false, 'eval failed: ${err}'
+		return
+	}
+	assert out == lit, 'computed and literal single-empty must agree; got ${out} vs ${lit}'
 }

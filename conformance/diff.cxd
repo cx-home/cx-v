@@ -175,4 +175,121 @@ no changes
 1 change(s): 0 element, 0 attribute, 1 body
 #]]
  ]
+
+ [; [table] payload diff (#414): TableData lives in the pooled `table`
+    field, not in `items`, so the pre-fix walker compared two tables as
+    empty bodies and reported "no changes" while cx eq / cx hash both saw
+    the difference. These cases pin: identical tables diff clean; a cell
+    change, a row addition, a row removal, and a header change each
+    surface as body change(s); a table vs. a bare `::table` element (the
+    exact shape the pre-#413 XML round-trip produced) is non-empty. ]
+
+ [case id=050-table-identical level=core
+  [tags diff table equiv issue-414]
+  [in-a [#
+[users [table[name::string age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [in-b [#
+[users [table[name::string age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [expected-unified [##]]
+  [expected-summary [#
+no changes
+#]]
+ ]
+
+ [case id=051-table-cell-changed level=core
+  [tags diff table body-changed issue-414]
+  [in-a [#
+[users [table[name::string age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [in-b [#
+[users [table[name::string age::int]]
+  alice 31
+  bob 25
+]
+#]]
+  [expected-unified [#
+@@ /users @@
+- alice 30
++ alice 31
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 0 attribute, 1 body
+#]]
+ ]
+
+ [case id=052-table-row-added level=core
+  [tags diff table row-added issue-414]
+  [in-a [#
+[users [table[name::string age::int]]
+  alice 30
+]
+#]]
+  [in-b [#
+[users [table[name::string age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 0 attribute, 1 body
+#]]
+ ]
+
+ [case id=053-table-row-removed level=core
+  [tags diff table row-removed issue-414]
+  [in-a [#
+[users [table[name::string age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [in-b [#
+[users [table[name::string age::int]]
+  alice 30
+]
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 0 attribute, 1 body
+#]]
+ ]
+
+ [case id=054-table-header-changed level=core
+  [tags diff table header issue-414]
+  [in-a [#
+[t [table[a::int]]]
+#]]
+  [in-b [#
+[t [table[a::string]]]
+#]]
+  [expected-summary [#
+1 change(s): 0 element, 0 attribute, 1 body
+#]]
+ ]
+
+ [case id=055-table-vs-bare-table-annotation level=core
+  [tags diff table data-loss issue-413 issue-414]
+  [in-a [#
+[formats [table[format::string input::bool]]
+  CX true
+  XML true
+]
+#]]
+  [in-b [#
+[formats::table]
+#]]
+  [expected-summary [#
+3 change(s): 0 element, 0 attribute, 3 body
+#]]
+ ]
 ]

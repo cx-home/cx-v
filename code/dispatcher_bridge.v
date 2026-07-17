@@ -326,8 +326,9 @@ pub fn eval_modify_node_path_aware(node cx.ModifyNode, doc_root cx.Node,
 			}
 		}
 	}
-	// Doc must be an Element for the adapter walk.
-	if doc_root !is cx.Element {
+	// Doc must be an Element — or a directive-as-data node (#436), which
+	// walks through its Element view — for the adapter walk.
+	if doc_root !is cx.Element && doc_root !is cx.EvalDirectiveNode {
 		return ModifyResult{
 			result_doc:      emit_node_compact_doc(doc_root)
 			result_node:     ?cx.Node(doc_root)
@@ -354,7 +355,12 @@ pub fn eval_modify_node_path_aware(node cx.ModifyNode, doc_root cx.Node,
 		}
 		// Build a fresh adapter tree per action — the previous action
 		// may have mutated `current` structurally.
-		root_el := current as cx.Element
+		mut root_el := cx.Element{}
+		if current is cx.EvalDirectiveNode {
+			root_el = eval_directive_view(current as cx.EvalDirectiveNode)
+		} else {
+			root_el = current as cx.Element
+		}
 		adapter_root, index_map := build_cxnode_tree(root_el)
 		dispatcher := new_default_axis_dispatcher()
 		matches := eval_cxpath(path, [adapter_root], dispatcher) or {
@@ -506,6 +512,16 @@ fn build_cxnode_tree_recursive(el cx.Element, path []int,
 				child.parent = node
 				node.children << child
 			}
+			cx.EvalDirectiveNode {
+				// #436: a nested directive-as-data node mirrors through its
+				// Element view (name `?<name>`) so the axis walker descends
+				// into its body; an element NodeTest never matches the
+				// `?`-prefixed name.
+				mut child := build_cxnode_tree_recursive(eval_directive_view(item),
+					child_path, mut index_map)
+				child.parent = node
+				node.children << child
+			}
 			cx.ScalarNode {
 				// Mirror scalars as text-kind so axis walker sees them
 				// but doesn't recurse. Path tracked so attribute-style
@@ -611,6 +627,21 @@ fn apply_action_at_index_path(doc cx.Node, path []int,
 // / rename / using / append / prepend) use this path.
 fn apply_element_action_at_path(doc cx.Node, path []int,
 	action cx.ModifyAction) !cx.Node {
+	// #436: a directive-as-data spine node rebuilds through its Element
+	// view — apply into the view's items, then re-wrap as the directive.
+	if doc is cx.EvalDirectiveNode {
+		d := doc as cx.EvalDirectiveNode
+		new_view := apply_element_action_at_path(cx.Node(eval_directive_view(d)),
+			path, action)!
+		if new_view is cx.Element {
+			return cx.Node(cx.EvalDirectiveNode{
+				name:  d.name
+				attrs: new_view.attrs
+				items: new_view.items
+			})
+		}
+		return doc
+	}
 	if doc !is cx.Element {
 		return doc
 	}
@@ -642,12 +673,11 @@ fn apply_element_action_at_path(doc cx.Node, path []int,
 		return doc
 	}
 	child := root_el.items[first]
-	if child !is cx.Element {
+	if child !is cx.Element && child !is cx.EvalDirectiveNode {
 		return doc
 	}
 	rest := path[1..]
-	new_child := apply_element_action_at_path(cx.Node(child as cx.Element),
-		rest, action)!
+	new_child := apply_element_action_at_path(child, rest, action)!
 	mut new_items := root_el.items.clone()
 	new_items[first] = new_child
 	return cx.Node(cx.Element{
@@ -665,6 +695,20 @@ fn apply_element_action_at_path(doc cx.Node, path []int,
 // element-actions which mutate the target itself.
 fn apply_sibling_action_at_path(doc cx.Node, path []int,
 	action cx.ModifyAction) !cx.Node {
+	// #436: directive-as-data spine node — rebuild through the Element view.
+	if doc is cx.EvalDirectiveNode {
+		d := doc as cx.EvalDirectiveNode
+		new_view := apply_sibling_action_at_path(cx.Node(eval_directive_view(d)),
+			path, action)!
+		if new_view is cx.Element {
+			return cx.Node(cx.EvalDirectiveNode{
+				name:  d.name
+				attrs: new_view.attrs
+				items: new_view.items
+			})
+		}
+		return doc
+	}
 	if doc !is cx.Element {
 		return doc
 	}
@@ -696,12 +740,11 @@ fn apply_sibling_action_at_path(doc cx.Node, path []int,
 		return doc
 	}
 	child := root_el.items[first]
-	if child !is cx.Element {
+	if child !is cx.Element && child !is cx.EvalDirectiveNode {
 		return doc
 	}
 	rest := path[1..]
-	new_child := apply_sibling_action_at_path(cx.Node(child as cx.Element),
-		rest, action)!
+	new_child := apply_sibling_action_at_path(child, rest, action)!
 	mut new_items := root_el.items.clone()
 	new_items[first] = new_child
 	return cx.Node(cx.Element{
@@ -935,12 +978,17 @@ fn apply_delete_attr_to_element(el cx.Element, action cx.ModifyAction) cx.Node {
 	})
 }
 
-// apply_using_to_element handles `:using` — degraded to `:replace`
-// (without `[?fn` lambda evaluation) per the standalone evaluator's
-// scope. `[?fn` triggers MODIFY_USING_LAMBDA_NOT_YET_IMPLEMENTED.
+// apply_using_to_element handles a NON-lambda `:using` (a literal replacement
+// value) for the standalone bridge. A `:using` carrying a `[?fn` lambda never
+// reaches here: try_eval_modify_via_bridge (eval.v) routes every `:using` action
+// to the legacy evaluator path, which applies the closure via invoke_closure
+// (the real, conformance-tested semantics — program-modify-005-using-transform).
+// The store-side lambda transform is `[$store:modify-using $s $h [?fn …]]`.
 fn apply_using_to_element(el cx.Element, action cx.ModifyAction) !cx.Node {
 	if action.value.contains('[?fn') {
-		return error('MODIFY_USING_LAMBDA_NOT_YET_IMPLEMENTED: :using lambda evaluation is deferred to Phase 2.x (got `${action.value}`)')
+		// Unreachable invariant: a lambda :using is handled by the legacy path,
+		// not the bridge. Surface clearly if the routing ever regresses.
+		return error('E_INTERNAL: lambda :using reached the standalone bridge (should route to the legacy evaluator); got `${action.value}`')
 	}
 	return value_node_for_action(action) or {
 		return error('MODIFY_USING: value unparseable (got `${action.value}`)')

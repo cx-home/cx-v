@@ -1,0 +1,1 @@
+wrk N=8 serve57 interleaved 5x10s: old(pre-fix) avg 2085 rps [2069 2292 1953 2003 2109] | new(all-fixes) avg 2158 rps [2353 2360 2095 1900 2082] | newmatch(VGC_PACE_MB=256) 2341 rps excl 1 collapsed rd. Idle CPU both 0.0%. => six fixes = NO throughput regression at N=8; #68 multi-reactor penalty ABSENT; sem-park idle burn FIXED (marine churn test 0.0% vs field 1.7 cores).

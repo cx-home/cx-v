@@ -160,10 +160,20 @@ fn test_node_valued_attribute_rejected() {
 	} else {
 		assert err.msg().contains('cx-err:E211'), 'reject must carry E211: ${err.msg()}'
 	}
-	// The scalar attribute-value forms that share the body carrier are unaffected:
-	// raw `[#…#]` and block `[|…|]` remain valid attribute values.
+	// #396 owner ruling 1b (2026-07-13): the pipe-block form is retired too —
+	// attributes have ONE value channel, a scalar. The hash-raw form stays as
+	// the sole bracket-opened escape hatch and yields the CONTENT as a STRING
+	// scalar (no Attribute.body — that channel is gone).
 	raw := cx.parse("[product note=[# raw <b> #]]") or {
 		panic('raw-text attribute value must still parse: ${err}')
 	}
 	assert raw.elements.len == 1
+	rel := raw.elements[0] as cx.Element
+	assert rel.attrs.len == 1
+	assert cx.scalar_value_str_public(rel.attrs[0].value) == ' raw <b> '
+	if _ := cx.parse('[product note=[| block |]]') {
+		assert false, 'pipe-block attribute value must be rejected (D2 scalar-only, #396 ruling 1b)'
+	} else {
+		assert err.msg().contains('cx-err:E211'), 'reject must carry E211: ${err.msg()}'
+	}
 }

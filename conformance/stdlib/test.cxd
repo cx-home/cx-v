@@ -493,9 +493,9 @@ null
 [?lib 'cx-stdlib/path']
 [?lib 'cx-stdlib/test']
 [?let [= $d [$io:temp-dir "cxc"]]
-  [?let [= $p [$path:join $d "fx.cx"]]
-    [?let [= $w [$io:write-file $p "[user name=\"alice\" age=30]"]]
-      [?let [= $fx [$test:fixture-load $p]] $fx@name]]]]
+  [= $p [$path:join $d "fx.cx"]]
+  [= $w [$io:write-file $p "[user name=\"alice\" age=30]"]]
+  [?let [= $fx [$test:fixture-load $p]] $fx@name]]
 #]]
   [out-text [#
 'alice'

@@ -108,8 +108,9 @@ pub fn cx_code_eval_with_len(input &char, input_len usize,
 //   - NULL or "" ⇒ empty set (pure-only) — the spec default
 //   - "all" or "*" ⇒ full grant (the --allow-all opt-out)
 //   - otherwise a comma/space/tab-separated capability list, e.g.
-//     "read,write,net" (resource scoping like "net:host:443" is parsed
-//     to the bare capability; per-resource enforcement is a v1 follow-up).
+//     "read,write,net". A `net:host:port` token grants `net` scoped to that
+//     host (least-privilege), and a literal-IP / `localhost` scope overrides
+//     the §4.5 private-range deny (net.md §4.5); a bare `net` stays unscoped.
 // The process-global set is RESET to empty after the call (success or
 // error) so a grant never leaks into a subsequent evaluation.
 @[export: 'cx_code_eval_caps']

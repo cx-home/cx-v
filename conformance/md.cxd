@@ -255,4 +255,85 @@ line three
 `single line`
 #]]
  ]
+
+ [case id=033-md-table-pipe-table level=md
+  [tags table md-output pipe-table issue-443]
+  [doc [#
+# 443: a [table[…]] block renders as a GFM pipe table — header row from
+# the declared column names, one row per data row. The pooled TableData
+# payload lives in Element.table, NOT items; the pre-fix emitter fell to
+# the unknown-element arm and emitted an HTML comment. Markdown is
+# typed-lossy (column types and the wrapper element name are dropped).
+#]]
+  [in-cx [#
+[users [table[name::string age::int]]
+  alice 30
+  bob 25
+]
+#]]
+  [out-md [#
+| name | age |
+| --- | --- |
+| alice | 30 |
+| bob | 25 |
+#]]
+ ]
+
+ [case id=034-md-table-null-and-empty-cells level=md
+  [tags table md-output null empty issue-443]
+  [in-cx [#
+[t [table[a b]]
+  '' null
+  x y
+]
+#]]
+  [out-md [#
+| a | b |
+| --- | --- |
+|  |  |
+| x | y |
+#]]
+ ]
+
+ [case id=035-md-table-pipe-escaping level=md
+  [tags table md-output escaping issue-443]
+  [in-cx [#
+[t [table[x]]
+  'a|b'
+]
+#]]
+  [out-md [#
+| x |
+| --- |
+| a\|b |
+#]]
+ ]
+
+ [case id=036-md-table-collection-cells level=md
+  [tags table md-output collection-literal issue-443]
+  [in-cx [#
+[t [table[name value]]
+  tags [admin, user]
+  meta {role: admin}
+]
+#]]
+  [out-md [#
+| name | value |
+| --- | --- |
+| tags | [admin, user] |
+| meta | {role: admin} |
+#]]
+ ]
+
+ [case id=037-md-table-header-only level=md
+  [tags table md-output header-only issue-443]
+  [in-cx [#
+[t [table[a b]]
+]
+#]]
+  [out-md [#
+| a | b |
+| --- | --- |
+#]]
+ ]
 ]

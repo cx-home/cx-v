@@ -32,8 +32,16 @@ struct FtDoc {
 mut:
 	id           string
 	tokens       []string
-	positions    map[string][]int // token → positions in `tokens`
+	positions    map[string][]int // token → SLOT positions (pre-stopword; ft.md §2)
 	field_tokens map[string][]string
+	// slots is the POSITIONAL token stream: one slot per pre-stopword
+	// segmented token, in original order; a slot holds the pipelined
+	// (case-folded, stemmed) token, or '' where the pipeline dropped it
+	// (stopword / sub-min-length). Positions therefore survive stopword
+	// configuration — ft.md §2 (decision 3a): "a removed stopword still
+	// consumes its position", so slop / NEAR distances are stable.
+	slots        []string
+	field_slots  map[string][]string
 	length       int
 }
 
@@ -356,6 +364,53 @@ fn ft_run_pipeline(raw []string, p FtPipeline) []string {
 // ft_tokenize_full = segment + pipeline (the §3.5 tokenize surface).
 fn ft_tokenize_full(text string, p FtPipeline) []string {
 	return ft_run_pipeline(ft_segment(text), p)
+}
+
+// ft_run_pipeline_slots runs the pipeline preserving POSITIONS: the
+// result is parallel to `raw` — one slot per input token, holding the
+// pipelined token or '' where the pipeline dropped it (stopword /
+// sub-min-length). Positions are assigned before stopword removal
+// (ft.md §2): a removed stopword still consumes its slot.
+fn ft_run_pipeline_slots(raw []string, p FtPipeline) []string {
+	mut out := []string{cap: raw.len}
+	stop := if p.stopwords_mode == 'default' {
+		ft_stopwords_for(p.language)
+	} else if p.stopwords_mode == 'custom' {
+		p.stopwords_set
+	} else {
+		map[string]bool{}
+	}
+	for tok0 in raw {
+		mut tok := tok0
+		if !p.case_sensitive {
+			tok = tok.to_lower()
+		}
+		if p.stopwords_mode != 'none' && tok in stop {
+			out << ''
+			continue
+		}
+		if p.stem_lang == 'en' {
+			tok = ft_porter2(tok)
+		}
+		if tok.len == 0 || tok.runes().len < p.min_token_len {
+			out << ''
+			continue
+		}
+		out << tok
+	}
+	return out
+}
+
+// ft_slots_compact drops the '' placeholders — the compact token stream
+// (frequency / keyword surface) derived from a slot stream.
+fn ft_slots_compact(slots []string) []string {
+	mut out := []string{cap: slots.len}
+	for s in slots {
+		if s.len > 0 {
+			out << s
+		}
+	}
+	return out
 }
 
 // ── Porter2 (English Snowball) stemmer ────────────────────────────────
@@ -873,21 +928,28 @@ fn ft_build_index(docs []cx.Node, opts FtBuildOpts) cx.Node {
 			id:           ft_doc_id(doc, di + 1)
 			positions:    map[string][]int{}
 			field_tokens: map[string][]string{}
+			field_slots:  map[string][]string{}
 		}
 		if opts.pre_tokenized {
 			// custom tokenizer output already run through downstream stages
-			// by the env hook; tokens are the doc's full token stream.
+			// by the env hook; tokens are the doc's full token stream. A
+			// custom stream carries no elision information, so the slot
+			// stream equals the compact stream (positions are contiguous).
 			fdoc.tokens = if di < opts.doc_tokens.len {
 				opts.doc_tokens[di].clone()
 			} else {
 				[]string{}
 			}
+			fdoc.slots = fdoc.tokens.clone()
 		} else {
 			default_text, field_texts := ft_doc_field_texts(doc)
-			fdoc.tokens = ft_tokenize_full(default_text, p)
+			fdoc.slots = ft_run_pipeline_slots(ft_segment(default_text), p)
+			fdoc.tokens = ft_slots_compact(fdoc.slots)
 			for fname, ftext in field_texts {
 				if opts.fields_auto || fname in all_field_names {
-					fdoc.field_tokens[fname] = ft_tokenize_full(ftext, p)
+					fslots := ft_run_pipeline_slots(ft_segment(ftext), p)
+					fdoc.field_slots[fname] = fslots
+					fdoc.field_tokens[fname] = ft_slots_compact(fslots)
 					if opts.fields_auto && fname !in all_field_names {
 						all_field_names[fname] = true
 						idx.fields << fname
@@ -895,9 +957,12 @@ fn ft_build_index(docs []cx.Node, opts FtBuildOpts) cx.Node {
 				}
 			}
 		}
-		// positions + per-doc term set
+		// positions (SLOT indices — pre-stopword, ft.md §2) + per-doc term set
 		mut seen := map[string]bool{}
-		for pos, t in fdoc.tokens {
+		for pos, t in fdoc.slots {
+			if t.len == 0 {
+				continue
+			}
 			fdoc.positions[t] << pos
 			seen[t] = true
 		}
@@ -923,6 +988,7 @@ enum FtQueryKind {
 	negation
 	and_op
 	or_op
+	near // proximity — operands within near_n slots (ft.md §2.2.2)
 }
 
 struct FtQueryNode {
@@ -931,7 +997,10 @@ mut:
 	text     string        // keyword / field-name
 	terms    []string      // phrase tokens (raw, pre-pipeline)
 	field    string        // field name for field restriction
-	children []FtQueryNode // for groups / field sub-term / negation
+	children []FtQueryNode // for groups / field sub-term / negation / near operands
+	slop     int           // phrase slop (ft.md §2.2.2); 0 = exact adjacency
+	near_n   int           // near window width in slots
+	ordered  bool          // near ordered variant
 }
 
 struct FtParser {
@@ -981,6 +1050,41 @@ fn (mut p FtParser) parse_sequence(in_group bool) ([]FtQueryNode, string) {
 				kind: if word == 'AND' { FtQueryKind.and_op } else { FtQueryKind.or_op }
 			}
 			continue
+		}
+		// Proximity `A NEAR/n B` / `A ONEAR/n B` (ft.md §2.2.1) — binds
+		// tighter than the connectives; the left operand is the node
+		// just parsed.
+		if (word.starts_with('NEAR/') || word.starts_with('ONEAR/')) && nodes.len > 0 {
+			last := nodes.last()
+			if last.kind == FtQueryKind.keyword || last.kind == FtQueryKind.phrase {
+				ordered := word.starts_with('ONEAR/')
+				digits := if ordered { word[6..] } else { word[5..] }
+				if digits.len == 0 {
+					return []FtQueryNode{}, 'expected integer after ${word.all_before('/')}/ '
+				}
+				for ch in digits {
+					if ch < `0` || ch > `9` {
+						return []FtQueryNode{}, 'expected integer after ${word.all_before('/')}/'
+					}
+				}
+				p.pos += word.len
+				right, rerr := p.parse_term()
+				if rerr != '' {
+					return []FtQueryNode{}, rerr
+				}
+				if right.kind != FtQueryKind.keyword && right.kind != FtQueryKind.phrase {
+					return []FtQueryNode{}, 'proximity operands must be terms or phrases'
+				}
+				nodes.pop()
+				nodes << FtQueryNode{
+					kind:     FtQueryKind.near
+					near_n:   digits.int()
+					ordered:  ordered
+					children: [last, right]
+				}
+				continue
+			}
+			return []FtQueryNode{}, 'proximity operands must be terms or phrases'
 		}
 		term, err := p.parse_term()
 		if err != '' {
@@ -1115,13 +1219,497 @@ fn (mut p FtParser) parse_phrase() (FtQueryNode, string) {
 	if !closed {
 		return FtQueryNode{}, 'unterminated phrase'
 	}
+	// Optional phrase slop `"…"~N` (ft.md §2.2.1) — `~` = approximately,
+	// per the CX-wide doctrine; grades positional tolerance.
+	mut slop := 0
+	if p.pos < p.src.len && p.src[p.pos] == `~` {
+		p.pos++
+		start := p.pos
+		for p.pos < p.src.len && p.src[p.pos] >= `0` && p.src[p.pos] <= `9` {
+			p.pos++
+		}
+		if p.pos == start {
+			return FtQueryNode{}, 'expected integer slop after `~`'
+		}
+		slop = p.src[start..p.pos].int()
+	}
 	return FtQueryNode{
 		kind: FtQueryKind.phrase
 		text: buf.bytestr()
+		slop: slop
 	}, ''
 }
 
-// ── query evaluation ──────────────────────────────────────────────────
+// ── canonical query element (ft.md §2.2) ─────────────────────────────
+//
+// The query TYPE is the `[query Node]` element; the string format is a
+// DATA FORMAT consumed only by `[$ft:parse-query]` (§2.2.1). Search
+// functions accept the element only — a string is CXER1205.
+
+// ft_query_from_element converts a canonical `[query …]` element into
+// the internal clause list. Returns (clauses, '') or ([], shape-error).
+// An EMPTY `[query]` is the empty-match query (matches nothing).
+fn ft_query_from_element(n cx.Node) ([]FtQueryNode, string) {
+	if n !is cx.Element {
+		return []FtQueryNode{}, 'query must be a [query …] element'
+	}
+	root := n as cx.Element
+	if root.name != 'query' {
+		return []FtQueryNode{}, 'query root must be [query …], got [${root.name}]'
+	}
+	kids := ft_element_children(root)
+	if kids.len == 0 {
+		return []FtQueryNode{}, ''
+	}
+	if kids.len != 1 {
+		return []FtQueryNode{}, '[query] must hold exactly one node (got ${kids.len})'
+	}
+	node, err := ft_query_node_from_element(kids[0])
+	if err != '' {
+		return []FtQueryNode{}, err
+	}
+	return [node], ''
+}
+
+fn ft_element_children(el cx.Element) []cx.Element {
+	mut out := []cx.Element{}
+	for c in el.items {
+		if c is cx.Element {
+			out << c as cx.Element
+		}
+	}
+	return out
+}
+
+fn ft_element_text(el cx.Element) string {
+	for c in el.items {
+		if c is cx.ScalarNode {
+			sc := c as cx.ScalarNode
+			v := sc.value
+			if v is string {
+				return v
+			}
+		}
+	}
+	return ''
+}
+
+fn ft_element_attr(el cx.Element, name string) ?string {
+	for a in el.attrs {
+		if a.name == name {
+			v := a.value
+			return match v {
+				string { v }
+				i64 { v.str() }
+				f64 { v.str() }
+				bool { v.str() }
+				else { '' }
+			}
+		}
+	}
+	return none
+}
+
+fn ft_query_node_from_element(el cx.Element) (FtQueryNode, string) {
+	match el.name {
+		'term' {
+			t := ft_element_text(el)
+			if t.len == 0 {
+				return FtQueryNode{}, '[term] needs a keyword string'
+			}
+			return FtQueryNode{ kind: .keyword, text: t }, ''
+		}
+		'phrase' {
+			t := ft_element_text(el)
+			if t.len == 0 {
+				return FtQueryNode{}, '[phrase] needs a phrase string'
+			}
+			mut slop := 0
+			if sv := ft_element_attr(el, 'slop') {
+				slop = sv.int()
+				if slop < 0 {
+					return FtQueryNode{}, '[phrase] slop must be ≥ 0'
+				}
+			}
+			return FtQueryNode{ kind: .phrase, text: t, slop: slop }, ''
+		}
+		'near' {
+			nv := ft_element_attr(el, 'n') or {
+				return FtQueryNode{}, '[near] needs an n=N attribute'
+			}
+			n := nv.int()
+			if n < 0 {
+				return FtQueryNode{}, '[near] n must be ≥ 0'
+			}
+			mut ordered := false
+			if ov := ft_element_attr(el, 'ordered') {
+				ordered = ov == 'true'
+			}
+			kids := ft_element_children(el)
+			if kids.len < 2 {
+				return FtQueryNode{}, '[near] needs two or more operands'
+			}
+			mut ops := []FtQueryNode{}
+			for k in kids {
+				op, err := ft_query_node_from_element(k)
+				if err != '' {
+					return FtQueryNode{}, err
+				}
+				if op.kind != .keyword && op.kind != .phrase {
+					return FtQueryNode{}, '[near] operands must be positional ([term]/[phrase]); got [${k.name}]'
+				}
+				ops << op
+			}
+			return FtQueryNode{ kind: .near, near_n: n, ordered: ordered, children: ops }, ''
+		}
+		'field' {
+			fname := ft_element_attr(el, 'name') or {
+				return FtQueryNode{}, '[field] needs a name="…" attribute'
+			}
+			kids := ft_element_children(el)
+			if kids.len != 1 {
+				return FtQueryNode{}, '[field] holds exactly one node'
+			}
+			child, err := ft_query_node_from_element(kids[0])
+			if err != '' {
+				return FtQueryNode{}, err
+			}
+			return FtQueryNode{ kind: .field, field: fname, children: [child] }, ''
+		}
+		'all', 'any', 'none' {
+			kids := ft_element_children(el)
+			if kids.len == 0 {
+				return FtQueryNode{}, '[${el.name}] needs at least one operand'
+			}
+			mut children := []FtQueryNode{}
+			for i, k in kids {
+				child, err := ft_query_node_from_element(k)
+				if err != '' {
+					return FtQueryNode{}, err
+				}
+				match el.name {
+					'any' {
+						if i > 0 {
+							children << FtQueryNode{ kind: .or_op }
+						}
+						children << child
+					}
+					'none' {
+						children << FtQueryNode{ kind: .negation, children: [child] }
+					}
+					else {
+						children << child
+					}
+				}
+			}
+			return FtQueryNode{ kind: .group, children: children }, ''
+		}
+		else {
+			return FtQueryNode{}, 'unknown query node [${el.name}]'
+		}
+	}
+}
+
+// ft_query_to_element converts a parsed clause list back to the
+// canonical `[query …]` element — the `[$ft:parse-query]` output.
+fn ft_query_to_element(clauses []FtQueryNode) cx.Node {
+	if clauses.len == 0 {
+		return cx.Element{ name: 'query' }
+	}
+	body := if clauses.len == 1 && clauses[0].kind != .and_op && clauses[0].kind != .or_op {
+		ft_query_node_to_element(clauses[0])
+	} else {
+		ft_clause_list_to_element(clauses)
+	}
+	return cx.Element{ name: 'query', items: [body] }
+}
+
+// ft_clause_list_to_element folds a connective-interleaved clause list
+// into nested [all]/[any] elements (OR binds looser than the implicit
+// AND, matching ft_eval_clause_list's semantics).
+fn ft_clause_list_to_element(clauses []FtQueryNode) cx.Node {
+	// Split on or_op → OR groups of AND runs.
+	mut or_groups := [][]FtQueryNode{}
+	mut cur := []FtQueryNode{}
+	for n in clauses {
+		if n.kind == .or_op {
+			or_groups << cur
+			cur = []FtQueryNode{}
+			continue
+		}
+		if n.kind == .and_op {
+			continue
+		}
+		cur << n
+	}
+	or_groups << cur
+	mut group_nodes := []cx.Node{}
+	for g in or_groups {
+		if g.len == 0 {
+			continue
+		}
+		if g.len == 1 {
+			group_nodes << ft_query_node_to_element(g[0])
+		} else {
+			mut items := []cx.Node{}
+			for n in g {
+				items << ft_query_node_to_element(n)
+			}
+			group_nodes << cx.Node(cx.Element{ name: 'all', items: items })
+		}
+	}
+	if group_nodes.len == 1 {
+		return group_nodes[0]
+	}
+	return cx.Element{ name: 'any', items: group_nodes }
+}
+
+fn ft_query_node_to_element(n FtQueryNode) cx.Node {
+	match n.kind {
+		.keyword {
+			return cx.Element{ name: 'term', items: [cx.Node(cx.ScalarNode{ value: cx.ScalarValue(n.text), data_type: cx.ScalarType.string_type })] }
+		}
+		.phrase {
+			mut attrs := []cx.Attribute{}
+			if n.slop > 0 {
+				attrs << cx.new_attribute('slop', cx.ScalarValue(i64(n.slop)), cx.AttributeMeta{ data_type: ?string('int') })
+			}
+			return cx.Element{ name: 'phrase', attrs: attrs, items: [cx.Node(cx.ScalarNode{ value: cx.ScalarValue(n.text), data_type: cx.ScalarType.string_type })] }
+		}
+		.near {
+			mut attrs := []cx.Attribute{}
+			attrs << cx.new_attribute('n', cx.ScalarValue(i64(n.near_n)), cx.AttributeMeta{ data_type: ?string('int') })
+			if n.ordered {
+				attrs << cx.new_attribute('ordered', cx.ScalarValue(true), cx.AttributeMeta{ data_type: ?string('bool') })
+			}
+			mut items := []cx.Node{}
+			for c in n.children {
+				items << ft_query_node_to_element(c)
+			}
+			return cx.Element{ name: 'near', attrs: attrs, items: items }
+		}
+		.field {
+			mut items := []cx.Node{}
+			for c in n.children {
+				items << ft_query_node_to_element(c)
+			}
+			return cx.Element{
+				name:  'field'
+				attrs: [cx.new_attribute('name', cx.ScalarValue(n.field), cx.AttributeMeta{})]
+				items: items
+			}
+		}
+		.negation {
+			mut items := []cx.Node{}
+			for c in n.children {
+				items << ft_query_node_to_element(c)
+			}
+			return cx.Element{ name: 'none', items: items }
+		}
+		.group {
+			return ft_clause_list_to_element(n.children)
+		}
+		.and_op, .or_op {
+			// Structural connectives never appear standalone.
+			return cx.Element{ name: 'all' }
+		}
+	}
+}
+
+// ── positional matching (slots — ft.md §2.2.2) ───────────────────────
+
+// ft_doc_slots_for returns the positional slot stream for the doc
+// (default or field-restricted).
+fn ft_doc_slots_for(idx &FtIndex, di int, field string) []string {
+	if field == '' {
+		return idx.docs[di].slots
+	}
+	return idx.docs[di].field_slots[field] or { []string{} }
+}
+
+// ft_query_slot_terms tokenizes a phrase WITH positional slots and
+// returns (terms, offsets): the surviving pipelined terms and their
+// slot offsets within the phrase (so a stopword inside the query
+// phrase consumes a slot, mirroring the doc side).
+fn ft_query_slot_terms(text string, p FtPipeline) ([]string, []int) {
+	slots := ft_run_pipeline_slots(ft_segment(text), p)
+	mut terms := []string{}
+	mut offsets := []int{}
+	for i, s in slots {
+		if s.len > 0 {
+			terms << s
+			offsets << i
+		}
+	}
+	return terms, offsets
+}
+
+// ft_phrase_hits_slots counts phrase occurrences over a slot stream.
+// The anchor is PINNED at the first term's occurrence d_0; each later
+// term_j must sit at a slot d_j > d_{j-1} within `slop` positional
+// moves of its expected slot d_0 + (q_j − q_0). slop 0 ≡ exact
+// positional adjacency (ft.md §2.2.2); elided stopwords consume
+// positions on both the doc and query sides.
+fn ft_phrase_hits_slots(slots []string, terms []string, offsets []int, slop int) int {
+	if terms.len == 0 || slots.len == 0 {
+		return 0
+	}
+	mut hits := 0
+	for d0 in 0 .. slots.len {
+		if slots[d0] != terms[0] {
+			continue
+		}
+		mut prev := d0
+		mut ok := true
+		for j in 1 .. terms.len {
+			want := d0 + offsets[j] - offsets[0]
+			mut found := -1
+			mut d := if want - slop > prev + 1 { want - slop } else { prev + 1 }
+			for d <= want + slop && d < slots.len {
+				if slots[d] == terms[j] {
+					found = d
+					break
+				}
+				d++
+			}
+			if found < 0 {
+				ok = false
+				break
+			}
+			prev = found
+		}
+		if ok {
+			hits++
+		}
+	}
+	return hits
+}
+
+// ft_near_positions returns each operand's occurrence-anchor list over
+// the slot stream (keyword → term slots; phrase → exact anchors).
+fn ft_near_positions(slots []string, op FtQueryNode, p FtPipeline) [][]int {
+	mut out := [][]int{}
+	match op.kind {
+		.keyword {
+			terms := ft_run_pipeline([op.text], p)
+			mut positions := []int{}
+			for t in terms {
+				for i, s in slots {
+					if s == t {
+						positions << i
+					}
+				}
+			}
+			positions.sort()
+			out << positions
+		}
+		.phrase {
+			terms, offsets := ft_query_slot_terms(op.text, p)
+			mut anchors := []int{}
+			for s in 0 .. slots.len {
+				mut ok := terms.len > 0
+				for j, t in terms {
+					want := s + offsets[j]
+					if want >= slots.len || slots[want] != t {
+						ok = false
+						break
+					}
+				}
+				if ok {
+					anchors << s
+				}
+			}
+			out << anchors
+		}
+		else {}
+	}
+	return out
+}
+
+// ft_near_matches reports whether one occurrence of every operand fits
+// in a window ≤ n slots wide (ordered variant: occurrences in operand
+// order). Standard k-list sliding minspan.
+fn ft_near_matches(slots []string, ops []FtQueryNode, n int, ordered bool, p FtPipeline) bool {
+	mut lists := [][]int{}
+	for op in ops {
+		ls := ft_near_positions(slots, op, p)
+		if ls.len == 0 || ls[0].len == 0 {
+			return false
+		}
+		lists << ls[0]
+	}
+	if ordered {
+		// Ordered: greedy increasing pick, then check span.
+		return ft_near_ordered_span(lists) <= n
+	}
+	return ft_min_span(lists) <= n
+}
+
+// ft_min_span computes the smallest window width (max−min) containing
+// one element from each sorted list; returns a huge span when any list
+// is empty.
+fn ft_min_span(lists [][]int) int {
+	mut idxs := []int{len: lists.len, init: 0}
+	mut best := 1 << 30
+	for {
+		mut lo := 1 << 30
+		mut hi := -(1 << 30)
+		mut lo_k := 0
+		for k, l in lists {
+			v := l[idxs[k]]
+			if v < lo {
+				lo = v
+				lo_k = k
+			}
+			if v > hi {
+				hi = v
+			}
+		}
+		span := hi - lo
+		if span < best {
+			best = span
+		}
+		idxs[lo_k]++
+		if idxs[lo_k] >= lists[lo_k].len {
+			break
+		}
+	}
+	return best
+}
+
+// ft_near_ordered_span finds the smallest span of an in-order pick
+// (p_0 < p_1 < … < p_{k-1}) across the lists; 1<<30 when impossible.
+fn ft_near_ordered_span(lists [][]int) int {
+	mut best := 1 << 30
+	first := lists[0]
+	for start in first {
+		mut prev := start
+		mut ok := true
+		mut last := start
+		for k in 1 .. lists.len {
+			mut nxt := -1
+			for v in lists[k] {
+				if v > prev {
+					nxt = v
+					break
+				}
+			}
+			if nxt < 0 {
+				ok = false
+				break
+			}
+			prev = nxt
+			last = nxt
+		}
+		if ok {
+			span := last - start
+			if span < best {
+				best = span
+			}
+		}
+	}
+	return best
+}
 
 // FtMatch records a matching doc with its score + match count.
 struct FtMatch {
@@ -1174,14 +1762,18 @@ fn ft_eval_node(idx &FtIndex, di int, node FtQueryNode, p FtPipeline, field stri
 			return hits > 0, hits, ''
 		}
 		.phrase {
-			raw := ft_segment(node.text)
-			terms := ft_run_pipeline(raw, p)
+			terms, offsets := ft_query_slot_terms(node.text, p)
 			if terms.len == 0 {
 				return false, 0, ''
 			}
-			toks := ft_doc_tokens_for(idx, di, field)
-			hits := ft_phrase_hits(toks, terms)
+			slots := ft_doc_slots_for(idx, di, field)
+			hits := ft_phrase_hits_slots(slots, terms, offsets, node.slop)
 			return hits > 0, hits, ''
+		}
+		.near {
+			slots := ft_doc_slots_for(idx, di, field)
+			m := ft_near_matches(slots, node.children, node.near_n, node.ordered, p)
+			return m, if m { 1 } else { 0 }, ''
 		}
 		.field {
 			fname := node.field
@@ -1325,26 +1917,50 @@ fn ft_collect_positive_terms(nodes []FtQueryNode, p FtPipeline, mut out []string
 			.group {
 				ft_collect_positive_terms(node.children, p, mut out)
 			}
+			.near {
+				ft_collect_positive_terms(node.children, p, mut out)
+			}
 			else {}
 		}
 	}
+}
+
+// ft_query_arg accepts the canonical [query …] element argument; none
+// for any other shape (the caller raises CXER1205).
+fn ft_query_arg(n cx.Node) ?cx.Node {
+	if n is cx.Element {
+		if (n as cx.Element).name == 'query' {
+			return n
+		}
+	}
+	return none
+}
+
+// ft_query_shape_err is the CXER1205 for a non-[query] argument — the
+// string format is a data format consumed only by [$ft:parse-query]
+// (ft.md §2.2/§3.2a).
+fn ft_query_shape_err(n cx.Node) cx.Node {
+	got := if n is cx.ScalarNode { 'a string (use [\$ft:parse-query])' } else { 'a non-[query] value' }
+	return mk_err('cx-err:CXER1205',
+		'E_FT_QUERY_SHAPE: search takes the canonical [query …] element, got ${got}')
 }
 
 // ── search ────────────────────────────────────────────────────────────
 
 struct FtSearchOpts {
 mut:
-	limit          int = 10
-	offset         int
-	scoring        string = 'tf-idf'
-	min_score      f64
-	language       string
-	case_sensitive bool
-	cs_present     bool
-	lang_present   bool
+	limit           int = 10
+	offset          int
+	scoring         string = 'tf-idf'
+	min_score       f64
+	language        string
+	case_sensitive  bool
+	cs_present      bool
+	lang_present    bool
+	proximity_boost f64 = 0.25 // §5.3 β; 0.0 disables
 }
 
-fn ft_search_impl(idx &FtIndex, query string, opts FtSearchOpts) cx.Node {
+fn ft_search_impl(idx &FtIndex, query cx.Node, opts FtSearchOpts) cx.Node {
 	// §3.2 compatibility check: a language / case-sensitive mismatch raises
 	// CXER1203.
 	if opts.lang_present && opts.language != idx.language {
@@ -1355,13 +1971,14 @@ fn ft_search_impl(idx &FtIndex, query string, opts FtSearchOpts) cx.Node {
 		return mk_err('cx-err:CXER1203',
 			'E_FT_INDEX_INCOMPATIBLE: search case-sensitive differs from index')
 	}
-	trimmed := query.trim_space()
-	if trimmed == '' {
-		return ft_seq([]cx.Node{})
+	// §3.2 — the query is the canonical [query …] element; the string
+	// format lives behind [$ft:parse-query] only (§2.2.1).
+	clauses, qerr := ft_query_from_element(query)
+	if qerr != '' {
+		return mk_err('cx-err:CXER1205', 'E_FT_QUERY_SHAPE: ${qerr}')
 	}
-	clauses, perr := ft_parse_query(query)
-	if perr != '' {
-		return mk_err('cx-err:CXER1200', 'E_FT_QUERY_PARSE: ${perr}')
+	if clauses.len == 0 {
+		return ft_seq([]cx.Node{})
 	}
 	p := ft_pipeline_for_search(idx)
 	mut fields_avail := map[string]bool{}
@@ -1380,7 +1997,32 @@ fn ft_search_impl(idx &FtIndex, query string, opts FtSearchOpts) cx.Node {
 		if !matched {
 			continue
 		}
-		sc := ft_score(idx, di, pos_terms, opts.scoring)
+		mut sc := ft_score(idx, di, pos_terms, opts.scoring)
+		// §5.3 proximity boost — multi-atom queries scale by co-occurrence
+		// closeness: score' = score × (1 + β / minspan). Ranking
+		// perturbation only: a doc missing an atom keeps its base score;
+		// single-atom queries are unaffected.
+		if opts.proximity_boost > 0 && pos_terms.len >= 2 {
+			mut lists := [][]int{}
+			mut all_present := true
+			for t in pos_terms {
+				ps := idx.docs[di].positions[t] or {
+					all_present = false
+					break
+				}
+				lists << ps
+			}
+			if all_present {
+				span := ft_min_span(lists)
+				if span > 0 && span < (1 << 29) {
+					sc *= 1.0 + opts.proximity_boost / f64(span)
+				} else if span == 0 {
+					// Degenerate identical-position case (single distinct
+					// slot) — treat as the closest possible window.
+					sc *= 1.0 + opts.proximity_boost
+				}
+			}
+		}
 		if sc < opts.min_score {
 			continue
 		}
@@ -1447,13 +2089,14 @@ mut:
 	mark_suffix   string = '</mark>'
 }
 
-fn ft_snippet_impl(doc cx.Node, query string, opts FtSnippetOpts) cx.Node {
+fn ft_snippet_impl(doc cx.Node, query cx.Node, opts FtSnippetOpts) cx.Node {
 	text, _ := ft_doc_field_texts(doc)
 	// derive query terms (lowercased keywords/phrases, raw — snippet match
-	// is on the surface text, case-insensitively).
-	clauses, perr := ft_parse_query(query)
-	if perr != '' {
-		return mk_err('cx-err:CXER1200', 'E_FT_QUERY_PARSE: ${perr}')
+	// is on the surface text, case-insensitively). The query is the
+	// canonical [query …] element (§2.2).
+	clauses, qerr := ft_query_from_element(query)
+	if qerr != '' {
+		return mk_err('cx-err:CXER1205', 'E_FT_QUERY_SHAPE: ${qerr}')
 	}
 	mut terms := []string{}
 	ft_collect_query_surface(clauses, mut terms)
@@ -1552,6 +2195,9 @@ fn ft_collect_query_surface(nodes []FtQueryNode, mut out []string) {
 				ft_collect_query_surface(node.children, mut out)
 			}
 			.group {
+				ft_collect_query_surface(node.children, mut out)
+			}
+			.near {
 				ft_collect_query_surface(node.children, mut out)
 			}
 			else {}
@@ -1694,7 +2340,7 @@ fn ft_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		'ft-search' {
 			idx := ft_index_of(args[0]) or { return none }
-			query := ft_arg_str(args[1]) or { return none }
+			query := ft_query_arg(args[1]) or { return ft_query_shape_err(args[1]) }
 			limit := if args.len > 2 { ft_int_arg(args[2], 10) } else { 10 }
 			return ft_search_impl(idx, query, FtSearchOpts{
 				limit: limit
@@ -1702,13 +2348,14 @@ fn ft_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		'ft-search-with-opts' {
 			idx := ft_index_of(args[0]) or { return none }
-			query := ft_arg_str(args[1]) or { return none }
+			query := ft_query_arg(args[1]) or { return ft_query_shape_err(args[1]) }
 			opts := args[2]
 			mut so := FtSearchOpts{}
 			so.limit = ft_opt_int(opts, 'limit', 10)
 			so.offset = ft_opt_int(opts, 'offset', 0)
 			so.scoring = ft_opt_str(opts, 'scoring', 'tf-idf')
 			so.min_score = ft_opt_float(opts, 'min-score', 0.0)
+			so.proximity_boost = ft_opt_float(opts, 'proximity-boost', 0.25)
 			if ft_opt_present(opts, 'language') {
 				so.language = ft_opt_str(opts, 'language', idx.language)
 				so.lang_present = true
@@ -1724,7 +2371,7 @@ fn ft_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		'ft-snippet' {
 			doc := args[0]
-			query := ft_arg_str(args[1]) or { return none }
+			query := ft_query_arg(args[1]) or { return ft_query_shape_err(args[1]) }
 			cc := if args.len > 2 { ft_int_arg(args[2], 80) } else { 80 }
 			return ft_snippet_impl(doc, query, FtSnippetOpts{
 				context_chars: cc
@@ -1732,7 +2379,7 @@ fn ft_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		'ft-snippet-with-opts' {
 			doc := args[0]
-			query := ft_arg_str(args[1]) or { return none }
+			query := ft_query_arg(args[1]) or { return ft_query_shape_err(args[1]) }
 			opts := args[2]
 			mut so := FtSnippetOpts{}
 			so.context_chars = ft_opt_int(opts, 'context-chars', 80)
@@ -1741,6 +2388,20 @@ fn ft_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			so.mark_prefix = ft_opt_str(opts, 'mark-prefix', '<mark>')
 			so.mark_suffix = ft_opt_str(opts, 'mark-suffix', '</mark>')
 			return ft_snippet_impl(doc, query, so)
+		}
+		'ft-parse-query' {
+			// §3.2a — the ONLY consumer of the query-string data format
+			// (§2.2.1). Returns the canonical [query …] element;
+			// malformed input is CXER1200.
+			q := ft_arg_str(args[0]) or { return none }
+			if q.trim_space() == '' {
+				return cx.Node(cx.Element{ name: 'query' })
+			}
+			clauses, perr := ft_parse_query(q)
+			if perr != '' {
+				return mk_err('cx-err:CXER1200', 'E_FT_QUERY_PARSE: ${perr}')
+			}
+			return ft_query_to_element(clauses)
 		}
 		'ft-tokenize' {
 			text := ft_arg_str(args[0]) or { return none }
@@ -1938,11 +2599,15 @@ fn ft_search_store(args []cx.Node) ?cx.Node {
 	if !ok {
 		return errn
 	}
-	query := ft_arg_str(args[1]) or { return none }
+	query := ft_query_arg(args[1]) or { return ft_query_shape_err(args[1]) }
 	limit := if args.len > 2 { ft_int_arg(args[2], 10) } else { 10 }
 	mut docs := []cx.Node{}
 	for h in ms.doc_order {
-		docs << store_decode_doc(ms.docs[h])
+		// Route through the doc abstraction so full-text search works on EVERY
+		// backend — the object-graph stores (cxpack/cxobj/mem-subtree) keep docs in
+		// the object graph, not the flat `docs` map (which is empty for them).
+		text := store_doc_text(ms, h) or { continue }
+		docs << store_decode_doc(text)
 	}
 	idx_node := ft_build_index(docs, FtBuildOpts{})
 	idx := ft_index_of(idx_node) or { return none }

@@ -69,6 +69,100 @@ pub fn is_ws(b u8) bool {
 	return b == ` ` || b == `\t` || b == `\r` || b == `\n`
 }
 
+// ── Opaque lexical spans (comments + raw text) — shared recognizers ─────────
+//
+// The verbatim-capture scanners (def/const/match body capture, the module
+// loader's directive balancer) walk bytes with quote-shielding to find the
+// span boundary of a form whose CONTENT is parsed later by the real program
+// parser. They must skip the three opaque spans the lexers skip — a `#` line
+// comment ([L2] / grammar [30b]), a `[; … ]` block comment ([L3] / [30]), and
+// a `[#…#]` raw-text span ([31]) — or a quote character INSIDE such a span
+// opens a phantom string and silently shifts bracket balance (#289: `cx fmt`
+// and the [?lib] loader disagreed about what parses). One shared home here
+// keeps every entry point byte-identical.
+
+// hash_line_comment_at reports whether the `#` at src[i] begins a line
+// comment per grammar.ebnf [30b] position rules: at input start, or preceded
+// by whitespace or `]`. (A `#` preceded by `[` is the `[#…#]` raw-text opener
+// [31], and a `#` glued to a bareword is content per [12a] BareChar — neither
+// starts a comment.)
+@[inline]
+pub fn hash_line_comment_at(src []u8, i int) bool {
+	if i >= src.len || src[i] != `#` {
+		return false
+	}
+	if i == 0 {
+		return true
+	}
+	prev := src[i - 1]
+	return is_ws(prev) || prev == `]`
+}
+
+// line_comment_end returns the index of the byte that TERMINATES the line
+// comment opened at src[i] — the `\n` (not consumed; it is ordinary
+// whitespace to the caller) or src.len at EOF. ([L2]: `#` to end-of-line.)
+@[inline]
+pub fn line_comment_end(src []u8, i int) int {
+	mut j := i
+	for j < src.len && src[j] != `\n` {
+		j++
+	}
+	return j
+}
+
+// block_comment_open_at reports whether src[i..] begins a `[; … ]` block
+// comment ([L3]).
+@[inline]
+pub fn block_comment_open_at(src []u8, i int) bool {
+	return i + 1 < src.len && src[i] == `[` && src[i + 1] == `;`
+}
+
+// block_comment_end returns the index just PAST the `]` that closes the block
+// comment opened at src[i] (which must be at `[;`). The body is OPAQUE prose:
+// nested `[`…`]` pairs balance (matching program_lexer.skip_ws_and_comments
+// and the data reader), but quotes have NO meaning inside — an apostrophe in
+// prose ("the draft's") must not open a string span. Returns none when the
+// comment never closes.
+pub fn block_comment_end(src []u8, i int) ?int {
+	mut depth := 0
+	mut j := i + 2
+	for j < src.len {
+		b := src[j]
+		if b == `[` {
+			depth++
+		} else if b == `]` {
+			if depth == 0 {
+				return j + 1
+			}
+			depth--
+		}
+		j++
+	}
+	return none
+}
+
+// raw_span_open_at reports whether src[i..] begins a `[#…#]` raw-text span
+// ([31] RawText / CDATA — NOT a comment; the content is carried verbatim).
+@[inline]
+pub fn raw_span_open_at(src []u8, i int) bool {
+	return i + 1 < src.len && src[i] == `[` && src[i + 1] == `#`
+}
+
+// raw_span_end returns the index just past the `#]` that closes the raw-text
+// span opened at src[i] (which must be at `[#`). Content is verbatim — no
+// nesting, no quote semantics — matching program_lexer.read_raw_span.
+// Returns none when the span never closes.
+pub fn raw_span_end(src []u8, i int) ?int {
+	mut j := i + 2
+	for j + 1 < src.len {
+		if src[j] == `#` && src[j + 1] == `]` {
+			return j + 2
+		}
+		j++
+	}
+	return none
+}
+
 // is_name_start reports whether `b` may begin an identifier / element name.
 // ASCII only (`lexicon.ebnf` [L10], decision 1a-as-graduated: lone `:` is its
 // own token, never a name-start). Identical in both parsers.
@@ -208,6 +302,15 @@ fn decode_unicode_escape(src []u8, bs int, n int) EscapeDecode {
 // byte) so line/column tracking and error positions are byte-stable — this is
 // why a count is returned rather than an absolute end position.
 pub fn scan_triple_quoted(src []u8, open int, q u8) ?(string, int) {
+	return scan_triple_quoted_opt(src, open, q, false)
+}
+
+// scan_triple_quoted_opt is the shared scanner with an explicit dedent control.
+// `raw == true` (the `r'''…'''` / `r"""…"""` prefix, #93) returns the body
+// VERBATIM — no strip_common_indent — so leading-whitespace-significant blocks
+// (indented code, tab-aligned text) survive byte-exact for surgical edits.
+// `raw == false` is the default triple-quote (dedented, grammar [10b]).
+pub fn scan_triple_quoted_opt(src []u8, open int, q u8, raw bool) ?(string, int) {
 	mut pos := open + 3 // past the opening triple
 	mut s := []u8{}
 	for pos < src.len {
@@ -220,7 +323,9 @@ pub fn scan_triple_quoted(src []u8, open int, q u8) ?(string, int) {
 				continue
 			}
 			pos += 3 // consume the closing triple
-			return strip_common_indent(s.bytestr()), pos - open
+			body := s.bytestr()
+			val := if raw { body } else { strip_common_indent(body) }
+			return val, pos - open
 		}
 		s << b
 		pos++

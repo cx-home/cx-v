@@ -59,11 +59,41 @@ pub fn eval_code(input string, program_src string, output_target string) !string
 		// unknown / retired `[?name]` directive: that is unambiguous PROGRAM
 		// intent, so it stays fail-loud (CXER0100) rather than being silently
 		// re-read as the data element `[?name]` (which it also happens to be).
-		is_unknown_directive := if err is cx.ParseError { err.unknown_directive } else { false }
-		if !is_unknown_directive && input.len == 0
-		   && output_target !in ['mermaid', 'svg', 'png'] {
+		// Three failure classes are unambiguous PROGRAM intent and MUST stay
+		// fail-loud (never silently re-read as data): an unknown/retired `[?name]`
+		// directive; a syntax error after the parser committed to a program
+		// construct — e.g. infix `=` inside a `[where …]` clause (#18), where the
+		// data-fallback would echo the source as data and bury the helpful "use
+		// the prefix form" diagnostic; and a resource whose DATA reading carries a
+		// registered `[?directive]` — a program-SHAPED resource whose program
+		// parse failed for any other reason (e.g. a lexer error the flags above
+		// never see, because tokenize() fails before the parser runs). Without
+		// the third guard a broken `[?let]`/`[?for]` program silently echoed
+		// itself as data with exit 0 — in a make target or CI that reads as
+		// success. The data-reading scan is string-aware by construction: a
+		// directive mentioned inside quoted prose parses as text, not as a
+		// directive node, so prose ABOUT directives still falls back.
+		no_data_fallback := if err is cx.ParseError {
+			err.unknown_directive || err.program_committed
+		} else {
+			false
+		}
+		if !no_data_fallback && input.len == 0
+		   && output_target !in ['mermaid', 'svg', 'png']
+		   && !data_reading_has_program_directive(program_src) {
 			to_codec := if output_target in ['', 'text'] { 'cx' } else { output_target }
-			if out := cx.convert_by_name(program_src, 'cx', to_codec, false) {
+			// Split parse from emit (#416): when the resource IS valid data
+			// but the TARGET rejects it (e.g. csv of a non-tabular
+			// document), the emit diagnostic is the real error — before
+			// this, the fallback swallowed it and surfaced the unrelated
+			// program-parse error instead.
+			if _ := cx.parse_cx(program_src) {
+				out := cx.convert_by_name(program_src, 'cx', to_codec, false) or {
+					return EvalError{
+						code:    'cx-err:CXER0100'
+						message: err.msg()
+					}
+				}
 				return out
 			}
 		}
@@ -131,6 +161,76 @@ pub fn eval_code(input string, program_src string, output_target string) !string
 	return render(result, output_target)!
 }
 
+// data_reading_has_program_directive reports whether the DATA reading of
+// `src` carries a registered program directive — a node the data parser
+// classified as an eval directive (`[?let]`, `[?for]`, `[?def]`, …) or a
+// processing instruction whose target is in the program directive registry
+// (`cx.directive_names`). The eval boundary's data-fallback consults this: a
+// resource whose data reading carries program directives is program-SHAPED,
+// so a program-parse failure must surface loud (spec code.md, the data /
+// program reading) instead of silently echoing the source back as data.
+//
+// String-aware by construction — a directive mentioned inside quoted prose
+// parses as text content, not as a directive node, so documentation ABOUT
+// directives keeps the prose fallback. `[?cx …]` config directives and
+// foreign PIs (e.g. `[?xml-stylesheet …]` from an XML ingest) are NOT
+// program directives and do not suppress the fallback.
+fn data_reading_has_program_directive(src string) bool {
+	doc := cx.parse(src) or { return false }
+	for n in doc.prolog {
+		if node_carries_program_directive(n) {
+			return true
+		}
+	}
+	for n in doc.elements {
+		if node_carries_program_directive(n) {
+			return true
+		}
+	}
+	return false
+}
+
+fn node_carries_program_directive(n cx.Node) bool {
+	match n {
+		cx.EvalDirectiveNode {
+			if n.name in cx.directive_names {
+				return true
+			}
+			for c in n.items {
+				if node_carries_program_directive(c) {
+					return true
+				}
+			}
+		}
+		cx.PINode {
+			return n.target in cx.directive_names
+		}
+		cx.Element {
+			for c in n.items {
+				if node_carries_program_directive(c) {
+					return true
+				}
+			}
+		}
+		cx.CXDirectiveNode {
+			for c in n.items {
+				if node_carries_program_directive(c) {
+					return true
+				}
+			}
+		}
+		cx.DocumentNode {
+			for c in n.elements {
+				if node_carries_program_directive(c) {
+					return true
+				}
+			}
+		}
+		else {}
+	}
+	return false
+}
+
 // eval_code_streaming is the streaming counterpart. The render
 // output is delivered to `sink` as one or more chunks; concatenating
 // all chunks yields the same byte sequence `eval_code` would
@@ -195,7 +295,19 @@ pub fn eval_code_streaming_opts(input string, program_src string,
 			if unbuffered {
 				ctx.threshold = 1
 			}
-			eval_for_comp_streamed(body, mut env, mut ctx)!
+			eval_for_comp_streamed(body, mut env, mut ctx) or {
+				// §9.2 / #348(a): an err-valued [?for] guard unwinds as the
+				// internal passthrough; in the streaming mode the err value
+				// becomes the stream's (remaining) output — the closest
+				// streaming analog of "the err is the form's result".
+				if err is EvalError && err.code == err_guard_passthrough_code
+				   && err.cause_set {
+					ctx.emit_node(err.cause)!
+					ctx.flush()!
+					return
+				}
+				return err
+			}
 			ctx.flush()!
 			return
 		}

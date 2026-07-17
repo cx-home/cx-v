@@ -52,8 +52,8 @@
   [summary """Close the bus, cancelling every active subscription — idempotent, never raises."""]
   [example [code """[?lib 'cx-stdlib/bus']
 [?let [= $b [$bus:bus]]
-  [?let [= $c [$bus:close $b]]
-    [$bus:emit $b [do :t]]]]"""] [expect """cx-err:CXER4664"""]]
+  [= $c [$bus:close $b]]
+  [$bus:emit $b [do :t]]]"""] [expect """cx-err:CXER4664"""]]
 ]
 [fn-doc name=on scope=public purity=impure
   [sig """-> element"""]
@@ -115,5 +115,5 @@
   [sig """-> bool"""]
   [summary """Report whether a message matches a pattern — the bare matcher."""]
   [example [code """[?lib 'cx-stdlib/bus']
-[$bus:matches [do :order-placed] :order-placed]"""] [expect """true"""]]
+[$bus:matches [do :order.placed] :order.placed]"""] [expect """true"""]]
 ]

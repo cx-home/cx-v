@@ -10,26 +10,24 @@ module main
 const scaffold_config = '# A CX config skeleton — typed, commented, format-stable.
 # Convert: cx --json this.cx hash: cx canonical this.cx | cx hash
 
-[config
- [; environment selector: dev / staging / prod ]
- env=dev
-
+[; env selects the active profile: dev / staging / prod ]
+[config env=dev
  [server
- host=localhost
- port:u16=8080
- tls=true
- debug=false
+  host=localhost
+  port::u16=8080
+  tls=true
+  debug=false
  ]
 
  [database
- url=postgres://localhost:5432/app
- pool_size:u8=16
- connect_timeout_ms:u32=5000
+  url=postgres://localhost:5432/app
+  pool_size::u8=16
+  connect_timeout_ms::u32=5000
  ]
 
  [allowed_origins
- https://app.example.com
- https://admin.example.com
+  https://app.example.com
+  https://admin.example.com
  ]
 ]
 '
@@ -37,9 +35,9 @@ const scaffold_config = '# A CX config skeleton — typed, commented, format-sta
 const scaffold_data = '# A CX data skeleton — typed entities, repeated structures.
 
 [catalog
- [product id=001 name=widget price:decimal=12.50 in_stock=true]
- [product id=002 name=gadget price:decimal=29.99 in_stock=true]
- [product id=003 name=gizmo price:decimal=8.75 in_stock=false]
+ [product id=001 name=widget price::decimal=12.50 in_stock=true]
+ [product id=002 name=gadget price::decimal=29.99 in_stock=true]
+ [product id=003 name=gizmo price::decimal=8.75 in_stock=false]
 ]
 '
 
@@ -48,7 +46,7 @@ const scaffold_doc = '# A CX document skeleton — mixed prose + structured data
 [article
  [title CX evaluation notes]
  [author erik]
- [date :date 2026-05-12]
+ [date::date 2026-05-12]
 
  [; The intro paragraph below mixes prose with inline data references. ]
  [p
@@ -58,8 +56,8 @@ const scaffold_doc = '# A CX document skeleton — mixed prose + structured data
  ]
 
  [section [heading Tabular section]
- [paragraph A `:table` block carries rows directly inside the doc.]
- [_ :table[metric value:int]
+ [paragraph A typed table block carries rows directly inside the doc.]
+ [metrics [table[metric value::int]]
  requests 1024
  errors 3
  latency_p99_ms 47
@@ -75,9 +73,9 @@ ts=2026-05-12T10:30:01Z level=warn svc=api req_id=def456 latency_ms=210 slow=tru
 ts=2026-05-12T10:30:01Z level=error svc=api req_id=ghi789 err=\'connection refused\'
 '
 
-const scaffold_table = '# A CX :table skeleton — column-typed rows.
+const scaffold_table = '# A CX table skeleton — column-typed rows.
 
-[users :table[id:int name age:int city email]
+[users [table[id::int name age::int city email]]
  1 alice 30 portland alice@example.com
  2 bob 25 austin bob@example.com
  3 carol 40 lisbon carol@example.com
