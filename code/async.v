@@ -1,25 +1,34 @@
 module code
 
 import cx
+import time
 
-// ── §10.5 async / await / cancellation — substrate (lazy futures) ─────────
+// ── §10.5 async / await / cancellation ─────────────────────────────────────
 //
-// Phase 3.10. Implements:
-//   [?async EXPR]              — register a lazy future
-//   [?await $f]                — drive lazy eval; propagate value/err
+// Implements:
+//   [?async EXPR]              — EAGER spawn (§10.5.1): the body runs on
+//                                its own V thread whether or not awaited
+//   [?await $f]                — barrier; propagate value/err
 //   [?await $f :timeout DUR]   — bound the wait; CXER0241 on expiry
 //   [?await-all FUTURES]       — barrier; CXER0240 collects non-done causes
 //   [?await-any FUTURES]       — first done in source order
 //   [?await-race FUTURES]      — first terminal; cancels losers
-//   [?cancel $f]               — extends to future handles
+//   [?cancel $f]               — cooperative flag + §10.5.7.2 thread revoke
 //   [?check-cancel]            — reads the active future's cancel flag
-//   [?sleep DUR]               — extended to honor cancel + await deadline
+//   [?sleep DUR]               — cancel-observing; DUR mock PARKS in a
+//                                spawned body (never self-advances)
 //
-// Substrate model: futures are lazy. The body AST + an env-bindings
-// snapshot are stored at [?async] time. Evaluation happens at the first
-// [?await] for the future, with `env.state.current_future_id` set so
-// [?sleep] / [?check-cancel] can read the cancel flag. This keeps the
-// fixture battery deterministic without needing V `spawn`.
+// Execution model (#541): [?async] spawns the body eagerly on the #58
+// worker-thread substrate — §10.5.1's "returns immediately with a future"
+// with the state machine running independently of any await. LOGICAL time
+// stays deterministic across threads: a mock sleep in a spawned body
+// PARKS (parked_until_ns) and the await barriers advance the shared
+// clock only when every runnable spawned future is parked, bounded by the
+// awaiter's own deadline (await_concurrent). CX_WORKER_THREADS=0 falls
+// back to the original LAZY substrate (body AST + bindings snapshot,
+// driven at first await via drive_future with the global
+// current_future_id) — the diagnostics/bisection escape hatch, same knob
+// as [?worker].
 
 fn mk_future_handle(id string) cx.Node {
 	// id (scalar) → attribute. The future handle also carries the nominal
@@ -146,7 +155,81 @@ fn eval_async(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		handle_kind: 'future'
 		handle_id:   id
 	}
+	// #541: EAGER spawn is the §10.5.1 DEFAULT — "evaluates EXPR in a new
+	// asynchronous context and RETURNS IMMEDIATELY"; the body runs whether
+	// or not the future is ever awaited (fire-and-forget is legitimate).
+	// Rides the #58 worker-thread substrate (same vgc multi-mutator
+	// soundness lineage); CX_WORKER_THREADS=0 falls back to the original
+	// lazy drive-at-await substrate (diagnostics/bisection escape hatch,
+	// same knob as [?worker]).
+	if worker_threads_enabled() {
+		mut mrec := unsafe { rec }
+		mrec.concurrent = true
+		mrec.state = 'running'
+		spawn run_future_thread(rec, unsafe { env.state }, env.bindings.clone(),
+			env.closures.clone(), env.scope, env.dyn_context.clone(), body_node)
+	}
 	return mk_future_handle(id)
+}
+
+// run_future_thread is the spawned-thread body for an eager [?async]
+// (#541) — run_worker_thread's shape verbatim: a private env (cloned
+// bindings/closures + shared &ProgramState + the program scope), the
+// §10.5.1 dynamic-context capture-at-spawn (dyn snapshot), and terminal
+// publication through the LOCKED future_publish (which arbitrates against
+// a racing [?cancel]: terminal states never change, so a body with no
+// cancellation point completes done even if the flag was set mid-run —
+// cancellation is cooperative, §10.5.4). Cancellation points inside the
+// body observe env.current_future (the thread-local rec) and raise/return
+// CXER0260 → the CANCELLED terminal.
+fn run_future_thread(rec_ptr &FutureRecord, state_ptr &ProgramState, binds map[string]cx.Node, closures_snap map[string]Closure, scope_ptr &Scope, dyn []cx.Node, body cx.ProgramNode) {
+	mut rec := unsafe { rec_ptr }
+	mut fenv := MatchEnv{
+		bindings:       binds
+		closures:       closures_snap
+		state:          unsafe { state_ptr }
+		scope:          unsafe { scope_ptr }
+		dyn_context:    dyn
+		anon_counter:   0
+		frame_pool:     &FramePool{}
+		current_future: rec
+	}
+	mut st := unsafe { state_ptr }
+	// §10.5.7.2 (#541): stamp this thread's id so a [?cancel] can revoke
+	// its capability set for the remainder of the body; clear the
+	// revocation with the thread (terminal futures need no backstop).
+	rec.thread_id = cap_thread_id()
+	if rec.cancel_requested {
+		caps_revoke_thread(rec.thread_id)
+	}
+	defer { caps_unrevoke_thread(rec.thread_id) }
+	empty := cx.Node(cx.Element{ name: '' })
+	result := eval_node(body, mut fenv) or {
+		if err.msg().contains('cx-err:CXER0260') {
+			st.future_publish(mut rec, 'cancelled', empty, mk_err_with_slots('cx-err:CXER0260', []))
+			return
+		}
+		st.future_publish(mut rec, 'failed', empty, mk_err('inner', err.msg()))
+		return
+	}
+	if is_err_value(result) {
+		if err_code_of(result) == 'cx-err:CXER0260' {
+			st.future_publish(mut rec, 'cancelled', empty, result)
+			return
+		}
+		st.future_publish(mut rec, 'failed', empty, result)
+		return
+	}
+	// Multi-value top-level wrapper → first-class sequence (mirrors
+	// drive_future's normalisation; program-async-013 shape).
+	if result is cx.Element && result.name == '' && result.items.len > 1 {
+		st.future_publish(mut rec, 'done', cx.Node(cx.Element{
+			name:  '__cx_seq__'
+			items: result.items
+		}), empty)
+		return
+	}
+	st.future_publish(mut rec, 'done', result, empty)
 }
 
 // drive_future runs the future's body lazily, returning the terminal
@@ -305,6 +388,9 @@ fn eval_await(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 
 fn await_with_deadline(mut fut FutureRecord, deadline_ns i64,
                        mut env MatchEnv) cx.Node {
+	if fut.concurrent {
+		return await_concurrent(mut fut, deadline_ns, mut env)
+	}
 	if fut.state != 'pending' {
 		return future_state_to_result(fut)
 	}
@@ -312,6 +398,46 @@ fn await_with_deadline(mut fut FutureRecord, deadline_ns i64,
 	env.state.await_deadline_set(deadline_ns)
 	defer { env.state.await_deadline_set(saved_deadline) }
 	return drive_future(mut fut, mut env)
+}
+
+// await_concurrent is the eager-spawn await barrier (#541): block until
+// the target future is terminal, coordinating LOGICAL time across the
+// spawned threads. The clock is purely logical (state_locks.v now_ns —
+// only mock sleeps and this barrier move it), so the §10.2.2 honest
+// posture is preserved: deadlines are logical-time deadlines.
+//
+//   - the target terminal → its result (§10.5.2).
+//   - a bounded await whose LOGICAL deadline lapses → CXER0241; the
+//     future stays pending/parked (the deadline is the caller's, §10.5.3).
+//   - when EVERY non-terminal spawned future is parked at a mock sleep
+//     (none runnable), nothing can move except time: advance the clock to
+//     the earliest wake — bounded by this awaiter's deadline, so a
+//     10s-mock-sleeping body under a 50ms await times the AWAIT out
+//     deterministically (program-async-003) instead of racing the body.
+//   - otherwise a runnable body is making real progress: poll.
+fn await_concurrent(mut fut FutureRecord, deadline_ns i64, mut env MatchEnv) cx.Node {
+	for {
+		if fut.state in ['done', 'failed', 'cancelled'] {
+			return future_state_to_result(fut)
+		}
+		if deadline_ns > 0 && env.state.clock_now() >= deadline_ns {
+			return mk_err_with_slots('cx-err:CXER0241', [])
+		}
+		runnable, earliest := env.state.futures_parked_earliest()
+		if runnable == 0 && earliest > 0 {
+			mut target := earliest
+			if deadline_ns > 0 && deadline_ns < target {
+				target = deadline_ns
+			}
+			now := env.state.clock_now()
+			if target > now {
+				env.state.clock_advance(target - now)
+			}
+			// woken sleepers observe the new clock on their next poll
+		}
+		time.sleep(time.millisecond)
+	}
+	return cx.Node(cx.Element{})
 }
 
 fn eval_await_all(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
@@ -382,13 +508,15 @@ fn eval_await_race(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		}
 	}
 	// Cancel every loser (per §10.5.2: "Other futures MUST be issued
-	// [?cancel]"). With lazy eval, the losers haven't run yet; mark
-	// cancel_requested so a subsequent [?await] sees cancellation.
+	// [?cancel]"). Lazy losers are 'pending' (not yet driven); eager
+	// losers are 'running' (#541) — their parked/running bodies observe
+	// the flag at the next cancellation point. Terminal losers stay
+	// terminal (§10.5.1).
 	for i, fh in futures {
 		if i == winner_idx { continue }
 		if mut fut := resolve_future_from_handle(fh, mut env) {
-			if fut.state == 'pending' {
-				fut.cancel_requested = true
+			if fut.state in ['pending', 'running'] {
+				future_request_cancel(mut fut)
 			}
 		}
 	}
@@ -424,9 +552,26 @@ fn resolve_future_from_handle(h cx.Node, mut env MatchEnv) !&FutureRecord {
 
 // ── Cancellation hooks for [?sleep] / [?check-cancel] / [?cancel] ─────────
 
+// future_request_cancel raises a future's cancel flag AND, for a running
+// concurrent body, registers its thread in the §10.5.7.2 revocation set —
+// raw capability-gated effects on that thread deny (CXER0271) for the
+// remainder of the body, while cancellation points keep their CXER0260
+// precedence. Every cancel path routes here.
+pub fn future_request_cancel(mut fut FutureRecord) {
+	fut.cancel_requested = true
+	if fut.concurrent && fut.thread_id != 0 {
+		caps_revoke_thread(fut.thread_id)
+	}
+}
+
 // active_future_cancelled returns true if the current evaluation is inside
-// an awaited future whose cancel_requested flag is set.
+// a future whose cancel_requested flag is set — the thread-local
+// env.current_future for an eager spawned body (#541), or the global
+// current_future_id the lazy drive-at-await path stamps.
 fn active_future_cancelled(env MatchEnv) bool {
+	if env.current_future != unsafe { nil } {
+		return env.current_future.cancel_requested
+	}
 	mut s := unsafe { env.state }
 	cur := s.current_future_get()
 	if cur == '' { return false }

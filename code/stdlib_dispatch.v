@@ -65,6 +65,7 @@ fn stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if r := process_stdlib_builtin(name, args) { return r }
 	if r := bus_stdlib_builtin(name, args) { return r }
 	if r := journal_stdlib_builtin(name, args) { return r }
+	if r := fabric_stdlib_builtin(name, args) { return r }
 	if r := session_stdlib_builtin(name, args) { return r }
 	if r := authz_stdlib_builtin(name, args) { return r }
 	if r := did_stdlib_builtin(name, args) { return r }

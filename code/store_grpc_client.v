@@ -452,6 +452,8 @@ fn grpc_objwire_method(op string) string {
 		'objects-put' { 'ObjectsPut' }
 		'refs' { 'Refs' }
 		'refs-set' { 'RefsSet' }
+		'aliases' { 'Aliases' }
+		'aliases-set' { 'AliasesSet' }
 		else { '' }
 	}
 }

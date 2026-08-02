@@ -84,6 +84,9 @@ pub fn cx_text_lint(input string, opts LintOptions) ![]Finding {
 	if check_enabled('CX-L006', opts) {
 		check_l006_let_staircase(input, mut findings)
 	}
+	if check_enabled('CX-L007', opts) {
+		check_l007_field_read_aggregation(input, mut findings)
+	}
 
 	// Apply [?cx lint-disable=...] / lint-enable=... directive scopes.
 	// The directives are scanned in document order; any finding whose
@@ -268,6 +271,102 @@ fn walk_let_staircase_children(node ProgramNode, mut findings []Finding) {
 // contains a newline. If a document has at least one line comment
 // AND at least one single-line block comment, every single-line
 // block comment is flagged.
+// ── CX-L007 — aggregation over a simple field accessor (#610) ────────────────
+//
+// `[$count $x/field]` (and $empty / $exists) over a PURE child chain is a
+// FIELD READ: per code.md §6.2 it aggregates the field's CONTENT — for a
+// field holding one element, the inner element's own arity — never "how
+// many children matched". The trap was ruled by-design in #584 (the
+// field-read algebra is load-bearing platform-wide); at scale the guard is
+// this lint, not folklore. Warning severity: the composition is legal and
+// sometimes intended (`[$count $x/list]` over a multi-item field is
+// idiomatic), so the finding teaches the sanctioned match-counting idioms
+// rather than forbidding the read.
+fn check_l007_field_read_aggregation(input string, mut findings []Finding) {
+	prog := parse_program(input) or { return } // not program source → not this rule's domain
+	l007_walk(prog.body, mut findings)
+}
+
+fn l007_flag(call ProgramCall, b ProgramBinding, mut findings []Finding) {
+	mut chain := '\$${b.name}'
+	for st in b.path {
+		chain += '/${st.name}'
+	}
+	findings << Finding{
+		check:    'CX-L007'
+		severity: .warn
+		message:  '[\$${call.name} ${chain}] aggregates the FIELD\'s content (code.md §6.2: a one-element field reports the inner element\'s arity), not how many `${b.path.last().name}` children matched'
+		path:     chain
+		line:     call.pos.line
+		col:      call.pos.col
+		suggestion: 'for match-counting use [\$${call.name} ${chain.all_before_last('/')}//${b.path.last().name}], [\$count ${chain.all_before_last('/')}/*], or a predicate step; keep the field read only if you mean the content'
+	}
+}
+
+fn l007_walk(n ProgramNode, mut findings []Finding) {
+	match n {
+		Program {
+			l007_walk(n.body, mut findings)
+		}
+		ProgramCall {
+			if n.name in ['count', 'empty', 'exists'] && n.args.len == 1 {
+				a := n.args[0]
+				if a is ProgramBinding {
+					if a.path.len > 0 {
+						mut pure_chain := true
+						for st in a.path {
+							if st.kind != .child || st.predicates.len > 0 {
+								pure_chain = false
+								break
+							}
+						}
+						if pure_chain {
+							l007_flag(n, a, mut findings)
+						}
+					}
+				}
+			}
+			for a in n.args {
+				l007_walk(a, mut findings)
+			}
+		}
+		ProgramDirective {
+			for s in n.slots {
+				l007_walk(s.value, mut findings)
+			}
+		}
+		ProgramForComp {
+			for c in n.clauses {
+				if src := c.source {
+					l007_walk(src, mut findings)
+				}
+				if ex := c.expr {
+					l007_walk(ex, mut findings)
+				}
+			}
+			l007_walk(n.yield, mut findings)
+			if yv := n.yield_value {
+				l007_walk(yv, mut findings)
+			}
+		}
+		ProgramLiteral {
+			for it in n.items {
+				l007_walk(it, mut findings)
+			}
+			for at in n.attrs {
+				l007_walk(at.value, mut findings)
+			}
+			for s in n.slots {
+				l007_walk(s.value, mut findings)
+			}
+			if ne := n.name_expr {
+				l007_walk(ne, mut findings)
+			}
+		}
+		else {}
+	}
+}
+
 fn check_l001_comment_style(input string, doc Document, mut findings []Finding) {
 	mut has_line_comment := false
 	mut single_line_blocks := [][3]int{} // [start_byte, line, col]

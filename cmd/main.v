@@ -16,8 +16,51 @@ const cx_build_date = $d('cx_build_date', 'unknown')
 const cx_gc = $d('cx_gc', 'unknown')
 const cx_vfork = $d('cx_vfork', 'unknown')
 
+// compiled_engines reports the DB engines compiled into THIS binary, probed
+// from the `$if` build gates themselves (#520) — the same gates that select
+// the engine in sql_open_impl / stdlib_dispatch, so the line can never drift
+// from what the binary resolves. Scripts probe capability here instead of
+// tripping CXER1100 (`cx -v | grep -q 'engines.*sqlite'`).
+fn compiled_engines() string {
+	mut e := []string{}
+	$if cx_db_sqlite ? {
+		e << 'sqlite'
+	}
+	$if cx_db_pg ? {
+		e << 'postgres'
+	}
+	$if cx_db_mysql ? {
+		e << 'mysql'
+	}
+	$if cx_db_redis ? {
+		e << 'redis'
+	}
+	return if e.len == 0 { '(none)' } else { e.join(' ') }
+}
+
+// compiled_features reports the other optional gated backends compiled into
+// this binary — the store substrates and transports that, like the DB
+// engines, are `-d`-gated because they link (or enable) something the bare
+// build must not assume.
+fn compiled_features() string {
+	mut f := []string{}
+	$if cxstore_sqlite ? {
+		f << 'store-sqlite'
+	}
+	$if cxstore_columnar ? {
+		f << 'store-columnar'
+	}
+	$if cx_arrow_files ? {
+		f << 'arrow-files'
+	}
+	$if cx_sftp ? {
+		f << 'sftp'
+	}
+	return if f.len == 0 { '(none)' } else { f.join(' ') }
+}
+
 // print_version emits expanded build/version info (commit, build time, GC model,
-// V-fork gitlink) — `cx --version` / `cx -v`.
+// V-fork gitlink, compiled-in engines/features) — `cx --version` / `cx -v`.
 fn print_version() {
 	gc_desc := match cx_gc {
 		'e' { 'e — Perceus RC front line + precise STW vgc backstop' }
@@ -30,6 +73,8 @@ fn print_version() {
 	println('  built    ${cx_build_date}')
 	println('  gc       ${gc_desc}')
 	println('  V fork   ${cx_vfork}')
+	println('  engines  ${compiled_engines()}')
+	println('  features ${compiled_features()}')
 }
 
 fn main() {
@@ -52,7 +97,7 @@ fn main() {
 
 		// ── Subcommand dispatch — driven by the ONE registry (#417) ───────────
 		// `subcommands` below is the single source of truth: the same table
-		// drives this dispatch, the `cx --help` catalogue, and every
+		// drives this dispatch, the `cx --help` catalog, and every
 		// per-subcommand `cx <name> --help`. A subcommand cannot exist
 		// without being documented, and help can never drift from dispatch.
 		for sc in subcommands {
@@ -813,16 +858,16 @@ fn read_one_input(args []string, cmd string) string {
 // ── CLI subcommand registry (#417) ───────────────────────────────────────────
 //
 // ONE table drives BOTH the dispatch in main() and every help surface: the
-// `cx --help` catalogue is generated from `name` + `summary`, and
+// `cx --help` catalog is generated from `name` + `summary`, and
 // `cx <name> --help` prints `help` verbatim. Adding a subcommand here is the
 // only way to make it dispatchable, so the help can never drift from the
 // real surface again. ALL subcommands are documented — none are internal
 // (`eval` is a documented alias of the default run action; the docs-src
-// 08-tooling catalogue mirrors this list).
+// 08-tooling catalog mirrors this list).
 
 struct SubcommandSpec {
 	name    string
-	summary string   // one-liner for the `cx --help` catalogue
+	summary string   // one-liner for the `cx --help` catalog
 	help    []string // `cx <name> --help` body; first line is `Usage: cx <name> …`
 	run     fn ([]string) @[required]
 }
@@ -1094,6 +1139,21 @@ fn build_subcommands() []SubcommandSpec {
 			run:     run_store_serve
 		},
 		SubcommandSpec{
+			name:    'fabric-serve'
+			summary: 'Run the CX fabric eventing daemon from a config.'
+			help:    [
+				'Usage: cx fabric-serve --config PATH [--allow-net[=host:port]] [--allow-*]',
+				'',
+				'Runs the single-node cx-fabric served tier: loads + validates the',
+				'fabric.service.cx config, mounts the configured fabrics (journal-backed',
+				'durable streams + transient channels), and serves XSP-AUTH-attached',
+				'clients over raw XSP frames until SIGTERM/SIGINT, then drains.',
+				'Health/ready probes ride the optional [health addr=…] listener',
+				'(compatible with `cx store-health --url`).',
+			]
+			run:     run_fabric_serve
+		},
+		SubcommandSpec{
 			name:    'store-health'
 			summary: 'Store readiness probe (exit 0 iff accepting).'
 			help:    [
@@ -1190,7 +1250,7 @@ fn convert_text_format_names(kind string) []string {
 fn usage_text() string {
 	// Capability flags derive from the accepted set (code.capability_names),
 	// the --from/--to lists from the codec registry, and the subcommand
-	// catalogue from the dispatch table — no hand-maintained copies.
+	// catalog from the dispatch table — no hand-maintained copies.
 	mut allow_flags := code.capability_names().map('--allow-' + it)
 	allow_flags << '--allow-all'
 	mut b := []string{}

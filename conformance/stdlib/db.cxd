@@ -1,27 +1,33 @@
 [test-suite name=db
   [doc [#
 conformance fixtures for the database-access layer ($sql-* / $redis-* verbs;
-   spec/02-working/db_access.md).
+   spec/03-approved/core/db_access.md).
 
-   SCOPE — build-independent surface ONLY. The engine-neutral SQL verbs
-   (sql-open / sql-exec / sql-query / sql-close) are compiled into EVERY
-   build; the engines behind them are opt-in build gates (-d cx_db_sqlite /
-   -d cx_db_pg / -d cx_db_mysql) and -d cx_db_redis gates the redis verbs
-   entirely. The fixture runner's gate toggle (gates.cxd gate=) is static —
-   it cannot condition a case on the flags the binary under test was built
-   with — so any case whose outcome depends on an engine gate (engine-built
-   success lanes, the open-time capability denial CXER0271 vs the no-engine
-   CXER1100, every redis verb) would be always-red on some build and is
-   deliberately NOT fixtured here. Those lanes live in $if-gated V tests
+   SCOPE — the DEFAULT build surface (#520). The default build carries the
+   sqlite + redis engines (vcx/Makefile CX_ENGINES = -d cx_db_sqlite
+   -d cx_db_redis; every gate invocation compiles the suite with the same
+   flags), so this corpus asserts BOTH tiers the shipped artifact exposes:
+
+   • build-independent lanes (001-009): operand-kind validation (CXER0100)
+     fires before any engine/gate/capability logic, an unknown [sql-db]
+     handle is the uniform E_SQL runtime error (CXER1120), sql-close of an
+     unknown handle is idempotent null, and the #305 arity sweep (CXER0108).
+     These hold on ANY build, engines or not.
+
+   • default-engine lanes (010+): sqlite success lifecycle, §7 param
+     binding (string-scalars-only, non-string binds ''), the open-time
+     capability denial (CXER0271 — deterministic now that the engine is
+     present, so denial is no longer shadowed by CXER1100), the malformed
+     empty-path CXER1101, and the redis guard sweep (verbs resolve on the
+     default build; arity/operand/unknown-handle/denial — no live server
+     needed). An engine-FREE override build (make CX_ENGINES='') is
+     expected red on these lanes; that is a non-default configuration,
+     like a CX_GC override.
+
+   pg/mysql remain opt-in gates: their lanes stay in $if-gated V tests
    (vcx/code/sql_test.v pattern) plus the live-verified evidence recorded
-   in the spec's testing section.
-
-   What IS asserted here holds on every build, engines or not: operand-kind
-   validation (CXER0100) fires before any engine/gate/capability logic, an
-   unknown [sql-db] handle is the uniform E_SQL runtime error (CXER1120),
-   and sql-close of an unknown handle is idempotent null. None of these
-   need a capability grant: the open-time gate is the ONLY capability point
-   of the surface, and no case here reaches a successful open.
+   in the spec's testing section. Redis SUCCESS lanes (live server) are
+   likewise V-test/live-evidence only — everything here is offline.
   #]]
 
  [case id=db-001-sql-open-bad-operand level=core
@@ -92,9 +98,8 @@ null
  [; #305 arity lane — missing operands raise CXER0108 E_ARG (they V-panicked
     before the guard). The guard sits ahead of engine/capability logic, so
     these are build-independent like the operand-kind cases above. The redis
-    arity guards are implemented identically but cannot be fixtured (verb
-    existence itself is -d cx_db_redis gated); they are covered by the same
-    sweep and the spec's live-verification record. ;]
+    arity guards are fixtured below (016+) now that -d cx_db_redis is a
+    default-build gate (#520). ;]
 
  [case id=db-006-sql-open-arity level=core
   [tags db sql sql-open arity error]
@@ -145,6 +150,201 @@ null
 #]]
   [out-text [#
 [err code=cx-err:CXER0108 message='E_ARG: sql-close expects ($db)']
+#]]
+ ]
+
+ [; ── default-engine lanes (#520) — the default build carries sqlite + redis ── ;]
+
+ [case id=db-010-sqlite-open-exec-query-close level=core grant='write'
+  [tags db sql sqlite lifecycle success]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $c [$sql-open "sqlite://:memory:"]] [= $create [$sql-exec $c "CREATE TABLE t (x INTEGER)"]] [= $insert [$sql-exec $c "INSERT INTO t VALUES (40), (2)"]] [= $r [$sql-query $c "SELECT SUM(x) AS total FROM t"]] [= $closed [$sql-close $c]] $r]
+#]]
+  [out-text [#
+[rows [row [total '42']]]
+#]]
+ ]
+
+ [case id=db-011-sqlite-exec-result-shape level=core grant='write'
+  [tags db sql sqlite sql-exec result changes last-rowid]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $c [$sql-open "sqlite://:memory:"]] [= $create [$sql-exec $c "CREATE TABLE t (x INTEGER)"]] [= $ins [$sql-exec $c "INSERT INTO t VALUES (1), (2)"]] [= $closed [$sql-close $c]] $ins]
+#]]
+  [out-text [#
+[result changes=2 last-rowid=2]
+#]]
+ ]
+
+ [case id=db-012-sqlite-param-binding-strings level=core grant='write'
+  [tags db sql sqlite params binding success]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $c [$sql-open "sqlite://:memory:"]] [= $r [$sql-query $c "SELECT ? + ? AS s" "40" "2"]] [= $closed [$sql-close $c]] $r]
+#]]
+  [out-text [#
+[rows [row [s '42']]]
+#]]
+ ]
+
+ [; §7.1 — parameters are string scalars ONLY; a non-string scalar in param
+    position silently binds as the empty string (spec'd shipped behavior,
+    with a candidate CXER0100 tightening recorded as a spec-first change). ;]
+ [case id=db-013-sqlite-param-nonstring-refuses level=core grant='write'
+  [tags db sql sqlite params nonstring CXER0100 spec-7-1]
+  [; #524 owner ruling 2026-07-21 — the §7.1 boundary is STRICT: a
+     non-string bind parameter refuses NAMING the parameter (the retired
+     behavior silently bound '' — `SELECT ?+?` with ints returned 0). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $c [$sql-open "sqlite://:memory:"]] [= $r [$sql-query $c "SELECT ? AS a" 7]] [= $closed [$sql-close $c]] $r]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message="E_OPERAND_KIND: sql-query bind parameter 1 is not a string scalar — parameters are string scalars only (db_access.md §7.1); convert explicitly (e.g. [$concat '' $v])"]
+#]]
+ ]
+
+ [case id=db-014-sqlite-malformed-empty-path level=core grant='write'
+  [tags db sql sqlite sql-open malformed error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-open "sqlite://"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER1101 message='E_STORE_BACKEND_UNREACHABLE: malformed sqlite URL sqlite://']
+#]]
+ ]
+
+ [; open-time capability denial — deterministic on the default build: the
+    engine IS present, so the write gate (not CXER1100) answers. ;]
+ [case id=db-015-sql-open-cap-denied level=core
+  [tags db sql sqlite sql-open capability denial]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sql-open "sqlite://:memory:"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [; redis guard sweep — verbs resolve on the default build; every lane here
+    is offline (guards fire before any dial). ;]
+
+ [case id=db-016-redis-open-arity level=core
+  [tags db redis redis-open arity error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$redis-open]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0108 message='E_ARG: redis-open expects ($url)']
+#]]
+ ]
+
+ [case id=db-017-redis-open-bad-operand level=core
+  [tags db redis redis-open operand-kind error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$redis-open 42]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='E_OPERAND_KIND: redis-open expects a url string']
+#]]
+ ]
+
+ [case id=db-018-redis-open-cap-denied level=core
+  [tags db redis redis-open capability denial]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$redis-open "redis://localhost"]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=db-019-redis-cmd-arity level=core
+  [tags db redis redis-cmd arity error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$redis-cmd]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0108 message='E_ARG: redis-cmd expects ($db, $word, $words…)']
+#]]
+ ]
+
+ [case id=db-020-redis-cmd-bad-handle level=core
+  [tags db redis redis-cmd operand-kind error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$redis-cmd "nope" "PING"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='E_OPERAND_KIND: redis-cmd expects a [redis-db] handle']
+#]]
+ ]
+
+ [case id=db-021-redis-cmd-unknown-handle level=core
+  [tags db redis redis-cmd handle error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$redis-cmd [redis-db handle=999999 url='x'] "PING"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER1120 message='E_REDIS: unknown redis handle 999999']
+#]]
+ ]
+
+ [case id=db-022-redis-close-arity level=core
+  [tags db redis redis-close arity error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$redis-close]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0108 message='E_ARG: redis-close expects ($db)']
+#]]
+ ]
+
+ [case id=db-023-redis-close-bad-operand level=core
+  [tags db redis redis-close operand-kind error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$redis-close "x"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='E_OPERAND_KIND: redis-close expects a [redis-db] handle']
 #]]
  ]
 ]

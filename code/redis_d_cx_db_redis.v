@@ -136,8 +136,13 @@ fn redis_cmd_impl(args []cx.Node) cx.Node {
 		return mk_err('cx-err:CXER0100', 'E_OPERAND_KIND: redis-cmd expects a [redis-db] handle')
 	}
 	mut parts := []string{cap: args.len}
-	for a in args[1..] {
-		parts << (store_arg_str(a) or { '' })
+	for i, a in args[1..] {
+		// §8 (#524, same tightening as the §7.1 bind params): a non-string
+		// command word REFUSES named — never the silent ''-degrade.
+		parts << store_arg_str(a) or {
+			return mk_err('cx-err:CXER0100',
+				'E_OPERAND_KIND: redis-cmd word ${i + 1} is not a string scalar — command words are string scalars only (db_access.md §8); convert explicitly (e.g. [\$concat \'\' \$v])')
+		}
 	}
 	if parts.len == 0 {
 		return mk_err('cx-err:CXER0100', 'E_OPERAND_KIND: redis-cmd needs at least a command word')

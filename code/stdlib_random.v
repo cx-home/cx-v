@@ -3,6 +3,7 @@ module code
 
 import cx
 import math
+import sync
 import rand.seed as vseed
 import crypto.rand as crand
 import encoding.hex
@@ -405,26 +406,129 @@ fn random_validate_weighted(items []cx.Node, weights []f64, n int) (f64, ?cx.Nod
 	return total, none
 }
 
-// ── process-global generator state ──────────────────────────────────
+// ── implicit generator state — PER-THREAD streams (#625) ─────────────
 //
-// Seeded from system entropy at module load; re-seedable via `seed`.
-// Impure — shared across all callers in the process.
+// One process-wide Xoshiro raced under [?worker] threads: interleaved
+// draws made a "deterministic" seed+draw sequence differ run to run, and
+// the unsynchronized state mutation was itself a data race. Each OS
+// thread now owns its own stream: entropy-seeded (tid-mixed, so two
+// threads first-drawing in the same tick still diverge) at that thread's
+// first draw, re-seedable via `[$random:seed]` — which seeds the CALLING
+// thread's stream, making seed+draw deterministic WITHIN a thread.
+// Cross-thread reproducible pipelines use the §3.2 explicit-state
+// mirrors or the §3.7 generator handles. Registry lock held only for the
+// tid lookup/insert; the returned per-thread state is mutated lock-free
+// (only its owner thread ever touches it).
 
-__global g_random_state = Xoshiro{}
+const g_random_streams_lock = &sync.Mutex(sync.new_mutex())
 
-fn random_global_seeded() bool {
-	return g_random_state.s[0] != 0 || g_random_state.s[1] != 0
-		|| g_random_state.s[2] != 0 || g_random_state.s[3] != 0
-}
+__global (
+	g_random_streams map[u64]&Xoshiro
+)
 
-fn random_ensure_seeded() {
-	if !random_global_seeded() {
-		s := vseed.time_seed_array(2)
-		g_random_state = xoshiro_from_seed(i64(u64(s[0]) | (u64(s[1]) << 32)))
-		if !random_global_seeded() {
-			g_random_state = xoshiro_from_seed(i64(0x2545f4914f6cdd1d))
+// random_tls returns the calling thread's stream, entropy-seeding it on
+// first use.
+fn random_tls() &Xoshiro {
+	tid := cap_thread_id()
+	mut l := unsafe { g_random_streams_lock }
+	l.lock()
+	if st := g_random_streams[tid] {
+		l.unlock()
+		return st
+	}
+	mut st := &Xoshiro{}
+	s := vseed.time_seed_array(2)
+	unsafe {
+		*st = xoshiro_from_seed(i64((u64(s[0]) | (u64(s[1]) << 32)) ^ (tid * u64(0x9e3779b97f4a7c15))))
+	}
+	if st.s[0] == 0 && st.s[1] == 0 && st.s[2] == 0 && st.s[3] == 0 {
+		unsafe {
+			*st = xoshiro_from_seed(i64(0x2545f4914f6cdd1d))
 		}
 	}
+	g_random_streams[tid] = st
+	l.unlock()
+	return st
+}
+
+// random_tls_seed re-seeds the calling thread's stream (the `seed` verb).
+fn random_tls_seed(s i64) {
+	mut st := random_tls()
+	unsafe {
+		*st = xoshiro_from_seed(s)
+	}
+	if st.s[0] == 0 && st.s[1] == 0 && st.s[2] == 0 && st.s[3] == 0 {
+		unsafe {
+			*st = xoshiro_from_seed(i64(0x2545f4914f6cdd1d))
+		}
+	}
+}
+
+// ── §3.7 stateful generator handles (#625) ───────────────────────────
+//
+// [$random:new $seed] returns an [rng handle=N] whose draws ($random:gen-*)
+// mutate registry-held state under a per-handle lock — the imperative twin
+// of the §3.2 pure -with mirrors, for worker code that wants a private
+// deterministic stream without threading [result …] pairs. Concurrent draws
+// on ONE handle are safe but serialize in arrival order (determinism under
+// concurrency = one consumer per handle, or the pure mirrors).
+
+@[heap]
+struct RandomGen {
+mut:
+	lock &sync.Mutex = sync.new_mutex()
+	st   Xoshiro
+}
+
+const g_random_gens_lock = &sync.Mutex(sync.new_mutex())
+
+__global (
+	g_random_gens    map[i64]&RandomGen
+	g_random_gen_seq i64
+)
+
+fn random_gen_new(seed i64) i64 {
+	mut l := unsafe { g_random_gens_lock }
+	l.lock()
+	g_random_gen_seq++
+	id := g_random_gen_seq
+	mut g := &RandomGen{
+		st: xoshiro_from_seed(seed)
+	}
+	if g.st.s[0] == 0 && g.st.s[1] == 0 && g.st.s[2] == 0 && g.st.s[3] == 0 {
+		g.st = xoshiro_from_seed(i64(0x2545f4914f6cdd1d))
+	}
+	g_random_gens[id] = g
+	l.unlock()
+	return id
+}
+
+fn random_gen_handle(id i64) cx.Node {
+	return cx.Element{
+		name:  'rng'
+		attrs: [
+			cx.Attribute{
+				name:  'handle'
+				value: cx.ScalarValue(id)
+			},
+		]
+	}
+}
+
+// random_gen_of resolves a draw's handle argument, or an arg-invalid err.
+fn random_gen_of(arg cx.Node) ?&RandomGen {
+	if arg is cx.Element && arg.name == 'rng' {
+		id := arg.attr('handle').i64()
+		mut l := unsafe { g_random_gens_lock }
+		l.lock()
+		g := g_random_gens[id] or {
+			l.unlock()
+			return none
+		}
+		l.unlock()
+		return g
+	}
+	return none
 }
 
 // ── crypto-random source (§4.2) ─────────────────────────────────────
@@ -470,23 +574,20 @@ fn random_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		// ── §3.1 PRNG process-global (impure) ───────────────────────
 		'random-seed' {
 			s := random_arg_int(args[0]) or { return none }
-			g_random_state = xoshiro_from_seed(s)
-			if !random_global_seeded() {
-				g_random_state = xoshiro_from_seed(i64(0x2545f4914f6cdd1d))
-			}
+			random_tls_seed(s)
 			return random_null()
 		}
 		'random-next-int' {
-			random_ensure_seeded()
-			return random_int(g_random_state.next_u63())
+			mut rst := random_tls()
+			return random_int(rst.next_u63())
 		}
 		'random-next-float' {
-			random_ensure_seeded()
-			return random_float(g_random_state.next_f64())
+			mut rst := random_tls()
+			return random_float(rst.next_f64())
 		}
 		'random-next-bool' {
-			random_ensure_seeded()
-			return random_bool(g_random_state.next() & 1 == 1)
+			mut rst := random_tls()
+			return random_bool(rst.next() & 1 == 1)
 		}
 		'random-int-range' {
 			lo := random_arg_int(args[0]) or { return none }
@@ -494,28 +595,28 @@ fn random_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			if lo > hi {
 				return mk_err('cx-err:CXER1901', 'E_RANDOM_RANGE_INVALID: lo ${lo} > hi ${hi}')
 			}
-			random_ensure_seeded()
-			return random_int(g_random_state.int_range(lo, hi))
+			mut rst := random_tls()
+			return random_int(rst.int_range(lo, hi))
 		}
 		'random-float-range' {
 			lo := random_arg_float(args[0]) or { return none }
 			hi := random_arg_float(args[1]) or { return none }
-			random_ensure_seeded()
-			u := g_random_state.next_f64()
+			mut rst := random_tls()
+			u := rst.next_f64()
 			return random_float(lo + u * (hi - lo))
 		}
 		'random-shuffle' {
 			items := random_seq_items(args[0]) or { return none }
-			random_ensure_seeded()
-			return random_seq(g_random_state.fisher_yates(items))
+			mut rst := random_tls()
+			return random_seq(rst.fisher_yates(items))
 		}
 		'random-choose' {
 			items := random_seq_items(args[0]) or { return none }
 			if items.len == 0 {
 				return mk_err('cx-err:CXER1902', 'E_RANDOM_EMPTY_SEQUENCE: choose on empty sequence')
 			}
-			random_ensure_seeded()
-			idx := int(g_random_state.range_u64(u64(items.len)))
+			mut rst := random_tls()
+			idx := int(rst.range_u64(u64(items.len)))
 			return items[idx]
 		}
 		'random-sample' {
@@ -527,9 +628,221 @@ fn random_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			if int(n) > items.len {
 				return mk_err('cx-err:CXER1903', 'E_RANDOM_SAMPLE_TOO_LARGE: n ${n} > length ${items.len}')
 			}
-			random_ensure_seeded()
-			shuffled := g_random_state.fisher_yates(items)
+			mut rst := random_tls()
+			shuffled := rst.fisher_yates(items)
 			return random_seq(shuffled[..int(n)].clone())
+		}
+
+		// ── §3.7 stateful generator handles (#625) ──────────────────
+		'random-new' {
+			s := random_arg_int(args[0]) or { return none }
+			return random_gen_handle(random_gen_new(s))
+		}
+		'random-free' {
+			if args[0] is cx.Element && (args[0] as cx.Element).name == 'rng' {
+				id := (args[0] as cx.Element).attr('handle').i64()
+				mut l := unsafe { g_random_gens_lock }
+				l.lock()
+				g_random_gens.delete(id)
+				l.unlock()
+				return random_null()
+			}
+			return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: free expects an [rng] handle')
+		}
+		'random-gen-int' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			g.lock.lock()
+			v := g.st.next_u63()
+			g.lock.unlock()
+			return random_int(v)
+		}
+		'random-gen-float' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			g.lock.lock()
+			v := g.st.next_f64()
+			g.lock.unlock()
+			return random_float(v)
+		}
+		'random-gen-bool' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			g.lock.lock()
+			v := g.st.next() & 1 == 1
+			g.lock.unlock()
+			return random_bool(v)
+		}
+		'random-gen-int-range' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			lo := random_arg_int(args[1]) or { return none }
+			hi := random_arg_int(args[2]) or { return none }
+			if lo > hi {
+				return mk_err('cx-err:CXER1901', 'E_RANDOM_RANGE_INVALID: lo ${lo} > hi ${hi}')
+			}
+			g.lock.lock()
+			v := g.st.int_range(lo, hi)
+			g.lock.unlock()
+			return random_int(v)
+		}
+		'random-gen-float-range' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			lo := random_arg_float(args[1]) or { return none }
+			hi := random_arg_float(args[2]) or { return none }
+			g.lock.lock()
+			u := g.st.next_f64()
+			g.lock.unlock()
+			return random_float(lo + u * (hi - lo))
+		}
+		'random-gen-shuffle' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			items := random_seq_items(args[1]) or { return none }
+			g.lock.lock()
+			out := g.st.fisher_yates(items)
+			g.lock.unlock()
+			return random_seq(out)
+		}
+		'random-gen-choose' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			items := random_seq_items(args[1]) or { return none }
+			if items.len == 0 {
+				return mk_err('cx-err:CXER1902', 'E_RANDOM_EMPTY_SEQUENCE: choose on empty sequence')
+			}
+			g.lock.lock()
+			idx := int(g.st.range_u64(u64(items.len)))
+			g.lock.unlock()
+			return items[idx]
+		}
+		'random-gen-sample' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			items := random_seq_items(args[1]) or { return none }
+			n := random_arg_int(args[2]) or { return none }
+			if n < 0 {
+				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: negative n')
+			}
+			if int(n) > items.len {
+				return mk_err('cx-err:CXER1903', 'E_RANDOM_SAMPLE_TOO_LARGE: n ${n} > length ${items.len}')
+			}
+			g.lock.lock()
+			shuffled := g.st.fisher_yates(items)
+			g.lock.unlock()
+			return random_seq(shuffled[..int(n)].clone())
+		}
+		'random-gen-gaussian' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			mean := random_arg_float(args[1]) or { return none }
+			stddev := random_arg_float(args[2]) or { return none }
+			if stddev < 0.0 {
+				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: negative stddev')
+			}
+			g.lock.lock()
+			v := g.st.gaussian_draw(mean, stddev)
+			g.lock.unlock()
+			return random_float(v)
+		}
+		'random-gen-exponential' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			lambda := random_arg_float(args[1]) or { return none }
+			if lambda <= 0.0 {
+				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: non-positive lambda')
+			}
+			g.lock.lock()
+			v := g.st.exponential_draw(lambda)
+			g.lock.unlock()
+			return random_float(v)
+		}
+		'random-gen-poisson' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			lambda := random_arg_float(args[1]) or { return none }
+			if lambda <= 0.0 {
+				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: non-positive lambda')
+			}
+			g.lock.lock()
+			v := g.st.poisson_draw(lambda)
+			g.lock.unlock()
+			return random_int(v)
+		}
+		'random-gen-choose-weighted' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			items := random_seq_items(args[1]) or { return none }
+			weights := random_weights(args[2]) or { return none }
+			total, errv := random_validate_weighted(items, weights, 1)
+			if e := errv {
+				return e
+			}
+			g.lock.lock()
+			idx := g.st.weighted_index(weights, total)
+			g.lock.unlock()
+			return items[idx]
+		}
+		'random-gen-sample-weighted' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			items := random_seq_items(args[1]) or { return none }
+			weights := random_weights(args[2]) or { return none }
+			n := random_arg_int(args[3]) or { return none }
+			_, errv := random_validate_weighted(items, weights, int(n))
+			if e := errv {
+				return e
+			}
+			g.lock.lock()
+			out := random_weighted_sample(mut g.st, items, weights, int(n))
+			g.lock.unlock()
+			return random_seq(out)
+		}
+		'random-gen-floats' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			n := random_arg_int(args[1]) or { return none }
+			if n < 0 {
+				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: negative n')
+			}
+			g.lock.lock()
+			mut out := []cx.Node{cap: int(n)}
+			for _ in 0 .. int(n) {
+				out << random_float(g.st.next_f64())
+			}
+			g.lock.unlock()
+			return random_seq(out)
+		}
+		'random-gen-ints' {
+			mut g := random_gen_of(args[0]) or {
+				return mk_err('cx-err:CXER1906', 'E_RANDOM_HANDLE_INVALID: unknown [rng] handle')
+			}
+			n := random_arg_int(args[1]) or { return none }
+			if n < 0 {
+				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: negative n')
+			}
+			g.lock.lock()
+			mut out := []cx.Node{cap: int(n)}
+			for _ in 0 .. int(n) {
+				out << random_int(g.st.next_u63())
+			}
+			g.lock.unlock()
+			return random_seq(out)
 		}
 
 		// ── §3.2 PRNG explicit-state (pure given generator) ─────────
@@ -679,24 +992,24 @@ fn random_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			if stddev < 0.0 {
 				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: negative stddev')
 			}
-			random_ensure_seeded()
-			return random_float(g_random_state.gaussian_draw(mean, stddev))
+			mut rst := random_tls()
+			return random_float(rst.gaussian_draw(mean, stddev))
 		}
 		'random-exponential' {
 			lambda := random_arg_float(args[0]) or { return none }
 			if lambda <= 0.0 {
 				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: non-positive lambda')
 			}
-			random_ensure_seeded()
-			return random_float(g_random_state.exponential_draw(lambda))
+			mut rst := random_tls()
+			return random_float(rst.exponential_draw(lambda))
 		}
 		'random-poisson' {
 			lambda := random_arg_float(args[0]) or { return none }
 			if lambda <= 0.0 {
 				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: non-positive lambda')
 			}
-			random_ensure_seeded()
-			return random_int(g_random_state.poisson_draw(lambda))
+			mut rst := random_tls()
+			return random_int(rst.poisson_draw(lambda))
 		}
 		'random-gaussian-with' {
 			mut x := node_to_gen(args[0]) or { return none }
@@ -735,8 +1048,8 @@ fn random_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			if e := errv {
 				return e
 			}
-			random_ensure_seeded()
-			idx := g_random_state.weighted_index(weights, total)
+			mut rst := random_tls()
+			idx := rst.weighted_index(weights, total)
 			return items[idx]
 		}
 		'random-sample-weighted' {
@@ -747,8 +1060,8 @@ fn random_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			if e := errv {
 				return e
 			}
-			random_ensure_seeded()
-			out := random_weighted_sample(mut g_random_state, items, weights, int(n))
+			mut rst := random_tls()
+			out := random_weighted_sample(mut rst, items, weights, int(n))
 			return random_seq(out)
 		}
 		'random-choose-weighted-with' {
@@ -781,10 +1094,10 @@ fn random_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			if n < 0 {
 				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: negative n')
 			}
-			random_ensure_seeded()
+			mut rst := random_tls()
 			mut out := []cx.Node{cap: int(n)}
 			for _ in 0 .. int(n) {
-				out << random_float(g_random_state.next_f64())
+				out << random_float(rst.next_f64())
 			}
 			return random_seq(out)
 		}
@@ -793,10 +1106,10 @@ fn random_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			if n < 0 {
 				return mk_err('cx-err:CXER1905', 'E_RANDOM_DISTRIBUTION_PARAM: negative n')
 			}
-			random_ensure_seeded()
+			mut rst := random_tls()
 			mut out := []cx.Node{cap: int(n)}
 			for _ in 0 .. int(n) {
-				out << random_int(g_random_state.next_u63())
+				out << random_int(rst.next_u63())
 			}
 			return random_seq(out)
 		}

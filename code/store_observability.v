@@ -28,7 +28,7 @@ const obs_latency_buckets = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.
 // `_other` — the same bounded-cardinality set covers both the document + object wires.
 const obs_known_endpoints = ['capabilities', 'get', 'put', 'delete', 'list', 'iter',
 	'query', 'modify', 'health', 'ready', 'metrics', 'objects-have', 'objects-get',
-	'objects-put', 'refs', 'refs-set']
+	'objects-put', 'refs', 'refs-set', 'aliases', 'aliases-set']
 
 // histogram accumulates per-bucket (non-cumulative) counts plus sum/count; the
 // cumulative `le` series are computed at render time.

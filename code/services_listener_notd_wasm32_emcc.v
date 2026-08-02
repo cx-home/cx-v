@@ -115,6 +115,10 @@ struct WireResp {
 	// prelude, holds the fd, and subscribes it instead of a one-shot response.
 	sse    bool
 	sse_rt int
+	// #609 changed-panel SSE: the fd opted into delta frames; sse_seq is its
+	// initial high-water commit_seq (the initial full frame covers it).
+	sse_delta bool
+	sse_seq   u64
 	// Generic SSE topic (#28): when sse=true and sse_topic is non-empty, the fd
 	// joins the named string-keyed topic in the generic registry instead of an
 	// xap runtime's set — the concurrent-SSE path for `[$http:serve]` handlers
@@ -313,7 +317,12 @@ mut:
 	path   string
 	body   string
 	xsp    XspReqHdrs
-	fd     int
+	// every wire header (cloned off the reactor's read buffer) — the
+	// module-serve `.handler` mode surfaces them on the [request] element
+	// per the http.md locked server-received shape (a handler reads e.g.
+	// the Authorization bearer; previously [headers] was always empty).
+	hdrs []WireHeader
+	fd   int
 }
 
 // Initialized in the module init() (stdlib_codec.v — one init per module,
@@ -879,7 +888,8 @@ fn cx_dispatch_executor(id int) {
 			$if cx_disp_trace ? {
 				eprintln('disp: t=${time.ticks() % 1000000} run fd=${job.fd} ${job.method} ${job.path}')
 			}
-			w := dispatch_request(mut job.h, job.method, job.path, job.body, job.xsp)
+			w := dispatch_request(mut job.h, job.method, job.path, job.body, job.xsp,
+				job.hdrs)
 			if w.sse {
 				// §24 SSE promotion — subscribe is atomic under the registry
 				// lock; the initial frame is the readiness ack (see the topic
@@ -888,7 +898,8 @@ fn cx_dispatch_executor(id int) {
 				if w.sse_topic != '' {
 					cx_sse_topic_subscribe(w.sse_topic, job.fd, prelude + w.body)
 				} else {
-					xap_sse_subscribe(w.sse_rt, job.fd, prelude + w.body)
+					xap_sse_subscribe(w.sse_rt, job.fd, prelude + w.body, w.sse_delta,
+						w.sse_seq)
 				}
 				cx_dispatch_finish(job.fd, true)
 				break
@@ -913,8 +924,13 @@ fn listener_callback(data voidptr, req picohttpparser.Request, mut res picohttpp
 	// buffer, which is reset/reused the moment this callback returns — the
 	// executor must own its bytes.
 	mut xsp := XspReqHdrs{}
+	mut all_hdrs := []WireHeader{cap: int(req.num_headers)}
 	for i in 0 .. req.num_headers {
 		hn := req.headers[i].name
+		all_hdrs << WireHeader{
+			name:  hn.clone()
+			value: req.headers[i].value.clone()
+		}
 		if hn.len < 9 || (hn[0] != `x` && hn[0] != `X`) {
 			continue
 		}
@@ -933,6 +949,7 @@ fn listener_callback(data voidptr, req picohttpparser.Request, mut res picohttpp
 		path:   req.path.clone()
 		body:   req.body.clone()
 		xsp:    xsp
+		hdrs:   all_hdrs
 		fd:     res.fd
 	}
 	// Lock-free admit: CAS the fd's flags 0 -> in-flight. All admit/close events
@@ -1067,7 +1084,7 @@ fn write_all_fd(fd int, data string) bool {
 // dispatch_request routes one request to its resource handler and
 // returns the wire-ready response. Mirrors the former net.http
 // `ListenerHandler.handle`, retargeted onto picohttpparser inputs.
-fn dispatch_request(mut h ListenerHandler, raw_method string, raw_path string, raw_body string, xsp_hdrs XspReqHdrs) WireResp {
+fn dispatch_request(mut h ListenerHandler, raw_method string, raw_path string, raw_body string, xsp_hdrs XspReqHdrs, wire_hdrs []WireHeader) WireResp {
 	// cx-xap `[$xap:serve]` — dispatch the request against the runtime in V
 	// (no CX closure). Renders the surface as text/html on GET, runs the
 	// cascade on POST, and re-renders the swapped fragment (xap.md §9/§13.2).
@@ -1108,7 +1125,10 @@ fn dispatch_request(mut h ListenerHandler, raw_method string, raw_path string, r
 	if h.mode == .handler {
 		method := raw_method.to_upper()
 		mut path := raw_path
+		mut query_nodes := []cx.Node{}
 		if q := path.index('?') {
+			// #627: the query rides the request as parsed [query-params].
+			query_nodes = http_parse_query(path[q + 1..])
 			path = path[..q]
 		}
 		// #317 template-alias request env (see the .xap branch above): zero
@@ -1150,7 +1170,24 @@ fn dispatch_request(mut h ListenerHandler, raw_method string, raw_path string, r
 			value:     cx.ScalarValue(raw_body)
 			data_type: cx.ScalarType.string_type
 		})
-		reqnode := build_request_node(method, path, []cx.Node{}, ?cx.Node(body_node))
+		mut hdr_nodes := []cx.Node{cap: wire_hdrs.len}
+		for wh in wire_hdrs {
+			hdr_nodes << cx.Node(cx.Element{
+				name:  'header'
+				attrs: [
+					cx.Attribute{
+						name:  'name'
+						value: cx.ScalarValue(wh.name)
+					},
+					cx.Attribute{
+						name:  'value'
+						value: cx.ScalarValue(wh.value)
+					},
+				]
+			})
+		}
+		reqnode := build_request_node(method, path, []cx.Node{}, ?cx.Node(body_node),
+			hdr_nodes, query_nodes)
 		result := apply_fn_value(h.handler, [reqnode], mut renv) or {
 			return mk_wire(500, [], 'handler error: ${err.msg()}\n')
 		}
@@ -1167,9 +1204,12 @@ fn dispatch_request(mut h ListenerHandler, raw_method string, raw_path string, r
 		return mk_wire(503, svc.default_headers, 'service stopping\n')
 	}
 	method := raw_method.to_upper()
-	// req path is the request-target; strip query for path matching.
+	// req path is the request-target; strip the query for path matching and
+	// carry it as parsed [query-params] (#627).
 	mut path := raw_path
+	mut query_nodes := []cx.Node{}
 	if q := path.index('?') {
+		query_nodes = http_parse_query(path[q + 1..])
 		path = path[..q]
 	}
 	// HEAD falls back to GET so static-file routes Just Work under
@@ -1180,11 +1220,11 @@ fn dispatch_request(mut h ListenerHandler, raw_method string, raw_path string, r
 			r2, p2 := match_resource(svc, 'GET', path) or {
 				return mk_wire(404, svc.default_headers, 'not found: ${method} ${path}\n')
 			}
-			return invoke_handler(svc, r2, p2, 'HEAD', path, mut h)
+			return invoke_handler(svc, r2, p2, 'HEAD', path, query_nodes, mut h)
 		}
 		return mk_wire(404, svc.default_headers, 'not found: ${method} ${path}\n')
 	}
-	return invoke_handler(svc, res, path_params, method, path, mut h)
+	return invoke_handler(svc, res, path_params, method, path, query_nodes, mut h)
 }
 
 // ServeFileSpec marks a resource body that is a bare static `[$serve-file]`
@@ -1259,7 +1299,7 @@ fn serve_file_fast_wire(spec ServeFileSpec, svc &ServiceRecord, req_path string)
 // clone and maps the [response …] envelope to a WireResp. Factored out
 // so the HEAD-falls-back-to-GET branch reuses the eval + wire pipeline.
 fn invoke_handler(svc &ServiceRecord, res ResourceRecord, path_params []cx.Node,
-	method string, path string, mut h ListenerHandler) WireResp {
+	method string, path string, query_nodes []cx.Node, mut h ListenerHandler) WireResp {
 	// Static-file fast path: a bare `[$serve-file]` resource skips the
 	// per-request env clone + `$request` node (the bulk of per-request
 	// allocation) while producing byte-identical wire output.
@@ -1285,7 +1325,8 @@ fn invoke_handler(svc &ServiceRecord, res ResourceRecord, path_params []cx.Node,
 		scope:           h.enclosing_scope
 	}
 	env.cow_bindings()
-	env.bindings['request'] = build_request_node(method, path, path_params, ?cx.Node(none))
+	env.bindings['request'] = build_request_node(method, path, path_params, ?cx.Node(none),
+		[]cx.Node{}, query_nodes)
 	if svc.root != '' {
 		env.dyn_context << cx.Node(cx.Element{
 			name:  'cx-service-root'
@@ -1831,4 +1872,14 @@ fn services_listener_init_globals() {
 	cx_sse_topic_subs = map[string][]int{}
 	xap_sse_lock = sync.new_mutex()
 	xap_sse_subs = map[int][]int{}
+	xap_sse_delta = map[int]bool{}
+	xap_sse_fdseq = map[int]u64{}
+	// #594: the render cache + push coalescer share the same real-mutex
+	// requirement (reactor threads + source pumps + trailing pushers).
+	xap_render_lock = sync.new_mutex()
+	xap_render_cache = map[int]map[string]string{}
+	xap_render_cache_seq = map[int]u64{}
+	xap_push_lock = sync.new_mutex()
+	xap_push_last = map[int]i64{}
+	xap_push_waiting = map[int]bool{}
 }

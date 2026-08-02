@@ -162,7 +162,7 @@ fn xap_host(args []cx.Node, mut env MatchEnv) ?cx.Node {
 		cx.Node(xap_elem('tenant', [], [cx.Node(xap_str(tenant))])),
 		cx.Node(xap_elem('grammar', [], [cx.Node(gram)])),
 	])
-	rt_handle := xap_run([cx.Node(run_opts)]) or {
+	rt_handle := xap_run([cx.Node(run_opts)], mut env) or {
 		return mk_err(xap_err_arg_invalid, 'E_XAP: host runtime creation failed')
 	}
 	if xd_is_err(rt_handle) {
@@ -360,7 +360,23 @@ fn xap_host_dial(rt cx.Node, from string, to string, scope string) {
 
 // ── dispatch (the standard surface) ──────────────────────────────────────────
 
-fn xap_host_readout(mut h XapHost, fname string, has_code bool, mut env MatchEnv) string {
+// xap_host_readout renders a feature's contract readout. `actor` is the
+// request's RESOLVED identity — the §4.12 proven principal on an
+// auth-enabled host, '' (anonymous) otherwise — and reaches the readout as
+// a THIRD parameter iff the feature declares one (#647):
+//   [?def readout scope=public impure ($store $t)]         — the prior arity,
+//                                                            identity-blind
+//   [?def readout scope=public impure ($store $t $actor)]  — per-principal
+//                                                            lens: the feature
+//                                                            composes the lens
+//                                                            as DATA, scoping
+//                                                            happens where the
+//                                                            fold happens, and
+//                                                            the wire carries
+//                                                            only what this
+//                                                            principal may see
+// The arity dispatch preserves every existing 2-param contract byte-for-byte.
+fn xap_host_readout(mut h XapHost, fname string, has_code bool, actor string, mut env MatchEnv) string {
 	if !has_code {
 		return render_canonical(cx.Node(xap_elem('readout', [xap_attr('feature', fname)],
 			[])))
@@ -370,11 +386,16 @@ fn xap_host_readout(mut h XapHost, fname string, has_code bool, mut env MatchEnv
 			[])))
 	}
 	t := f64(time.sys_mono_now()) / 1e9 // vtime alias below
-	out := invoke_closure(c, [h.store, cx.Node(cx.ScalarNode{
+	mut rargs := [h.store, cx.Node(cx.ScalarNode{
 		value:     cx.ScalarValue(t)
 		data_type: cx.ScalarType.float_type
-	})], mut env) or { cx.Node(xap_elem('readout', [xap_attr('feature', fname),
-		xap_attr('error', err.msg())], [])) }
+	})]
+	nparams := if c.param_specs.len > 0 { c.param_specs.len } else { c.params.len }
+	if nparams >= 3 {
+		rargs << cx.Node(xap_str(actor))
+	}
+	out := invoke_closure(c, rargs, mut env) or { cx.Node(xap_elem('readout', [
+		xap_attr('feature', fname), xap_attr('error', err.msg())], [])) }
 	return render_canonical(out)
 }
 
@@ -391,7 +412,10 @@ fn xap_host_dispatch(mut h XapHost, method string, raw_path string, body string,
 	reg := xap_reg()
 	mut rt := reg.runtimes[h.rt_id] or { return mk_wire(500, [], 'xap-host: unknown runtime\n') }
 	mut path := raw_path
+	mut query_nodes := []cx.Node{}
 	if q := path.index('?') {
+		// #627: the query rides adapter-route requests as parsed [query-params].
+		query_nodes = http_parse_query(path[q + 1..])
 		path = path[..q]
 	}
 	// §4.12 (issue #394): on an auth-enabled host, POST /attach IS the
@@ -416,7 +440,7 @@ fn xap_host_dispatch(mut h XapHost, method string, raw_path string, body string,
 	// route without forking the host. Exact key match, or prefix match when
 	// the registered key ends with '/' ('/history/' serves /history/…).
 	if handler := xap_host_route_for(h, path) {
-		req := build_host_request(method, path, body)
+		req := build_host_request(method, path, body, query_nodes)
 		if c := resolve_closure(handler, env) {
 			out := invoke_closure(c, [cx.Node(req)], mut env) or {
 				return mk_wire(500, [], 'adapter route failed: ${err.msg()}\n')
@@ -439,7 +463,9 @@ fn xap_host_dispatch(mut h XapHost, method string, raw_path string, body string,
 	if method == 'GET' && path == '/surface' {
 		mut items := []cx.Node{}
 		for f in h.feats {
-			ro := xap_host_readout(mut h, f.name, f.has_code, mut env)
+			// #647: the resolved request identity reaches every readout that
+			// declares an actor param — the per-principal lens folds server-side.
+			ro := xap_host_readout(mut h, f.name, f.has_code, auth_principal, mut env)
 			items << xap_host_first_elem(ro)
 		}
 		return xap_wire_cx(200, render_canonical(cx.Node(xap_elem('surface', [], items))))
@@ -448,7 +474,8 @@ fn xap_host_dispatch(mut h XapHost, method string, raw_path string, body string,
 		fname := path.all_after('/surface/')
 		for f in h.feats {
 			if f.name == fname {
-				return xap_wire_cx(200, xap_host_readout(mut h, fname, f.has_code, mut env))
+				return xap_wire_cx(200, xap_host_readout(mut h, fname, f.has_code,
+					auth_principal, mut env))
 			}
 		}
 		return mk_wire(404, [], 'no such feature: ${fname}\n')
@@ -493,7 +520,7 @@ fn xap_host_first_elem(ro string) cx.Node {
 	return cx.Node(xap_str(ro))
 }
 
-fn build_host_request(method string, path string, body string) cx.Element {
+fn build_host_request(method string, path string, body string, query_nodes []cx.Node) cx.Element {
 	body_item := cx.Node(cx.ScalarNode{
 		value:     cx.ScalarValue(body)
 		data_type: cx.ScalarType.string_type
@@ -505,7 +532,7 @@ fn build_host_request(method string, path string, body string) cx.Element {
 			cx.Attribute{ name: 'path', value: cx.ScalarValue(path) },
 		]
 		items: [
-			cx.Node(cx.Element{ name: 'query-params', items: []cx.Node{} }),
+			cx.Node(cx.Element{ name: 'query-params', items: query_nodes }),
 			cx.Node(cx.Element{ name: 'headers', items: []cx.Node{} }),
 			cx.Node(cx.Element{ name: 'body', items: [body_item] }),
 		]
@@ -618,7 +645,7 @@ fn xap_host_intent(mut h XapHost, raw_body string, auth_principal string, mut en
 		cx.Node(xap_elem('actor', [], [cx.Node(xap_str(actor))])),
 	])
 	ev := xap_emit([cx.Node(xap_elem('xap-runtime', [xap_attr('id', h.rt_id.str())], [])),
-		cx.Node(do_el), cx.Node(emit_opts)]) or {
+		cx.Node(do_el), cx.Node(emit_opts)], mut env) or {
 		return xap_host_ack(false, qualified, [xap_attr('reason', 'emit-failed')])
 	}
 	if xd_is_err(ev) {
@@ -699,7 +726,12 @@ fn xap_host_render_push(mut h XapHost, fname string) {
 		anon_counter:    0
 		dyn_context:     if h.henv_dyn.len > 0 { h.henv_dyn.clone() } else { h.henv_dyn }
 	}
-	xap_host_push_frame(h.rt_id, fname, xap_host_readout(mut h, fname, has_code, mut henv))
+	// #647: SSE pushes FAN OUT to every /stream subscriber, so a lensed
+	// (3-param) readout renders with the ANONYMOUS actor ('') — the feature's
+	// lens yields its public subset, the broadcast can never carry one
+	// principal's view to another, and a lensed client treats the named event
+	// as a change SIGNAL and re-fetches GET /surface/<f> under its own proof.
+	xap_host_push_frame(h.rt_id, fname, xap_host_readout(mut h, fname, has_code, '', mut henv))
 }
 
 // [$xap:host-push RT FEATURE] — the deployment-worker push surface (§6.3): the

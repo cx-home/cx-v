@@ -96,6 +96,11 @@ mut:
 	// line-iter); the bounded read-bytes / read-exact return a short read.
 	read_deadline_ms i64
 	timed_out        bool // transient: the last read-until-EOF pull lapsed the deadline (line-iter signal)
+	// §3.4/§3.7 line-terminator (rev-4 H4 — a REAL option, not a phantom):
+	// what write-line appends. 'auto'/'lf' → LF; 'crlf' → CRLF (the framing
+	// the text protocols — NATS, SMTP, HTTP — require). read-line strips
+	// either regardless. Stream-only; set via set-opt {line-terminator}.
+	line_term string = 'auto'
 	consumed     bool // single-use stream walked once (http SSE sse-events → CXER0105 on a second walk)
 	is_sse_stream bool // this connection backs a server-side http SSE stream (counts against http_open_sse_streams)
 }
@@ -824,6 +829,27 @@ fn net_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 					}
 				}
 				return net_null()
+			}
+			// net-set-opt (#548): EVERY §3.7 option either APPLIES or REFUSES
+			// loudly, per key — never a phantom accept. Unknown keys refuse
+			// too (they were silently swallowed before).
+			opts2 := if args.len > 1 {
+				args[1]
+			} else {
+				cx.Node(cx.Element{ name: '__cx_map__' })
+			}
+			mut h := net_mut_handle(args[0]) or {
+				return mk_err(net_err_handle_closed, 'E_NET_HANDLE_CLOSED: unknown handle')
+			}
+			if opts2 is cx.Element && (opts2.name == '__cx_map__' || opts2.name == 'map') {
+				for it in opts2.items {
+					if it is cx.Element && it.items.len > 0 {
+						r := net_apply_sock_opt(mut h, it.name, it.items[0])
+						if r_el := r {
+							return r_el // an [err …] from this option
+						}
+					}
+				}
 			}
 			return net_handle_op_null(args[0])
 		}
@@ -1967,7 +1993,128 @@ fn net_read_bytes_real(mut h NetHandle, n int, raise_on_deadline bool) cx.Node {
 	return net_bytes(out)
 }
 
-// net_write_real writes a string/bytes payload; write-line appends LF (§3.4).
+// net_apply_sock_opt applies ONE §3.7 socket option to a handle, or
+// returns the [err …] refusing it (#548 — apply or refuse, never a
+// phantom). Returns none when the option applied cleanly.
+//
+// Honest availability map for this build (V net API + macOS):
+//   line-terminator  stream framing (stored on the handle; write-line)
+//   nodelay          TCP_NODELAY is set at socket creation by the V net
+//                    layer and has no public toggle — `true` is verified
+//                    satisfied; `false` refuses
+//   keepalive        SO_KEEPALIVE enable/disable (bool, or duration>0 =
+//                    on); the probe INTERVAL is not tunable in this build
+//   recv-buf/send-buf SO_RCVBUF/SO_SNDBUF (stream sockets)
+//   broadcast        SO_BROADCAST (datagram sockets)
+//   linger, multicast-* refuse (no usable V net surface)
+fn net_apply_sock_opt(mut h NetHandle, key string, v cx.Node) ?cx.Node {
+	is_stream := h.kind == 'socket' && h.transport !in ['udp', 'dtls', 'unixgram']
+	match key {
+		'line-terminator' {
+			val := net_arg_str(v) or { '' }
+			if val !in ['auto', 'lf', 'crlf'] {
+				return mk_err(net_err_arg_invalid,
+					'E_NET_ARG_INVALID: line-terminator must be "auto", "lf", or "crlf"')
+			}
+			if !is_stream {
+				return mk_err(net_err_arg_invalid,
+					'E_NET_ARG_INVALID: line-terminator is a stream-socket option (§3.7)')
+			}
+			h.line_term = val
+			return none
+		}
+		'nodelay' {
+			want := net_arg_bool_val(v) or {
+				return mk_err(net_err_arg_invalid, 'E_NET_ARG_INVALID: nodelay takes a bool')
+			}
+			if !is_stream || h.conn == unsafe { nil } {
+				return mk_err(net_err_arg_invalid,
+					'E_NET_ARG_INVALID: nodelay is a TCP option (§3.7)')
+			}
+			if want {
+				return none // TCP_NODELAY is enabled at socket creation (V net layer)
+			}
+			return mk_err(net_err_arg_invalid,
+				'E_NET_ARG_INVALID: nodelay=false cannot be applied — TCP_NODELAY is fixed on at socket creation in this build')
+		}
+		'keepalive' {
+			if !is_stream || h.conn == unsafe { nil } {
+				return mk_err(net_err_arg_invalid,
+					'E_NET_ARG_INVALID: keepalive is a TCP option (§3.7)')
+			}
+			mut on := false
+			if b := net_arg_bool_val(v) {
+				on = b
+			} else if ms := net_node_ms(v) {
+				on = ms > 0
+			} else {
+				return mk_err(net_err_arg_invalid,
+					'E_NET_ARG_INVALID: keepalive takes a duration (>0 = on) or a bool')
+			}
+			h.conn.sock.set_option_bool(.keep_alive, on) or {
+				return mk_err(net_err_arg_invalid, 'E_NET_ARG_INVALID: keepalive: ${err.msg()}')
+			}
+			return none
+		}
+		'recv-buf', 'send-buf' {
+			n := net_node_ms(v) or {
+				return mk_err(net_err_arg_invalid, 'E_NET_ARG_INVALID: ${key} takes a byte count')
+			}
+			if !is_stream || h.conn == unsafe { nil } {
+				return mk_err(net_err_arg_invalid,
+					'E_NET_ARG_INVALID: ${key} is not settable on this transport in this build (stream sockets only)')
+			}
+			opt := if key == 'recv-buf' {
+				net.SocketOption.receive_buf_size
+			} else {
+				net.SocketOption.send_buf_size
+			}
+			h.conn.sock.set_option_int(opt, int(n)) or {
+				return mk_err(net_err_arg_invalid, 'E_NET_ARG_INVALID: ${key}: ${err.msg()}')
+			}
+			return none
+		}
+		'broadcast' {
+			want := net_arg_bool_val(v) or {
+				return mk_err(net_err_arg_invalid, 'E_NET_ARG_INVALID: broadcast takes a bool')
+			}
+			if h.transport != 'udp' || h.udp == unsafe { nil } {
+				return mk_err(net_err_arg_invalid,
+					'E_NET_ARG_INVALID: broadcast is a UDP option (§3.7)')
+			}
+			h.udp.sock.set_option_bool(.broadcast, want) or {
+				return mk_err(net_err_arg_invalid, 'E_NET_ARG_INVALID: broadcast: ${err.msg()}')
+			}
+			return none
+		}
+		'linger' {
+			return mk_err(net_err_arg_invalid,
+				'E_NET_ARG_INVALID: linger is not settable in this build (SO_LINGER needs the struct form the V net API does not expose)')
+		}
+		else {
+			if key.starts_with('multicast-') {
+				return mk_err(net_err_arg_invalid,
+					'E_NET_ARG_INVALID: ${key} is not settable in this build (no multicast surface in the V net API)')
+			}
+			return mk_err(net_err_arg_invalid,
+				'E_NET_ARG_INVALID: unknown socket option "${key}" (§3.7)')
+		}
+	}
+}
+
+// net_arg_bool_val extracts a bool scalar.
+fn net_arg_bool_val(v cx.Node) ?bool {
+	if v is cx.ScalarNode {
+		val := v.value
+		if val is bool {
+			return val
+		}
+	}
+	return none
+}
+
+// net_write_real writes a string/bytes payload; write-line appends the
+// socket's line-terminator (§3.4 — 'auto'/'lf' → LF, 'crlf' → CRLF).
 fn net_write_real(mut h NetHandle, name string, args []cx.Node) cx.Node {
 	if !net_h_connected(h) {
 		return mk_err(net_err_handle_closed, 'E_NET_HANDLE_CLOSED: not a connected stream socket')
@@ -1986,6 +2133,9 @@ fn net_write_real(mut h NetHandle, name string, args []cx.Node) cx.Node {
 		}
 		payload = s.bytes()
 		if name == 'net-write-line' {
+			if h.line_term == 'crlf' {
+				payload << `\r`
+			}
 			payload << `\n`
 		}
 	}

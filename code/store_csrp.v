@@ -218,13 +218,16 @@ fn store_csrp_route(req cx.Element, local cx.Node) cx.Node {
 	// concurrent put/get races the store's obj_roots/obj_sink maps and a
 	// just-written doc reads back absent (spurious NOT_FOUND) — a latent daemon race
 	// turned into a reliable failure by the subtree decompose/reconstruct window.
+	// #628: through the owner-tracked reentrant helpers — the route body's
+	// funnels (store_persist / put / append) re-enter the same mutex on the
+	// same thread; a raw @lock() here self-deadlocked against them.
 	mut guard := store_for_guard(local) or { unsafe { nil } }
-	if guard != unsafe { nil } && guard.op_lock != unsafe { nil } {
-		guard.op_lock.@lock()
+	if guard != unsafe { nil } {
+		store_lock_enter(mut guard)
 	}
 	defer {
-		if guard != unsafe { nil } && guard.op_lock != unsafe { nil } {
-			guard.op_lock.unlock()
+		if guard != unsafe { nil } {
+			store_lock_exit(mut guard)
 		}
 	}
 	method := http_attr(req, 'method') or { 'GET' }
@@ -602,6 +605,111 @@ fn store_csrp_route(req cx.Element, local cx.Node) cx.Node {
 			return csrp_resp(500, '[err code="cx-err:CXER1707" message="E_CSRP_SERVER_INTERNAL: persist failed: ${csrp_msg_esc(err.msg())}"]')
 		}
 		return csrp_resp(200, '[refs-set-result set="${n}"]')
+	}
+	if method == 'POST' && path == csrp_base + 'aliases' {
+		// #645: alias READS answer from the mount's authoritative alias table with
+		// EXPLICIT per-name presence — an absent alias is a server-asserted
+		// present="false", never a silent empty (the #264 miss-vs-absence concern).
+		body := http_body_octets(req).bytestr()
+		doc := cx.parse(body) or { return csrp_resp(400, '[err code="cx-err:CXER1701"]') }
+		if doc.elements.len == 0 {
+			return csrp_resp(400, '[err code="cx-err:CXER1701"]')
+		}
+		top := doc.elements[0]
+		mut sb := '[aliases-result'
+		if top is cx.Element {
+			if csrp_attr(top, 'all') == 'true' {
+				lst := store_stdlib_builtin_inner('store-list-aliases', [local]) or {
+					return csrp_resp(500, '[err code="cx-err:CXER1707"]')
+				}
+				if lst is cx.Element {
+					for it in lst.items {
+						if it is cx.Element && it.name == 'alias' {
+							sb += ' [a name="${csrp_msg_esc(csrp_attr(it, 'name'))}" hash="${csrp_attr(it,
+								'hash')}" present="true"]'
+						}
+					}
+				}
+			}
+			for it in top.items {
+				if it is cx.Element && it.name == 'k' {
+					name := csrp_attr(it, 'name')
+					if name == '' {
+						continue
+					}
+					r := store_stdlib_builtin_inner('store-get-alias', [local, store_str(name)]) or {
+						return csrp_resp(500, '[err code="cx-err:CXER1707"]')
+					}
+					if r is cx.ScalarNode {
+						sb += ' [a name="${csrp_msg_esc(name)}" hash="${csrp_scalar(r)}" present="true"]'
+					} else {
+						sb += ' [a name="${csrp_msg_esc(name)}" present="false"]'
+					}
+				}
+			}
+		}
+		return csrp_resp(200, sb + ']')
+	}
+	if method == 'POST' && path == csrp_base + 'aliases-set' {
+		// #645: alias WRITES apply through the same local arm as an in-process
+		// set-alias (target-presence CXER1121 → wire 404 CXER1721, read-only →
+		// 400, alias record persisted). An optional per-record expect="<hash>"
+		// is the refs-set CAS applied to the alias pointer layer (expect="" ⇒
+		// must not exist): VALIDATE-THEN-APPLY under the route's handle lock,
+		// all-or-nothing, mismatch = 409 CXER1704 — the conflict-safe pointer
+		// advance a remote journal head rides (#644).
+		body := http_body_octets(req).bytestr()
+		doc := cx.parse(body) or { return csrp_resp(400, '[err code="cx-err:CXER1701"]') }
+		if doc.elements.len == 0 {
+			return csrp_resp(400, '[err code="cx-err:CXER1701"]')
+		}
+		top := doc.elements[0]
+		mut n := 0
+		if top is cx.Element {
+			for it in top.items {
+				if it is cx.Element && it.name == 'a' {
+					name := csrp_attr(it, 'name')
+					if name == '' || !csrp_has_attr(it, 'expect') {
+						continue
+					}
+					expect := csrp_attr(it, 'expect')
+					mut cur := ''
+					r := store_stdlib_builtin_inner('store-get-alias', [local, store_str(name)]) or {
+						return csrp_resp(500, '[err code="cx-err:CXER1707"]')
+					}
+					if r is cx.ScalarNode {
+						cur = csrp_scalar(r)
+					}
+					if cur != expect {
+						return csrp_resp(409, '[err code="cx-err:CXER1704" message="E_CSRP_CONCURRENT_MODIFY: alias ${csrp_msg_esc(name)} is at ${csrp_msg_esc(cur)}, expected ${csrp_msg_esc(expect)}"]')
+					}
+				}
+			}
+			for it in top.items {
+				if it is cx.Element && it.name == 'a' {
+					name := csrp_attr(it, 'name')
+					hash := csrp_attr(it, 'hash')
+					if name == '' || hash == '' {
+						continue
+					}
+					r := store_stdlib_builtin_inner('store-set-alias', [local, store_str(name),
+						store_str(hash)]) or {
+						return csrp_resp(500, '[err code="cx-err:CXER1707"]')
+					}
+					if is_err_value(r) {
+						ecode := csrp_err_code(r)
+						if ecode == 'cx-err:CXER1121' {
+							return csrp_resp(404, '[err code="cx-err:CXER1721" message="E_CSRP_NOT_FOUND: alias target ${hash}"]')
+						}
+						// read-only mount and other write-shape failures map to 400
+						// (same convention as the admin/write ops).
+						return csrp_resp(400, '[err code="${ecode}"]')
+					}
+					n++
+				}
+			}
+		}
+		return csrp_resp(200, '[aliases-set-result set="${n}"]')
 	}
 	// #196: an unrecognized operation is 404 CXER1709 E_CSRP_OPERATION_UNSUPPORTED
 	// (a 404-class code, per the 1:1 status↔code invariant), NOT the 500-class

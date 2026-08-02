@@ -142,3 +142,103 @@ fn test_cxstore_object_wire_economy() {
 	assert added > 0, 'doc2 must add at least its new objects (added ${added})'
 	assert added < d2, 'wire economy: shared subtree must not re-transfer — added ${added} of ${d2} objects'
 }
+
+// ── #645: alias remoting over the object wire ────────────────────────────────
+//
+// get-alias / list-aliases / set-alias on a cx-store:// CLIENT route to the
+// daemon's authoritative alias table via the `aliases` / `aliases-set` wire
+// ops (spec §3.14) — the CXER1709 refusal remains only for byte-source
+// remotes with no CSRP service to ask. The wire answers presence EXPLICITLY
+// (present="true|false" per name), resolving the #264 miss-vs-absence
+// concern: an absent alias is a server-asserted absence (), never a
+// client-side shrug, and never a lying empty.
+
+fn test_cxstore_alias_wire_set_get_list() {
+	daemon := cxs_daemon('alias')
+	client := cxs_client(daemon, 'a')
+	text := '[users [user [name "Ann"]]]'
+	ph := store_stdlib_builtin_inner('store-put-doc-text', [client, store_str(text)]) or {
+		panic('put: ${err.msg()}')
+	}
+	key := csrp_scalar(ph)
+
+	// set-alias over the wire lands in the DAEMON's alias table (one authority).
+	sr := store_stdlib_builtin_inner('store-set-alias', [client, store_str('users'),
+		store_str(key)]) or { panic('set-alias: ${err.msg()}') }
+	assert !is_err_value(sr), 'remote set-alias must succeed: ${render_canonical(sr)}'
+	dg := store_stdlib_builtin_inner('store-get-alias', [daemon, store_str('users')]) or {
+		panic('daemon get-alias: ${err.msg()}')
+	}
+	assert csrp_scalar(dg) == key, 'daemon-side alias table is the single authority'
+
+	// get-alias over the wire resolves the same entry.
+	cg := store_stdlib_builtin_inner('store-get-alias', [client, store_str('users')]) or {
+		panic('get-alias: ${err.msg()}')
+	}
+	assert !is_err_value(cg), 'remote get-alias must succeed: ${render_canonical(cg)}'
+	assert csrp_scalar(cg) == key, 'remote get-alias must resolve the daemon alias'
+
+	// a miss is the absence channel (server-asserted present="false"), never err.
+	miss := store_stdlib_builtin_inner('store-get-alias', [client, store_str('nope')]) or {
+		panic('miss: ${err.msg()}')
+	}
+	assert !is_err_value(miss), 'remote alias miss must be absence, not an error'
+	assert miss !is cx.ScalarNode, 'remote alias miss must be the absence channel'
+
+	// list-aliases over the wire: same [alias name=… hash=…] shape as local.
+	lst := store_stdlib_builtin_inner('store-list-aliases', [client]) or {
+		panic('list: ${err.msg()}')
+	}
+	assert !is_err_value(lst), 'remote list-aliases must succeed: ${render_canonical(lst)}'
+	rendered := render_canonical(lst)
+	assert rendered.contains('name=users') || rendered.contains("name='users'"), 'listing must carry the alias: ${rendered}'
+
+	// set-alias to a hash the daemon does not hold refuses loudly (CXER1121,
+	// the wire's 404 CXER1721 translated to the std-lib code — never silent).
+	bad := store_stdlib_builtin_inner('store-set-alias', [client, store_str('ghost'),
+		store_str('0'.repeat(64))]) or { panic('bad set: ${err.msg()}') }
+	assert is_err_value(bad), 'set-alias to a missing target must refuse'
+	assert err_code_of(bad) == 'cx-err:CXER1121', 'missing target maps to CXER1121: ${render_canonical(bad)}'
+}
+
+// The wire-level CAS on aliases-set (expect="…" / expect="" ⇒ must-not-exist):
+// validate-then-apply, 409 CXER1704 on mismatch — the conflict-safe pointer
+// advance the remote journal head rides (#644).
+fn test_cxstore_alias_wire_cas() {
+	daemon := cxs_daemon('aliascas')
+	client := cxs_client(daemon, 'c')
+	t1 := '[head [seq 1]]'
+	t2 := '[head [seq 2]]'
+	h1 := csrp_scalar(store_stdlib_builtin_inner('store-put-doc-text', [client, store_str(t1)]) or {
+		panic('put1')
+	})
+	h2 := csrp_scalar(store_stdlib_builtin_inner('store-put-doc-text', [client, store_str(t2)]) or {
+		panic('put2')
+	})
+	lb := CxsWireLoopback{
+		daemon: daemon
+	}
+
+	// expect="" — the alias must not exist yet: first create wins…
+	st1, _, _ := lb.send('aliases-set', '', '[aliases-set [a name="head" hash="${h1}" expect=""]]')
+	assert st1 == 200, 'create-if-absent must apply (status ${st1})'
+	// …the second create-if-absent conflicts.
+	st2, body2, _ := lb.send('aliases-set', '', '[aliases-set [a name="head" hash="${h2}" expect=""]]')
+	assert st2 == 409, 'second create-if-absent must 409 (status ${st2})'
+	assert body2.contains('CXER1704'), 'conflict carries CXER1704: ${body2}'
+
+	// CAS advance with the correct expectation applies…
+	st3, _, _ := lb.send('aliases-set', '', '[aliases-set [a name="head" hash="${h2}" expect="${h1}"]]')
+	assert st3 == 200, 'CAS advance with correct expect must apply (status ${st3})'
+	g := store_stdlib_builtin_inner('store-get-alias', [daemon, store_str('head')]) or {
+		panic('get')
+	}
+	assert csrp_scalar(g) == h2, 'alias advanced to h2'
+	// …and a stale expectation refuses without applying.
+	st4, _, _ := lb.send('aliases-set', '', '[aliases-set [a name="head" hash="${h1}" expect="${h1}"]]')
+	assert st4 == 409, 'stale CAS must 409 (status ${st4})'
+	g2 := store_stdlib_builtin_inner('store-get-alias', [daemon, store_str('head')]) or {
+		panic('get2')
+	}
+	assert csrp_scalar(g2) == h2, 'stale CAS must not move the alias'
+}

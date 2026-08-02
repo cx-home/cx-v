@@ -69,6 +69,48 @@ conformance fixtures for cx-stdlib/store (spec/std-lib/store.md §8).
 #]]
  ]
 
+ [case id=store-rt-003-round-trip-quote-bearing-attrs level=core
+  [tags store mem put-doc get-doc round-trip attr quoting issue-564]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $doc [?element "rows" ([?element "row" [?attr "id" "a"] [?attr "title" "has 'quotes' — tricky"]], [?element "row" [?attr "id" "b"] [?attr "title" "has 'quotes' — tricky"]])]] [= $h [$store:put-doc $s $doc]] [$cx:equal [$store:get-doc $s $h] $doc]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-rt-004-round-trip-multiword-attr-multiple-docs level=core
+  [tags store mem put-doc get-doc round-trip issue-564]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $e1 [?element "note" [?attr "txt" "two words"]]] [= $e2 [?element "notes" [?element "note" [?attr "id" "n1"]]]] [= $h1 [$store:put-doc $s $e1]] [= $h2 [$store:put-doc $s $e2]] ([$cx:equal [$store:get-doc $s $h1] $e1], [$cx:equal [$store:get-doc $s $h2] $e2])]
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
+ [case id=store-rt-005-round-trip-for-built-body-kind-stable level=core
+  [tags store mem put-doc get-doc round-trip for-comprehension issue-566]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $kids [?for [in $i ("a", "b")] [yield [?element "row" [?attr "id" $i]]]]] [= $doc [?element "rows" $kids]] [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s $doc]] ([$cx:equal [$store:get-doc $s $h] $doc], [$eq [$cx:serialize [$store:get-doc $s $h]] [$cx:serialize $doc]])]
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
  [case id=store-rt-002-dedup-list level=core
   [tags store mem put-doc list-docs dedup]
   [in-cx [#
@@ -590,6 +632,20 @@ cx-err:CXER1709
 #]]
   [out-text [#
 1
+#]]
+ ]
+
+ [case id=store-verify-001-whole-graph-pass level=core
+  [tags store mem verify integrity porcelain]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "x"]]]] [$store:verify $s]]
+#]]
+  [out-text [#
+[verification valid=true docs=1 objects=5]
 #]]
  ]
 

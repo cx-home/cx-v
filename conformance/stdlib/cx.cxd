@@ -11,8 +11,12 @@ conformance fixtures for the cx: self-host module (spec/03-approved/modules/cx.m
      001-007  #436 — [$cx:parse] of directive-bearing source is a CXDM
               value: navigable, renderable as CX surface, modifiable;
               pure-data parse unregressed
-     010-012  §4 round-trip identity serialize∘parse ≡ canonical
-              (data lane, directive lane, canonical-input lane)
+     010-018  §4 round-trip identity serialize∘parse ≡ canonical
+              (data lane, directive lane, canonical-input lane) +
+              #563 attr-value quoting: embedded quotes / both quote
+              kinds / escape-initial backslashes survive emit∘parse +
+              #564 sequence-of-elements body serializes with no
+              internal marker leak
      020-029  serialize / canonical / hash / equal (CLI-verb agreement:
               hash hex pins the `cx hash` digest of the same doc)
      040-049  diff (navigable [diff [change …]…] value) + patch
@@ -156,6 +160,84 @@ true
 #]]
   [out-text [#
 true
+#]]
+ ]
+
+ [case id=cx-013-serialize-attr-embedded-single-quotes level=core
+  [tags cx serialize attr quoting issue-563]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:serialize [$cx:parse "[row title=\"has 'embedded' quotes\"]"]]
+#]]
+  [out-text [#
+'[row title="has \'embedded\' quotes"]'
+#]]
+ ]
+
+ [case id=cx-014-roundtrip-attr-embedded-single-quotes level=core
+  [tags cx parse serialize roundtrip attr quoting issue-563]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:serialize [$cx:parse "[row title=\"has 'embedded' quotes\"]"]]] [$eq [$cx:serialize [$cx:parse $t]] $t]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-015-roundtrip-attr-both-quote-kinds level=core
+  [tags cx parse serialize roundtrip attr quoting issue-563]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:serialize [?element "row" [?attr "title" 'a \'mix\' of "both"']]]] [$eq [$cx:serialize [$cx:parse $t]] $t]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-016-roundtrip-attr-backslash-escape-initial level=core
+  [tags cx parse serialize roundtrip attr quoting escape issue-563]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t [$cx:serialize [?element "row" [?attr "path" "C:\\new dir"]]]] [$eq [$cx:serialize [$cx:parse $t]] $t]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-017-serialize-sequence-body-no-marker-leak level=core
+  [tags cx serialize sequence element issue-564]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:serialize [?element "rows" ([?element "row" [?attr "id" "a"]], [?element "row" [?attr "id" "b"]])]]
+#]]
+  [out-text [#
+'[rows ([row id=a], [row id=b])]'
+#]]
+ ]
+
+ [case id=cx-018-serialize-anon-wrapper-body-is-sequence level=core
+  [tags cx serialize sequence for-comprehension issue-566]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $kids [?for [in $i ("a", "b")] [yield [?element "row" [?attr "id" $i]]]]] [$cx:serialize [?element "rows" $kids]]]
+#]]
+  [out-text [#
+'[rows ([row id=a], [row id=b])]'
 #]]
  ]
 

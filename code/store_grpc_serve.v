@@ -178,7 +178,8 @@ pub fn grpc_dispatch(call GrpcCall, mut state ServiceState, ctx ServeContext) Gr
 				stored:   grpc_attr_of(body, 'stored') == 'true'
 			}))
 		}
-		'objects-have', 'objects-get', 'objects-put', 'refs', 'refs-set' {
+		'objects-have', 'objects-get', 'objects-put', 'refs', 'refs-set', 'aliases',
+		'aliases-set' {
 			// Object wire: every verb is cxd-text-body in, cxd-text-body out, so one
 			// shape drives all five — synthesize the CSRP-equivalent request and route
 			// it through the SAME store_csrp_route the CSRP listener uses (exact
@@ -438,6 +439,9 @@ fn grpc_op_from_path(path string) string {
 		'ObjectsPut' { 'objects-put' }
 		'Refs' { 'refs' }
 		'RefsSet' { 'refs-set' }
+		// alias remoting (#645) — same objwire body shape, spec §3.14.
+		'Aliases' { 'aliases' }
+		'AliasesSet' { 'aliases-set' }
 		// admin plane (#248 / CSRP §3.10–3.12; #251 §3.13)
 		'Status' { 'status' }
 		'Gc' { 'gc' }

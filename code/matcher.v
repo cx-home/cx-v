@@ -112,6 +112,12 @@ pub mut:
 	// sub-contexts ([?for :par] tasks, [?test-concurrent] tasks, service
 	// listeners) deliberately start nil.
 	current_worker &WorkerRecord = unsafe { nil }
+	// current_future is the FutureRecord of the concurrent [?async] whose
+	// spawned body THIS thread is evaluating (#541) — the thread-local
+	// analog of state.current_future_id (which serves the lazy
+	// drive-at-await path and cannot be shared across spawned threads).
+	// Cancellation points ([?sleep]/[?check-cancel]) consult it first.
+	current_future &FutureRecord = unsafe { nil }
 }
 
 // FramePool: per-thread free-list of reusable closure call-frame binding maps. See the
@@ -367,10 +373,25 @@ pub mut:
 	id                string
 	body              []cx.ProgramNode  // length-1 (see Closure.body rationale)
 	bindings_snapshot map[string]cx.Node
-	state             string  // 'pending' | 'done' | 'failed' | 'cancelled'
+	state             string  // 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
 	value             cx.Node
 	cause             cx.Node
 	cancel_requested  bool
+	// #541 eager spawn: `concurrent` marks a future whose body runs on its
+	// own V thread (the §10.5.1 DEFAULT — the lazy drive-at-await substrate
+	// remains behind CX_WORKER_THREADS=0). `parked_until_ns` is the logical
+	// wake time of a [?sleep DUR mock] the body is PARKED at (0 = not
+	// parked): the mock sleep does NOT self-advance the shared clock — the
+	// await barriers advance it when every runnable future is parked, which
+	// is what keeps the mock-clock fixture battery deterministic across
+	// real threads.
+	concurrent      bool
+	parked_until_ns i64
+	// thread_id is the spawned body's pthread id (#541), stamped at thread
+	// start — the §10.5.7.2 revocation registry key: cancelling a running
+	// concurrent future registers this id so cap_allowed denies raw
+	// effects on that thread for the remainder of the body.
+	thread_id u64
 }
 
 // WorkerRecord tracks one [?worker]'s lifecycle per spec/code.md §10.4.6.
@@ -675,7 +696,17 @@ fn (e MatchEnv) clone() MatchEnv {
 		anon_counter: e.anon_counter
 		dyn_context: e.dyn_context.clone()
 		scope:    e.scope // share the program scope (heap, read-only at call time)
+		// A derived frame stays INSIDE the same lexical context (#646): dropping
+		// these two reset every [?let]/[?loop]/[?for]/backtrack frame to "top
+		// level", so a [?fn] created under one captured env.scope — the IMPORTING
+		// program's scope — instead of the enclosing callable's defining scope,
+		// and module-sibling calls inside deferred bodies failed ("no callable")
+		// while the same text ran green as a program. cur_defining_scope is a
+		// read-only-after-build &Scope, shared exactly like `scope` above.
+		in_function_body:   e.in_function_body
+		cur_defining_scope: e.cur_defining_scope
 		current_worker: e.current_worker // same-thread derivation keeps the §10.5.4 cancel signal
+		current_future: e.current_future // #541: the eager-async cancel/park signal derives the same way
 	}
 	for k, v in e.bindings {
 		copy.bindings[k] = v
@@ -707,7 +738,11 @@ fn (e MatchEnv) clone_frame_sharing_closures() MatchEnv {
 		anon_counter:    e.anon_counter
 		dyn_context:     e.dyn_context.clone()
 		scope:           e.scope
+		// Same-context derivation keeps the lexical position (#646) — see clone().
+		in_function_body:   e.in_function_body
+		cur_defining_scope: e.cur_defining_scope
 		current_worker:  e.current_worker // same-thread derivation keeps the §10.5.4 cancel signal
+		current_future:  e.current_future // #541: the eager-async cancel/park signal derives the same way
 	}
 	for k, v in e.bindings {
 		copy.bindings[k] = v

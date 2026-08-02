@@ -72,6 +72,14 @@ fn fp_classify(n cx.Node) FpKind {
 	if n is cx.ArrayNode {
 		return .sequence
 	}
+	// IteratorNode is the sequence instance too (#529): $filter/$map and
+	// the finite generators return eager iterators, and a combinator over
+	// one must map its ITEMS. Unclassified it fell to .scalar — the whole
+	// iterator became a singleton Some, so [$fp:map [$filter …] f] wrapped
+	// the collection instead of mapping over it (the kind taint).
+	if n is cx.IteratorNode {
+		return .sequence
+	}
 	// Everything else (scalar, text) is a bare scalar → singleton.
 	return .scalar
 }

@@ -354,6 +354,14 @@ fn (mut l Lexer) next_token() !ProgramToken {
 			l.advance()
 			return ProgramToken{ kind: .plus, text: '+', pos: start }
 		}
+		`%` {
+			// modulo operator head `[% a b]` (#598) — completes the
+			// `+ - * /` operator-element family, aliasing $mod. Outside
+			// head position the token is a loud parse error (never the
+			// pre-#598 silent data-ification / byte-0x25 lex error split).
+			l.advance()
+			return ProgramToken{ kind: .percent, text: '%', pos: start }
+		}
 		else {
 			if is_digit(c) {
 				// lexicon §9 [L23]/[L24]: a `YYYY-MM-DD` date or

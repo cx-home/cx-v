@@ -9,7 +9,7 @@ import time
 // #105 Phase-2 service tier — daemon lifecycle, brick 1: service configuration.
 //
 // Parses + validates the `cxstore.service.cx` config document (spec
-// spec/02-working/cxstore_service_tier_phase2.md, Appendix A) into a typed
+// spec/03-approved/misc/cxstore_service_tier_phase2.md, Appendix A) into a typed
 // ServiceConfig, failing fast with a structured diagnostic on any invalid
 // config (§2.2 — no partial serve). Config is a CX document (owner decision 5a),
 // so it parses through the data reader and dogfoods CX.
@@ -917,7 +917,8 @@ pub fn svc_handle_request(req cx.Element, mut state ServiceState, ctx_in ServeCo
 // child span, #200) — as opposed to a lifecycle/discovery endpoint.
 fn svc_is_data_op(op string) bool {
 	return op in ['get', 'put', 'delete', 'list', 'iter', 'query', 'modify',
-		'objects-have', 'objects-get', 'objects-put', 'refs', 'refs-set']
+		'objects-have', 'objects-get', 'objects-put', 'refs', 'refs-set', 'aliases',
+		'aliases-set']
 }
 
 // svc_metric_op_for_path classifies a non-`/cx-store/v1/<op>` path for the
@@ -1713,6 +1714,29 @@ pub fn svc_install_shutdown_signals(server cx.Node, drain_grace_ms i64) {
 	spawn svc_shutdown_watcher()
 }
 
+// svc_install_stdin_tether (#648): tether the daemon's lifetime to its
+// spawner. A harness (or supervisor) that spawns the daemon with a PIPE on
+// stdin holds the write end; when the spawner dies — a V panic skips defers,
+// a SIGKILLed test binary runs no cleanup — the pipe closes, stdin reaches
+// EOF, and the daemon drains gracefully instead of orphaning (squatting its
+// port band, poisoning subsequent runs, and wedging make via inherited
+// jobserver FDs). Opt-in via --exit-on-stdin-eof ONLY: a production daemon's
+// detached/redirected stdin must never take it down.
+pub fn svc_install_stdin_tether(label string) {
+	spawn fn (label string) {
+		mut f := os.stdin()
+		mut buf := []u8{len: 256}
+		for {
+			n := f.read(mut buf) or { break }
+			if n <= 0 {
+				break
+			}
+		}
+		eprintln('${label}: stdin EOF — spawner is gone, draining (tether, #648)')
+		g_svc_shutdown = g_svc_shutdown + 1
+	}(label)
+}
+
 // svc_register_grpc_listener records the gRPC listener id so the shutdown watcher
 // closes BOTH listeners on signal (#211 — the gRPC listener was never registered,
 // so a gRPC accept blocked in accept() was never unblocked and its in-flight
@@ -1781,15 +1805,13 @@ pub fn svc_shutdown_requested() bool {
 pub fn svc_shutdown_checkpoint(mounts map[string]cx.Node) {
 	for name, handle in mounts {
 		mut ms := store_for_guard(handle) or { continue }
-		if ms.op_lock != unsafe { nil } {
-			ms.op_lock.@lock()
-		}
+		// #628: owner-tracked reentrant acquisition — store_persist itself
+		// re-enters this mutex; a raw @lock() self-deadlocked against it.
+		store_lock_enter(mut ms)
 		store_persist(mut ms) or {
 			eprintln('cx store-serve: checkpoint of store `${name}` failed: ${err.msg()}')
 		}
-		if ms.op_lock != unsafe { nil } {
-			ms.op_lock.unlock()
-		}
+		store_lock_exit(mut ms)
 	}
 }
 

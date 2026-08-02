@@ -61,8 +61,7 @@ fn test_store_sqlite_encrypted_roundtrip_and_at_rest() {
 		store_sqlite_attach(mut ms) or { panic('attach: ${err.msg()}') }
 		store_put_canonical(mut ms, h, c) or { panic('put: ${err.msg()}') }
 		store_sqlite_persist(ms) or { panic('persist: ${err.msg()}') }
-		ms.alias_order << 'orders/latest'
-		ms.aliases['orders/latest'] = h
+		store_alias_set_local(mut ms, 'orders/latest', h)
 		store_sqlite_persist(ms) or { panic('persist2: ${err.msg()}') }
 
 		// at rest: no plaintext field values and no plaintext alias name (checked

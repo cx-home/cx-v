@@ -117,7 +117,7 @@ const stdlib_src_did = $embed_file('../stdlib/did.cx').to_string()
 
 const stdlib_src_vc = $embed_file('../stdlib/vc.cx').to_string()
 
-// xsp — XAP Stream Protocol frame codec (spec/02-working/xsp.md; issue #31).
+// xsp — XAP Stream Protocol frame codec (spec/03-approved/xap/xsp.md; issue #31).
 const stdlib_src_xsp = $embed_file('../stdlib/xsp.cx').to_string()
 
 const stdlib_src_jsonrpc = $embed_file('../stdlib/jsonrpc.cx').to_string()
@@ -395,6 +395,9 @@ pub fn new_seeded_module_table() ModuleTable {
 	// directly rather than via bundled_stdlib_names(); the experience-layer
 	// orchestrator over the cx-stdlib primitives (spec/03-approved/xap/xap.md §0).
 	t.register_source('cx-xap', stdlib_src_xap)
+	// cx-fabric: likewise its OWN bundled package — platform eventing composed
+	// over journal/bus/store (spec/03-approved/xap/fabric.md, #518/#531).
+	t.register_source('cx-fabric', stdlib_src_fabric)
 	register_conformance_test_modules(mut t)
 	return t
 }
@@ -449,6 +452,25 @@ const testmod_src_regex_helpers = '[?def compile scope=public (\$p) [regex patte
 // public sub-path re-exporting `encode`.
 const testmod_src_json_encoder = '[?def encode scope=public (\$v::any) [\$format-canonical \$v]]'
 
+// ./scope-frames-module.cx — module-scope-through-frames (#646): a [?fn]
+// created under a [?let]/HOF frame INSIDE a module def must capture the
+// module\'s defining scope (sibling defs resolvable, dollar and bare form),
+// not the importing program\'s scope. Before the fix the derived frames
+// dropped in_function_body/cur_defining_scope, so these failed with
+// `no callable "bump"` (dollar form) / silently built `[bump …]` data
+// elements (bare form) when imported — while running green as a program.
+const testmod_src_scope_frames = '[?def offset () 7]
+[?def bump (\$x) [+ \$x [\$offset]]]
+[?def fold-bump scope=public (\$a \$b \$c)
+  [?let [= \$total [\$reduce (\$a, \$b, \$c) [?fn (\$acc \$e) [+ \$acc [\$bump \$e]]] 0]]
+    [total n=\$total]]]
+[?def label-of scope=public (\$v)
+  [?let [= \$f [?fn (\$p) [?let [= \$o [\$offset]] [?str \'v={\$p}|o={\$o}\']]]]
+    [\$f \$v]]]
+[?def bare-call scope=public (\$v)
+  [?let [= \$f [?fn (\$p) [bump \$p]]]
+    [\$f \$v]]]'
+
 // register_conformance_test_modules seeds the in-memory sources every
 // module-system fixture imports. Idempotent; safe to call on any fresh
 // seeded table.
@@ -462,4 +484,5 @@ pub fn register_conformance_test_modules(mut table ModuleTable) {
 	table.register_source('github.com/example/regex-helpers', testmod_src_regex_helpers)
 	table.register_source('https://cdn.example.com/regex-helpers-1.2.3.zip', testmod_src_regex_helpers)
 	table.register_source('cx-stdlib/json/encoder', testmod_src_json_encoder)
+	table.register_source('./scope-frames-module.cx', testmod_src_scope_frames)
 }

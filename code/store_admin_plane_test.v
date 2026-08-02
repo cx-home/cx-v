@@ -344,14 +344,17 @@ fn test_admin_plane_live_end_to_end() {
 	defer {
 		os.rm(cfg) or {}
 	}
-	pid_s := os.execute('${bin} store-serve --config ${cfg} --allow-net=127.0.0.1:${cport} --allow-net=127.0.0.1:${gport} >/tmp/cx-admin-live.${cport}.out 2>&1 & echo \$!')
-	if pid_s.exit_code != 0 {
-		eprintln('SKIP: could not spawn cx store-serve')
-		return
-	}
-	pid := pid_s.output.trim_space()
+	// Spawn with a stdin pipe + --exit-on-stdin-eof (#648): a panicking test
+	// binary skips its defers, and pre-tether the orphaned daemon squatted the
+	// port band and poisoned later runs. stdout/err go to a file via the shell
+	// redirect (pipes replaced before exec — never blocks on an undrained pipe).
+	mut proc := os.new_process('/bin/sh')
+	proc.set_args(['-c',
+		'exec "${bin}" store-serve --config "${cfg}" --exit-on-stdin-eof --allow-net=127.0.0.1:${cport} --allow-net=127.0.0.1:${gport} >/tmp/cx-admin-live.${cport}.out 2>&1'])
+	proc.set_redirect_stdio()
+	proc.run()
 	defer {
-		os.execute('kill ${pid} 2>/dev/null')
+		proc.signal_kill()
 	}
 	time.sleep(700 * time.millisecond) // let both listeners bind
 

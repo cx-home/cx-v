@@ -1,12 +1,16 @@
-// store_remote_alias_unsupported_test.v — issue #264: CSRP carries NO alias
-// verbs (the M3 design decision), so the CX-level alias family on a
-// remote-backed handle must refuse with CXER1709 — never a silent empty
-// (get/list) or a silent local no-op ack (set). Same posture as query
-// pushdown (#119): honest refusal over a lying success.
+// store_remote_alias_unsupported_test.v — #264 → #645: the remote alias contract.
+//
+// #264 established the honest-refusal posture: never a silent empty (get/list)
+// and never a silent local no-op ack (set) on a remote handle. #645 keeps that
+// posture but gives CSRP handles a REAL answer: get/list/set-alias route to the
+// daemon's authoritative alias table over the `aliases` / `aliases-set` wire
+// ops with EXPLICIT per-name presence, so a miss is a server-asserted absence
+// — not a guess, not a refusal. Byte-source remotes (http/ftp/sftp) still
+// refuse with CXER1709: there is no service to ask.
 //
 // Real two-process lane, mirroring xap_registry_serve_real_test.v: a served
 // file:// store over `[$store:csrp-handle]`, a client on a
-// `cx-store+http://` handle probing all three ops.
+// `cx-store+http://` handle driving the full alias family.
 module main
 
 import os
@@ -38,21 +42,30 @@ fn sra_server_prog(port int, store_dir string) string {
 }
 
 // §9.2: err handling is [?match V [case [err …]]] ONLY — [?else] defaults on
-// BOTH absence and err values, so it cannot distinguish an honest CXER1709
-// from the old silent-empty. Each lane folds to its err code, or a marker.
+// BOTH absence and err values. Each lane folds to its err code or a marker.
 fn sra_client_prog(port int) string {
 	probe := fn (op string) string {
 		return '[?match ${op} [case [err \$e] [\$concat "" \$e@code]] [else "NO-ERR"]]'
 	}
 	return "[?lib 'cx-stdlib/store' :as store]\n" +
 		'[?let [= \$c [\$store:open "cx-store+http://127.0.0.1:${port}/probe/"]]\n' +
-		'[?let [= \$ga ' + probe('[\$store:get-alias \$c "x"]') + ']\n' +
-		'[?let [= \$la ' + probe('[\$store:list-aliases \$c]') + ']\n' +
-		'[?let [= \$sa ' + probe('[\$store:set-alias \$c "x" "deadbeef"]') + ']\n' +
-		'[result [ga \$ga] [la \$la] [sa \$sa]]\n' + ']]]]\n'
+		// a miss is a server-asserted absence (present="false" on the wire) → no err.
+		'[?let [= \$ga-miss [?if [= [\$count [\$store:get-alias \$c "nope"]] 0] [then "ABSENT"] [else "PRESENT"]]]\n' +
+		// set-alias to a hash the daemon does not hold refuses loudly (CXER1121).
+		'[?let [= \$sa-dangling ' + probe('[\$store:set-alias \$c "x" "deadbeef"]') + ']\n' +
+		// the live round trip: put a doc through the object wire, alias it, read it back.
+		'[?let [= \$h [\$store:put-doc \$c [probe x=2]]]\n' +
+		'[?let [= \$sa ' + probe('[\$store:set-alias \$c "probe" \$h]') + ']\n' +
+		'[?let [= \$ga [?if [= [\$store:get-alias \$c "probe"] \$h] [then "ROUNDTRIP"] [else "MISMATCH"]]]\n' +
+		'[?let [= \$la [\$count [\$store:list-aliases \$c]]]\n' +
+		// a byte-source remote keeps the honest refusal — no service to ask.
+		'[?let [= \$bs [\$store:open "http://127.0.0.1:1/never-dialed.cx"]]\n' +
+		'[?let [= \$bs-ga ' + probe('[\$store:get-alias \$bs "x"]') + ']\n' +
+		'[result [ga-miss \$ga-miss] [sa-dangling \$sa-dangling] [sa \$sa] [ga \$ga] [la \$la] [bs-ga \$bs-ga]]\n' +
+		']]]]]]]]]\n'
 }
 
-fn test_remote_alias_ops_refuse_cxer1709() {
+fn test_remote_alias_family_wire_contract() {
 	port := sra_pick_port()
 	store_dir := os.join_path(os.temp_dir(), 'cx-sra-store-${port}')
 	os.mkdir_all(store_dir) or { panic('mkdir ${store_dir}: ${err}') }
@@ -94,10 +107,17 @@ fn test_remote_alias_ops_refuse_cxer1709() {
 	out := os.execute('${sra_cx_binary()} --allow-net=127.0.0.1 ${cli}')
 	assert out.exit_code == 0, 'client failed: ${out.output}'
 	body := out.output
-	// every lane refuses honestly; none returns the silent-empty/no-op shape.
-	for lane in ['ga', 'la', 'sa'] {
-		lane_txt := body.all_after('[${lane} ').all_before(']')
-		assert lane_txt.contains('CXER1709'), '${lane} did not refuse: ${lane_txt}'
+	lane := fn [body] (name string) string {
+		return body.all_after('[${name} ').all_before(']')
 	}
-	assert !body.contains('NO-ERR'), 'an alias op succeeded silently on a remote handle: ${body}'
+	// CSRP handle: a miss is a server-asserted absence, never an err/refusal.
+	assert lane('ga-miss').contains('ABSENT'), 'miss must be absence: ${lane('ga-miss')}'
+	// a dangling target refuses with the same CXER1121 a local set-alias raises.
+	assert lane('sa-dangling').contains('CXER1121'), 'dangling set-alias must refuse: ${lane('sa-dangling')}'
+	// live round trip through the daemon's authoritative table.
+	assert lane('sa').contains('NO-ERR'), 'set-alias must apply: ${lane('sa')}'
+	assert lane('ga').contains('ROUNDTRIP'), 'get-alias must resolve the daemon alias: ${lane('ga')}'
+	assert lane('la') == '1', 'listing carries exactly the applied alias: ${lane('la')}'
+	// byte-source remote: the #264 honest refusal is unchanged.
+	assert lane('bs-ga').contains('CXER1709'), 'byte-source get-alias must refuse: ${lane('bs-ga')}'
 }

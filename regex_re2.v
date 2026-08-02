@@ -8,21 +8,21 @@ module cx
 // drift; bindings call cx_validate / cx_validate_apply_defaults and
 // receive identical match results across V/Python/Go/Rust/etc.
 //
-// Ships with system RE2 (Homebrew `re2` on macOS,
-// `libre2-dev` on Debian/Ubuntu). Submodule-pinned RE2 source is
-// queued post-tag for full source determinism (build-version
-// guarantee). Switching from system → vendored is a build-system
-// change, not an API change; the wire-level FullMatch semantics are
-// stable.
+// Ships with VENDORED RE2 (#573): third_party/re2, submodule-pinned to
+// the last pre-abseil release (2023-03-01) and linked as a STATIC
+// archive built in-tree (vcx/Makefile re2-static) — no system-re2
+// runtime dependency on any platform, and full source determinism
+// (the previously queued post-tag item). The shim uses only the stable
+// compile/match/replace API; the wire-level FullMatch semantics are
+// identical across the pin and later releases.
 
 #flag -I @VMODROOT/deps/re2_shim
-#flag darwin -I/opt/homebrew/include
-#flag linux -I/usr/include
+#flag -I @VMODROOT/../third_party/re2
 #flag -L @VMODROOT/target
-#flag darwin -L/opt/homebrew/lib
 #flag -lcx_re2_shim
-#flag darwin -lre2 -lc++
-#flag linux -lre2 -lstdc++
+#flag @VMODROOT/../third_party/re2/obj/libre2.a
+#flag darwin -lc++
+#flag linux -lstdc++ -lpthread
 
 #include "re2_shim.h"
 

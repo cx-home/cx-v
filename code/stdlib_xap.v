@@ -21,8 +21,22 @@ const xap_err_arg_invalid = 'cx-err:CXER4852' // E_XAP_COMPONENT_INVALID (reused
 const xap_err_surface = 'cx-err:CXER4853' // E_XAP_SURFACE_INVALID
 const xap_err_render = 'cx-err:CXER4855' // E_XAP_RENDER_UNSUPPORTED
 const xap_err_unauthorized = 'cx-err:CXER4850' // E_XAP_UNAUTHORIZED (PEP deny, §8)
+const xap_err_view_failed = 'cx-err:CXER4863' // E_XAP_VIEW_FAILED (render-time view failure, §3.5)
+const xap_err_cascade_fault = 'cx-err:CXER4860' // E_XAP_CASCADE_FAULT (journal write failure mid-cascade, §2.3/§3.1.1)
 
 // ── component registry (global, by name) ────────────────────────────────────
+
+// XapAffinity is one declared [affinity when=… class=… rank=…] clause —
+// the §19 context-affinity metadata, colocated on the component (§3.2,
+// #535 owner ruling 2026-07-21). `when` is a CXPath predicate over the
+// [context …] projection; `class` the §20.1 context-class the ramp keys
+// on; `rank` the static tie-break (default = declaration order).
+struct XapAffinity {
+mut:
+	when_path string
+	class     string
+	rank      int
+}
 
 struct XapComponent {
 mut:
@@ -34,6 +48,14 @@ mut:
 	emits         cx.Node // the declared intent vocabulary (a sequence), or empty
 	has_view      bool
 	has_view_closure bool // true once view_closure has been captured
+	affinity      []XapAffinity // §3.2 context-affinity declarations (#535)
+	// §5 `reduce` — fold-side compaction (#606, owner ruling b): when the
+	// bind slice exceeds reduce_window detail records, the oldest evict
+	// through the pure reducer into the slice's single summary record.
+	// Captured at declaration (#40 discipline, like the view).
+	reduce_window  int
+	reduce_closure Closure
+	has_reduce     bool
 }
 
 @[heap]
@@ -51,15 +73,90 @@ mut:
 	state      map[string][]cx.Node // bind-path → appended payload records (the fold)
 	components []string             // component names registered with this runtime
 	log        []cx.Node            // committed intents (the journal, for the demo)
-	coord      map[string]cx.Node   // #25 Tier-2: transient coordination channels
-	                                 // (channel → latest frame). NOT journaled, NOT
-	                                 // PEP-gated, latest-wins, out of audit (§3.2).
+	// #25 Tier-2 coordination rides the FABRIC TRANSIENT PLANE (#531 P2,
+	// fabric.md §12: one transient-channel mechanism on the platform, not
+	// two): a lazily-opened per-runtime embedded fabric over a mem:// journal
+	// carries the latest-wins channels. NOT journaled (the durable plane is
+	// untouched), NOT PEP-gated, out of audit (§3.2) — behavior unchanged
+	// from the retired rt.coord map.
+	coord_fab     cx.Node
+	has_coord_fab bool
 	dials      []cx.Node            // issued delegations (the dial) — display elements
 	authz      &AuthzStore = unsafe { nil } // the runtime's authority store (the real PEP, §2.2)
 	shell_dir  string               // D3 web bridge: dir holding layout.html + static/
+	// #567: the shell's mount geometry, learned at GET / splice time —
+	// surface name → the mount element's id / tag, so POST fragments and
+	// control hx-targets swap against the SHELL's ids (any mount, not the
+	// D3 guestbook literal). Defaults ('<name>-panel' / 'main') apply when
+	// no shell has been spliced yet (self-contained fallback page).
+	panel_ids  map[string]string
+	panel_tags map[string]string
 	grammar    cx.Element           // the attached composed grammar (§8.2 runtime integration)
 	has_grammar bool                // set by xap-run {grammar: G}; switches on §5 resolution
 	                                // + §6 N-COMPOSE-2 at the emit PEP
+	// §3.6/§19 context→composition resolver (#535). resolver_kind is
+	// 'scripted' (the default — the deterministic resolver-default fold
+	// over declared §3.2 context-affinity rules, ramp-gated) or 'closure'
+	// (a CX closure captured at run time, #40-style, so it stays
+	// invocable wherever resolve runs). The resolver PROPOSES; the entry
+	// (xap_resolve_context) owns the governance — proposal validation,
+	// §20.2 tier demotion, the journaled decision with :reason (§4.5:
+	// auditable, never authoritative).
+	resolver_kind        string = 'scripted'
+	resolver_closure     Closure
+	has_resolver_closure bool
+	// a [scripted-resolver …] value from [$xap:resolver-default $rules]
+	// passed as {resolver: …}: the scripted fold runs over THESE rules
+	// instead of the registry's component declarations.
+	scripted_comps []string
+	scripted_rules []XapAffinity
+	has_scripted_rules bool
+	// §3.1.1 durable journal binding (#582): every cascade commit publishes
+	// the uniform [event …] envelope to this stream BEFORE folding (append
+	// failure = CXER4860, nothing folds); run re-folds the stream at boot.
+	// journal_remote distinguishes the attribution lane: a direct journal
+	// handle carries the PEP-resolved {actor, authority}; a fabric session's
+	// attribution is the proven session principal (§4.8), the PEP actor
+	// rides in the envelope.
+	journal_fab      cx.Node
+	journal_stream   string
+	journal_remote   bool
+	has_journal_bind bool
+	// #594: monotone state version — bumped on every fold (the single
+	// central mutation point). The serve layer's render cache keys on it:
+	// a render computed at seq N serves every request until seq moves.
+	commit_seq u64
+	// §3.1.1 fold checkpoints (#595): derived-state persistence. journal_seq
+	// tracks the last journal seq applied to this fold (from publish
+	// receipts on the live path, entry seqs on replay); every ckpt_every
+	// committed events the fold persists to ckpt_store as
+	// [checkpoint stream=… seq=…] under the alias
+	// xap-checkpoint-<tenant>-<stream>. Derived, never authority.
+	ckpt_store  cx.Node
+	ckpt_every  u64
+	has_ckpt    bool
+	journal_seq u64
+	ckpt_last   u64
+	// #604: one checkpoint persist in flight per runtime — the commit path
+	// only snapshots and dispatches; the store I/O runs off-thread.
+	ckpt_inflight bool
+	// #606 fold-side compaction: per-bind summary records (a slice with a
+	// declared §5 reduce keeps its most-recent `window` detail records;
+	// older ones live folded into summaries[bind]). Every slice read
+	// composes summary + detail via xap_slice_view.
+	summaries map[string]cx.Node
+	// #609 changed-panel SSE: the commit_seq at each bind's last change —
+	// a delta frame carries only panels whose bind moved past the
+	// subscriber's high-water mark.
+	bind_seq map[string]u64
+	// #606 log compaction (the run-level `log-reduce` opt): same mechanism
+	// over rt.log; log readers (governance folds included) go through
+	// xap_log_view. Absent = unbounded (today).
+	log_reduce_window  int
+	log_reduce_closure Closure
+	has_log_reduce     bool
+	log_summary        cx.Node
+	has_log_summary    bool
 }
 
 __global (
@@ -189,10 +286,45 @@ fn xap_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		'xap-grammar-hash' {
 			return xap_grammar_hash_builtin(args)
 		}
+		'xap-resolver-default' {
+			return xap_resolver_default_builtin(args)
+		}
 		else {
 			return none
 		}
 	}
+}
+
+// xap_resolver_default_builtin — [$xap:resolver-default $rules] (§3.6,
+// #535): PURE — validated rules in, the scripted resolver out as a
+// first-class VALUE ([scripted-resolver [affinity component=… when=…
+// class=… rank=…]…]) that [$xap:run {resolver: …}] accepts. Each rule
+// here carries component= explicitly (the standalone form has no
+// component declaration to ride on); validation is the same as the §3.2
+// declaration path — a malformed rule refuses now.
+fn xap_resolver_default_builtin(args []cx.Node) ?cx.Node {
+	if args.len < 1 {
+		return mk_err(xap_err_arg_invalid,
+			'E_XAP: resolver-default expects a sequence of [affinity component=… when=… class=… rank=…] rules (xap.md §3.6)')
+	}
+	mut items := []cx.Node{}
+	for i, it in xap_seq_items(args[0]) {
+		a := xap_parse_affinity(it, i) or {
+			return mk_err(xap_err_arg_invalid, 'E_XAP: resolver-default: ${err.msg()}')
+		}
+		comp := if it is cx.Element { it.attr('component') } else { '' }
+		if comp == '' {
+			return mk_err(xap_err_arg_invalid,
+				'E_XAP: resolver-default rules carry component=… (the standalone form has no component declaration to ride on; xap.md §3.6)')
+		}
+		items << cx.Node(xap_elem('affinity', [
+			xap_attr('component', comp),
+			xap_attr('when', a.when_path),
+			xap_attr('class', a.class),
+			xap_attr('rank', a.rank.str()),
+		], []))
+	}
+	return cx.Node(xap_elem('scripted-resolver', [], items))
 }
 
 fn xap_component(args []cx.Node, mut env MatchEnv) ?cx.Node {
@@ -224,6 +356,36 @@ fn xap_component(args []cx.Node, mut env MatchEnv) ?cx.Node {
 	if e := xap_map_get_node(opts, 'emits') {
 		comp.emits = e
 	}
+	// §3.2 context-affinity declarations (#535) — validated NOW (a
+	// malformed rule refuses at declaration, never sits silently inert).
+	if av := xap_map_get_node(opts, 'affinity') {
+		for i, it in xap_seq_items(av) {
+			a := xap_parse_affinity(it, i) or {
+				return mk_err(xap_err_arg_invalid, 'E_XAP_COMPONENT_INVALID: ${err.msg()}')
+			}
+			comp.affinity << a
+		}
+	}
+	// §5 `reduce` (#606) — validated + captured at declaration: a malformed
+	// compaction declaration refuses NOW, never silently truncates later.
+	if rv := xap_map_get_node(opts, 'reduce') {
+		w := xap_map_get_str(rv, 'window').int()
+		if w < 1 {
+			return mk_err(xap_err_arg_invalid,
+				'E_XAP_COMPONENT_INVALID: reduce needs window: ≥ 1 (the detail records kept; older evict through the reducer — xap.md §5)')
+		}
+		rfn := xap_map_get_node(rv, 'fn') or {
+			return mk_err(xap_err_arg_invalid,
+				'E_XAP_COMPONENT_INVALID: reduce needs fn: (the pure (summary-or-absence, evicted-record) → summary reducer — xap.md §5)')
+		}
+		rcl := resolve_closure(rfn, env) or {
+			return mk_err(xap_err_arg_invalid,
+				'E_XAP_COMPONENT_INVALID: reduce fn: does not resolve to a callable')
+		}
+		comp.reduce_window = w
+		comp.reduce_closure = rcl
+		comp.has_reduce = true
+	}
 	mut reg := xap_reg()
 	reg.components[cname] = comp
 	return xap_elem('component', [xap_attr('name', cname)], [])
@@ -234,7 +396,18 @@ fn xap_surface(args []cx.Node) ?cx.Node {
 		return mk_err(xap_err_surface, 'E_XAP_SURFACE_INVALID: surface expects (name, panels)')
 	}
 	sname := xap_arg_name(args[0])
-	return xap_elem('xap-surface', [xap_attr('name', sname)], [args[1]])
+	mut attrs := [xap_attr('name', sname)]
+	// opts.reason (#535): a resolver proposal must carry its :reason —
+	// stamping it here keeps the resolver-author idiom one call
+	// ([$xap:surface name panels {reason: …}]) instead of a hand-built
+	// element. Other opts keys remain reserved.
+	if args.len > 2 {
+		reason := xap_map_get_str(args[2], 'reason')
+		if reason != '' {
+			attrs << xap_attr('reason', reason)
+		}
+	}
+	return xap_elem('xap-surface', attrs, [args[1]])
 }
 
 fn xap_panel(args []cx.Node) ?cx.Node {
@@ -252,11 +425,25 @@ fn xap_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?cx.Nod
 	match name {
 		'xap-component' { return xap_component(args, mut env) }
 		'xap-render' { return xap_render(args, mut env) }
-		'xap-run' { return xap_run(args) }
+		'xap-run' { return xap_run(args, mut env) }
+		'xap-resolve' {
+			// §3.6 shape dispatch (#535): a runtime-handle FIRST argument is
+			// the context→composition entry (env-aware — it applies the
+			// configured resolver closure). Any other first-arg shape falls
+			// through (none) to the env-free §8.1 ρ term-resolution path.
+			if args.len > 0 {
+				if rt := xap_runtime_of(args[0]) {
+					mut mrt := unsafe { rt }
+					return xap_resolve_context(mut mrt, args, mut env)
+				}
+			}
+			return none
+		}
+		'xap-resolve-respond' { return xap_resolve_respond(args) }
 		'xap-serve' { return xap_serve(args, mut env) }
 		'xap-host' { return xap_host(args, mut env) }
 		'xap-host-push' { return xap_host_push(args, mut env) }
-		'xap-emit' { return xap_emit(args) }
+		'xap-emit' { return xap_emit(args, mut env) }
 		'xap-state' { return xap_state(args) }
 		'xap-coord-publish' { return xap_coord_publish(args) }
 		'xap-coord-read' { return xap_coord_read(args) }
@@ -266,6 +453,443 @@ fn xap_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?cx.Nod
 		'xap-why-allowed' { return xap_why_allowed(args) }
 		else { return none }
 	}
+}
+
+// ── §3.6 context→composition resolve (#535) ─────────────────────────────────
+
+// xap_tier_effective maps a requested placement to the §20.2 tier the
+// entry GRANTS: the stakes gate, not a confidence gate — a resolver
+// proposal never seizes the foreground (T0/T1 are guardian/decision-
+// blocked machinery, not resolver territory), so :foreground demotes to
+// T2 (foreground-PROPOSE — inline, encountered on look, never modal),
+// :peripheral is T3 (the default posture), :queued is T4. Returns
+// (effective, requested-name).
+fn xap_tier_effective(opts cx.Node) (string, string) {
+	req := xap_map_get_str(opts, 'tier')
+	name := req.trim_left(':')
+	return match name {
+		'foreground', 'T0', 'T1', 'T2' { 'T2', name }
+		'queued', 'digest', 'T4' { 'T4', name }
+		'', 'peripheral', 'T3' { 'T3', name }
+		else { 'T3', name }
+	}
+}
+
+// xap_parse_affinity validates one [affinity when=… class=… rank=…]
+// clause (§3.2, #535). The `when` CXPath must PARSE at declaration time —
+// a malformed rule refuses now (CXER4852), never sits silently inert.
+// `rank` defaults to 1000000+idx so declared ranks (small ints) win and
+// undeclared ones keep declaration order.
+fn xap_parse_affinity(it cx.Node, idx int) !XapAffinity {
+	if !(it is cx.Element && it.name == 'affinity') {
+		return error('affinity declarations are [affinity when=<CXPath> class=<atom> rank=<int>?] elements (xap.md §3.2)')
+	}
+	e := it as cx.Element
+	w := e.attr('when')
+	cl := e.attr('class').trim_left(':')
+	if w == '' || cl == '' {
+		return error('an [affinity] clause requires when=<CXPath> and class=<context-class atom> (xap.md §3.2)')
+	}
+	joiner := if w.starts_with('/') || w.starts_with('@') || w.starts_with('.') { '' } else { '/' }
+	cx.parse_program('\$__cxaff__${joiner}${w}') or {
+		return error('affinity when="${w}" is not a CXPath expression: ${err.msg()}')
+	}
+	mut rank := 1000000 + idx
+	rs := e.attr('rank')
+	if rs != '' {
+		rank = rs.int()
+	}
+	return XapAffinity{
+		when_path: w
+		class:     cl
+		rank:      rank
+	}
+}
+
+// xap_affinity_matches evaluates a rule's `when` CXPath against the
+// [context …] projection (wrapped in an envelope so the rule addresses
+// the context ELEMENT by name — `context[@focus='orders']`, or deeper
+// `context/deadline`). A non-empty result = candidate. An eval fault
+// propagates loudly as the err it is.
+fn xap_affinity_matches(ctx cx.Node, when_path string, mut env MatchEnv) !bool {
+	envl := cx.Node(cx.Element{ name: '__cxaff__', items: [ctx] })
+	res := cx_mod_select([envl, cx.Node(cx.ScalarNode{
+		value:     cx.ScalarValue(when_path)
+		data_type: cx.ScalarType.string_type
+	})], mut env)
+	if res is cx.Element {
+		if is_err_value(res) {
+			return error('affinity when="${when_path}": ${err_summary(res)}')
+		}
+		return res.items.len > 0
+	}
+	return false
+}
+
+// xap_ramp_level computes the §20.1 trust-ramp level for (capability ×
+// context-class). Two inputs, per the spec'd model:
+//   1. the MANUAL PIN — an override grant issued through the dial (§21.3,
+//      one mechanism): a delegation at scope `ramp/<comp>/<class>` (most
+//      specific) or `ramp/<comp>`, whose [setting level=N] pins the
+//      level; the LAST matching dial wins (later dials adjust earlier
+//      ones). A pin OVERRIDES the fold outright — it is the principal's
+//      explicit grant.
+//   2. the deterministic FOLD over journaled surfacing outcomes (#553):
+//      each [resolution-response surface=S response=R] event attributes R
+//      to the (component × class) candidates of the most recent prior
+//      [resolved outcome=composed surface=S] decision. Scoring is
+//      asymmetric — slow to gain, fast to lose (§20.1):
+//        acted-on           streak+1; level = max(level, min(3, streak/2))
+//                           (two CONSECUTIVE acted-ons per step); clears a
+//                           standing suppression (the principal re-engaged)
+//        glanced-dismissed  streak=0; level-1 (floor 0)
+//        ignored            streak=0 (no level change)
+//        suppressed         sticky level 0 ("don't show me this") until a
+//                           later acted-on or a pin
+//      New capabilities have no history → level 0 = summon-only, §20.1's
+//      conservative posture; the bootstrap is a summon (opts.summon) or a
+//      pin, whose surfacings then accumulate organic responses.
+fn xap_ramp_level(rt &XapRuntime, comp string, class string) int {
+	specific := 'ramp/${comp}/${class}'
+	general := 'ramp/${comp}'
+	mut pin := -1
+	mut have_specific := false
+	for d in rt.dials {
+		if d is cx.Element && d.name == 'delegation' {
+			mut scope := ''
+			mut setting_level := -1
+			for c in d.items {
+				if c is cx.Element {
+					if c.name == 'scope' && c.items.len > 0 {
+						scope = xap_verb_name(c.items[0])
+					}
+					if c.name == 'setting' {
+						ls := c.attr('level')
+						if ls != '' {
+							setting_level = ls.int()
+						}
+					}
+				}
+			}
+			if setting_level < 0 {
+				continue
+			}
+			if scope == specific {
+				pin = setting_level
+				have_specific = true
+			} else if scope == general && !have_specific {
+				pin = setting_level
+			}
+		}
+	}
+	if pin >= 0 {
+		return pin
+	}
+	// the fold (chronological walk of the demo journal)
+	key := '${comp}/${class}'
+	mut level := 0
+	mut streak := 0
+	mut suppressed := false
+	mut surface_cands := map[string][]string{}
+	for ev in xap_log_view(rt) {
+		if ev is cx.Element {
+			if ev.name == 'resolved' && ev.attr('outcome') == 'composed' {
+				sname := ev.attr('surface')
+				mut cands := []string{}
+				for c in ev.items {
+					if c is cx.Element && c.name == 'candidate' {
+						cands << c.attr('component') + '/' + c.attr('class')
+					}
+				}
+				surface_cands[sname] = cands
+			} else if ev.name == 'resolution-response' {
+				sname := ev.attr('surface')
+				if key !in (surface_cands[sname] or { []string{} }) {
+					continue
+				}
+				match ev.attr('response') {
+					'acted-on' {
+						streak++
+						suppressed = false
+						cand := streak / 2
+						if cand > level {
+							level = if cand > 3 { 3 } else { cand }
+						}
+					}
+					'glanced-dismissed' {
+						streak = 0
+						if level > 0 {
+							level--
+						}
+					}
+					'ignored' {
+						streak = 0
+					}
+					'suppressed' {
+						streak = 0
+						level = 0
+						suppressed = true
+					}
+					else {}
+				}
+			}
+		}
+	}
+	if suppressed {
+		return 0
+	}
+	return level
+}
+
+// xap_scripted_propose is resolver-default's fold (§3.6, #535): filter
+// (when matches context) → gate (ramp level ≥2 for inclusion, ≥3 when
+// the granted tier is T2) → rank → compose one [xap-surface …] with a
+// GENERATED deterministic reason, or the absence channel. `comps`/`rules`
+// are parallel arrays — either the runtime's pinned resolver-default
+// rules or the registry's component declarations (collected by the
+// caller in declaration order).
+fn xap_scripted_propose(rt &XapRuntime, ctx cx.Node, tier string, summon string, comps []string, rules []XapAffinity, mut env MatchEnv) !cx.Node {
+	need := if tier == 'T2' { 3 } else { 2 }
+	mut cand_comps := []string{}
+	mut cand_rules := []XapAffinity{}
+	mut cand_levels := []int{}
+	if summon != '' {
+		// §20.1 level 0 IS summon-only: an explicit summon composes the
+		// named capability regardless of ramp level or when-match — the
+		// principal asked for it. Its class (for response attribution) is
+		// the component's first declared affinity class, or 'summoned'.
+		mut cl := 'summoned'
+		mut rank := 0
+		for i, a in rules {
+			if comps[i] == summon {
+				cl = a.class
+				rank = a.rank
+				break
+			}
+		}
+		cand_comps << summon
+		cand_rules << XapAffinity{
+			when_path: '(summoned)'
+			class:     cl
+			rank:      rank
+		}
+		cand_levels << xap_ramp_level(rt, summon, cl)
+	} else {
+		for i, a in rules {
+			comp := comps[i]
+			if comp in cand_comps {
+				continue // first matching+passing clause per component wins
+			}
+			if !xap_affinity_matches(ctx, a.when_path, mut env)! {
+				continue
+			}
+			lvl := xap_ramp_level(rt, comp, a.class)
+			if lvl < need {
+				continue
+			}
+			cand_comps << comp
+			cand_rules << a
+			cand_levels << lvl
+		}
+	}
+	if cand_comps.len == 0 {
+		return cx.Node(cx.Element{ name: seq_marker_name })
+	}
+	// stable rank sort (declared rank asc; insertion order breaks ties —
+	// insertion sort keeps it stable and the sets are small)
+	mut order := []int{len: cand_comps.len, init: index}
+	for i in 1 .. order.len {
+		mut j := i
+		for j > 0 && cand_rules[order[j - 1]].rank > cand_rules[order[j]].rank {
+			order[j - 1], order[j] = order[j], order[j - 1]
+			j--
+		}
+	}
+	mut panels := []cx.Node{cap: order.len}
+	mut cands := []cx.Node{cap: order.len}
+	mut reasons := []string{cap: order.len}
+	for oi in order {
+		panels << xap_elem('xap-panel', [xap_attr('component', cand_comps[oi])],
+			[cx.Node(xap_elem('__cx_map__', [], []))])
+		// calibration metadata (#553): the entry relocates [candidate …]
+		// children from the proposal onto the journaled [resolved …] event
+		// so responses attribute per (component × class).
+		cands << cx.Node(xap_elem('candidate', [
+			xap_attr('component', cand_comps[oi]),
+			xap_attr('class', cand_rules[oi].class),
+		], []))
+		reasons << '${cand_comps[oi]}: affinity :${cand_rules[oi].class} matched ${cand_rules[oi].when_path} (ramp level ${cand_levels[oi]})'
+	}
+	prefix := if summon != '' { 'summoned: ' } else { 'scripted: ' }
+	reason := prefix + reasons.join('; ')
+	mut items := []cx.Node{}
+	items << cx.Node(cx.Element{ name: seq_marker_name, items: panels })
+	items << cands
+	return cx.Node(xap_elem('xap-surface', [
+		xap_attr('name', if summon != '' { summon } else { 'scripted' }),
+		xap_attr('reason', reason),
+	], items))
+}
+
+// xap_scripted_registry_rules collects the registry's component affinity
+// declarations (declaration order) as the parallel comps/rules arrays the
+// scripted fold consumes.
+fn xap_scripted_registry_rules() ([]string, []XapAffinity) {
+	reg := xap_reg()
+	mut comps := []string{}
+	mut rules := []XapAffinity{}
+	for name, c in reg.components {
+		for a in c.affinity {
+			comps << name
+			rules << a
+		}
+	}
+	return comps, rules
+}
+
+// xap_resolve_context is the §3.6 entry: ask the runtime's configured
+// resolver to compose a surface for $context. The RESOLVER proposes; this
+// entry owns the governance for every resolver kind (§4.5 — auditable,
+// never authoritative): proposal-shape validation, the required :reason,
+// §20.2 tier demotion, and the journaled decision event. Returns the
+// composed [xap-surface …] or the ABSENCE channel when nothing meets
+// threshold (both outcomes journal).
+//
+// Closure contract (documented in stdlib/xap.cx): the resolver closure is
+// applied as ($context $opts) and returns either the absence channel or
+// an [xap-surface …] proposal carrying reason=… (build it with
+// [$xap:surface] and stamp the reason attr; a missing reason refuses —
+// §19 requires the decision auditable).
+fn xap_resolve_context(mut rt XapRuntime, args []cx.Node, mut env MatchEnv) ?cx.Node {
+	if args.len < 2 {
+		return mk_err(xap_err_arg_invalid,
+			'E_XAP: resolve (context→composition, §3.6) expects (runtime, context, opts?)')
+	}
+	ctx := args[1]
+	if !(ctx is cx.Element) {
+		return mk_err(xap_err_arg_invalid,
+			'E_XAP: resolve (§3.6) argument 2 is the [context …] projection element')
+	}
+	opts := if args.len > 2 { args[2] } else { xap_elem('__cx_map__', [], []) }
+	tier, requested := xap_tier_effective(opts)
+	via := if rt.has_resolver_closure { 'closure' } else { 'scripted' }
+	// ── judgment (pluggable) ────────────────────────────────────────────
+	proposal := if rt.has_resolver_closure {
+		invoke_closure(rt.resolver_closure, [ctx, opts], mut env) or { err_to_node(err) }
+	} else {
+		// :scripted — resolver-default's deterministic fold (§3.6) over
+		// either the runtime's pinned rules ([$xap:resolver-default …]
+		// passed as {resolver: …}) or the registry's §3.2 component
+		// affinity declarations.
+		comps, rules := if rt.has_scripted_rules {
+			rt.scripted_comps, rt.scripted_rules
+		} else {
+			xap_scripted_registry_rules()
+		}
+		// opts.summon (#553): an explicit summon of a named capability —
+		// §20.1 level 0's own semantics, and the organic bootstrap for the
+		// response fold (a fresh capability can be summoned, responded to,
+		// and thereby promoted without a pin).
+		xap_scripted_propose(rt, ctx, tier, xap_map_get_str(opts, 'summon'), comps, rules, mut env) or {
+			mk_err(xap_err_arg_invalid, 'E_XAP: scripted resolve: ${err.msg()}')
+		}
+	}
+	// ── governance (fixed, resolver-independent) ────────────────────────
+	if proposal is cx.Element && is_err_value(proposal) {
+		return proposal // the resolver faulted; propagate per §9.2
+	}
+	if is_sequence_wrapper(proposal) && (proposal as cx.Element).items.len == 0 {
+		rt.log << cx.Node(xap_elem('resolved', [
+			xap_attr('via', via),
+			xap_attr('tier', tier),
+			xap_attr('outcome', 'below-threshold'),
+			xap_attr('reason', 'nothing met threshold for this context'),
+		], []))
+		return cx.Node(cx.Element{ name: seq_marker_name })
+	}
+	surface := unwrap_single_item(proposal)
+	if !(surface is cx.Element && (surface.name == 'xap-surface' || surface.name == 'surface')) {
+		return mk_err(xap_err_surface,
+			'E_XAP_SURFACE_INVALID: a resolver proposal is an [xap-surface …] (build it with [\$xap:surface]) or the absence channel; got a different shape')
+	}
+	reason := (surface as cx.Element).attr('reason')
+	if reason == '' {
+		return mk_err(xap_err_surface,
+			'E_XAP_SURFACE_INVALID: a resolver proposal must carry reason=… — the decision is journaled and auditable (xap.md §19); stamp the attr on the proposed surface')
+	}
+	mut ev_attrs := [
+		xap_attr('via', via),
+		xap_attr('tier', tier),
+		xap_attr('outcome', 'composed'),
+		xap_attr('reason', reason),
+		xap_attr('surface', (surface as cx.Element).attr('name')),
+	]
+	if requested != '' && requested != tier {
+		// the §20.2 demotion is itself auditable
+		ev_attrs << xap_attr('requested', requested)
+	}
+	// Relocate [candidate component=… class=…] children from the proposal
+	// onto the journaled decision (#553): they are CALIBRATION metadata —
+	// the response fold joins [resolution-response] events to them — not
+	// render content. Scripted proposals carry them by construction; a
+	// closure resolver MAY stamp them for the same attribution.
+	mut se := surface as cx.Element
+	mut ev_items := []cx.Node{}
+	mut kept := []cx.Node{cap: se.items.len}
+	for c in se.items {
+		if c is cx.Element && c.name == 'candidate' {
+			ev_items << c
+		} else {
+			kept << c
+		}
+	}
+	se.items = kept
+	rt.log << cx.Node(xap_elem('resolved', ev_attrs, ev_items))
+	// The GRANTED placement travels with the surface — the renderer reads
+	// it for foreground/periphery placement (§3.1 render context), and a
+	// requested-vs-granted demotion is observable on the value itself.
+	mut sattrs := []cx.Attribute{cap: se.attrs.len + 1}
+	for a in se.attrs {
+		if a.name != 'tier' {
+			sattrs << a
+		}
+	}
+	sattrs << xap_attr('tier', tier)
+	se.attrs = sattrs
+	return cx.Node(se)
+}
+
+// xap_resolve_respond — [$xap:resolve-respond $rt $surface-name $response]
+// (#553; the §20.1 recording surface): journals the principal's response
+// to a surfacing as a [resolution-response surface=… response=…] event —
+// the ramp fold's second input. Responses are the closed §20.1 vocabulary:
+// :acted-on / :glanced-dismissed / :ignored / :suppressed. Returns null
+// (unit). The event journals even when no [resolved] decision matches the
+// surface name yet — the fold simply attributes nothing for it (an
+// unmatched response is inert, not an error: hosts may record responses
+// asynchronously of decision replay).
+fn xap_resolve_respond(args []cx.Node) ?cx.Node {
+	if args.len < 3 {
+		return mk_err(xap_err_arg_invalid,
+			'E_XAP: resolve-respond expects (runtime, surface-name, response-atom) — responses are :acted-on / :glanced-dismissed / :ignored / :suppressed (xap.md §20.1)')
+	}
+	mut rt := xap_runtime_of(args[0]) or {
+		return mk_err('cx-err:CXER4859', 'E_XAP_RUNTIME_CLOSED: unknown runtime handle')
+	}
+	sname := xap_arg_name(args[1])
+	resp := xap_verb_name(args[2]).trim_left(':')
+	if resp !in ['acted-on', 'glanced-dismissed', 'ignored', 'suppressed'] {
+		return mk_err(xap_err_arg_invalid,
+			'E_XAP: resolve-respond response must be :acted-on, :glanced-dismissed, :ignored, or :suppressed (xap.md §20.1); got "${resp}"')
+	}
+	rt.log << cx.Node(xap_elem('resolution-response', [
+		xap_attr('surface', sname),
+		xap_attr('response', resp),
+	], []))
+	return cx.Node(cx.ScalarNode{
+		value:     cx.ScalarValue(cx.NullValue{})
+		data_type: cx.ScalarType.null_type
+	})
 }
 
 // xap_runtime_of resolves a [xap-runtime id=K] handle to its live runtime.
@@ -282,12 +906,48 @@ fn xap_runtime_of(n cx.Node) ?&XapRuntime {
 
 // xap-run wires a single-tenant runtime (its journal/bus/authz/sessions — here
 // an in-process state fold over the cx-stdlib primitives) and returns its handle.
-fn xap_run(args []cx.Node) ?cx.Node {
+fn xap_run(args []cx.Node, mut env MatchEnv) ?cx.Node {
 	opts := if args.len > 0 { args[0] } else { xap_elem('__cx_map__', [], []) }
 	mut reg := xap_reg()
 	reg.next_id = reg.next_id + 1
 	id := reg.next_id
 	tenant := xap_map_get_str(opts, 'tenant')
+	// §3.1 `resolver` run-option (#535): `:scripted` (default) or a CX
+	// closure. The closure is captured NOW (#40 discipline — the sentinel's
+	// scope table is gone by resolve time). An external LLM resolver handle
+	// is spec'd but not yet a shipped surface — refuse it loudly rather
+	// than accept-and-ignore.
+	mut resolver_kind := 'scripted'
+	mut resolver_cl := Closure{}
+	mut has_resolver_cl := false
+	mut scripted_comps := []string{}
+	mut scripted_rules := []XapAffinity{}
+	mut has_scripted := false
+	if rv := xap_map_get_node(opts, 'resolver') {
+		if cl := resolve_closure(rv, env) {
+			resolver_kind = 'closure'
+			resolver_cl = cl
+			has_resolver_cl = true
+		} else if rv is cx.Element && rv.name == 'scripted-resolver' {
+			// a [$xap:resolver-default $rules] value — the scripted fold
+			// runs over THESE rules instead of the registry declarations.
+			for i, it in rv.items {
+				a := xap_parse_affinity(it, i) or {
+					return mk_err(xap_err_arg_invalid, 'E_XAP: run resolver: ${err.msg()}')
+				}
+				comp := if it is cx.Element { it.attr('component') } else { '' }
+				scripted_comps << comp
+				scripted_rules << a
+			}
+			has_scripted = true
+		} else {
+			rname := xap_verb_name(rv)
+			if rname != 'scripted' && rname != ':scripted' {
+				return mk_err(xap_err_arg_invalid,
+					'E_XAP: run {resolver: …} takes :scripted, a CX closure, or a [$xap:resolver-default …] value — an external resolver handle is not yet a shipped surface (xap.md §3.1/§3.6)')
+			}
+		}
+	}
 	// §8.2 — a composed [grammar …] (the §8 projection) may be pinned at run
 	// creation; it becomes the runtime's control vocabulary and switches on §5
 	// resolution + §6 N-COMPOSE-2 evaluation in the emit cascade.
@@ -307,17 +967,609 @@ fn xap_run(args []cx.Node) ?cx.Node {
 		tenant:  tenant
 		is_open: true
 	}
-	rt := &XapRuntime{
+	// #606: run-level log compaction — validated at run like a component's
+	// reduce; absent = unbounded (today's behavior).
+	mut lr_window := 0
+	mut lr_cl := Closure{}
+	mut has_lr := false
+	if lv := xap_map_get_node(opts, 'log-reduce') {
+		w := xap_map_get_str(lv, 'window').int()
+		if w < 1 {
+			return mk_err(xap_err_arg_invalid,
+				'E_XAP: run log-reduce needs window: ≥ 1 (xap.md §3.1)')
+		}
+		lfn := xap_map_get_node(lv, 'fn') or {
+			return mk_err(xap_err_arg_invalid,
+				'E_XAP: run log-reduce needs fn: (the pure reducer — xap.md §3.1)')
+		}
+		lcl := resolve_closure(lfn, env) or {
+			return mk_err(xap_err_arg_invalid,
+				'E_XAP: run log-reduce fn: does not resolve to a callable')
+		}
+		lr_window = w
+		lr_cl = lcl
+		has_lr = true
+	}
+	mut rt := &XapRuntime{
 		id:     id
 		tenant: tenant
 		state:  map[string][]cx.Node{}
+		summaries: map[string]cx.Node{}
+		bind_seq: map[string]u64{}
+		log_reduce_window: lr_window
+		log_reduce_closure: lr_cl
+		has_log_reduce: has_lr
 		authz:  st
 		grammar: gram
 		has_grammar: has_gram
+		resolver_kind: resolver_kind
+		resolver_closure: resolver_cl
+		has_resolver_closure: has_resolver_cl
+		scripted_comps: scripted_comps
+		scripted_rules: scripted_rules
+		has_scripted_rules: has_scripted
 	}
 	reg.runtimes[id] = rt
+	// §3.1.1 (#582): the durable journal binding — resolve/open it NOW (a
+	// bad binding refuses at run, never at first commit), then re-fold the
+	// bound stream before returning: restart = re-fold, no PEP re-check.
+	if jv := xap_map_get_node(opts, 'journal') {
+		jb := xap_open_journal_bind(jv, tenant) or {
+			return mk_err(xap_err_arg_invalid, 'E_XAP: run journal binding: ${err.msg()}')
+		}
+		rt.journal_fab = jb.fab
+		rt.journal_stream = jb.stream
+		rt.journal_remote = jb.remote
+		rt.has_journal_bind = true
+		rt.ckpt_store = jb.ckpt_store
+		rt.ckpt_every = jb.ckpt_every
+		rt.has_ckpt = jb.has_ckpt
+		if rerr := xap_replay_journal(mut rt, mut env) {
+			return rerr
+		}
+	}
+	// §3.1.2 (#583): event-source bindings — the runtime owns each fabric
+	// subscription; a bad binding refuses at run. Pumps start after the
+	// §3.1.1 re-fold so ingested deliveries land on the replayed state.
+	if sv := xap_map_get_node(opts, 'sources') {
+		if serr := xap_start_source_pumps(id, xap_seq_items(sv), tenant, mut env) {
+			return serr
+		}
+	}
 	return xap_elem('xap-runtime', [xap_attr('id', id.str()), xap_attr('tenant', tenant)],
 		[])
+}
+
+// XapJournalBind is the resolved §3.1.1 binding: an open fabric handle over
+// the bound journal/stream (embedded for journal urls/handles, the served
+// tier for xsp:// urls) — one publish/observe surface for both tiers.
+struct XapJournalBind {
+	fab    cx.Node
+	stream string
+	remote bool
+	// §3.1.1 fold checkpoints (#595): the derived-state store handle,
+	// persist cadence, and presence flag.
+	ckpt_store cx.Node
+	ckpt_every u64
+	has_ckpt   bool
+}
+
+// xap_int_node builds an int scalar node (map values for from/max opts).
+fn xap_int_node(v i64) cx.Node {
+	return cx.ScalarNode{
+		value:     cx.ScalarValue(v)
+		data_type: cx.ScalarType.int_type
+	}
+}
+
+// xap_map_node builds a `{key: value}` map value from parallel key/value arrays.
+fn xap_map_node(keys []string, vals []cx.Node) cx.Node {
+	mut items := []cx.Node{cap: keys.len}
+	for i, k in keys {
+		items << cx.Node(cx.Element{ name: k, items: [vals[i]] })
+	}
+	return cx.Element{ name: '__cx_map__', items: items }
+}
+
+// xap_open_journal_bind resolves the §3.1.1 binding value: a {url, stream, …}
+// map (xsp://→ the fabric served tier with the map as client opts; any other
+// url → [$journal:open] under the runtime tenant), a live [$fabric:open …]
+// handle, or a [$journal:open …] handle. stream defaults to "acts".
+fn xap_open_journal_bind(jv cx.Node, tenant string) !XapJournalBind {
+	if jv is cx.Element {
+		if jv.name == '__cx_map__' {
+			mut url := ''
+			if u := xap_map_get_node(jv, 'url') {
+				url = xap_arg_name(u)
+			}
+			if url == '' {
+				return error('binding map needs url: (a journal url, or an xsp:// daemon)')
+			}
+			mut stream := xap_map_get_str(jv, 'stream')
+			if stream == '' {
+				stream = 'acts'
+			}
+			// §3.1.1 checkpoints (#595): open the derived-state store NOW —
+			// a bad checkpoint binding refuses at run like the journal does.
+			mut ckpt_store := cx.Node(cx.Element{})
+			mut ckpt_every := u64(256)
+			mut has_ckpt := false
+			ckpt_url := xap_map_get_str(jv, 'checkpoint')
+			if ckpt_url != '' {
+				cs := store_stdlib_builtin('store-open', [cx.Node(bus_str(ckpt_url))]) or {
+					return error('checkpoint store-open unavailable')
+				}
+				if is_err_value(cs) {
+					return error('checkpoint store: ${xap_err_message(cs)}')
+				}
+				ckpt_store = cs
+				has_ckpt = true
+				ev := xap_map_get_str(jv, 'checkpoint-every')
+				if ev != '' {
+					n := ev.u64()
+					if n == 0 {
+						return error('checkpoint-every must be a positive int')
+					}
+					ckpt_every = n
+				}
+			}
+			if url.starts_with('xsp://') || url.starts_with('xsps://') {
+				fab := fabric_stdlib_builtin('fabric-open', [cx.Node(bus_str(url)), cx.Node(jv)]) or {
+					return error('fabric-open unavailable')
+				}
+				if is_err_value(fab) {
+					return error(xap_err_message(fab))
+				}
+				return XapJournalBind{
+					fab:        fab
+					stream:     stream
+					remote:     true
+					ckpt_store: ckpt_store
+					ckpt_every: ckpt_every
+					has_ckpt:   has_ckpt
+				}
+			}
+			jrn := journal_stdlib_builtin('journal-open', [cx.Node(bus_str(url)),
+				cx.Node(bus_str(tenant))]) or {
+				return error('journal-open unavailable')
+			}
+			if is_err_value(jrn) {
+				return error(xap_err_message(jrn))
+			}
+			fab := fabric_stdlib_builtin('fabric-open', [jrn]) or {
+				return error('fabric-open unavailable')
+			}
+			if is_err_value(fab) {
+				return error(xap_err_message(fab))
+			}
+			return XapJournalBind{
+				fab:        fab
+				stream:     stream
+				remote:     false
+				ckpt_store: ckpt_store
+				ckpt_every: ckpt_every
+				has_ckpt:   has_ckpt
+			}
+		}
+		if jv.name == 'fabric' || jv.name == 'fabric-remote' {
+			return XapJournalBind{ fab: cx.Node(jv), stream: 'acts', remote: jv.name == 'fabric-remote' }
+		}
+		if jv.name == 'journal' {
+			fab := fabric_stdlib_builtin('fabric-open', [cx.Node(jv)]) or {
+				return error('fabric-open unavailable')
+			}
+			if is_err_value(fab) {
+				return error(xap_err_message(fab))
+			}
+			return XapJournalBind{ fab: fab, stream: 'acts', remote: false }
+		}
+	}
+	return error('journal binding must be a {url, stream, …} map, a [\$fabric:open] handle, or a [\$journal:open] handle (xap.md §3.1.1)')
+}
+
+// xap_ckpt_alias is the checkpoint's store alias for one (tenant, stream).
+fn xap_ckpt_alias(rt &XapRuntime) string {
+	return 'xap-checkpoint-${rt.tenant}-${rt.journal_stream}'
+}
+
+// xap_ckpt_load seeds the fold from the persisted checkpoint and returns
+// the seq it covers (0 = no usable checkpoint → the caller replays in
+// full). A checkpoint is DERIVED state, never authority (§3.1.1): any
+// missing/unreadable/unparseable checkpoint falls back silently to full
+// replay — the stream is the source of truth.
+fn xap_ckpt_load(mut rt XapRuntime) u64 {
+	al := store_stdlib_builtin('store-get-alias', [rt.ckpt_store,
+		cx.Node(bus_str(xap_ckpt_alias(rt)))]) or { return 0 }
+	if is_err_value(al) {
+		return 0
+	}
+	href := xap_arg_name(al)
+	if href == '' {
+		return 0
+	}
+	doc := store_stdlib_builtin('store-get-doc', [rt.ckpt_store, cx.Node(bus_str(href))]) or {
+		return 0
+	}
+	if is_err_value(doc) {
+		return 0
+	}
+	text := xap_arg_name(doc)
+	if text == '' {
+		return 0
+	}
+	parsed := cx.parse(text) or { return 0 }
+	for e in parsed.elements {
+		if e is cx.Element && e.name == 'checkpoint' {
+			seq := e.attr('seq').u64()
+			if seq == 0 {
+				return 0
+			}
+			for it in e.items {
+				if it is cx.Element && it.name == 'slice' {
+					bind := it.attr('bind')
+					if bind == '' {
+						continue
+					}
+					mut recs := []cx.Node{}
+					for r in it.items {
+						// #606: the leading [summary …] child restores the
+						// compacted-fold summary, not a detail record.
+						if r is cx.Element && r.name == 'summary' && r.items.len > 0 {
+							rt.summaries[bind] = r.items[0]
+							continue
+						}
+						recs << r
+					}
+					rt.state[bind] = recs
+				}
+			}
+			rt.journal_seq = seq
+			rt.ckpt_last = seq
+			rt.commit_seq++
+			return seq
+		}
+	}
+	return 0
+}
+
+// XapCkptSnap is one checkpoint's frozen input: the slices are cloned on
+// the commit path (cheap — record-pointer copies), everything expensive
+// (canonical serialization, store writes) runs off-thread (#604).
+struct XapCkptSnap {
+	rt_id  int
+	seq    u64
+	stream string
+	alias  string
+	store  cx.Node
+	slices []cx.Node
+}
+
+// xap_ckpt_maybe_persist SNAPSHOTS the fold and dispatches the persist when
+// ckpt_every committed events have landed since the last one. The commit
+// path never pays the store I/O (#604): one persist in flight per runtime
+// (a cadence point that finds one running simply retries at the next), and
+// a failed/interrupted persist never fails the commit it trails — the
+// put-doc-then-alias order means the alias ALWAYS names a complete
+// checkpoint (worst case: the previous one; the stream stays authoritative,
+// §3.1.1).
+fn xap_ckpt_maybe_persist(mut rt XapRuntime) {
+	if !rt.has_ckpt || rt.journal_seq == 0 || rt.journal_seq - rt.ckpt_last < rt.ckpt_every {
+		return
+	}
+	if rt.ckpt_inflight {
+		return
+	}
+	rt.ckpt_inflight = true
+	mut slices := []cx.Node{}
+	for bind, recs in rt.state {
+		mut items := []cx.Node{}
+		// #606: the checkpoint IS the compacted fold — the summary record
+		// rides as the slice's leading [summary …] child.
+		if sm := rt.summaries[bind] {
+			items << cx.Node(cx.Element{
+				name:  'summary'
+				items: [sm]
+			})
+		}
+		items << recs.clone()
+		slices << cx.Node(cx.Element{
+			name:  'slice'
+			attrs: [cx.Attribute{ name: 'bind', value: cx.ScalarValue(bind) }]
+			items: items
+		})
+	}
+	xap_ckpt_persist_dispatch(XapCkptSnap{
+		rt_id:  rt.id
+		seq:    rt.journal_seq
+		stream: rt.journal_stream
+		alias:  xap_ckpt_alias(rt)
+		store:  rt.ckpt_store
+		slices: slices
+	})
+}
+
+// xap_ckpt_done clears the in-flight flag and (on success) advances the
+// cadence watermark.
+fn xap_ckpt_done(rt_id int, seq u64, ok bool) {
+	reg := xap_reg()
+	mut rt := reg.runtimes[rt_id] or { return }
+	if ok {
+		rt.ckpt_last = seq
+	}
+	rt.ckpt_inflight = false
+}
+
+// xap_ckpt_persist_run is the store I/O for one snapshot — off the commit
+// path on native targets (#604). Serialize → put-doc → set-alias, in that
+// order, so an interrupted persist always leaves the previous complete
+// checkpoint aliased. Best-effort per §3.1.1: failures are loud on stderr
+// and retried at the next cadence point.
+fn xap_ckpt_persist_run(snap XapCkptSnap) {
+	doc := cx.Element{
+		name:  'checkpoint'
+		attrs: [
+			cx.Attribute{ name: 'stream', value: cx.ScalarValue(snap.stream) },
+			cx.Attribute{ name: 'seq', value: cx.ScalarValue(snap.seq.str()) },
+		]
+		items: snap.slices
+	}
+	put := store_stdlib_builtin('store-put-doc', [snap.store,
+		cx.Node(bus_str(render_canonical(cx.Node(doc))))]) or {
+		eprintln('cx-xap: checkpoint put-doc unavailable (stream "${snap.stream}")')
+		xap_ckpt_done(snap.rt_id, snap.seq, false)
+		return
+	}
+	if is_err_value(put) {
+		eprintln('cx-xap: checkpoint persist failed: ${xap_err_message(put)}')
+		xap_ckpt_done(snap.rt_id, snap.seq, false)
+		return
+	}
+	href := xap_arg_name(put)
+	sa := store_stdlib_builtin('store-set-alias', [snap.store,
+		cx.Node(bus_str(snap.alias)), cx.Node(bus_str(href))]) or {
+		eprintln('cx-xap: checkpoint set-alias unavailable (stream "${snap.stream}")')
+		xap_ckpt_done(snap.rt_id, snap.seq, false)
+		return
+	}
+	if is_err_value(sa) {
+		eprintln('cx-xap: checkpoint alias failed: ${xap_err_message(sa)}')
+		xap_ckpt_done(snap.rt_id, snap.seq, false)
+		return
+	}
+	xap_ckpt_done(snap.rt_id, snap.seq, true)
+}
+
+// xap_replay_journal re-folds the bound stream — from the start, or from
+// the checkpoint's suffix when one loads (§3.1.1 #595). Committed facts
+// fold with no PEP re-check and no re-append. Returns the CXER4860 err
+// VALUE on a replay fault.
+fn xap_replay_journal(mut rt XapRuntime, mut env MatchEnv) ?cx.Node {
+	mut from := u64(0)
+	if rt.has_ckpt {
+		from = xap_ckpt_load(mut rt)
+	}
+	// An ungrouped observe reads from the stream head on both tiers —
+	// replay from seq 1 is the durable plane's default; a loaded
+	// checkpoint replays only the suffix (from seq+1).
+	mut obs_args := [rt.journal_fab, cx.Node(bus_str(rt.journal_stream)),
+		cx.Node(bus_str('event'))]
+	if from > 0 {
+		obs_args << xap_map_node(['from'], [xap_int_node(i64(from + 1))])
+	}
+	sub := fabric_stdlib_builtin('fabric-observe', obs_args) or {
+		return mk_err(xap_err_cascade_fault, 'E_XAP_CASCADE_FAULT: journal replay observe unavailable')
+	}
+	if is_err_value(sub) {
+		return mk_err(xap_err_cascade_fault, 'E_XAP_CASCADE_FAULT: journal replay: ${xap_err_message(sub)}')
+	}
+	// #605: the sub reply carries the stream's head seq — replay ends
+	// exactly at the head instead of probing for an empty batch (which on
+	// the remote tier costs one full receive deadline). head == 0 means
+	// the stream is empty (nothing to replay at all); a daemon that
+	// predates the attr yields head == 0 with a NON-empty stream, so the
+	// empty-batch probe below remains the fallback.
+	mut head := u64(0)
+	if sub is cx.Element {
+		head = sub.attr('head').u64()
+	}
+	if head > 0 && rt.journal_seq >= head {
+		// the checkpoint already covers the head — zero receives needed.
+		xap_ckpt_maybe_persist(mut rt)
+		return none
+	}
+	recv_opts := xap_map_node(['max', 'deadline'], [xap_int_node(64), xap_int_node(500)])
+	for {
+		batch := fabric_stdlib_builtin_env('fabric-receive', [sub, recv_opts], mut env) or {
+			return mk_err(xap_err_cascade_fault, 'E_XAP_CASCADE_FAULT: journal replay receive unavailable')
+		}
+		if batch is cx.Element && is_err_value(batch) {
+			return mk_err(xap_err_cascade_fault, 'E_XAP_CASCADE_FAULT: journal replay: ${xap_err_message(batch)}')
+		}
+		entries := xap_seq_items(batch)
+		if entries.len == 0 {
+			break
+		}
+		for en in entries {
+			if en is cx.Element && en.name == 'entry' {
+				// [entry seq=… [event <published envelope>]] — the journal's
+				// wrapper holds the envelope this runtime committed.
+				eseq := en.attr('seq').u64()
+				for it in en.items {
+					if it is cx.Element && it.name == 'event' && it.items.len > 0 {
+						xap_fold_committed(mut rt, it.items[0], mut env)
+						if eseq > rt.journal_seq {
+							rt.journal_seq = eseq
+						}
+						break
+					}
+				}
+			}
+		}
+		// #605: stop exactly at the advertised head — no tail probe. (A
+		// foreign entry past our matches keeps journal_seq below head; the
+		// empty-batch break above stays as the safety net.)
+		if head > 0 && rt.journal_seq >= head {
+			break
+		}
+	}
+	// the replayed fold may already be a cadence past the last checkpoint.
+	xap_ckpt_maybe_persist(mut rt)
+	return none
+}
+
+// xap_absence is the empty node-set — the seed a §5 reducer's first
+// application receives (its own [?else] handles it).
+fn xap_absence() cx.Node {
+	return cx.Element{
+		name: '__cx_seq__'
+	}
+}
+
+// xap_reduce_component_for returns the registered component (with a
+// declared §5 reduce) whose bind is `bind`, if any.
+fn xap_reduce_component_for(bind string) ?XapComponent {
+	reg := xap_reg()
+	for _, c in reg.components {
+		if c.bind == bind && c.has_reduce {
+			return c
+		}
+	}
+	return none
+}
+
+// xap_slice_reduce applies a component's §5 fold-side compaction (#606):
+// when the bind slice exceeds `window` detail records, the OLDEST evict
+// through the pure reducer into the slice's single summary record. A
+// failing reducer is loud (a [reduce-failed …] event in the log) and
+// FAIL-OPEN: the slice keeps its uncompacted records — compaction never
+// loses data by failing.
+fn xap_slice_reduce(mut rt XapRuntime, bind string, mut env MatchEnv) {
+	c := xap_reduce_component_for(bind) or { return }
+	recs := rt.state[bind] or { return }
+	if recs.len <= c.reduce_window {
+		return
+	}
+	overflow := recs[..recs.len - c.reduce_window]
+	mut summary := rt.summaries[bind] or { xap_absence() }
+	for rec in overflow {
+		nxt := invoke_closure(c.reduce_closure, [summary, rec], mut env) or {
+			rt.log << cx.Node(xap_elem('reduce-failed', [
+				xap_attr('component', c.name),
+				xap_attr('bind', bind),
+			], [err_to_node(err)]))
+			return
+		}
+		if nxt is cx.Element && is_err_value(nxt) {
+			rt.log << cx.Node(xap_elem('reduce-failed', [
+				xap_attr('component', c.name),
+				xap_attr('bind', bind),
+			], [nxt]))
+			return
+		}
+		summary = nxt
+	}
+	rt.summaries[bind] = summary
+	rt.state[bind] = recs[recs.len - c.reduce_window..].clone()
+}
+
+// xap_slice_view composes what every slice READ observes (#606): the
+// summary record (when compaction has produced one) followed by the
+// most-recent detail records. Without a declared reduce this is exactly
+// the complete fold (today's behavior).
+fn xap_slice_view(rt &XapRuntime, bind string) []cx.Node {
+	mut out := []cx.Node{}
+	if s := rt.summaries[bind] {
+		out << s
+	}
+	out << (rt.state[bind] or { []cx.Node{} })
+	return out
+}
+
+// xap_log_append is the ONE append point for the in-process log — it
+// applies the run-level log-reduce (#606) exactly as xap_slice_reduce
+// compacts a slice. Absent log-reduce: plain append (today).
+fn xap_log_append(mut rt XapRuntime, ev cx.Node, mut env MatchEnv) {
+	rt.log << ev
+	if !rt.has_log_reduce || rt.log.len <= rt.log_reduce_window {
+		return
+	}
+	overflow := rt.log[..rt.log.len - rt.log_reduce_window]
+	mut summary := if rt.has_log_summary { rt.log_summary } else { xap_absence() }
+	for rec in overflow {
+		nxt := invoke_closure(rt.log_reduce_closure, [summary, rec], mut env) or {
+			// loud + fail-open, mirroring xap_slice_reduce: eprintln (the
+			// log itself is what failed to compact — appending a failure
+			// event would recurse into the same reducer).
+			eprintln('cx-xap: log-reduce failed (window ${rt.log_reduce_window}): ${err.msg()}')
+			return
+		}
+		if nxt is cx.Element && is_err_value(nxt) {
+			eprintln('cx-xap: log-reduce refused: ${xap_err_message(nxt)}')
+			return
+		}
+		summary = nxt
+	}
+	rt.log_summary = summary
+	rt.has_log_summary = true
+	rt.log = rt.log[rt.log.len - rt.log_reduce_window..].clone()
+}
+
+// xap_log_view composes what log READERS observe (#606): the log summary
+// (when compaction has produced one) followed by the most-recent events.
+fn xap_log_view(rt &XapRuntime) []cx.Node {
+	mut out := []cx.Node{}
+	if rt.has_log_summary {
+		out << rt.log_summary
+	}
+	out << rt.log
+	return out
+}
+
+// xap_fold_committed folds ONE committed envelope ([event actor=…? [intent]],
+// or a bare intent) into the runtime — the shared fold for live commits and
+// §3.1.1 boot replay. Mirrors the in-process journal (rt.log) and the state
+// slice; no PEP, no append: committed facts fold, period. env carries the
+// evaluator for the §5/#606 reducers.
+fn xap_fold_committed(mut rt XapRuntime, event cx.Node, mut env MatchEnv) {
+	mut actor := ''
+	mut intent := event
+	if event is cx.Element && event.name == 'event' {
+		actor = event.attr('actor')
+		for it in event.items {
+			if it is cx.Element {
+				intent = cx.Node(it)
+				break
+			}
+		}
+	}
+	mut vname := ''
+	if intent is cx.Element && intent.items.len > 0 {
+		vname = xap_verb_name(intent.items[0])
+	}
+	bind := xap_route_bind(vname)
+	if bind != '' {
+		mut fields := []cx.Node{}
+		if actor != '' {
+			fields << cx.Node(xap_elem('actor', [], [cx.Node(cx.TextNode{ value: actor })]))
+		}
+		if intent is cx.Element {
+			for i, it in intent.items {
+				if i == 0 {
+					continue
+				}
+				fields << it
+			}
+		}
+		rt.state[bind] << cx.Node(xap_elem('__cx_map__', [], fields))
+		xap_slice_reduce(mut rt, bind, mut env)
+	}
+	xap_log_append(mut rt, event, mut env)
+	rt.commit_seq++
+	// #609: stamp the bind's change AFTER the seq advances, so a delta
+	// subscriber whose high-water mark equals the pre-commit seq sees it.
+	if bind != '' {
+		rt.bind_seq[bind] = rt.commit_seq
+	}
 }
 
 // xap_verb_name returns the bare name of a `:verb` atom (or text), '' otherwise.
@@ -350,9 +1602,10 @@ fn xap_seq_items(n cx.Node) []cx.Node {
 		return out
 	}
 	if n is cx.Element {
-		// a `(…)` sequence is carried as a `__cx_seq__` marker element — descend
-		// into it; a real element (e.g. `[do …]`) is a leaf pattern.
-		if n.name == '__cx_seq__' {
+		// a `(…)` sequence rides a `__cx_seq__` marker element and an `[…]`
+		// array literal a `__cx_arr__` marker — descend both; a real element
+		// (e.g. `[do …]`, a `__cx_map__` binding) is a leaf.
+		if n.name == '__cx_seq__' || n.name == '__cx_arr__' {
 			mut out := []cx.Node{}
 			for it in n.items {
 				out << xap_seq_items(it)
@@ -491,7 +1744,7 @@ fn xap_rt_resolve_term(g cx.Element, term string) (string, cx.Node) {
 // journal → the bound component's slice is the fold. The intent payload (fields
 // after the :verb atom) is recorded as a map in the target component's bind slice;
 // every attached client re-materializes from that shared state (§2.1/§14/§16).
-fn xap_emit(args []cx.Node) ?cx.Node {
+fn xap_emit(args []cx.Node, mut env MatchEnv) ?cx.Node {
 	if args.len < 2 {
 		return mk_err(xap_err_arg_invalid, 'E_XAP: emit expects (runtime, intent, opts?)')
 	}
@@ -500,6 +1753,37 @@ fn xap_emit(args []cx.Node) ?cx.Node {
 	}
 	intent := args[1]
 	opts := if args.len > 2 { args[2] } else { cx.Node(xap_elem('__cx_map__', [], [])) }
+	res := xap_emit_into(mut rt, intent, opts, mut env)
+	// §3.1.2: live media follow EVERY commit lane — an in-process emit
+	// refreshes held /events readers exactly as a web intent does.
+	if r := res {
+		if !(r is cx.Element && is_err_value(r)) {
+			xap_push_live(rt.id, mut env)
+		}
+	}
+	return res
+}
+
+// xap_emit_into is the emit cascade proper, factored off the handle
+// resolution so every boundary that already holds the runtime — the
+// in-process [$xap:emit] above, the web bridge's POST /intent/<verb>
+// (#570) — commits through the ONE path: §8.2 grammar resolution, the
+// §2.2 PEP, the record build, the journal append. A client medium can
+// never bypass the cascade by arriving over a different transport.
+// XapEmitPrep is the cascade's PRE-APPEND half for one intent: actor
+// resolution, §8.2 grammar qualification, the §2.2 PEP decision, and the
+// event/envelope/attribution build. A refusal carries the err VALUE —
+// nothing appends, nothing folds. Factored so the single-emit path and the
+// #593 pipelined batch lane run the IDENTICAL cascade head.
+struct XapEmitPrep {
+	refused  bool
+	refusal  cx.Node
+	event    cx.Node // the fold/rt.log value (anonymous back-compat shape)
+	envelope cx.Node // the §3.1.1 durable [event …] envelope (bound runtimes)
+	att      cx.Node // the append attribution map (bound runtimes)
+}
+
+fn xap_emit_prepare(mut rt XapRuntime, intent cx.Node, opts cx.Node) XapEmitPrep {
 	// §3.4: the committed event's actor = opts.actor, else opts.session's principal.
 	mut actor := ''
 	if a := xap_map_get_node(opts, 'actor') {
@@ -522,7 +1806,7 @@ fn xap_emit(args []cx.Node) ?cx.Node {
 	if rt.has_grammar {
 		qname, rerr := xap_rt_resolve_term(rt.grammar, vname)
 		if qname == '' {
-			return rerr
+			return XapEmitPrep{ refused: true, refusal: rerr }
 		}
 		if qname != vname && intent is cx.Element {
 			mut qitems := intent.items.clone()
@@ -547,40 +1831,145 @@ fn xap_emit(args []cx.Node) ?cx.Node {
 		for gname in xap_gc_leaf_grants(rt.grammar, vname) {
 			gbind := xap_route_bind(gname)
 			if !xap_pep_admits(rt, actor, gname, gbind) {
-				return mk_err(xap_err_unauthorized, 'E_XAP_UNAUTHORIZED: actor "${actor}" is not granted "${gname}" over "${gbind}"')
+				return XapEmitPrep{
+					refused: true
+					refusal: mk_err(xap_err_unauthorized, 'E_XAP_UNAUTHORIZED: actor "${actor}" is not granted "${gname}" over "${gbind}"')
+				}
 			}
 		}
 	} else if !xap_pep_admits(rt, actor, vname, bind) {
-		return mk_err(xap_err_unauthorized, 'E_XAP_UNAUTHORIZED: actor "${actor}" is not granted "${vname}" over "${bind}"')
-	}
-	// build a record map from the intent's payload fields (skip the :verb atom);
-	// stamp the committing actor (§3.4) so the fold is per-actor auditable.
-	mut fields := []cx.Node{}
-	if actor != '' {
-		fields << xap_elem('actor', [], [cx.Node(cx.TextNode{ value: actor })])
-	}
-	if intent is cx.Element {
-		for i, it in intent.items {
-			if i == 0 {
-				continue
-			}
-			fields << it
+		return XapEmitPrep{
+			refused: true
+			refusal: mk_err(xap_err_unauthorized, 'E_XAP_UNAUTHORIZED: actor "${actor}" is not granted "${vname}" over "${bind}"')
 		}
 	}
-	record := xap_elem('__cx_map__', [], fields)
-	if bind != '' {
-		rt.state[bind] << record
-	}
 	// the committed EVENT records the authority basis (the actor) and — with a
-	// grammar attached — the QUALIFIED intent (§8.2); journal it. An anonymous
-	// emit (no opts.actor/session) logs the bare intent (back-compat).
+	// grammar attached — the QUALIFIED intent (§8.2). An anonymous emit logs
+	// the bare intent in-process (back-compat); the DURABLE stream always
+	// carries the uniform [event …] envelope (§3.1.1 — head `event` is the
+	// stream's total pattern).
 	event := if actor != '' {
 		cx.Node(xap_elem('event', [xap_attr('actor', actor)], [intent_committed]))
 	} else {
 		intent_committed
 	}
-	rt.log << event
-	return event
+	mut envelope := cx.Node(cx.Element{})
+	mut att := cx.Node(cx.Element{})
+	if rt.has_journal_bind {
+		envelope = if actor != '' {
+			event
+		} else {
+			cx.Node(xap_elem('event', [], [intent_committed]))
+		}
+		mut att_keys := []string{}
+		mut att_vals := []cx.Node{}
+		if !rt.journal_remote {
+			// Direct journal handle: the append's attribution IS the
+			// PEP-resolved {actor, authority}. Over a fabric session the
+			// transport's proven principal attributes the append (§4.8 —
+			// a claimed actor would refuse); the PEP actor rides in the
+			// envelope.
+			if actor != '' {
+				att_keys << 'actor'
+				att_vals << cx.Node(bus_str(actor))
+			}
+			att_keys << 'authority'
+			att_vals << cx.Node(bus_str('xap:emit'))
+		}
+		att = xap_map_node(att_keys, att_vals)
+	}
+	return XapEmitPrep{ event: event, envelope: envelope, att: att }
+}
+
+// xap_emit_receipt_fold is the cascade's POST-APPEND half for one prepared
+// intent: thread the receipt's journal seq (§3.1.1/#595) and fold.
+fn xap_emit_receipt_fold(mut rt XapRuntime, p XapEmitPrep, receipt cx.Node, mut env MatchEnv) {
+	if receipt is cx.Element {
+		rseq := receipt.attr('seq').u64()
+		if rseq > rt.journal_seq {
+			rt.journal_seq = rseq
+		}
+	}
+	xap_fold_committed(mut rt, p.event, mut env)
+}
+
+fn xap_emit_into(mut rt XapRuntime, intent cx.Node, opts cx.Node, mut env MatchEnv) ?cx.Node {
+	p := xap_emit_prepare(mut rt, intent, opts)
+	if p.refused {
+		return p.refusal
+	}
+	// §3.1.1 commit order: PEP (in prepare) → durable append → fold. An
+	// append failure means NOTHING folds — a commit that isn't durable
+	// didn't happen. Both commit lanes (in-process emit, the web bridge)
+	// arrive here, so authority is never double-recorded downstream.
+	mut receipt := cx.Node(cx.Element{})
+	if rt.has_journal_bind {
+		pr := fabric_stdlib_builtin('fabric-publish', [rt.journal_fab,
+			cx.Node(bus_str(rt.journal_stream)), p.envelope, p.att]) or {
+			return mk_err(xap_err_cascade_fault, 'E_XAP_CASCADE_FAULT: journal publish unavailable')
+		}
+		if is_err_value(pr) {
+			// The sibling's refusal propagates AS-IS (N-IMPL-1 — e.g. the
+			// journal's no-anonymous-appends invariant, or a fabric grant
+			// denial). Nothing folds either way.
+			return pr
+		}
+		receipt = pr
+	}
+	xap_emit_receipt_fold(mut rt, p, receipt, mut env)
+	xap_ckpt_maybe_persist(mut rt)
+	return p.event
+}
+
+// xap_emit_batch_into commits a BATCH of intents through the one cascade:
+// PEP per entry (in prepare), then the durable appends PIPELINED over a
+// remote binding — ~one wire round-trip per batch instead of per event
+// (#593). Embedded/unbound runtimes take the single path per entry (no RTT
+// to save; one hot code path). Per-entry results in order: the committed
+// event, or the refusal/append err. Folds happen in receipt order = send
+// order; an erred append refuses THAT entry only (later receipts folded —
+// the journal appended them).
+fn xap_emit_batch_into(mut rt XapRuntime, intents []cx.Node, optss []cx.Node, mut env MatchEnv) []cx.Node {
+	mut out := []cx.Node{len: intents.len, init: cx.Node(cx.Element{})}
+	if !(rt.has_journal_bind && rt.journal_remote) || intents.len <= 1 {
+		for i, it in intents {
+			r := xap_emit_into(mut rt, it, optss[i], mut env) or {
+				cx.Node(mk_err(xap_err_cascade_fault, 'E_XAP_CASCADE_FAULT: emit unavailable'))
+			}
+			out[i] = r
+		}
+		return out
+	}
+	mut preps := []XapEmitPrep{cap: intents.len}
+	for i, it in intents {
+		preps << xap_emit_prepare(mut rt, it, optss[i])
+	}
+	mut env_batch := []cx.Node{}
+	mut att_batch := []cx.Node{}
+	mut idxs := []int{}
+	for i, p in preps {
+		if p.refused {
+			out[i] = p.refusal
+			continue
+		}
+		env_batch << p.envelope
+		att_batch << p.att
+		idxs << i
+	}
+	if idxs.len > 0 {
+		receipts := fab_batch_publish(rt.journal_fab, rt.journal_stream, env_batch, att_batch)
+		for k, r in receipts {
+			i := idxs[k]
+			if r is cx.Element && is_err_value(r) {
+				out[i] = r
+				continue
+			}
+			xap_emit_receipt_fold(mut rt, preps[i], r, mut env)
+			out[i] = preps[i].event
+		}
+	}
+	xap_ckpt_maybe_persist(mut rt)
+	return out
 }
 
 // xap-state returns the live fold over the runtime's journal projected by CXPath
@@ -590,17 +1979,53 @@ fn xap_state(args []cx.Node) ?cx.Node {
 		return mk_err('cx-err:CXER4859', 'E_XAP_RUNTIME_CLOSED: unknown runtime handle')
 	}
 	path := if args.len > 1 { xap_arg_name(args[1]) } else { '' }
-	entries := rt.state[path] or { return jrn_empty() }
+	entries := xap_slice_view(rt, path)
 	if entries.len == 0 {
 		return jrn_empty()
 	}
 	return jrn_seq(entries)
 }
 
+// xap_coord_fabric resolves the runtime's transient-plane carrier: an
+// embedded fabric over a mem:// journal, opened lazily on the first publish
+// (a runtime that never coordinates never opens one). mem:// is
+// capability-free, so the coord verbs keep their pre-migration authority
+// posture — wiring-time, never per-frame.
+fn xap_coord_fabric(mut rt XapRuntime) cx.Node {
+	if rt.has_coord_fab {
+		return rt.coord_fab
+	}
+	tenant := if rt.tenant == '' { 'xap' } else { rt.tenant }
+	jn := journal_stdlib_builtin('journal-open', [cx.Node(bus_str('mem://xap-coord-${rt.id}')),
+		cx.Node(bus_str(tenant))]) or {
+		return mk_err(xap_err_arg_invalid, 'E_XAP: coord fabric journal-open unavailable')
+	}
+	if is_err_value(jn) {
+		return jn
+	}
+	fe := fabric_open([jn])
+	if is_err_value(fe) {
+		return fe
+	}
+	rt.coord_fab = fe
+	rt.has_coord_fab = true
+	return fe
+}
+
+// xap_coord_key is the fabric §19.4 tenant-first channel key: the runtime's
+// tenant is the leading structural segment, the caller's `<scope>/<name>`
+// channel follows.
+fn xap_coord_key(rt &XapRuntime, channel string) string {
+	tenant := if rt.tenant == '' { 'xap' } else { rt.tenant }
+	return '${tenant}/${channel}'
+}
+
 // xap-coord-publish (runtime, channel, frame) — #25 Tier-2: publish ephemeral
 // interaction state (viewport/selection/hover) to a transient coordination
-// channel. LATEST-WINS (not appended) and held OUTSIDE rt.log — it never flows
-// through the journal or the PEP-gated cascade, and is out of audit by design
+// channel — a fabric transient-plane emit (#531 P2; fabric.md §12
+// generalizes exactly this pattern). LATEST-WINS (not appended) and held
+// outside rt.log — it never flows through the journal or the PEP-gated
+// cascade, and is out of audit by design
 // (spec/02-working/xap_feature_augmentation.md §3.2). Authorization is a
 // wiring-time concern (the subscribing feature's capability), not per-frame.
 fn xap_coord_publish(args []cx.Node) ?cx.Node {
@@ -614,13 +2039,22 @@ fn xap_coord_publish(args []cx.Node) ?cx.Node {
 	if channel == '' {
 		return mk_err(xap_err_arg_invalid, 'E_XAP: coord-publish channel must be a non-empty string')
 	}
-	rt.coord[channel] = args[2] // latest-wins; transient, not journaled
-	return args[2]
+	fe := xap_coord_fabric(mut rt)
+	if is_err_value(fe) {
+		return fe
+	}
+	r := fabric_emit([fe, cx.Node(bus_str(xap_coord_key(rt, channel))), args[2]])
+	if is_err_value(r) {
+		return r
+	}
+	return args[2] // the pre-migration return contract: the published frame
 }
 
 // xap-coord-read (runtime, channel) — read the latest frame on a coordination
-// channel (or empty if none published). The augmenting feature's live read of
-// the augmented feature's ephemeral state (#25 Tier-2).
+// channel (or empty if none published): a fabric transient-plane read. The
+// augmenting feature's live read of the augmented feature's ephemeral state
+// (#25 Tier-2). A runtime that never published reads empty without opening a
+// carrier.
 fn xap_coord_read(args []cx.Node) ?cx.Node {
 	if args.len < 2 {
 		return mk_err(xap_err_arg_invalid, 'E_XAP: coord-read expects (runtime, channel)')
@@ -629,10 +2063,10 @@ fn xap_coord_read(args []cx.Node) ?cx.Node {
 		return mk_err('cx-err:CXER4859', 'E_XAP_RUNTIME_CLOSED: unknown runtime handle')
 	}
 	channel := xap_arg_name(args[1])
-	if frame := rt.coord[channel] {
-		return frame
+	if !rt.has_coord_fab {
+		return jrn_empty()
 	}
-	return jrn_empty()
+	return fabric_read([rt.coord_fab, cx.Node(bus_str(xap_coord_key(rt, channel)))])
 }
 
 // xap-on registers an intent handler (a thin wrap of bus subscribe + the cascade
@@ -948,7 +2382,7 @@ fn xap_render(args []cx.Node, mut env MatchEnv) ?cx.Node {
 		if comp.bind != '' {
 			if cn := xap_map_get_node(opts, 'context') {
 				if rt := xap_runtime_of(cn) {
-					view_arg = jrn_seq(rt.state[comp.bind] or { []cx.Node{} })
+					view_arg = jrn_seq(xap_slice_view(rt, comp.bind))
 				}
 			}
 		} else if pe.items.len > 0 {
@@ -966,6 +2400,195 @@ fn xap_render(args []cx.Node, mut env MatchEnv) ?cx.Node {
 	return surface_out
 }
 
+// xap_component_declaring finds the registered component whose `emits`
+// vocabulary declares `vname` (qualified or local form — mirrors
+// xap_route_bind's matching). The web bridge's route table derives from
+// this (#570): a verb no component declares has no route semantics.
+fn xap_component_declaring(vname string) ?XapComponent {
+	if vname == '' {
+		return none
+	}
+	reg := xap_reg()
+	local := if vname.contains('/') { vname.all_after_last('/') } else { vname }
+	for _, c in reg.components {
+		for pat in xap_seq_items(c.emits) {
+			if pat is cx.Element && pat.items.len > 0 {
+				pv := xap_verb_name(pat.items[0])
+				if pv == vname || pv == local {
+					return c
+				}
+			}
+		}
+	}
+	return none
+}
+
+// xap_emit_slots lists the payload slot names the component's emits
+// pattern declares for `vname` — `[do :sign [name :string]]` → ['name'].
+// The web bridge maps form params onto exactly these slots (#570).
+fn xap_emit_slots(c XapComponent, vname string) []string {
+	local := if vname.contains('/') { vname.all_after_last('/') } else { vname }
+	for pat in xap_seq_items(c.emits) {
+		if pat is cx.Element && pat.items.len > 0 {
+			pv := xap_verb_name(pat.items[0])
+			if pv == vname || pv == local {
+				mut out := []string{}
+				for i, it in pat.items {
+					if i == 0 {
+						continue
+					}
+					if it is cx.Element && it.name != '' {
+						out << it.name
+					}
+				}
+				return out
+			}
+		}
+	}
+	return []
+}
+
+// xap_err_message reads the message attribute off an [err …] value node
+// ('' when absent) — the render boundary quotes the view's own failure text.
+fn xap_err_message(n cx.Node) string {
+	if n is cx.Element {
+		for a in n.attrs {
+			if a.name == 'message' {
+				v := a.value
+				if v is string {
+					return v
+				}
+			}
+		}
+		// [message '…'] child (user-built errs carry structured fields as
+		// children — code.md §9.5 err shapes).
+		for it in n.items {
+			if it is cx.Element && it.name == 'message' && it.items.len > 0 {
+				inner := it.items[0]
+				if inner is cx.ScalarNode {
+					v := inner.value
+					if v is string {
+						return v
+					}
+				}
+			}
+		}
+		for a in n.attrs {
+			if a.name == 'code' {
+				v := a.value
+				if v is string {
+					return v
+				}
+			}
+		}
+	}
+	return ''
+}
+
+
+// xap_view_failed wraps a render-time view failure as the spec's CXER4863
+// E_XAP_VIEW_FAILED err VALUE (xap.md §3.5/§8): it names the component and
+// carries the view's own failure as [cause …]. The err flows the single
+// view-tree channel, so every medium surfaces it at the transport's failure
+// mapping — never folded into absence, never misreported as an unregistered
+// component (#585). Absence stays "no registered component with a view".
+fn xap_view_failed(comp string, cause cx.Node) cx.Node {
+	e := cx.Node(cx.Element{
+		name: 'err'
+		attrs: [
+			cx.Attribute{ name: 'code', value: cx.ScalarValue(xap_err_view_failed) },
+			cx.Attribute{
+				name:  'message'
+				value: cx.ScalarValue('E_XAP_VIEW_FAILED: component "${comp}" view failed at render: ${xap_err_message(cause)}')
+			},
+		]
+		items: [cx.Node(cx.Element{ name: 'cause', items: [cause] })]
+	})
+	fire_raise_observe(e)
+	return e
+}
+
+// xap_render_view applies one registered component's view over `view_arg`
+// and returns the materialized panel — or the CXER4863 err VALUE when the
+// view raises or itself returns an [err] (xap.md §3.5: view failure is
+// loud, one contract for every render path).
+fn xap_render_view(c XapComponent, view_arg cx.Node, mut env MatchEnv) cx.Node {
+	panel := if c.has_view_closure {
+		invoke_closure(c.view_closure, [view_arg], mut env) or {
+			return xap_view_failed(c.name, err_to_node(err))
+		}
+	} else {
+		apply_fn_value(c.view, [view_arg], mut env) or {
+			return xap_view_failed(c.name, err_to_node(err))
+		}
+	}
+	// ONE traversal (#596) materializes the tree AND finds the first [err …]
+	// value in document order — the view's own err result and any err
+	// EMBEDDED in the projected tree (a failed hole wrapped by data
+	// construction; the serializers would drop it silently) are the same
+	// failure (§3.5).
+	m, e, has_err := xap_materialize_scan(panel)
+	if has_err {
+		return xap_view_failed(c.name, e)
+	}
+	return m
+}
+
+// xap_runtime_panel_named renders the view of the registered component
+// `name` over rt's live slice and returns its materialized panel — none
+// when the name is unregistered or has no view (the #567 shell splice
+// refuses those as unknown mounts), the CXER4863 err VALUE when the view
+// itself fails (xap.md §3.5 — the caller maps it to the transport failure).
+fn xap_runtime_panel_named(rt &XapRuntime, name string, mut env MatchEnv) ?cx.Node {
+	reg := xap_reg()
+	c := reg.components[name] or { return none }
+	if !c.has_view {
+		return none
+	}
+	mut view_arg := cx.Node(xap_elem('__cx_map__', [], []))
+	if c.bind != '' {
+		view_arg = jrn_seq(xap_slice_view(rt, c.bind))
+	}
+	return xap_render_view(c, view_arg, mut env)
+}
+
+// xap_component_by_bind_seg finds the registered component (with a view)
+// whose bind path is exactly "/<seg>" — the #578 detail-route lookup
+// (GET /<seg>/<key>).
+fn xap_component_by_bind_seg(seg string) ?XapComponent {
+	if seg == '' {
+		return none
+	}
+	reg := xap_reg()
+	want := '/' + seg
+	for _, c in reg.components {
+		if c.bind == want && c.has_view {
+			return c
+		}
+	}
+	return none
+}
+
+// xap_runtime_panel_keyed renders component c's view over its slice
+// FILTERED to the record(s) whose `id` field equals `key` — the spec's own
+// keyed-slice convention (xap.md §5's bind example predicates on @/id).
+// Returns none when no record matches: a detail route names a record
+// resource, so a missing record is the caller's 404, never an empty page
+// (#578).
+fn xap_runtime_panel_keyed(rt &XapRuntime, c XapComponent, key string, mut env MatchEnv) ?cx.Node {
+	mut hits := []cx.Node{}
+	for rec in (rt.state[c.bind] or { []cx.Node{} }) {
+		if xap_map_get_str(rec, 'id') == key {
+			hits << rec
+		}
+	}
+	if hits.len == 0 {
+		return none
+	}
+	view_arg := jrn_seq(hits)
+	return xap_render_view(c, view_arg, mut env)
+}
+
 // xap_runtime_surface applies the registered (bound) component's pure view [?fn]
 // over the runtime's LIVE slice and wraps it as the [surface name=…] value — the
 // SINGLE view-tree every medium serializes from (§2.5/§13.2). The serve listener
@@ -980,70 +2603,104 @@ fn xap_runtime_surface(rt &XapRuntime, mut env MatchEnv) cx.Node {
 		}
 		mut view_arg := cx.Node(xap_elem('__cx_map__', [], []))
 		if c.bind != '' {
-			view_arg = jrn_seq(rt.state[c.bind] or { []cx.Node{} })
+			view_arg = jrn_seq(xap_slice_view(rt, c.bind))
 		}
-		panel := if c.has_view_closure {
-			invoke_closure(c.view_closure, [view_arg], mut env) or {
-				return xap_elem('surface', [xap_attr('name', c.name)], [])
-			}
-		} else {
-			apply_fn_value(c.view, [view_arg], mut env) or {
-				return xap_elem('surface', [xap_attr('name', c.name)], [])
-			}
+		// xap_render_view materializes the panel (forcing lazy iterators so
+		// every serializer reads the same concrete data) or yields the
+		// CXER4863 err VALUE; a failed view surfaces as the surface value
+		// itself so the serve boundary maps it to the transport failure
+		// (xap.md §3.5 — never an empty surface).
+		panel := xap_render_view(c, view_arg, mut env)
+		if panel is cx.Element && is_err_value(panel) {
+			return panel
 		}
-		// Force any lazy iterators in the view-tree into concrete sequences so
-		// EVERY serializer (canonical print + the HTML mapper) reads the same
-		// materialized data — a single-use [?for] iterator must not be consumed
-		// by one serializer and emptied for the next.
-		return xap_elem('surface', [xap_attr('name', c.name)], [xap_materialize(panel)])
+		return xap_elem('surface', [xap_attr('name', c.name)], [panel])
 	}
 	return xap_elem('surface', [xap_attr('name', '')], [])
 }
 
-// xap_materialize deep-forces a view-tree: IteratorNode → concrete SequenceNode
-// (via iterate), recursing through element items and nested collections. The
-// medium-agnostic view-tree (§13.2) becomes a re-readable value, not a one-shot stream.
-fn xap_materialize(n cx.Node) cx.Node {
+// xap_materialize_scan deep-forces a view-tree (IteratorNode → concrete
+// SequenceNode via iterate, recursing through element items and nested
+// collections — the medium-agnostic view-tree (§13.2) becomes a re-readable
+// value, not a one-shot stream) AND, in the SAME traversal (#596), reports
+// the first [err …] value found in document order (a failing view's own
+// result, or an err embedded by data construction — the §3.5 loud-failure
+// scan). Returns (materialized, first-err, found).
+fn xap_materialize_scan(n cx.Node) (cx.Node, cx.Node, bool) {
 	match n {
 		cx.IteratorNode {
 			mut items := []cx.Node{}
+			mut ferr := cx.Node(cx.Element{})
+			mut has := false
 			for it in iterate(n) {
-				items << xap_materialize(it)
+				m, e, h := xap_materialize_scan(it)
+				items << m
+				if h && !has {
+					ferr = e
+					has = true
+				}
 			}
 			return cx.SequenceNode{
 				items: items
-			}
+			}, ferr, has
 		}
 		cx.SequenceNode {
 			mut items := []cx.Node{}
+			mut ferr := cx.Node(cx.Element{})
+			mut has := false
 			for it in n.items {
-				items << xap_materialize(it)
+				m, e, h := xap_materialize_scan(it)
+				items << m
+				if h && !has {
+					ferr = e
+					has = true
+				}
 			}
 			return cx.SequenceNode{
 				items: items
-			}
+			}, ferr, has
 		}
 		cx.ArrayNode {
 			mut items := []cx.Node{}
+			mut ferr := cx.Node(cx.Element{})
+			mut has := false
 			for it in n.items {
-				items << xap_materialize(it)
+				m, e, h := xap_materialize_scan(it)
+				items << m
+				if h && !has {
+					ferr = e
+					has = true
+				}
 			}
 			return cx.ArrayNode{
 				items: items
-			}
+			}, ferr, has
 		}
 		cx.Element {
 			mut items := []cx.Node{}
+			mut ferr := cx.Node(cx.Element{})
+			mut has := false
 			for it in n.items {
-				items << xap_materialize(it)
+				m, e, h := xap_materialize_scan(it)
+				items << m
+				if h && !has {
+					ferr = e
+					has = true
+				}
 			}
-			return cx.Element{
+			out := cx.Element{
 				...n
 				items: items
 			}
+			// Self-or-descendant, self first (document order): an err-shaped
+			// element IS the finding, its embedded errs are its cause detail.
+			if is_err_value(cx.Node(out)) {
+				return out, cx.Node(out), true
+			}
+			return out, ferr, has
 		}
 		else {
-			return n
+			return n, n, false
 		}
 	}
 }
@@ -2178,7 +3835,10 @@ fn xap_resolve_builtin(args []cx.Node) ?cx.Node {
 		return mk_err(xap_err_arg_invalid, 'E_XAP: resolve expects (grammar, term, context?)')
 	}
 	g := xap_gc_grammar_arg(args[0]) or {
-		return mk_err(xap_err_arg_invalid, 'E_XAP: resolve expects a composed [grammar …] as its first argument')
+		// The one head carries two shape-dispatched contracts (#535): name
+		// BOTH so a miss on either sends debugging to the right section.
+		return mk_err(xap_err_arg_invalid,
+			'E_XAP: resolve is shape-dispatched on its first argument — a composed [grammar …] = §8.1 ρ term resolution (grammar, term, context?); an [xap-runtime …] handle = §3.6 context→composition (runtime, context, opts?); got neither')
 	}
 	term := xap_arg_name(args[1])
 	if term == '' {

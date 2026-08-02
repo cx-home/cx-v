@@ -77,7 +77,7 @@ fn test_stdlib_surface_enumerates_bundled_subpackages() {
 		// post-v0.8.0 trust additions (README §3.2; issue #26): 37→38 did, 38→39 vc.
 		'cx-stdlib/did',
 		'cx-stdlib/vc',
-		// working-status transport module (spec/02-working/xsp.md; issue #31):
+		// working-status transport module (spec/03-approved/xap/xsp.md; issue #31):
 		// 39→40 xsp. Bundled to back the XAP web client; graduates to approved
 		// (and the README §3 count) later.
 		'cx-stdlib/xsp',

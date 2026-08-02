@@ -41,6 +41,7 @@
 [?def mounts         scope=public impure [returns element]              ($store::element)                           [$store-mounts $store]]
 [?def config-reload  scope=public impure [returns element]              ($store::element)                           [$store-config-reload $store]]
 [?def log            scope=public impure [returns [sequence element]]   ($store::element)                           [$store-log $store]]
+[?def verify         scope=public impure [returns element]              ($store::element)                           [$store-verify $store]]
 [?def gc             scope=public impure [returns element]              ($store::element)                           [$store-gc $store]]
 [?def prune          scope=public impure [returns element]              ($store::element)                           [$store-prune $store]]
 [?def rotate-kek     scope=public impure [returns element]              ($store::element $new-key-id::string)       [$store-rotate-kek $store $new-key-id]]
@@ -230,6 +231,12 @@
   [summary """Trigger a store-serve daemon's runtime config reload: the daemon re-reads its OWN config source (nothing rides the wire) and answers [config-reload applied=... generation=... changed=...], or refuses with CXER1711/CXER1712 verbatim; admin RBAC enforced server-side. Daemon-level like mounts — a local handle raises CXER1709 (there is no daemon config to reload)."""]
   [example [code """[?lib 'cx-stdlib/store']
 [?let [= $s [$store:open "mem://"]] [$store:config-reload $s]]"""] [expect """cx-err:CXER1709"""]]
+]
+[fn-doc name=verify scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Whole-graph integrity pass: every live doc must reconstruct from the object graph, or it raises CXER1120 naming the first offending store-key. This is the check that used to run inline on EVERY open of an object-graph store; under demand-paged loading it runs on demand (or from a background task) instead, while per-object integrity is unchanged — every paged read self-verifies its hash, so corruption refuses loudly at first touch. Refuses on the flat document model, whose per-read hash check IS its verification."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "x"]]]] [$store:verify $s]]"""] [expect """[verification valid=true docs=1 objects=5]"""]]
 ]
 [fn-doc name=log scope=public purity=impure
   [sig """-> [sequence element]"""]

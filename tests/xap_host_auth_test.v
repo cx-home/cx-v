@@ -80,11 +80,14 @@ const xa_door_spec = "[feature name=door version=1.0.0
   [requirement kind=functional as=resident traces=read-door [want 'to see the door'] [so 'I know its state']]
   [requirement kind=functional as=resident traces=unlock [want 'to unlock the door'] [so 'guests can enter']]]]"
 
+// #647: the readout declares the THREE-param form — $actor is the request's
+// resolved identity (the proven §4.12 principal here; '' on the anonymous
+// floor / SSE push), echoed as seen-by= so the lanes assert the lens.
 const xa_door_code = "[?lib 'cx-stdlib/store' :as store]
-[?def readout scope=public impure (\$store \$t)
+[?def readout scope=public impure (\$store \$t \$actor)
   [?let [= \$h [\$store:get-alias \$store 'door-count']]
    [= \$n [?else [\$store:get-doc \$store \$h] '0']]
-   [?element 'readout' [?attr 'feature' 'door'] [?attr 'unlocks' [\$concat '' \$n]]]]]
+   [?element 'readout' [?attr 'feature' 'door'] [?attr 'unlocks' [\$concat '' \$n]] [?attr 'seen-by' [\$concat '@' \$actor]]]]]
 [?def apply scope=public impure (\$verb \$intent \$store)
   [?let [= \$h [?else [\$store:get-alias \$store 'door-count'] '']]
    [= \$n [?if [= \$h ''] [then 0] [else [\$cast [\$concat '' [\$store:get-doc \$store \$h]] 'int']]]]
@@ -355,6 +358,9 @@ fn test_xap_host_auth_mutual_attach_proofs_and_proven_actor() {
 	p2 := xa_run_cx('', p2_prog)
 	ro := xa_get(port, '/surface/door', xa_proof_hdrs(chan_hex, 2, p2))
 	assert ro.status == 200 && (ro.body.contains("'1'") || ro.body.contains('unlocks=1')), 'authed readout: ${ro.status} ${ro.body}'
+	// #647: the proven principal reached the readout's $actor param — the
+	// per-principal lens folds server-side, on the request's real identity.
+	assert ro.body.contains('@${xa_client_did}'), 'readout $actor is not the proven principal: ${ro.body}'
 
 	// replay: counter=2 again with the same valid proof → refused, state intact.
 	rp := xa_get(port, '/surface/door', xa_proof_hdrs(chan_hex, 2, p2))

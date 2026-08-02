@@ -6,6 +6,7 @@ import cxstore
 import io
 import os
 import sync
+import time
 
 // errno/ESRCH for the stale-tmp sweep's kill(pid, 0) liveness probe (#292);
 // C.kill itself is declared in stdlib_process.v (same module).
@@ -63,7 +64,7 @@ mut:
 	// canonical blob as a single object, "don't decompose"). Both satisfy the same
 	// Layer-1 API; the model is invisible to it. Set from the `model=` open-opt;
 	// must be re-specified on reopen until self-describing reopen lands (Phase 5).
-	model       string
+	model string
 	// root is the filesystem directory for the `file://` backend (the path
 	// component of the open URL); empty for the in-process `mem://` backend.
 	root        string
@@ -78,11 +79,48 @@ mut:
 	// E_STORE_HANDLE_RACE value instead of a segfault. Lazily allocated at
 	// open (a nil lock = legacy/unopened handle → guard is skipped).
 	op_lock &sync.Mutex = unsafe { nil }
+	// #628: WRITABLE opens of one canonical root SHARE this MemStore (two
+	// independent writers on one root used to collide on segment numbering —
+	// the second flush clobbered the first's segment file). open_count
+	// refcounts the live handles; close retires the store only at zero.
+	// lock_owner/lock_depth make op-lock acquisition REENTRANT per thread
+	// (store_lock_enter/exit): a verb's guard, the jrn layer's flush scope,
+	// and the mutation funnels nest on one mutex instead of deadlocking.
+	// Ops on a shared store BLOCK on contention (two legitimate owners);
+	// the single-handle try-lock refusal contract is unchanged.
+	open_count int = 1
+	lock_owner u64
+	lock_depth int
 	// log_records counts records currently in the on-disk append log (#74
 	// Defect 1). file:// mutations APPEND one record instead of rewriting the
 	// whole index (O(n) per op → O(n^2) total); when the log accumulates enough
 	// redundancy vs live state it is compacted back to a snapshot. mem:// unused.
 	log_records int
+	// #603 O(delta) flush bookkeeping: doc_scanned = doc_order prefix already
+	// manifest-scanned (new docs live past it); alias_dirty = alias names
+	// whose values changed since the last flush; has_removals gates the
+	// (rare) tombstone scans. Together they turn the per-mutation cxpack
+	// flush from O(live) map scans into O(delta) — the watermark-diff
+	// guards stay (self-healing unchanged), only the CANDIDATE SET shrinks.
+	doc_scanned  int
+	alias_dirty  []string
+	has_removals bool
+	// #614 group-commit: while flush_hold > 0, store_append DEFERS durability
+	// — file:// records buffer in held_recs, incremental backends just mark
+	// flush_dirty — and store_flush_release performs ONE backend flush for
+	// the whole scope (one segment pack + one manifest append for cxpack,
+	// instead of one per mutation). The caller acknowledges nothing until
+	// release returns, so the durability contract moves to the SCOPE
+	// boundary, never disappears.
+	flush_hold  int
+	flush_dirty bool
+	held_recs   []string
+	// #617: a background segment-fold worker is live for this store (spawned
+	// by store_cxpack_fold_kick; at most one — this flag is the guard).
+	// Mutated only under the op-lock. store_stdlib_builtin's single-owner
+	// try-lock refusal treats contention against this INTERNAL worker as
+	// wait-your-turn, never as a user handle race.
+	fold_running bool
 	// obj_flushed is the sink-tail durability watermark (#299): the count of
 	// obj_sink.objects (an insertion-ordered map — V maps preserve insertion
 	// order) already durable in obj_backend, so an incremental flush persists
@@ -105,6 +143,18 @@ mut:
 	// docs-backed backends (mem/file/sqlite). See store_objgraph.v.
 	obj_sink  cxstore.ObjectSink
 	obj_roots map[string][]u8
+	// #637 demand paging: `lazy_objects` marks a store opened WITHOUT the
+	// whole-graph slurp — open populates only the refs layer (manifest replay
+	// + doc_order/aliases) and objects resolve on first touch through the
+	// composite getter. `obj_cache` holds those paged-in objects. It is
+	// DELIBERATELY separate from obj_sink: the sink's insertion order is the
+	// flush watermark (obj_flushed / persist_objects_from), so caching reads
+	// there would re-persist already-durable objects on the next mutation.
+	// Reads self-verify at the backend (object_name(payload) == hash), so a
+	// corrupt object refuses LOUDLY at first touch — never a silent wrong doc
+	// (#129-C posture preserved; the whole-graph check moves to `verify`).
+	lazy_objects bool
+	obj_cache    map[string][]u8
 	// obj_pack is the DURABLE object substrate for the cxpack backend — a pack-backed
 	// ObjectBackend (#76 / spec §2, §7.1). Object persistence/resolution route through
 	// the seam (put_object / getter_of) rather than hardcoded write_pack/open_pack, so
@@ -151,8 +201,8 @@ mut:
 	// shared service" discipline observability.v enforces for cardinality).
 	graph_stats_docs    int = -1 // doc-count fingerprint of the cached walk
 	graph_stats_objects int = -1 // object-count fingerprint of the cached walk
-	graph_logical       i64      // Σ live-doc objects if NOTHING were shared
-	graph_distinct      int      // distinct objects reachable from the live docs
+	graph_logical       i64 // Σ live-doc objects if NOTHING were shared
+	graph_distinct      int // distinct objects reachable from the live docs
 	// #129 D5 columnar: whether the most recent flush/load promoted ≥1 top-level
 	// scalar field to its own typed column (so [$store:query] can push a column
 	// projection + scalar predicate down to a columnar scan). false ⇒ the
@@ -391,6 +441,11 @@ fn store_persist_err(ms &MemStore, msg string) cx.Node {
 // write that didn't land; the in-process state remains authoritative for the
 // open handle and the next successful persist self-heals.
 fn store_persist(mut ms MemStore) ! {
+	// #628: persists serialize on the reentrant op-lock (see store_append).
+	store_lock_enter(mut ms)
+	defer {
+		store_lock_exit(mut ms)
+	}
 	$if cxstore_sqlite ? {
 		if ms.backend == 'sqlite' {
 			// #299: incremental, like cxpack below — a delta over the durable
@@ -504,7 +559,91 @@ fn store_alias_record(alias string, hash string) string {
 // appends amortized O(1). A durable-write failure PROPAGATES (`!`), matching
 // store_persist — the triggering op raises instead of acknowledging a write
 // that didn't land.
+// store_flush_hold opens a #614 group-commit scope: mutations inside it
+// stay in-memory-staged; durability lands at the matching release. Nestable.
+// #628: the scope also TAKES the store's reentrant op-lock, so a whole
+// journal append (entry doc + entry alias + head meta + head alias) is
+// atomic against a sibling handle's writers — the hash chain can never
+// interleave — and releases it after the flush lands.
+fn store_flush_hold(mut ms MemStore) {
+	store_lock_enter(mut ms)
+	ms.flush_hold++
+}
+
+// store_flush_release closes a group-commit scope; the OUTERMOST release
+// performs one backend flush covering every held mutation. A flush failure
+// propagates exactly as a per-op failure does (the op-in-progress raises;
+// in-process state stays authoritative; the next flush self-heals).
+fn store_flush_release(mut ms MemStore) ! {
+	defer {
+		store_lock_exit(mut ms)
+	}
+	if ms.flush_hold > 0 {
+		ms.flush_hold--
+	}
+	if ms.flush_hold > 0 {
+		return
+	}
+	if !ms.flush_dirty && ms.held_recs.len == 0 {
+		return
+	}
+	ms.flush_dirty = false
+	if ms.backend == 'file' && ms.held_recs.len > 0 {
+		n := ms.held_recs.len
+		recs := ms.held_recs.join('')
+		ms.held_recs = []
+		store_append_file_now(mut ms, recs, n)!
+		return
+	}
+	ms.held_recs = []
+	store_append_flush_backend(mut ms)!
+}
+
+// store_append_flush_backend runs the incremental backend flush once —
+// the tail store_append performs per mutation outside a hold scope.
+fn store_append_flush_backend(mut ms MemStore) ! {
+	$if cxstore_sqlite ? {
+		if ms.backend == 'sqlite' {
+			store_sqlite_flush(mut ms)!
+			return
+		}
+	}
+	if ms.backend == 'cxpack' {
+		store_cxpack_flush(mut ms)!
+		return
+	}
+	if ms.backend == 'cxobj' {
+		store_cxobj_flush(mut ms)!
+		return
+	}
+	if ms.backend == 's3' {
+		store_s3_flush(mut ms)!
+		return
+	}
+	if ms.backend == 'columnar' {
+		$if cxstore_columnar ? {
+			store_columnar_flush(mut ms)!
+		}
+		return
+	}
+}
+
 fn store_append(mut ms MemStore, rec string) ! {
+	// #628: durable appends serialize on the store's reentrant op-lock (a
+	// no-op re-enter inside a verb guard or a flush scope; the real
+	// acquisition for direct jrn/fabric-layer calls on a shared store).
+	store_lock_enter(mut ms)
+	defer {
+		store_lock_exit(mut ms)
+	}
+	// #614: inside a group-commit scope, defer — release flushes once.
+	if ms.flush_hold > 0 {
+		ms.flush_dirty = true
+		if ms.backend == 'file' && ms.root != '' {
+			ms.held_recs << rec
+		}
+		return
+	}
 	$if cxstore_sqlite ? {
 		if ms.backend == 'sqlite' {
 			// #299: incremental — the mutation's new objects (sink tail) + ONE
@@ -543,32 +682,48 @@ fn store_append(mut ms MemStore, rec string) ! {
 	if ms.backend != 'file' || ms.root == '' {
 		return
 	}
+	store_append_file_now(mut ms, rec, 1)!
+}
+
+// store_append_file_now writes `recs` (n records, pre-joined) to the file://
+// index in ONE open/append/close — the per-op path passes a single record;
+// a #614 group-commit release passes the whole held scope.
+fn store_append_file_now(mut ms MemStore, recs string, n int) ! {
+	tr := fab_trace_on()
+	t0 := time.sys_mono_now()
 	os.mkdir_all(ms.root) or { return error('file ${ms.root}: mkdir failed: ${err.msg()}') }
 	idx := os.join_path(ms.root, store_index_name)
 	if !os.exists(idx) {
-		os.write_file(idx, 'CXSTORE\tv1\n${rec}') or {
+		os.write_file(idx, 'CXSTORE\tv1\n${recs}') or {
 			return error('file ${ms.root}: index write failed: ${err.msg()}')
 		}
-		ms.log_records = 1
+		ms.log_records = n
 		return
 	}
 	mut f := os.open_append(idx) or {
 		return error('file ${ms.root}: index open failed: ${err.msg()}')
 	}
-	f.write_string(rec) or {
+	f.write_string(recs) or {
 		f.close()
 		return error('file ${ms.root}: index append failed: ${err.msg()}')
 	}
 	f.close()
-	ms.log_records++
+	ms.log_records += n
+	t_appended := time.sys_mono_now()
 	// Compaction: when redundancy builds up (each alias update / re-append adds
 	// a record without growing live state), snapshot the live model and reset
 	// the log to live size. Insert-only workloads append zero redundancy, so
 	// this never fires for them.
 	live := ms.doc_order.len + ms.alias_order.len
+	mut compacted := false
 	if ms.log_records > 2 * live + 64 {
 		store_persist(mut ms)!
 		ms.log_records = live
+		compacted = true
+	}
+	if tr {
+		t_done := time.sys_mono_now()
+		eprintln('[fab-trace side=store step=file-append recs=${n} bytes=${recs.len} log-records=${ms.log_records} live=${live} io-us=${(t_appended - t0) / 1000} compact=${compacted} compact-us=${(t_done - t_appended) / 1000}]')
 	}
 }
 
@@ -586,11 +741,20 @@ struct StoreRegistry {
 mut:
 	stores  map[int]&MemStore
 	next_id int
+	// #628: ids retired by store-close. A closed HANDLE's later ops must
+	// report CXER1130 (the spec's closed-store error), not "unknown handle" —
+	// and on a shared store the id must stop resolving to the still-live
+	// sibling view.
+	closed map[int]bool
 }
 
 __global (
 	g_store_reg voidptr
 )
+
+// g_store_reg_lock guards the registry map (#628: registration, lookup, the
+// same-root dedupe scan, and close's id retirement can race across threads).
+const g_store_reg_lock = &sync.Mutex(sync.new_mutex())
 
 fn store_reg() &StoreRegistry {
 	if g_store_reg == unsafe { nil } {
@@ -603,16 +767,170 @@ fn store_reg() &StoreRegistry {
 }
 
 fn store_register(ms &MemStore) int {
+	mut l := unsafe { g_store_reg_lock }
+	l.@lock()
 	mut reg := store_reg()
 	reg.next_id++
 	id := reg.next_id
 	reg.stores[id] = ms
+	l.unlock()
 	return id
 }
 
 fn store_lookup(id int) ?&MemStore {
+	mut l := unsafe { g_store_reg_lock }
+	l.@lock()
 	reg := store_reg()
-	return reg.stores[id] or { return none }
+	ms := reg.stores[id] or {
+		l.unlock()
+		return none
+	}
+	l.unlock()
+	return ms
+}
+
+// store_id_closed reports whether a handle id was retired by store-close
+// (#628: the CXER1130 closed-store contract survives per-handle retirement).
+fn store_id_closed(id int) bool {
+	mut l := unsafe { g_store_reg_lock }
+	l.@lock()
+	reg := store_reg()
+	hit := id in reg.closed
+	l.unlock()
+	return hit
+}
+
+// store_find_shared returns an already-open WRITABLE store on the same
+// canonical (backend, root) — the #628 same-root sharing dedupe — bumping its
+// refcount under the registry lock. `key_fp` fingerprints the open options
+// that shape at-rest bytes; a mismatch is the CALLER's to refuse (sharing
+// with divergent options would silently apply one opener's options to the
+// other's writes).
+fn store_find_shared(backend string, root string, key_fp string) ?&MemStore {
+	mut l := unsafe { g_store_reg_lock }
+	l.@lock()
+	mut reg := store_reg()
+	for _, ms in reg.stores {
+		if ms.is_open && !ms.read_only && ms.backend == backend && ms.root == root {
+			if store_share_fp(ms) == key_fp {
+				mut m := unsafe { ms }
+				m.open_count++
+				l.unlock()
+				return m
+			}
+			l.unlock()
+			return none // caller refuses loudly (option mismatch on a live root)
+		}
+	}
+	l.unlock()
+	return none
+}
+
+// store_share_fp fingerprints the open options that shape a store's at-rest
+// bytes — two writable opens may share the live MemStore only when they agree.
+fn store_share_fp(ms &MemStore) string {
+	return '${ms.enc_key_id}|${ms.model}|${ms.encoding}|${ms.compression}'
+}
+
+// store_share_conflict reports whether root is open WRITABLE with different
+// at-rest options (the refusal case store_find_shared signalled with none).
+fn store_share_conflict(backend string, root string, key_fp string) bool {
+	mut l := unsafe { g_store_reg_lock }
+	l.@lock()
+	reg := store_reg()
+	for _, ms in reg.stores {
+		if ms.is_open && !ms.read_only && ms.backend == backend && ms.root == root {
+			hit := store_share_fp(ms) != key_fp
+			l.unlock()
+			return hit
+		}
+	}
+	l.unlock()
+	return false
+}
+
+// ── #628 reentrant op-lock (shared-store serialization) ─────────────────
+//
+// One mutex per MemStore, acquired through owner-tid + depth bookkeeping so
+// a verb's dispatch guard, the jrn/group-commit flush scope, and the
+// mutation/read funnels NEST instead of self-deadlocking. Blocking: a
+// shared store has two legitimate owners (e.g. an embedded publisher and a
+// source pump on one root), so contention waits — the single-owner
+// try-lock refusal in store_stdlib_builtin is unchanged for unshared
+// handles.
+
+fn store_lock_enter(mut ms MemStore) {
+	if ms.op_lock == unsafe { nil } {
+		return
+	}
+	tid := cap_thread_id()
+	if ms.lock_owner == tid && ms.lock_depth > 0 {
+		ms.lock_depth++
+		return
+	}
+	mut lk := ms.op_lock
+	lk.@lock()
+	ms.lock_owner = tid
+	ms.lock_depth = 1
+}
+
+// store_try_enter is the non-blocking twin (the #74 single-owner guard):
+// false = another thread holds the lock.
+fn store_try_enter(mut ms MemStore) bool {
+	if ms.op_lock == unsafe { nil } {
+		return true
+	}
+	tid := cap_thread_id()
+	if ms.lock_owner == tid && ms.lock_depth > 0 {
+		ms.lock_depth++
+		return true
+	}
+	if !ms.op_lock.try_lock() {
+		return false
+	}
+	ms.lock_owner = tid
+	ms.lock_depth = 1
+	return true
+}
+
+fn store_lock_exit(mut ms MemStore) {
+	if ms.op_lock == unsafe { nil } {
+		return
+	}
+	if ms.lock_depth > 1 {
+		ms.lock_depth--
+		return
+	}
+	ms.lock_depth = 0
+	ms.lock_owner = 0
+	mut lk := ms.op_lock
+	lk.unlock()
+}
+
+const store_err_open_conflict = 'cx-err:CXER1143' // E_STORE_OPEN_CONFLICT
+
+// store_open_shared_or_conflict implements #628 same-root sharing for a
+// WRITABLE local-filesystem open: a root already open writable in-process
+// returns a second handle over the SAME live MemStore (two independent
+// writers on one root collide on segment numbering — the second flush
+// clobbers the first's segment file — so a shared live view is the only
+// sound multi-handle shape; ruling (a)). A live root whose at-rest options
+// differ refuses loudly. Returns none to proceed with a fresh MemStore
+// (first open, or read-only opens — which keep snapshot semantics: they
+// never write, so a private view is safe and cheaper).
+fn store_open_shared_or_conflict(backend string, root string, read_only bool, fp string) ?cx.Node {
+	if read_only {
+		return none
+	}
+	if live := store_find_shared(backend, root, fp) {
+		id := store_register(live)
+		return store_handle_element(id, live)
+	}
+	if store_share_conflict(backend, root, fp) {
+		return mk_err(store_err_open_conflict,
+			'E_STORE_OPEN_CONFLICT: ${root} is already open WRITABLE in-process with different at-rest options — close it first or match the open options')
+	}
+	return none
 }
 
 // ── value helpers ────────────────────────────────────────────────────
@@ -698,7 +1016,7 @@ fn store_handle_of(n cx.Node) ?int {
 pub struct StoreStats {
 pub:
 	backend   string // the mount's backend kind (mem/file/cxpack/…)
-	doc_count int     // unique content hashes currently held (master-index size)
+	doc_count int    // unique content hashes currently held (master-index size)
 	// #129-D object-graph introspection — populated ONLY for the content-addressed
 	// backend (cxpack). has_object_graph gates the object/dedup series so the flat
 	// backends (mem/file/sqlite), which have no object graph, emit no fabricated
@@ -723,10 +1041,11 @@ pub fn store_mount_stats(handle cx.Node) ?StoreStats {
 	if ms.remote != unsafe { nil } {
 		return none
 	}
-	locked := ms.op_lock != unsafe { nil }
-	if locked {
-		mut lk := ms.op_lock
-		lk.@lock()
+	// #628: owner-tracked reentrant acquisition (a raw @lock() self-deadlocks
+	// against the mutation/read funnels on the same thread).
+	store_lock_enter(mut ms)
+	defer {
+		store_lock_exit(mut ms)
 	}
 	// doc_order is the unique-doc list for BOTH the docs-map backends and the
 	// object-graph backend (where docs is empty), so it is the correct count.
@@ -737,10 +1056,6 @@ pub fn store_mount_stats(handle cx.Node) ?StoreStats {
 	}
 	if store_objgraph_active(ms) {
 		stats = store_objgraph_stats(mut ms, count)
-	}
-	if locked {
-		mut lk := ms.op_lock
-		lk.unlock()
 	}
 	return stats
 }
@@ -804,8 +1119,12 @@ fn store_get_open(arg cx.Node) (&MemStore, cx.Node, bool) {
 	id := store_handle_of(arg) or {
 		return unsafe { nil }, mk_err('cx-err:CXER0100', 'E_OPERAND_KIND: expected a Store element'), false
 	}
+	if store_id_closed(id) {
+		return unsafe { nil }, mk_err('cx-err:CXER1130', store_closed_msg), false
+	}
 	ms := store_lookup(id) or {
-		return unsafe { nil }, mk_err('cx-err:CXER0100', 'E_OPERAND_KIND: unknown Store handle ${id}'), false
+		return unsafe { nil }, mk_err('cx-err:CXER0100',
+			'E_OPERAND_KIND: unknown Store handle ${id}'), false
 	}
 	if !ms.is_open {
 		return unsafe { nil }, mk_err('cx-err:CXER1130', store_closed_msg), false
@@ -886,7 +1205,7 @@ fn store_normalize_uri(url string) (string, map[string]string, string) {
 }
 
 // store_open_columnar dispatches the columnar (Parquet / Arrow-IPC) encoding
-// (#129 D5 / #76; spec/02-working/cxstore_columnar_backend.md). Columnar is a
+// (#129 D5 / #76; spec/03-approved/misc/cxstore_columnar_backend.md). Columnar is a
 // GATED substrate (`-d cxstore_columnar`, libcx_arrow + libparquet via the
 // `arrow` module): without the flag it errors honestly. The capability gate is
 // applied FIRST (deny-by-default) so an ungranted caller learns nothing about
@@ -907,9 +1226,14 @@ fn store_open_columnar(base_url string, compression string, encoding string, rea
 	}
 	// Capability gate first (deny-by-default; §7.1). file ⇒ read/write; s3 ⇒ net.
 	cap := match scheme {
-		's3' { 'net' }
-		else { if read_only { 'read' } else { 'write' } }
+		's3' {
+			'net'
+		}
+		else {
+			if read_only { 'read' } else { 'write' }
+		}
 	}
+
 	if d := cap_guard(cap, 'store open ${base_url}') {
 		return d
 	}
@@ -943,8 +1267,7 @@ fn store_open_columnar(base_url string, compression string, encoding string, rea
 					return mk_err('cx-err:CXER1100',
 						'E_STORE_UNRESOLVED_BACKEND: malformed file URL ${base_url}')
 				}
-				return store_columnar_open(base_url, path, encoding, codec, read_only,
-					schema_text)
+				return store_columnar_open(base_url, path, encoding, codec, read_only, schema_text)
 			}
 			's3' {
 				return store_columnar_open_s3(base_url, encoding, codec, read_only, auth,
@@ -968,7 +1291,8 @@ fn store_open_columnar(base_url string, compression string, encoding string, rea
 // guard cheap: callers gate on ms.columnar_schema != '' before building the doc.
 fn store_columnar_schema_violation(ms &MemStore, doc cx.Document) ?cx.Node {
 	rep := cx.validate(doc, ms.columnar_schema, cx.ValidateOptions{}) or {
-		return mk_err('cx-err:CXER1115', 'E_STORE_SCHEMA_VIOLATION: schema load/validate error: ${err.msg()}')
+		return mk_err('cx-err:CXER1115',
+			'E_STORE_SCHEMA_VIOLATION: schema load/validate error: ${err.msg()}')
 	}
 	if !rep.is_valid() {
 		mut msgs := []string{}
@@ -1004,7 +1328,21 @@ fn store_reject_unbuilt_compression(compression string, url string) ?cx.Node {
 	return none
 }
 
+// g_store_open_lock serializes store OPENS process-wide (#628): the same-root
+// sharing dedupe (store_find_shared) and the subsequent construct+register are
+// otherwise not atomic — two threads opening one root concurrently would both
+// miss the scan and build private stores, reintroducing the segment-collision
+// data loss the sharing exists to prevent. Opens are rare (per mount/boot,
+// never per op), so one process-wide open at a time costs nothing; per-op
+// lookups take only the registry lock and never wait on an open.
+const g_store_open_lock = &sync.Mutex(sync.new_mutex())
+
 fn store_open_impl(url string, compression string, encoding string, read_only bool, tls_verify bool, auth map[string]string) cx.Node {
+	mut opl := unsafe { g_store_open_lock }
+	opl.@lock()
+	defer {
+		opl.unlock()
+	}
 	// #129 D5 (columnar): canonical-URI routing for the columnar encoding. Parse a
 	// `document+` model prefix and `?encoding=/?compression=/?schema=` query so the
 	// G3-locked surface `document+file://…?encoding=parquet` resolves. This is
@@ -1112,7 +1450,8 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 			mut want_framing := framing
 			det_model, det_framing := store_file_detect(root)
 			if det_model != '' {
-				if (model_prefix != '' || auth['model'] != '') && want_doc != (det_model == 'document') {
+				if (model_prefix != '' || auth['model'] != '')
+					&& want_doc != (det_model == 'document') {
 					return mk_err('cx-err:CXER1120',
 						'E_STORE_INTEGRITY_MISMATCH: stated model contradicts the on-disk store at ${root}')
 				}
@@ -1134,7 +1473,24 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 				return store_encrypt_unsupported_err('the file document model', base_url)
 			}
 			if want_doc {
+				if !read_only {
+					// #292: sweep dead writers' orphaned snapshot temps before
+					// touching the index (never the live index, never a live
+					// pid's in-flight temp — see store_sweep_stale_tmp). Runs
+					// BEFORE the shared-handle resolution: a same-root reopen
+					// that lands on the live in-process MemStore (#628) is
+					// still a writable open, and the sweep is filesystem
+					// hygiene independent of handle sharing — after #628 the
+					// old post-share call site was unreachable on exactly the
+					// reopen path #292 exists for.
+					store_sweep_stale_tmp(root)
+				}
 				// document model on `file` = the flat index store.
+				if r := store_open_shared_or_conflict('file', root, read_only,
+					'|document|${enc}|${comp}')
+				{
+					return r
+				}
 				mut ms := &MemStore{
 					url:         url
 					backend:     'file'
@@ -1147,12 +1503,6 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 					op_lock:     sync.new_mutex()
 				}
 				idx := os.join_path(root, store_index_name)
-				if !read_only {
-					// #292: sweep dead writers' orphaned snapshot temps before
-					// touching the index (never the live index, never a live
-					// pid's in-flight temp — see store_sweep_stale_tmp).
-					store_sweep_stale_tmp(root)
-				}
 				if os.exists(idx) {
 					store_read_index(idx, mut ms)
 				} else if !read_only {
@@ -1166,6 +1516,11 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 			}
 			// subtree model — object-per-key on request, pack by default.
 			if want_framing == 'object-per-key' {
+				if r := store_open_shared_or_conflict('cxobj', root, read_only,
+					'${auth['encrypt-key-id']}||${enc}|${comp}')
+				{
+					return r
+				}
 				mut ms := &MemStore{
 					url:         url
 					backend:     'cxobj'
@@ -1191,6 +1546,11 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 			}
 			// obj_pack attaches lazily in store_cxpack_load (store_cxpack_backend
 			// picks keyed vs plain mode from enc_key_id, #229).
+			if r := store_open_shared_or_conflict('cxpack', root, read_only,
+				'${auth['encrypt-key-id']}||${enc}|${comp}')
+			{
+				return r
+			}
 			mut ms := &MemStore{
 				url:         url
 				backend:     'cxpack'
@@ -1201,6 +1561,12 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 				is_open:     true
 				op_lock:     sync.new_mutex()
 				enc_key_id:  auth['encrypt-key-id']
+				// #637: demand-paged object resolution is the DEFAULT — open
+				// costs O(refs) and RSS tracks the working set. `[opts
+				// eager="true"]` restores the whole-graph slurp + load-time
+				// reconstruction for a caller that wants that check inline
+				// (the same check the explicit `verify` op runs on demand).
+				lazy_objects: auth['eager'] != 'true'
 			}
 			if !read_only {
 				os.mkdir_all(root) or {
@@ -1218,7 +1584,8 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 			// §9 + #77: sqlite:// external engine. Feature-gated via
 			// `-d cxstore_sqlite` so the default/core/wasm build never links
 			// libsqlite3; without the flag, error clearly (degrade-with-visibility).
-			mut r := mk_err('cx-err:CXER1100', 'E_STORE_UNRESOLVED_BACKEND: sqlite backend not built — rebuild with `-d cxstore_sqlite` (${url})')
+			mut r := mk_err('cx-err:CXER1100',
+				'E_STORE_UNRESOLVED_BACKEND: sqlite backend not built — rebuild with `-d cxstore_sqlite` (${url})')
 			$if cxstore_sqlite ? {
 				r = store_sqlite_open(base_url, compression, encoding, read_only, if doc_model {
 					'document'
@@ -1253,8 +1620,8 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 				kms := store_kek_kms(auth['encrypt-key-id']) or {
 					return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
 				}
-				s3ob = cxstore.ObjectBackend(cxstore.new_encrypting_wrapper(s3be, auth['encrypt-key-id'],
-					kms))
+				s3ob = cxstore.ObjectBackend(cxstore.new_encrypting_wrapper(s3be,
+					auth['encrypt-key-id'], kms))
 			}
 			mut ms := &MemStore{
 				url:         url
@@ -1429,7 +1796,11 @@ fn store_substrate_name(ms &MemStore) string {
 			'file'
 		}
 		'columnar' {
-			if ms.columnar_s3 != none { 's3' } else { 'file' }
+			if ms.columnar_s3 != none {
+				's3'
+			} else {
+				'file'
+			}
 		}
 		else {
 			ms.backend
@@ -1515,11 +1886,10 @@ fn store_op_host_cap(name string, ms &MemStore) string {
 // Non-write ops are reads; open/close/capabilities take no host cap and never
 // reach the re-check.
 fn store_op_is_write(name string) bool {
-	return name in ['store-put-doc', 'store-put-doc-text', 'store-put-doc-stream',
-		'store-put-def', 'store-delete-doc', 'store-modify-doc', 'store-set-alias',
-		'store-delete-alias', 'store-migrate', 'store-clone', 'store-push', 'store-pull',
-		'store-fetch', 'store-gc', 'store-prune', 'store-rotate-kek', 'store-branch',
-		'store-branch-force']
+	return name in ['store-put-doc', 'store-put-doc-text', 'store-put-doc-stream', 'store-put-def',
+		'store-delete-doc', 'store-modify-doc', 'store-set-alias', 'store-delete-alias',
+		'store-migrate', 'store-clone', 'store-push', 'store-pull', 'store-fetch', 'store-gc',
+		'store-prune', 'store-rotate-kek', 'store-branch', 'store-branch-force']
 }
 
 // store_op_needs_no_cap names the introspection/lifecycle ops that take no host
@@ -1551,12 +1921,35 @@ fn store_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if ms.op_lock == unsafe { nil } {
 		return store_stdlib_builtin_inner(name, args)
 	}
-	if !ms.op_lock.try_lock() {
-		return mk_err(store_err_handle_race,
-			'E_STORE_HANDLE_RACE: concurrent access to a shared Store handle — a Store is single-owner; shard (open separate handles per worker) for parallelism, `[par]` on one handle is unsupported')
+	// #628: a SHARED store (same-root writable opens) has two legitimate
+	// owners — contention BLOCKS (per-op serialization). A single-handle
+	// store keeps the #74 single-owner contract: contention is a caller bug
+	// ([par] over one handle) and refuses cleanly. Both paths go through the
+	// reentrant owner-tid bookkeeping so the mutation/read funnels and the
+	// group-commit flush scope nest on the same mutex instead of
+	// self-deadlocking.
+	if ms.open_count > 1 {
+		store_lock_enter(mut ms)
+	} else {
+		if !store_try_enter(mut ms) {
+			// #617: contention from the store's OWN background fold worker is
+			// not a caller bug — it holds the lock only for µs-scale plan/
+			// commit bookkeeping (the pack I/O runs unlocked), so wait it out.
+			// Only a genuine second user thread on a single-owner handle
+			// refuses. fold_running is read racily here; the fallback is
+			// blocking, which is always safe (it is what shared stores do) —
+			// at worst a real [par] misuse waits instead of refusing while a
+			// fold happens to be live.
+			if ms.fold_running {
+				store_lock_enter(mut ms)
+			} else {
+				return mk_err(store_err_handle_race,
+					'E_STORE_HANDLE_RACE: concurrent access to a shared Store handle — a Store is single-owner; shard (open separate handles per worker) for parallelism, `[par]` on one handle is unsupported')
+			}
+		}
 	}
 	defer {
-		ms.op_lock.unlock()
+		store_lock_exit(mut ms)
 	}
 	return store_stdlib_builtin_inner(name, args)
 }
@@ -1651,13 +2044,19 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER1110', 'E_STORE_READ_ONLY: ${ms.url}')
 			}
 			if ms.backend == 'columnar' && ms.columnar_schema != '' {
-				if v := store_columnar_schema_violation(ms, cx.Document{ elements: [args[1]] }) {
+				if v := store_columnar_schema_violation(ms, cx.Document{
+					elements: [
+						args[1],
+					]
+				})
+				{
 					return v
 				}
 			}
 			canonical := render_canonical(args[1])
 			hash := cx.cx_text_hash(canonical) or {
-				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: hash failed: ${err.msg()}')
+				return mk_err('cx-err:CXER1120',
+					'E_STORE_INTEGRITY_MISMATCH: hash failed: ${err.msg()}')
 			}
 			if owc := store_objwire_client(ms) {
 				// cx-store:// object wire: decompose locally, push only the missing
@@ -1683,7 +2082,8 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			}
 			if store_put_canonical(mut ms, hash, canonical) or {
 				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
-			} {
+			}
+			{
 				store_append(mut ms, store_doc_record(hash, canonical)) or {
 					return store_persist_err(ms, err.msg())
 				}
@@ -1708,7 +2108,8 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			}
 			text := store_arg_str(args[1]) or { return none }
 			parsed := cx.parse(text) or {
-				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: undecodable doc text: ${err.msg()}')
+				return mk_err('cx-err:CXER1120',
+					'E_STORE_INTEGRITY_MISMATCH: undecodable doc text: ${err.msg()}')
 			}
 			if parsed.elements.len == 0 {
 				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: empty doc text')
@@ -1719,10 +2120,12 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 				}
 			}
 			canonical := cx.cx_text_canonical(text) or {
-				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: undecodable doc text: ${err.msg()}')
+				return mk_err('cx-err:CXER1120',
+					'E_STORE_INTEGRITY_MISMATCH: undecodable doc text: ${err.msg()}')
 			}
 			hash := cx.cx_text_hash(canonical) or {
-				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: hash failed: ${err.msg()}')
+				return mk_err('cx-err:CXER1120',
+					'E_STORE_INTEGRITY_MISMATCH: hash failed: ${err.msg()}')
 			}
 			if owc := store_objwire_client(ms) {
 				// cx-store:// object wire (text-body CSRP server's enabling verb too).
@@ -1745,7 +2148,8 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			}
 			if store_put_canonical(mut ms, hash, canonical) or {
 				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
-			} {
+			}
+			{
 				store_append(mut ms, store_doc_record(hash, canonical)) or {
 					return store_persist_err(ms, err.msg())
 				}
@@ -1855,10 +2259,12 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${hash}')
 			}
 			if rehash != hash {
-				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: stored ${hash} rehashes to ${rehash}')
+				return mk_err('cx-err:CXER1120',
+					'E_STORE_INTEGRITY_MISMATCH: stored ${hash} rehashes to ${rehash}')
 			}
 			parsed := cx.parse(text) or {
-				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: undecodable doc at ${hash}')
+				return mk_err('cx-err:CXER1120',
+					'E_STORE_INTEGRITY_MISMATCH: undecodable doc at ${hash}')
 			}
 			if parsed.elements.len > 0 {
 				return parsed.elements[0]
@@ -1917,10 +2323,12 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 					}
 					items << cx.Element{
 						name:  'entry'
-						attrs: [cx.Attribute{
-							name:  'hash'
-							value: cx.ScalarValue(h)
-						}]
+						attrs: [
+							cx.Attribute{
+								name:  'hash'
+								value: cx.ScalarValue(h)
+							},
+						]
 						items: [store_decode_doc(t)]
 					}
 				}
@@ -1933,10 +2341,12 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 				doc_node := store_decode_doc(text)
 				items << cx.Element{
 					name:  'entry'
-					attrs: [cx.Attribute{
-						name:  'hash'
-						value: cx.ScalarValue(h)
-					}]
+					attrs: [
+						cx.Attribute{
+							name:  'hash'
+							value: cx.ScalarValue(h)
+						},
+					]
 					items: [doc_node]
 				}
 			}
@@ -2006,7 +2416,8 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			}
 			src := store_arg_str(args[1]) or { return none }
 			h := cx_code_store_put_def(mut ms, src) or {
-				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: code put: ${err.msg()}')
+				return mk_err('cx-err:CXER1120',
+					'E_STORE_INTEGRITY_MISMATCH: code put: ${err.msg()}')
 			}
 			// persist hook: cxpack snapshots the whole graph (code included); the
 			// flat-index backends append a record keyed by the code: namespace.
@@ -2050,7 +2461,7 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 					},
 					cx.Attribute{
 						name:  'backend'
-				value: cx.ScalarValue(store_substrate_name(ms))
+						value: cx.ScalarValue(store_substrate_name(ms))
 					},
 					cx.Attribute{
 						name:  'url'
@@ -2072,7 +2483,24 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			if !ok {
 				return errn
 			}
-			ms.is_open = false
+			// #628: retire THIS handle (its id reports CXER1130 from now on)
+			// and decrement the share refcount; the live store closes only
+			// when the last handle goes. Retirement stops a closed handle from
+			// silently operating via a sibling's live view.
+			if hid := store_handle_of(args[0]) {
+				mut l := unsafe { g_store_reg_lock }
+				l.@lock()
+				mut reg := store_reg()
+				reg.stores.delete(hid)
+				reg.closed[hid] = true
+				ms.open_count--
+				l.unlock()
+			} else {
+				ms.open_count--
+			}
+			if ms.open_count <= 0 {
+				ms.is_open = false
+			}
 			return store_null()
 		}
 		'store-set-alias' {
@@ -2080,11 +2508,34 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			if !ok {
 				return errn
 			}
-			// CSRP carries NO alias verbs (M3): on a remote-backed handle the
-			// local alias map is dead state, so a silent no-op ack would lie.
-			// Same posture as query pushdown (#119) — CXER1709, never empty (#264).
+			// #645: a cx-store:// CLIENT routes the write to the daemon's
+			// AUTHORITATIVE alias table over the `aliases-set` wire op — one
+			// authority, so target-presence (CXER1121), gc pinning, and the pack
+			// alias record all apply daemon-side. Byte-source remotes (http/ftp/
+			// sftp/s3-doc) keep the honest CXER1709 refusal: there is no service
+			// to ask (#264 posture unchanged for them).
 			if store_remote_active(ms) {
-				return mk_err('cx-err:CXER1709', 'E_CSRP_OPERATION_UNSUPPORTED: set-alias — CSRP carries no alias verbs; aliases are local-registry state (discover remotely via store-query pushdown)')
+				if owc := store_objwire_client(ms) {
+					if ms.read_only {
+						return mk_err('cx-err:CXER1110', 'E_STORE_READ_ONLY: ${ms.url}')
+					}
+					alias := store_arg_str(args[1]) or { return none }
+					hash := store_arg_str(args[2]) or { return none }
+					st, _, tok := owc.alias_set(alias, hash)
+					if !tok {
+						return mk_err('cx-err:CXER1101', 'E_STORE_BACKEND_UNREACHABLE: aliases-set on ${ms.url}')
+					}
+					match st {
+						200 { return store_null() }
+						404 { return mk_err('cx-err:CXER1121', 'E_STORE_NOT_FOUND: alias target ${hash}') }
+						409 { return mk_err('cx-err:CXER1114', 'E_STORE_REF_CONFLICT: alias ${alias} moved') }
+						401, 403 { return mk_err('cx-err:CXER1131', 'E_STORE_AUTH_FAILED: aliases-set on ${ms.url} (status ${st})') }
+						429 { return mk_err('cx-err:CXER1132', 'E_STORE_RATE_LIMITED: aliases-set on ${ms.url}') }
+						else { return mk_err('cx-err:CXER1101', 'E_STORE_BACKEND_UNREACHABLE: aliases-set on ${ms.url} (status ${st})') }
+					}
+				}
+				return mk_err('cx-err:CXER1709',
+					'E_CSRP_OPERATION_UNSUPPORTED: set-alias — this remote is a byte source with no CSRP service; aliases are local-registry state (discover remotely via store-query pushdown)')
 			}
 			if ms.read_only {
 				return mk_err('cx-err:CXER1110', 'E_STORE_READ_ONLY: ${ms.url}')
@@ -2096,22 +2547,38 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			if !store_doc_present(ms, hash) && !store_doc_present(ms, 'code:${hash}') {
 				return mk_err('cx-err:CXER1121', 'E_STORE_NOT_FOUND: alias target ${hash}')
 			}
-			if alias !in ms.aliases {
-				ms.alias_order << alias
-			}
-			ms.aliases[alias] = hash
+			store_alias_set_local(mut ms, alias, hash)
 			store_append(mut ms, store_alias_record(alias, hash)) or {
 				return store_persist_err(ms, err.msg())
 			}
 			return store_null()
 		}
 		'store-get-alias' {
-			ms, errn, ok := store_get_open(args[0])
+			mut ms, errn, ok := store_get_open(args[0])
 			if !ok {
 				return errn
 			}
 			if store_remote_active(ms) {
-				return mk_err('cx-err:CXER1709', 'E_CSRP_OPERATION_UNSUPPORTED: get-alias — CSRP carries no alias verbs; a remote miss is indistinguishable from absence, so the op refuses instead (#264)')
+				// #645: resolve against the daemon's alias table over the `aliases`
+				// wire op. The answer carries EXPLICIT per-name presence, so an
+				// absent alias is a server-asserted absence () — the #264
+				// miss-vs-absence concern is answered by the wire, not assumed.
+				if owc := store_objwire_client(ms) {
+					alias := store_arg_str(args[1]) or { return none }
+					hash, present, tok := owc.alias_get(alias)
+					if !tok {
+						if e := store_objwire_err(mut ms) {
+							return e
+						}
+						return mk_err('cx-err:CXER1101', 'E_STORE_BACKEND_UNREACHABLE: aliases on ${ms.url}')
+					}
+					if present {
+						return store_str(hash)
+					}
+					return store_empty() // server-asserted miss → absence (§9.1.2)
+				}
+				return mk_err('cx-err:CXER1709',
+					'E_CSRP_OPERATION_UNSUPPORTED: get-alias — this remote is a byte source with no CSRP service to ask; a remote miss would be indistinguishable from absence, so the op refuses instead (#264)')
 			}
 			alias := store_arg_str(args[1]) or { return none }
 			if alias in ms.aliases {
@@ -2120,12 +2587,43 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			return store_empty() // §9.1.2: alias miss → absence, not null
 		}
 		'store-list-aliases' {
-			ms, errn, ok := store_get_open(args[0])
+			mut ms, errn, ok := store_get_open(args[0])
 			if !ok {
 				return errn
 			}
 			if store_remote_active(ms) {
-				return mk_err('cx-err:CXER1709', 'E_CSRP_OPERATION_UNSUPPORTED: list-aliases — CSRP carries no alias verbs; catalog discovery over the wire is store-query pushdown (pkg-catalog composes it)')
+				// #645: list from the daemon's authoritative table (server order),
+				// same [alias name=… hash=…] shape as the local listing.
+				if owc := store_objwire_client(ms) {
+					pairs := owc.alias_list() or {
+						if e := store_objwire_err(mut ms) {
+							return e
+						}
+						return mk_err('cx-err:CXER1101', 'E_STORE_BACKEND_UNREACHABLE: aliases on ${ms.url}')
+					}
+					mut ritems := []cx.Node{}
+					for p in pairs {
+						if p.len != 2 {
+							continue
+						}
+						ritems << cx.Element{
+							name:  'alias'
+							attrs: [
+								cx.Attribute{
+									name:  'name'
+									value: cx.ScalarValue(p[0])
+								},
+								cx.Attribute{
+									name:  'hash'
+									value: cx.ScalarValue(p[1])
+								},
+							]
+						}
+					}
+					return store_seq(ritems)
+				}
+				return mk_err('cx-err:CXER1709',
+					'E_CSRP_OPERATION_UNSUPPORTED: list-aliases — this remote is a byte source with no CSRP service; catalog discovery over the wire is store-query pushdown (pkg-catalog composes it)')
 			}
 			mut items := []cx.Node{}
 			for a in ms.alias_order {
@@ -2150,16 +2648,20 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			if !ok {
 				return errn
 			}
+			// #645: deletion is deliberately NOT carried on the wire (no live
+			// consumer; the wire carries `aliases`/`aliases-set` only). On any
+			// remote handle the local alias map is dead state, so mutating it
+			// and answering true/false would lie — refuse honestly instead
+			// (the #264 posture).
+			if store_remote_active(ms) {
+				return mk_err('cx-err:CXER1709',
+					'E_CSRP_OPERATION_UNSUPPORTED: delete-alias is not carried on the CSRP wire (#645 carries aliases/aliases-set); delete on the daemon side')
+			}
 			if ms.read_only {
 				return mk_err('cx-err:CXER1110', 'E_STORE_READ_ONLY: ${ms.url}')
 			}
 			alias := store_arg_str(args[1]) or { return none }
-			if alias in ms.aliases {
-				ms.aliases.delete(alias)
-				idx := ms.alias_order.index(alias)
-				if idx >= 0 {
-					ms.alias_order.delete(idx)
-				}
+			if store_alias_delete_local(mut ms, alias) {
 				// #298: alias removal rides the same O(1) append path as set-alias
 				// — an X (alias tombstone) record — instead of a whole-snapshot
 				// rewrite per delete (the #291 contract on the alias plane:
@@ -2206,7 +2708,8 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			if store_remote_active(ms) && csrp_scheme(ms.remote.scheme) {
 				return store_remote_admin(ms.remote, 'mounts')
 			}
-			return mk_err('cx-err:CXER1709', 'E_CSRP_OPERATION_UNSUPPORTED: mounts is a daemon-level op — it requires a cx-store:// service-tier handle')
+			return mk_err('cx-err:CXER1709',
+				'E_CSRP_OPERATION_UNSUPPORTED: mounts is a daemon-level op — it requires a cx-store:// service-tier handle')
 		}
 		'store-config-reload' {
 			// #251 (CSRP §3.13): daemon-level runtime config reload — like mounts,
@@ -2224,10 +2727,14 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			if store_remote_active(ms) && csrp_scheme(ms.remote.scheme) {
 				return store_remote_admin(ms.remote, 'config-reload')
 			}
-			return mk_err('cx-err:CXER1709', 'E_CSRP_OPERATION_UNSUPPORTED: config-reload is a daemon-level op — it requires a cx-store:// service-tier handle')
+			return mk_err('cx-err:CXER1709',
+				'E_CSRP_OPERATION_UNSUPPORTED: config-reload is a daemon-level op — it requires a cx-store:// service-tier handle')
 		}
 		'store-log' {
 			return store_log(args)
+		}
+		'store-verify' {
+			return store_verify(args)
 		}
 		'store-gc' {
 			return store_gc(args)
@@ -2334,7 +2841,8 @@ fn store_modify_doc(args []cx.Node) ?cx.Node {
 	}
 	if store_put_canonical(mut ms, new_hash, new_canonical) or {
 		return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
-	} {
+	}
+	{
 		store_append(mut ms, store_doc_record(new_hash, new_canonical)) or {
 			return store_persist_err(ms, err.msg())
 		}
@@ -2389,8 +2897,10 @@ fn store_modify_doc_using(args []cx.Node, act cx.Element, mut env MatchEnv) ?cx.
 		}
 	}
 	closure := resolved or {
-		return mk_err('cx-err:CXER0104', 'E_USING_NOT_CALLABLE: modify-doc [using …] must be a [?fn] lambda')
+		return mk_err('cx-err:CXER0104',
+			'E_USING_NOT_CALLABLE: modify-doc [using …] must be a [?fn] lambda')
 	}
+
 	mut sel := ''
 	for a in act.attrs {
 		if a.name == 'select' {
@@ -2444,7 +2954,8 @@ fn store_modify_doc_using(args []cx.Node, act cx.Element, mut env MatchEnv) ?cx.
 	}
 	if store_put_canonical(mut ms, new_hash, new_canonical) or {
 		return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
-	} {
+	}
+	{
 		store_append(mut ms, store_doc_record(new_hash, new_canonical)) or {
 			return store_persist_err(ms, err.msg())
 		}
@@ -2546,6 +3057,7 @@ fn store_apply_action(elem cx.Element, act cx.Element) !cx.Node {
 			return error('unsupported modify action "${act.name}"')
 		}
 	}
+
 	return cx.Node(el)
 }
 
@@ -2703,6 +3215,7 @@ fn store_elem_matches_predicates(el cx.Element, preds []cx.PathPredicate) bool {
 			// No parsed expr available — cannot evaluate; fail closed.
 			return false
 		}
+
 		filtered := eval_predicate_filter([item], expr, ctx) or {
 			// Unsupported predicate shape — fail closed (do NOT match).
 			return false
@@ -2741,14 +3254,13 @@ fn store_modify_rebuild(el cx.Element, target string, descendant bool, match_her
 				}
 				nr := store_apply_action(child, op.act)!
 				if descendant && nr is cx.Element {
-					new_items << cx.Node(store_modify_rebuild(nr as cx.Element, target,
-						descendant, true, preds, op)!)
+					new_items << cx.Node(store_modify_rebuild(nr as cx.Element, target, descendant,
+						true, preds, op)!)
 				} else {
 					new_items << nr
 				}
 			} else if descendant {
-				new_items << cx.Node(store_modify_rebuild(child, target, descendant,
-					true, preds, op)!)
+				new_items << cx.Node(store_modify_rebuild(child, target, descendant, true, preds, op)!)
 			} else {
 				new_items << item // child axis: deeper structure unchanged
 			}
@@ -2803,7 +3315,8 @@ fn store_query(args []cx.Node) ?cx.Node {
 	// masquerading as "no matches" — the exact bug this closes).
 	attr_name, elem_path := store_query_split_attr(path_text)
 	target, descendant, preds := store_parse_select(elem_path) or {
-		return mk_err('cx-err:CXER1709', 'E_CSRP_OPERATION_UNSUPPORTED: query CXPath `${path_text}` has an unsupported predicate/step (${err.msg()}) — refusing to return a lying empty result')
+		return mk_err('cx-err:CXER1709',
+			'E_CSRP_OPERATION_UNSUPPORTED: query CXPath `${path_text}` has an unsupported predicate/step (${err.msg()}) — refusing to return a lying empty result')
 	}
 	mut results := []cx.Node{}
 	for h in ms.doc_order {
@@ -2833,10 +3346,12 @@ fn store_query(args []cx.Node) ?cx.Node {
 		if matches.len > 0 {
 			results << cx.Element{
 				name:  'result'
-				attrs: [cx.Attribute{
-					name:  'hash'
-					value: cx.ScalarValue(h)
-				}]
+				attrs: [
+					cx.Attribute{
+						name:  'hash'
+						value: cx.ScalarValue(h)
+					},
+				]
 				items: [store_seq(matches)]
 			}
 		}
@@ -2925,7 +3440,8 @@ fn store_migrate(args []cx.Node) ?cx.Node {
 			// #128-A: a code: entry is verbatim source (not a data doc) — copy raw.
 			if store_put_raw(mut to, h, text) or {
 				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${h}: ${err.msg()}')
-			} {
+			}
+			{
 				bytes_written += text.len
 			}
 			verified++
@@ -2936,21 +3452,20 @@ fn store_migrate(args []cx.Node) ?cx.Node {
 			return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${h}')
 		}
 		if rehash != h {
-			return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: stored ${h} rehashes to ${rehash}')
+			return mk_err('cx-err:CXER1120',
+				'E_STORE_INTEGRITY_MISMATCH: stored ${h} rehashes to ${rehash}')
 		}
 		verified++
 		if store_put_canonical(mut to, h, text) or {
 			return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${h}: ${err.msg()}')
-		} {
+		}
+		{
 			bytes_written += text.len
 		}
 		doc_count++
 	}
 	for a in from.alias_order {
-		if a !in to.aliases {
-			to.alias_order << a
-		}
-		to.aliases[a] = from.aliases[a]
+		store_alias_set_local(mut to, a, from.aliases[a])
 	}
 	store_persist(mut to) or { return store_persist_err(to, err.msg()) }
 	to.log_records = to.doc_order.len + to.alias_order.len

@@ -1331,6 +1331,32 @@ false
 #]]
  ]
 
+ [case id=program-err-015-path-over-err-is-inspection-not-propagation level=core
+  [tags errors cxpath binding-path inspection issue-565]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $doc [$cx:parse "[rows [row id=a] oops-unclosed"]] [$count [?for [in $r $doc//row] [yield 1]]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=program-err-016-path-over-err-reads-err-shape level=core
+  [tags errors cxpath binding-path inspection issue-565]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $e [$cx:parse "[rows [row id=a] oops-unclosed"]] $e@code]
+#]]
+  [out-text [#
+'cx-err:CXER0100'
+#]]
+ ]
+
  [case id=program-retry-001-happy-path level=resilience
   [tags retry happy-path]
   [in-cx [#
@@ -6633,6 +6659,92 @@ cx-err:CXER0216
 #]]
  ]
 
+ [case id=module-scope-frame-hof-sibling-dollar level=core
+  [tags module scope fn closure let hof defining-scope issue-646]
+  [doc [#
+A [?fn] created under a [?let] frame inside a MODULE def and applied by a
+HOF must resolve module siblings via the dollar form (#646). Derived frames
+([?let]/[?loop]/[?for]/backtrack) dropped in_function_body +
+cur_defining_scope, so the lambda captured the IMPORTING program's scope and
+`[$bump]` failed with `no callable "bump"` — while the identical text ran
+green as a program (the program scope happened to hold the defs there).
+fold-bump(1,2,3) = (1+7)+(2+7)+(3+7) = 27.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?lib './scope-frames-module.cx' as=m]
+[$m:fold-bump 1 2 3]
+#]]
+  [out-text [#
+[total n=27]
+#]]
+ ]
+
+ [case id=module-scope-frame-str-hole-deferred level=core
+  [tags module scope fn closure let str interpolation defining-scope issue-646]
+  [doc [#
+[?str] interpolation inside a deferred [?fn] under a [?let] in a module def:
+the sibling call [$offset] inside the lambda must resolve and the holes must
+render (#646 class 1 — the CXER0100 non-scalar-hole raise was the sibling
+call's err element flowing into the hole).
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?lib './scope-frames-module.cx' as=m]
+[$m:label-of 10]
+#]]
+  [out-text [#
+'v=10|o=7'
+#]]
+ ]
+
+ [case id=module-scope-frame-bare-sibling-call level=core
+  [tags module scope fn closure let bare-call defining-scope issue-646]
+  [doc [#
+A BARE-form sibling call [bump $p] inside a deferred [?fn] in a module def is
+a CALL, not data (#646 class 2 dual): with the defining scope dropped it
+silently self-evaluated to a [bump 10] data element instead of invoking the
+sibling — a silent wrong answer, worse than the dollar form's loud
+`no callable`. bare-call(10) = 10+7 = 17.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?lib './scope-frames-module.cx' as=m]
+[$m:bare-call 10]
+#]]
+  [out-text [#
+17
+#]]
+ ]
+
+ [case id=program-def-nested-in-let-CXER0204 level=core
+  [tags def nested let CXER0204 function-body issue-646]
+  [doc [#
+The §12.2 nested-def guard reaches THROUGH derived frames: a [?def] under a
+[?let] inside a function body is still inside the function body (#646 dual —
+the same dropped in_function_body flag that broke module scoping also let
+this bypass CXER0204).
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def outer ()
+  [?let [= $x 1]
+    [?def inner () 2]]]
+[$outer]
+#]]
+  [out-err [#
+cx-err:CXER0204
+#]]
+ ]
+
  [case id=module-load-order-independent level=core
   [tags module two-pass order-independent const-def gate-35.6]
   [in-cx [#
@@ -8925,6 +9037,202 @@ false
 #]]
  ]
 
+ [case id=program-field-read-uniform-001-scalar-value level=core
+  [tags cxpath field-read unwrap scalar]
+  [; §6.2 — the terminal labeled-field unwrap: [result [value 42]] reads 42
+     (the simplest-adequate field model; reading a field returns its content). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $r [result [value 42]]] $r/value]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=program-field-read-uniform-002-element-value level=core
+  [tags cxpath field-read unwrap element]
+  [; §6.2 (owner ruling 2026-07-23, #584) — the field model is UNIFORM over
+     content kinds: a field holding one element reads as that element (the
+     platform's $response/body / $r/next-generator idiom). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $b [box [life [?attr 'opp' 'a'] [evidence [id 'e1'] [kind 'cro'] [val 42]]]]]
+  $b/life]
+#]]
+  [out-text [#
+[evidence [id 'e1'] [kind 'cro'] [val 42]]
+#]]
+ ]
+
+ [case id=program-field-read-composition-003-count-is-content-arity level=core
+  [tags cxpath field-read count node-set descendant wildcard]
+  [; §6.2 (owner ruling 2026-07-23, #584 — closed by design) — count over a
+     field READ aggregates the CONTENT (the inner element's arity, 3 here);
+     MATCH-counting uses the node-set forms, which never unwrap: the
+     descendant axis (//life = 1), a wildcard read over the parent (/* = 1),
+     or $filter over the read. A fold accumulating element-valued records
+     counts matches, not field contents. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $b [box [life [?attr 'opp' 'a'] [evidence [id 'e1'] [kind 'cro'] [val 42]]]]]
+  [?str '{[$count $b/life]}|{[$count $b//life]}|{[$count $b/*]}|{[$count [$filter $b/life [?fn ($l) true]]]}']]
+#]]
+  [out-text [#
+'3|1|1|1'
+#]]
+ ]
+
+ [case id=program-field-read-composition-004-arity-rows level=core
+  [tags cxpath field-read count]
+  [; §6.2 (#584) — the arity rows of the composition table: a two-item
+     field counts its 2 contents, an empty field counts 0, and a scalar
+     chain read atomizes ($x/life/a → 1). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x [box [life [a 1] [b 2]]]]
+[?let [= $e [box [life]]]
+  [?str '{[$count $x/life]}|{[$count $e/life]}|{$x/life/a}']]]
+#]]
+  [out-text [#
+'2|0|1'
+#]]
+ ]
+
+ [case id=program-mapnode-nav-001-parsed-map-field-reads level=core
+  [tags cxpath map parse roundtrip field-read]
+  [; #618 — a PARSED map (cx.MapNode) reads its keys exactly like the
+     runtime __cx_map__ twin: /key and .key both yield the value. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $p [$cx:parse "{label: 'sum-2', count: 2}"]]
+  [?str '{[?else $p/count 0]}|{[?else $p.count 0]}|{$p/label}']]
+#]]
+  [out-text [#
+'2|2|sum-2'
+#]]
+ ]
+
+ [case id=program-mapnode-nav-002-equal-navigates-equal level=core
+  [tags cxpath map parse equal]
+  [; #618 — the #587 invariant extended to maps: two $cx:equal maps (one
+     runtime-built, one parsed) navigate identically. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $m {label: 'x', count: 2}]
+      [= $p [$cx:parse [$cx:serialize $m]]]
+  [?str '{[$cx:equal $m $p]}|{[= [?else $m/count 0] [?else $p/count 0]]}']]
+#]]
+  [out-text [#
+'true|true'
+#]]
+ ]
+
+ [case id=program-mapnode-nav-003-nested-and-descendant level=core
+  [tags cxpath map parse descendant]
+  [; #618 — nested parsed maps chain via the map-key DOT form ($p.a.b),
+     exactly as runtime maps do ($m/a/b is 0 on BOTH lanes — slash-chain
+     over maps is not the map-read form; parity, not new semantics), and
+     the descendant axis walks THROUGH a parsed map value into elements
+     it holds. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $p [$cx:parse "{a: {b: 7}}"]]
+      [= $w [$cx:parse "[w {k: [item n=1]}]"]]
+  [?str '{[?else $p.a.b 0]}|{[$count $w//item]}']]
+#]]
+  [out-text [#
+'7|1'
+#]]
+ ]
+
+ [case id=program-descendant-seq-roundtrip-001-equal-navigates-equal level=core
+  [tags cxpath descendant sequence roundtrip serialize parse equal]
+  [; #587 — two $cx:equal values MUST navigate identically. A sequence-valued
+     element body built by the runtime ([?for/yield] → the seq marker) and its
+     serialize→parse twin (a parsed paren-sequence body) are equal; the //
+     descendant axis walks THROUGH the sequence in both lanes. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let
+  [= $seq [w [?for [in $x (1,2,3)] [yield [item n=$x]]]]]
+  [= $rt [$cx:parse [$cx:serialize $seq]]]
+  [?str 'equal={[$cx:equal $seq $rt]} inmem={[$count $seq//item]} rt={[$count $rt//item]}']]
+#]]
+  [out-text [#
+'equal=true inmem=3 rt=3'
+#]]
+ ]
+
+ [case id=program-descendant-seq-roundtrip-002-double-roundtrip level=core
+  [tags cxpath descendant sequence roundtrip serialize parse]
+  [; #587 — axis fidelity survives a SECOND canonical round-trip: parse of
+     the parsed lane's own canonical text navigates identically too. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let
+  [= $seq [w [?for [in $x (1,2,3)] [yield [item n=$x]]]]]
+  [= $rt [$cx:parse [$cx:serialize $seq]]]
+  [= $rt2 [$cx:parse [$cx:serialize $rt]]]
+  [?str '{[$count $rt2//item]}={[$cx:equal $rt $rt2]}']]
+#]]
+  [out-text [#
+'3=true'
+#]]
+ ]
+
+ [case id=program-descendant-seq-roundtrip-003-child-axis-unchanged level=core
+  [tags cxpath child sequence roundtrip]
+  [; #587 — the CHILD axis over a bare sequence-valued body stays 0 in BOTH
+     lanes (the sequence is the single child; its items are not direct child
+     elements): the fix aligns the descendant axis, it does not widen child. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let
+  [= $seq [w [?for [in $x (1,2,3)] [yield [item n=$x]]]]]
+  [= $rt [$cx:parse [$cx:serialize $seq]]]
+  [?str '{[$count $seq/item]}|{[$count $rt/item]}']]
+#]]
+  [out-text [#
+'0|0'
+#]]
+ ]
+
+ [case id=program-descendant-seq-roundtrip-004-doc-query-lane level=core
+  [tags cxpath descendant sequence document path-expr]
+  [; #587 — the same fidelity for the DOCUMENT path engine: a parsed doc
+     whose element body is a paren-sequence yields its items to //. ]
+  [in-cx [#
+[w ([item n=1], [item n=2], [item n=3])]
+#]]
+  [in-code [#
+[$count //item]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
  # ── N-ary prefix arithmetic + logical/comparison operators (code.md §6.5) ──
  # CX is Lisp-1 homoiconic: + - * / and and/or fold over the FULL operand
  # list; comparisons are binary. Scalar arithmetic (+ - * /) is STRICT and
@@ -10349,6 +10657,340 @@ cx-err:CXER3000
 #]]
   [out-text [#
 [sum [a 1] [b 2]]
+#]]
+ ]
+
+ [case id=program-builtin-badarg-001-absence-named level=core
+  [tags builtin dispatch bad-argument absence CXER0100]
+  [; #536 — a recognized builtin whose argument is absence surfaces a real
+     CXER0100 diagnostic NAMING THE ARGUMENT, never `no callable "concat"`. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $c [x]] [$concat '' $c@nope]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='concat: argument 2 is absence (the empty sequence) — a single scalar (or a node atomizing to one) is required; bind it or default it with [?else] first (code.md §6.5)']
+#]]
+ ]
+
+ [case id=program-builtin-badarg-002-sequence-named level=core
+  [tags builtin dispatch bad-argument sequence CXER0100]
+  [; #536 — a multi-item sequence in a scalar slot is named per-argument,
+     never misdiagnosed as an unknown callable. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $seq ([a], [b])] [$concat '' $seq]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='concat: argument 2 is a 2-item sequence — a single scalar (or a node atomizing to one) is required; bind it or default it with [?else] first (code.md §6.5)']
+#]]
+ ]
+
+ [case id=program-builtin-badarg-003-arity-named level=core
+  [tags builtin dispatch bad-argument arity CXER0100]
+  [; #536 — an arity mismatch on a recognized builtin reports the expected
+     range, never `no callable`. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$substring 'abc']
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='substring: expected 2–3 argument(s), got 1 (code.md §6.5)']
+#]]
+ ]
+
+ [case id=program-builtin-badarg-004-scalar-stringify level=core
+  [tags builtin dispatch string-builtin coercion]
+  [; §6.5 string-builtin argument rule — a non-string SCALAR stringifies via
+     the canonical scalar printer ([$upper 5] is '5', not an argument error). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$upper 5]
+#]]
+  [out-text [#
+'5'
+#]]
+ ]
+
+ [case id=program-call-inline-element-arg-001 level=core
+  [tags call dispatch inline-element directive-argument]
+  [; #540 — an inline [?element NAME-EXPR …] constructor is a valid positional
+     argument to a bareword def call: the call applies; it does NOT silently
+     fall through to data construction. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def render scope=public pure ($fmt $e) [rendered [fmt $fmt] $e]]
+[render 'cx' [?element 'batch' ([entry seq=1], [entry seq=2])]]
+#]]
+  [out-text [#
+[rendered [fmt 'cx'] [batch ([entry seq=1], [entry seq=2])]]
+#]]
+ ]
+
+ [case id=program-collection-kind-001-filter-first level=core
+  [tags builtin collection-kind filter first iterator]
+  [; #529 — [$filter] returns an eager IteratorNode; [$first] destructures
+     it like nth/count do, never silently returning the whole collection. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $lit ([e x=1], [e x=2])]
+  [= $filtered [$filter $lit [?fn ($s) true]]]
+  [$first $filtered]]
+#]]
+  [out-text [#
+[e x=1]
+#]]
+ ]
+
+ [case id=program-collection-kind-002-positional-matrix level=core
+  [tags builtin collection-kind filter last head tail reverse iterator]
+  [; #529 — the whole positional family over an iterator input: last takes
+     the final item, head the first, tail drops one, reverse reorders
+     (before the fix: last/head passed the collection through whole, tail
+     was empty, reverse was unreversed — all silent). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $flt [$filter ([e x=1], [e x=2], [e x=3]) [?fn ($s) true]]]
+  [probe
+    [last [$last $flt]] [head [$head $flt]]
+    [tail [$tail $flt]] [rev [$reverse $flt]]]]
+#]]
+  [out-text [#
+[probe [last [e x=3]] [head [e x=1]] [tail ([e x=2], [e x=3])] [rev ([e x=3], [e x=2], [e x=1])]]
+#]]
+ ]
+
+ [case id=program-collection-kind-003-fp-map-iterator level=core
+  [tags builtin collection-kind filter fp map iterator]
+  [; #529 — fp_classify treats an IteratorNode as the SEQUENCE instance:
+     [$fp:map [$filter …] f] maps over the items (before: the iterator
+     classified as a bare scalar and the whole collection became one
+     singleton Some — the kind taint that propagated through fp:map). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/fp' :as fp]
+[?let [= $flt [$filter ([e x=1], [e x=2]) [?fn ($s) true]]]
+  [$first [$fp:map $flt [?fn ($v) [?element 'seen' [?attr 'x' [$concat '' $v@x]]]]]]]
+#]]
+  [out-text [#
+[seen x='1']
+#]]
+ ]
+
+ [case id=program-loop-001-accumulate-break level=core
+  [tags loop break continue bindings]
+  [; §8.15 (#550) — declared loop bindings rebind via [continue V…]
+     (positional, all of them); [break V] exits with V as the loop's value. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?loop [= $i 1] [= $acc 0]
+  [?if [> $i 5] [then [break $acc]]
+    [else [continue [+ $i 1] [+ $acc $i]]]]]
+#]]
+  [out-text [#
+15
+#]]
+ ]
+
+ [case id=program-loop-002-bare-continue level=core
+  [tags loop continue bare]
+  [; §8.15 — a single-binding countdown: [continue V] rebinds it each
+     pass until the exit condition takes the [break …] branch. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?loop [= $n 3]
+  [?if [= $n 0] [then [break 'done']]
+    [else [continue [- $n 1]]]]]
+#]]
+  [out-text [#
+'done'
+#]]
+ ]
+
+ [case id=program-loop-003-bare-break-unit level=core
+  [tags loop break unit null]
+  [; §8.15 — a bare [break] exits with null (a present unit, §9.1.2.1 2b). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?loop [break]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=program-loop-004-forgot-exit-raises level=core
+  [tags loop tail-contract CXER0100]
+  [; §8.15 — the ALL-EXPLICIT tail contract: a body value that is neither
+     [break …] nor [continue …] raises — the Clojure forgot-to-recur
+     silent-exit foot-gun is a diagnostic here, never a wrong answer. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?loop [= $i 0] 42]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-loop-005-continue-arity-raises level=core
+  [tags loop continue arity CXER0100]
+  [; §8.15 — [continue V…] rebinds ALL declared bindings positionally, or
+     none (bare); a partial rebind raises with the counts named. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?loop [= $a 1] [= $b 2] [continue 9]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-loop-006-deep-flat-stack level=core
+  [tags loop trampoline stack]
+  [; §8.15 — 50k passes in O(1) native stack (the #60 trampoline guarantee
+     without the named-def boilerplate). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?loop [= $i 0]
+  [?if [>= $i 50000] [then [break $i]] [else [continue [+ $i 1]]]]]
+#]]
+  [out-text [#
+50000
+#]]
+ ]
+
+ [case id=program-do-001-yields-unit level=core
+  [tags do effect unit null]
+  [; §8.14 (#550) — [?do] evaluates for effect and yields null (a present
+     unit), never the last value and never absence. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?do 1 2 3]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [case id=program-do-002-first-err-propagates level=core
+  [tags do effect err-propagation]
+  [; §8.14 — the first [err …] result propagates immediately (§9.2); the
+     remaining expressions never evaluate. Resolves #530: a failed effect
+     is loud without a dummy [?let] binding to swallow it. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $c [x]] [?do 'fine' [$concat '' $c@nope] 'never-reached']]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='concat: argument 2 is absence (the empty sequence) — a single scalar (or a node atomizing to one) is required; bind it or default it with [?else] first (code.md §6.5)']
+#]]
+ ]
+
+ [case id=program-for-where-call-001-fn-call-predicate level=core
+  [tags for where predicate function-call]
+  [; #537(a) regression pin — a function call inside a [where …] clause
+     participates in matching (code.md §5.1 arbitrary expressions). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $rs ([webhook path="/a"], [webhook path="/b"])]
+  [?for [in $r $rs] [where [= [$concat '' $r@path] '/a']] [yield $r]]]
+#]]
+  [out-text [#
+[webhook path='/a']
+#]]
+ ]
+
+ [case id=program-num-percent-001-modulo-head level=core
+  [tags numeric mod operator percent]
+  [; #598 (owner ruling a) — `%` is a reserved operator head aliasing the
+     §6.5 mod builtin exactly: sign of dividend, $mod parity. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?str '{[% 7 3]}|{[% -7 3]}|{[= [% 10 4] [$mod 10 4]]}']
+#]]
+  [out-text [#
+'1|-1|true'
+#]]
+ ]
+
+ [case id=program-num-percent-002-float-promotes level=core
+  [tags numeric mod operator percent float]
+  [; #598 — float operand promotes, sign of dividend (XPath 3.1 §3.5). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[% 7.5 2]
+#]]
+  [out-text [#
+1.5
+#]]
+ ]
+
+ [case id=program-num-percent-003-divide-by-zero level=core
+  [tags numeric mod operator percent error]
+  [; #598 — zero divisor raises CXER0101 like [$mod] / [/]. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[% 7 0]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-num-percent-004-arity-enforced level=core
+  [tags numeric mod operator percent arity]
+  [; #598 — a recognized operator head with wrong arity raises, never
+     falls through to data construction (§6.5 arity rule): the pre-#598
+     silent data-ification of [% a b] is retired. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[% 7]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='mod takes 2 arguments, got 1']
 #]]
  ]
 
@@ -12765,11 +13407,18 @@ cx-err:CXER0101
        these deterministic. NOTE: an `[err]`-pattern attr value carrying a colon
        (`cx-err:CXER0260`) MUST be quoted in a `[case]` pattern so it parses as a
        value rather than a stray `:` token (same quote convention as D008). ── #]
+ [# The async body PARKS on a mock sleep (a cancellation point) so [?cancel]
+    lands deterministically — under eager [?async] (#541) a bare
+    [?check-cancel] body races the cancel and can legitimately complete
+    first (cancellation is cooperative; a completed terminal is never
+    demoted). The pre-#541 shape was deterministic only under the lazy
+    drive-at-await substrate. Same park pattern as
+    program-async-004-await-cancelled. #]
  [case id=program-sap-cancel-01-checkcancel-after-cancel level=core gate=enforced
   [tags sap concurrency cancel CXER0260 precedence]
   [in-cx [# [empty] #]]
   [in-code [#
-[?let [= $f [?async [?check-cancel]]]
+[?let [= $f [?async [?let [= $_ [?sleep 10s mock]] [?check-cancel]]]]
   [= $_ [?cancel $f]]
   [?match [?await $f]
     [case [err @code='cx-err:CXER0260'] [cancelled]]
@@ -12810,10 +13459,21 @@ cx-err:CXER0101
     substrate.) #]
  [case id=program-sap-revoke-01-cap-revoked-after-cancel level=core gate=enforced
   [tags sap concurrency cancel revoke CXER0271 capability]
+  [; #541 re-bless: under EAGER spawn (§10.5.1) the original bare-effect
+     body raced the cancel (a fast body legitimately completes done —
+     terminal states never change). The deterministic §10.5.7.2 shape:
+     the body PARKS at a mock sleep (holding the race still), the cancel
+     wakes it with CXER0260 which the body CATCHES as a value (a caught
+     cancellation point does not end the task), and the next raw
+     capability effect hits the thread-revoked backstop — CXER0271 for
+     the remainder of the cancelled task, exactly the spec sentence. ]
   [in-cx [# [empty] #]]
   [in-code [#
 [?lib 'cx-stdlib/env']
-[?let [= $f [?async [$env:var 'HOME']]]
+[?let
+  [= $f [?async [?match [?sleep 10s mock]
+                  [case [err $e] [$env:var 'HOME']]
+                  [case $ok 'no-cancel']]]]
   [= $_ [?cancel $f]]
   [?match [?await $f]
     [case [err @code='cx-err:CXER0271'] [revoked]]

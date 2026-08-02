@@ -352,10 +352,7 @@ fn store_sqlite_load(mut ms MemStore) ! {
 	store_graph_replay(mut ms, getter, content, 'sqlite ${ms.root}')!
 	// #299: seed the delta watermarks from the replayed state, so the first
 	// incremental flush appends only what changes after this open.
-	for h in ms.doc_order {
-		ms.doc_manifested[h] = true
-	}
-	ms.alias_manifested = ms.aliases.clone()
+	store_graph_seed_watermarks(mut ms)
 }
 
 // store_sqlite_flush — the #299 per-op INCREMENTAL persist: everything one
@@ -429,6 +426,10 @@ fn store_sqlite_flush(mut ms MemStore) ! {
 		committed = true
 		ms.obj_flushed = ms.obj_sink.objects.len
 		store_graph_delta_commit(mut ms, d)
+	} else {
+		// Nothing to persist — still commit the empty delta so the #603 scan
+		// bookkeeping (doc cursor, dirty aliases) advances instead of re-walking.
+		store_graph_delta_commit(mut ms, d)
 	}
 	// Fold check runs even on an empty delta so a redundancy-heavy store folds
 	// on its next durability hook (gc's durable-compaction half rides this).
@@ -469,11 +470,7 @@ fn store_sqlite_persist(ms &MemStore) ! {
 	// #299: a snapshot IS the full live state — reset the delta watermarks so
 	// the next incremental flush appends only what changes after this point
 	// (write_manifest above already reset the on-disk line counter).
-	m.doc_manifested = map[string]bool{}
-	for h in m.doc_order {
-		m.doc_manifested[h] = true
-	}
-	m.alias_manifested = m.aliases.clone()
+	store_graph_seed_watermarks(mut m)
 	m.obj_flushed = m.obj_sink.objects.len
 }
 

@@ -445,7 +445,11 @@ fn test_every_directive_parses_with_empty_body() {
 		   || name == 'with-caps'
 		   || name == 'element' || name == 'attr' || name == 'entry'
 		   || name == 'name' || name == 'quote' || name == 'unquote'
-		   || name == 'splice' || name == 'eval' {
+		   || name == 'splice' || name == 'eval'
+		   // [?do] needs ≥1 effect expression (grammar [127aa] `+`) and
+		   // [?loop] a body (grammar [127ab]) — empty is a parse error by
+		   // design, same as [?with-caps]/[?let] (spec/code.md §8.14/§8.15).
+		   || name == 'do' || name == 'loop' {
 			// [?with-caps] requires at least one [deny CAP] clause
 			// (grammar [167]); an empty body is a parse error by design.
 			// The dynamic-construction directives (spec/code.md §6.4.2-§6.4.4)

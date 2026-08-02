@@ -771,8 +771,37 @@ pub fn cx_choose_quote(s string) string {
 	// canonical.md §2.10.1) — no escape pass — so it is the cheapest lossless
 	// container when the content has no '''-terminator run. Otherwise fall to a
 	// double-quoted form with the minimal escape pass.
+	//
+	// NOTE on newlines: body/collection quoted strings may carry raw newline
+	// bytes (extended/038 pins `[desc 'hello\nworld']` as THE canonical form),
+	// so this chooser is deliberately newline-agnostic. Canonical forms are
+	// identity-bearing (store Tier-1 hashes, xap package pins) — do not change
+	// this function's output shape without an owner-ruled migration.
+	// Attribute values are single-line-only; their multiline handling lives in
+	// cx_quote_attr_if_needed, BEFORE delegation here.
 	if !s.contains("'''") { return "'''${s}'''" }
 	return '"' + cx_escape_quoted(s, `"`) + '"'
+}
+
+// cx_choose_quote_render is the programs-render lane's quote chooser
+// (code.render_canonical → choose_render_quote delegates here so the escape
+// rules live in one place). It differs from cx_choose_quote only in the
+// both-quotes tiebreak: the render display contract uses single-quoted with
+// the `\'` escape (canonical.md §2.3 "Both" row — the shape the fixture
+// corpus is blessed against), where the canonical data lane above prefers
+// the verbatim triquote. Newline-agnostic like its caller — rendered
+// strings may carry raw newline bytes inside the quoted form.
+pub fn cx_choose_quote_render(s string) string {
+	has_single := s.contains("'")
+	has_double := s.contains('"')
+	if !has_single { return "'" + cx_escape_quoted(s, `'`) + "'" }
+	if !has_double { return '"' + cx_escape_quoted(s, `"`) + '"' }
+	// Both quote styles present → single-quoted with the minimal escape
+	// pass (canonical.md §2.3, "Both `'` and `\"`" row: the disambiguating
+	// tiebreak — the `"` needs no escape inside `'…'`). Triple-quoting is
+	// RESERVED for multiline values, NOT for escape-avoidance (§2.3
+	// Triple-quoted row), so it is never chosen here.
+	return "'" + cx_escape_quoted(s, `'`) + "'"
 }
 
 // cx_escape_quoted escapes the content of a single/double-quoted CX string
@@ -894,15 +923,32 @@ pub fn cx_would_autotype(s string) bool {
 }
 
 fn cx_quote_attr_if_needed(s string) string {
-	// Multi-line-text symmetry: newline-bearing string values
-	// cannot be emitted as bare / single-quote / double-quote (all
-	// single-line) without invalidating the round-trip. Triquote is
-	// now valid in AttValue position per [55a] amendment, so use it.
+	// Multi-line-text symmetry: newline-bearing string values cannot be
+	// emitted as bare / single-quote / double-quote in ATTR position (all
+	// single-line there) without invalidating the round-trip. Triquote is
+	// valid in AttValue position per the [55a] amendment, so use it; a
+	// '''-run inside the value would close the verbatim triquote early, so
+	// that (pathological) case falls to a fully escaped single-line
+	// double-quoted scalar (\n/\r decode per canonical.md §2.4).
 	if s.contains('\n') {
-		return "'''${s}'''"
+		if !s.contains("'''") {
+			return "'''${s}'''"
+		}
+		return '"' + cx_escape_quoted(s, `"`).replace('\r', '\\r').replace('\n', '\\n') + '"'
 	}
-	if s.contains(' ') || s.contains("'") || s.contains('"') || s.len == 0 {
-		return "'${s}'"
+	// #563: quote-bearing values MUST go through the shared chooser +
+	// escape pass — a verbatim `'…'` wrap around an embedded `'` emits
+	// text that re-parses as a different document, or fails to parse at
+	// all.
+	if s.contains("'") || s.contains('"') {
+		return cx_choose_quote(s)
+	}
+	// The remaining quoted wraps still need the minimal backslash
+	// re-escape: a `\n`-shaped byte pair inside `'…'` decodes as an
+	// escape on re-parse (lenient decode, §2.4), so `C:\new dir` would
+	// otherwise round-trip into a literal newline.
+	if s.contains(' ') || s.len == 0 {
+		return "'" + cx_escape_quoted(s, `'`) + "'"
 	}
 	// bare `@id` at attribute-value position is a syntactic
 	// reference. A literal string starting with '@' must be quoted to
@@ -910,7 +956,7 @@ fn cx_quote_attr_if_needed(s string) string {
 	// `@id` via cx_build_meta's is_ref branch) and is_ref=false (emit
 	// here, must NOT look like a reference token).
 	if s.len > 0 && s[0] == `@` {
-		return "'${s}'"
+		return "'" + cx_escape_quoted(s, `'`) + "'"
 	}
 	// a string value of the form `:NAME` would re-parse as an
 	// atom literal on round-trip; quote it to preserve the string kind.

@@ -643,7 +643,16 @@ fn route_client_call(client ClientRecord, method string, path string,
 		return mk_response_with_err(413, 'cx-err:CXER0164', ?cx.Node(none))
 	}
 
-	res, path_params := match_resource(svc, method, path) or {
+	// #627: split the request-target into path + query — the query rides the
+	// request as parsed [query-params] (uniform with the socket listener and
+	// the §2.2 exchange lane), and routing matches on the bare path.
+	mut req_path := path
+	mut query_nodes := []cx.Node{}
+	if qi := path.index('?') {
+		req_path = path[..qi]
+		query_nodes = http_parse_query(path[qi + 1..])
+	}
+	res, path_params := match_resource(svc, method, req_path) or {
 		return mk_response_with_err(404, 'cx-err:CXER0162', ?cx.Node(none))
 	}
 
@@ -659,7 +668,7 @@ fn route_client_call(client ClientRecord, method string, path string,
 		// per-request `$request` binding. Same shape as the socket listener's
 		// template-alias dispatch env.
 		mut auth_env := env.clone_frame_sharing_closures()
-		auth_env.bindings['request'] = build_request_node(method, path, path_params, opts.payload)
+		auth_env.bindings['request'] = build_request_node(method, req_path, path_params, opts.payload, []cx.Node{}, query_nodes)
 		auth_result := eval_auth(auth_expr, mut auth_env)!
 		if is_err_value(auth_result) {
 			return mk_response_with_err(401, 'cx-err:CXER0161', ?cx.Node(none))
@@ -670,7 +679,7 @@ fn route_client_call(client ClientRecord, method string, path string,
 	// stash service root into dyn_context so [$serve-file] can resolve
 	// the request path against the filesystem root.
 	mut body_env := env.clone_frame_sharing_closures()
-	body_env.bindings['request'] = build_request_node(method, path, path_params, opts.payload)
+	body_env.bindings['request'] = build_request_node(method, req_path, path_params, opts.payload, []cx.Node{}, query_nodes)
 	if svc.root != '' {
 		body_env.dyn_context << cx.Node(cx.Element{
 			name: 'cx-service-root'
@@ -877,13 +886,17 @@ fn match_path(route string, req string) ?[]cx.Node {
 	return params
 }
 
-fn build_request_node(method string, path string, params []cx.Node, body ?cx.Node) cx.Node {
+fn build_request_node(method string, path string, params []cx.Node, body ?cx.Node, hdr_nodes []cx.Node, query_nodes []cx.Node) cx.Node {
 	body_item := body or { cx.Node(cx.Element{ name: '' }) }
 	// method/path are scalar fields → attributes. The
 	// path-params/query-params/headers collections and `body` are plain
 	// child elements; path-param captures and `body` read back via
 	// `$request/path-params/id` / `$request/body`, resolving through the
-	// terminal labeled-field unwrap (#19) to the inner value.
+	// terminal labeled-field unwrap (#19) to the inner value. `hdr_nodes`
+	// are pre-built [header name=… value=…] elements — the module-serve
+	// dispatch passes the wire headers (the http.md locked server-received
+	// shape carries them; a handler reads e.g. the Authorization bearer);
+	// the directive-service sites pass none (their auth is the :auth seam).
 	mut rq_attrs := []cx.Attribute{}
 	mut rq_items := []cx.Node{}
 	append_result_field('method', cx.Node(cx.ScalarNode{
@@ -891,8 +904,8 @@ fn build_request_node(method string, path string, params []cx.Node, body ?cx.Nod
 	append_result_field('path', cx.Node(cx.ScalarNode{
 		value: cx.ScalarValue(path), data_type: cx.ScalarType.string_type }), mut rq_attrs, mut rq_items)
 	rq_items << cx.Node(cx.Element{ name: 'path-params', items: params })
-	rq_items << cx.Node(cx.Element{ name: 'query-params', items: []cx.Node{} })
-	rq_items << cx.Node(cx.Element{ name: 'headers', items: []cx.Node{} })
+	rq_items << cx.Node(cx.Element{ name: 'query-params', items: query_nodes })
+	rq_items << cx.Node(cx.Element{ name: 'headers', items: hdr_nodes })
 	rq_items << cx.Node(cx.Element{ name: 'body', items: [body_item] })
 	return cx.Element{
 		name:  'request'

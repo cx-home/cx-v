@@ -72,10 +72,17 @@ fn sql_handle_of(n cx.Node) ?int {
 	return none
 }
 
-fn sql_params(args []cx.Node) []string {
+// sql_params converts bind arguments to the engine's string parameters.
+// Parameters are STRING SCALARS ONLY, and a non-string value in parameter
+// position REFUSES with the parameter named (db_access.md §7.1, tightened
+// per the #524 owner ruling 2026-07-21) — never the old silent ''-bind
+// (`SELECT ?+?` with ints returned 0 and cost real debugging time).
+fn sql_params(args []cx.Node) ![]string {
 	mut p := []string{cap: args.len}
-	for a in args {
-		p << (store_arg_str(a) or { '' })
+	for i, a in args {
+		p << store_arg_str(a) or {
+			return error('bind parameter ${i + 1} is not a string scalar — parameters are string scalars only (db_access.md §7.1); convert explicitly (e.g. [\$concat \'\' \$v])')
+		}
 	}
 	return p
 }
@@ -161,12 +168,19 @@ fn sql_run(args []cx.Node) !SqlResult {
 	stmt := store_arg_str(args[1]) or { return error('expected a SQL string') }
 	mut reg := sql_reg()
 	mut conn := reg.conns[id] or { return error('unknown sql handle ${id}') }
-	return conn.run(stmt, sql_params(args[2..]))!
+	return conn.run(stmt, sql_params(args[2..])!)!
 }
 
 fn sql_exec_impl(args []cx.Node) cx.Node {
 	if args.len < 2 {
 		return mk_err('cx-err:CXER0108', 'E_ARG: sql-exec expects ($db, $sql, $params…)')
+	}
+	// §7.1 (#524): a bad bind parameter is an OPERAND error (CXER0100
+	// naming the parameter), distinct from an engine fault below.
+	if args.len > 2 {
+		sql_params(args[2..]) or {
+			return mk_err('cx-err:CXER0100', 'E_OPERAND_KIND: sql-exec ${err.msg()}')
+		}
 	}
 	res := sql_run(args) or { return mk_err('cx-err:CXER1120', 'E_SQL: ${err.msg()}') }
 	return cx.Element{
@@ -187,6 +201,12 @@ fn sql_exec_impl(args []cx.Node) cx.Node {
 fn sql_query_impl(args []cx.Node) cx.Node {
 	if args.len < 2 {
 		return mk_err('cx-err:CXER0108', 'E_ARG: sql-query expects ($db, $sql, $params…)')
+	}
+	// §7.1 (#524): see sql_exec_impl.
+	if args.len > 2 {
+		sql_params(args[2..]) or {
+			return mk_err('cx-err:CXER0100', 'E_OPERAND_KIND: sql-query ${err.msg()}')
+		}
 	}
 	res := sql_run(args) or { return mk_err('cx-err:CXER1120', 'E_SQL: ${err.msg()}') }
 	mut row_nodes := []cx.Node{cap: res.rows.len}

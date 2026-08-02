@@ -3,7 +3,7 @@ module code
 import cx
 
 // stdlib_xsp.v — native primitives backing the cx-stdlib/xsp module
-// (spec/02-working/xsp.md). XSP is the XAP Stream Protocol: a self-describing,
+// (spec/03-approved/xap/xsp.md). XSP is the XAP Stream Protocol: a self-describing,
 // self-delimiting frame that carries XAP over any transport. The payload is
 // opaque bytes; the canonical binary encoding dogfoods CX `data-bin` via the
 // codec registry (cx.codec_emit_bytes_node / codec_parse_bytes_node).
@@ -12,7 +12,7 @@ import cx
 // Reuses shared `module code` helpers (bytes_node/bytes_string_node from bytes,
 // xap_elem/xap_attr/xap_elem_attr from xap, mk_err from eval).
 //
-// Frame layout (network byte order / big-endian), spec/02-working/xsp.md §2:
+// Frame layout (network byte order / big-endian), spec/03-approved/xap/xsp.md §2:
 //   0     1  version (0x01)
 //   1     1  type    (1 request 2 event 3 reply 4 cancel 5 ping 6 pong 7 error)
 //   2     8  stream-id (u64)
@@ -22,7 +22,7 @@ import cx
 //   13+P  4  payload-len (u32)
 //   17+P  L  payload (data-bin if bit0 set, else UTF-8 text)
 
-// CXER codes per spec/02-working/xsp.md §3 (symbolic, trust-stack style).
+// CXER codes per spec/03-approved/xap/xsp.md §3 (symbolic, trust-stack style).
 const xsp_err_version   = 'cx-err:CXER-XSP-VERSION'
 const xsp_err_truncated = 'cx-err:CXER-XSP-TRUNCATED'
 const xsp_err_type      = 'cx-err:CXER-XSP-TYPE'
@@ -44,6 +44,11 @@ fn xsp_type_code(s string) ?u8 {
 		'ping' { u8(5) }
 		'pong' { u8(6) }
 		'error' { u8(7) }
+		// §5.2 flow control (#560): grants N credits on a stream (payload =
+		// a non-negative integer). NEGOTIATED-ONLY on the wire — a client
+		// sends it only to a server that advertised the `credit` feature
+		// (xsp.md §5.0), so pre-§5 peers never see the byte.
+		'credit' { u8(8) }
 		else { none }
 	}
 }
@@ -58,6 +63,7 @@ fn xsp_type_name(b u8) ?string {
 		5 { 'ping' }
 		6 { 'pong' }
 		7 { 'error' }
+		8 { 'credit' }
 		else { none }
 	}
 }

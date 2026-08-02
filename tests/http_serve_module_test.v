@@ -85,3 +85,70 @@ fn test_module_serve_invokes_handler() {
 	assert status == '200', 'expected 200, got ${status} (full: ${res.output})'
 	assert body == 'served-by-handler', 'expected handler body, got ${body}'
 }
+
+// Regression gate for the #537(b)/#538/#539 serve-handler env reports
+// (filed from the fabric P3 adapter dogfooding, not reproducible on the
+// current engine — this test pins the behaviors so they stay fixed):
+//   • #538(a) a program [?def] resolves inside the handler closure;
+//   • #538(b) a ?let-bound MULTI-ARG closure applies (does not return its
+//     last argument);
+//   • #537(b) a [where …] clause sees handler-local ?let bindings AND may
+//     carry a function call;
+//   • #539 an INT-typed [?attr 'status' 401] maps to the wire status.
+fn test_module_serve_handler_env_regressions() {
+	if !curl_available() {
+		eprintln('SKIP: curl not available')
+		return
+	}
+	tmp := os.temp_dir()
+	port := pick_port() + 100 // disjoint from test_module_serve_invokes_handler
+	prog := os.join_path(tmp, 'serve-env-${time.now().unix_milli()}.cx')
+	os.write_file(prog, "
+[?lib 'cx-stdlib/http']
+[?lib 'cx-stdlib/format' :as format]
+[?def helper scope=public pure (\$x) [helped \$x]]
+[?def make-handler scope=public impure (\$cfg)
+  [?fn (\$req)
+    [?let
+      [= \$path [\$concat '' \$req@path]]
+      [= \$mk [?fn (\$status \$node) [?element 'resp2' [?attr 's' \$status] \$node]]]
+      [= \$a [helper 'x']]
+      [= \$b [\$mk 7 [?element 'n' 'v']]]
+      [= \$w  [\$first [?for [in \$r \$cfg/routes/webhook] [where [= \$r@path \$path]] [yield \$r]]]]
+      [= \$wc [\$first [?for [in \$r \$cfg/routes/webhook] [where [= [\$concat '' \$r@path] \$path]] [yield \$r]]]]
+      [?element 'response' [?attr 'status' 401]
+        [?element 'body' [\$format:canonical [?element 'out'
+          [?element 'a' \$a] [?element 'b' \$b]
+          [?element 'w' \$w] [?element 'wc' \$wc]]]]]]]]
+[?let
+  [= \$cfg [?element 'cfg' [?element 'routes'
+            [?element 'webhook' [?attr 'path' '/a']]
+            [?element 'webhook' [?attr 'path' '/b']]]]]
+  [\$http:serve 'tcp://127.0.0.1:${port}' [make-handler \$cfg] {block: true}]]
+") or { panic(err) }
+	defer {
+		os.rm(prog) or {}
+	}
+	pid := spawn_eval(prog, port)
+	defer {
+		if pid > 0 {
+			os.execute('kill -9 ${pid} 2>/dev/null')
+		}
+	}
+
+	res := os.execute('curl -s --max-time 3 -w "\n%{http_code}" http://127.0.0.1:${port}/a')
+	assert res.exit_code == 0, 'curl failed: ${res.output}'
+	lines := res.output.split('\n')
+	status := lines.last()
+	body := lines[..lines.len - 1].join('\n')
+	// #539 — the int-typed status attr reaches the wire.
+	assert status == '401', 'expected 401 from int-typed status attr, got ${status} (full: ${res.output})'
+	// #538(a) — the program def applied ([helped 'x'], not literal [helper 'x']).
+	assert body.contains("[a [helped 'x']]"), '#538(a) def call did not apply: ${body}'
+	// #538(b) — the 2-arg local closure applied (resp2 wrapper present).
+	assert body.contains("[b [resp2 s=7 [n 'v']]]"), '#538(b) multi-arg closure did not apply: ${body}'
+	// #537(b) — [where] with a handler-local comparand matched the /a route.
+	assert body.contains("[w [webhook path='/a']]"), '#537(b) [where] missed handler-local binding: ${body}'
+	// #537(b) cont. — [where] carrying a FUNCTION CALL matched too.
+	assert body.contains("[wc [webhook path='/a']]"), '#537(b) [where] with fn-call predicate missed: ${body}'
+}

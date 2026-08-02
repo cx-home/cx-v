@@ -1,6 +1,8 @@
 @[has_globals]
 module code
 
+import sync
+
 import cx
 
 // stdlib_caps.v — capability-based effect enforcement (spec/core/security.md).
@@ -186,9 +188,57 @@ fn caps_restore(saved voidptr) {
 	g_active_caps = saved
 }
 
+// ── §10.5.7.2 cancellation-revokes-capabilities (thread-scoped, #541) ────────
+//
+// Once a task is cancelled its capability set narrows to EMPTY for the
+// remainder of the task. The lazy substrate narrowed the global set around
+// the (single-threaded) drive; with eager spawned futures the narrowing
+// must be per-thread: the future's thread id registers here when its
+// cancel flag is raised, and cap_allowed denies everything on a revoked
+// thread. The registry entry clears when the thread publishes its
+// terminal state (run_future_thread's defer). Cancellation POINTS still
+// observe the flag FIRST and report CXER0260 — the §10.5.7.2 precedence
+// is theirs; this is the backstop for raw effects reached between points.
+const g_revoked_tids_lock = &sync.RwMutex(sync.new_rwmutex())
+
+__global (
+	g_revoked_tids map[u64]bool
+)
+
+fn cap_thread_id() u64 {
+	return u64(C.pthread_self())
+}
+
+pub fn caps_revoke_thread(tid u64) {
+	mut l := unsafe { g_revoked_tids_lock }
+	l.lock()
+	defer { l.unlock() }
+	g_revoked_tids[tid] = true
+}
+
+pub fn caps_unrevoke_thread(tid u64) {
+	mut l := unsafe { g_revoked_tids_lock }
+	l.lock()
+	defer { l.unlock() }
+	g_revoked_tids.delete(tid)
+}
+
+fn cap_thread_revoked() bool {
+	mut l := unsafe { g_revoked_tids_lock }
+	l.rlock()
+	defer { l.runlock() }
+	if g_revoked_tids.len == 0 {
+		return false
+	}
+	return cap_thread_id() in g_revoked_tids
+}
+
 // cap_allowed reports whether `capability` is granted by the active set.
 // nil set (empty/default) denies everything.
 fn cap_allowed(capability string) bool {
+	if cap_thread_revoked() {
+		return false // §10.5.7.2 — cancelled task, capability set is EMPTY
+	}
 	if g_active_caps == unsafe { nil } {
 		return false
 	}

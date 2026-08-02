@@ -40,6 +40,13 @@ fn store_objgraph_active(ms &MemStore) bool {
 
 // store_doc_present reports whether a local store holds a doc at `hash`.
 fn store_doc_present(ms &MemStore, hash string) bool {
+	// #628: reads on a possibly-shared store serialize on the reentrant
+	// op-lock too — a V map read racing a sibling handle's rehash is UB.
+	mut m := unsafe { ms }
+	store_lock_enter(mut m)
+	defer {
+		store_lock_exit(mut m)
+	}
 	if store_objgraph_active(ms) {
 		return hash in ms.obj_roots
 	}
@@ -52,6 +59,11 @@ fn store_doc_present(ms &MemStore, hash string) bool {
 // present-but-unreconstructable doc is a HARD integrity error (#129-C), never a
 // silent miss. Callers MUST check store_doc_present first for absence semantics.
 fn store_doc_text(ms &MemStore, hash string) !string {
+	mut m := unsafe { ms }
+	store_lock_enter(mut m)
+	defer {
+		store_lock_exit(mut m)
+	}
 	if store_objgraph_active(ms) {
 		root := ms.obj_roots[hash] or { return error('E_STORE_NOT_FOUND: ${hash}') }
 		// Resolve objects through the universal ObjectBackend seam (#76): the live
@@ -95,6 +107,10 @@ fn store_doc_text(ms &MemStore, hash string) !string {
 // Returns true iff the doc was newly inserted (so the caller persists only on a
 // real change).
 fn store_put_canonical(mut ms MemStore, hash string, canonical string) !bool {
+	store_lock_enter(mut ms)
+	defer {
+		store_lock_exit(mut ms)
+	}
 	if store_objgraph_active(ms) {
 		if hash in ms.obj_roots {
 			return false
@@ -130,6 +146,10 @@ fn store_put_canonical(mut ms MemStore, hash string, canonical string) !bool {
 // code entries are source text, not data documents, so they are never
 // decomposed. Idempotent; returns true iff newly inserted.
 fn store_put_raw(mut ms MemStore, key string, raw string) !bool {
+	store_lock_enter(mut ms)
+	defer {
+		store_lock_exit(mut ms)
+	}
 	if store_objgraph_active(ms) {
 		if key in ms.obj_roots {
 			return false
@@ -151,6 +171,10 @@ fn store_put_raw(mut ms MemStore, key string, raw string) !bool {
 // and from doc_order. Object-graph objects left unreferenced are reclaimed at
 // compaction (content-addressed; a shared object stays live for other docs).
 fn store_delete_local(mut ms MemStore, hash string) {
+	store_lock_enter(mut ms)
+	defer {
+		store_lock_exit(mut ms)
+	}
 	if store_objgraph_active(ms) {
 		ms.obj_roots.delete(hash)
 	} else {
@@ -159,5 +183,48 @@ fn store_delete_local(mut ms MemStore, hash string) {
 	idx := ms.doc_order.index(hash)
 	if idx >= 0 {
 		ms.doc_order.delete(idx)
+		// #603: deleting below the scan cursor shifts the unscanned tail left
+		// by one — keep the cursor aligned or a later-put doc would slip under
+		// it and never reach the manifest.
+		if idx < ms.doc_scanned {
+			ms.doc_scanned--
+		}
 	}
+	// #603: arm the tombstone scan on the next delta.
+	ms.has_removals = true
+}
+
+// store_alias_set_local / store_alias_delete_local — the ONE internal seam for
+// mutating the live alias table (#603): they keep alias_order and the O(delta)
+// flush discovery (alias_dirty / has_removals) aligned with the aliases map.
+// Every live writer (the set/delete verbs, branch, migrate, tests poking a
+// MemStore directly) routes here; load/replay paths set the maps directly and
+// reseed the watermarks wholesale (store_graph_seed_watermarks) instead.
+fn store_alias_set_local(mut ms MemStore, name string, hash string) {
+	store_lock_enter(mut ms)
+	defer {
+		store_lock_exit(mut ms)
+	}
+	if name !in ms.aliases {
+		ms.alias_order << name
+	}
+	ms.aliases[name] = hash
+	ms.alias_dirty << name
+}
+
+fn store_alias_delete_local(mut ms MemStore, name string) bool {
+	store_lock_enter(mut ms)
+	defer {
+		store_lock_exit(mut ms)
+	}
+	if name !in ms.aliases {
+		return false
+	}
+	ms.aliases.delete(name)
+	idx := ms.alias_order.index(name)
+	if idx >= 0 {
+		ms.alias_order.delete(idx)
+	}
+	ms.has_removals = true
+	return true
 }

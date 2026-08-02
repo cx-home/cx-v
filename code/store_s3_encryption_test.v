@@ -112,8 +112,7 @@ fn test_store_s3_encrypted_roundtrip_and_at_rest() {
 	assert s3enc_load_ok(mut ms), 'fresh encrypted open must succeed (stamps the marker)'
 	store_put_canonical(mut ms, h, c) or { panic(err) }
 	store_s3_flush(mut ms) or { panic(err) }
-	ms.alias_order << 'orders/latest'
-	ms.aliases['orders/latest'] = h
+	store_alias_set_local(mut ms, 'orders/latest', h)
 	store_s3_flush(mut ms) or { panic(err) }
 
 	// marker declared, and nothing under objects/ leaks plaintext. The refs

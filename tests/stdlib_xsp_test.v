@@ -2,7 +2,7 @@ module main
 
 import code
 
-// TDD for cx-stdlib/xsp (spec/02-working/xsp.md; issue #31). XSP is the XAP
+// TDD for cx-stdlib/xsp (spec/03-approved/xap/xsp.md; issue #31). XSP is the XAP
 // Stream Protocol frame codec: a self-describing, self-delimiting frame whose
 // payload dogfoods CX `data-bin`. The whole codec is PURE (no capability grant),
 // so these run under eval_code's deny-all caps.
@@ -89,4 +89,15 @@ fn test_xsp_truncated_errs() {
 [\$xsp:decode [\$b:from-hex \"0102\"]]"
 	out := xsp_eval(prog)
 	assert out.contains('CXER-XSP-TRUNCATED'), 'expected truncated err, got: ${out}'
+}
+
+// §5.2 (#560): the negotiated-only `credit` frame (type 8) round-trips —
+// the payload is a data-bin integer grant.
+fn test_xsp_credit_frame_roundtrip() {
+	prog := "[?lib 'cx-stdlib/xsp' :as xsp]
+[\$xsp:decode [\$xsp:encode [frame type=credit stream=42 [payload 7]]]]"
+	out := xsp_eval(prog)
+	assert out.contains('type=credit'), 'credit type lost: ${out}'
+	assert out.contains("stream='42'") || out.contains('stream=42'), 'stream lost: ${out}'
+	assert out.contains('7'), 'grant payload lost: ${out}'
 }

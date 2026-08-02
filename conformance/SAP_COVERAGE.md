@@ -76,7 +76,7 @@ The `COVERAGE` + `RED-COMPLETE` gate evidence: every Stage-A normative clause ha
 
 ## §9.1.2 absence cutover — the null/absence catalog (Phase C1)
 The no-conflation guard (§9.1.2.1 rule b): no builtin returns `null` for "absent."
-Each catalogued absent-null return migrated to the absence channel (the empty
+Each cataloged absent-null return migrated to the absence channel (the empty
 sequence `()`); extraction is `[?else]` (getOrElse, §8.13). These live in the
 stdlib `.cxd` files and run enforced under a least-privilege `grant=`.
 | catalog site | channel | fixtures | gate |

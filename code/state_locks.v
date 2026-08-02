@@ -277,6 +277,52 @@ fn (mut s ProgramState) future_alloc_id() string {
 	return id
 }
 
+// future_publish stamps a concurrent future's terminal state under the
+// futures lock (#541) — one locked transition, mirroring worker_publish's
+// arbitration: an already-terminal future is never re-stamped (completion
+// and cancellation cannot interleave into a torn state; for a body with no
+// cancellation point, completion wins — §10.5.1 terminal states never
+// change).
+fn (mut s ProgramState) future_publish(mut f FutureRecord, state string, value cx.Node, cause cx.Node) {
+	s.futures_lock.lock()
+	defer { s.futures_lock.unlock() }
+	if f.state in ['done', 'failed', 'cancelled'] {
+		return
+	}
+	f.state = state
+	f.value = value
+	f.cause = cause
+	f.parked_until_ns = 0
+}
+
+// futures_parked_earliest reports the concurrent-future park picture for
+// the await barriers (#541): (runnable, earliest) where `runnable` counts
+// spawned futures that are non-terminal AND not parked at a mock sleep,
+// and `earliest` is the soonest parked wake time (0 when none parked).
+// The barrier may advance the logical clock ONLY when runnable == 0 —
+// otherwise a real-time body still making progress would race the clock.
+fn (mut s ProgramState) futures_parked_earliest() (int, i64) {
+	s.futures_lock.rlock()
+	defer { s.futures_lock.runlock() }
+	mut runnable := 0
+	mut earliest := i64(0)
+	for _, f in s.futures {
+		if !f.concurrent {
+			continue
+		}
+		if f.state in ['done', 'failed', 'cancelled'] {
+			continue
+		}
+		p := f.parked_until_ns
+		if p == 0 {
+			runnable++
+		} else if earliest == 0 || p < earliest {
+			earliest = p
+		}
+	}
+	return runnable, earliest
+}
+
 // ── test_counters / test_err_counts / test_seq_idx ──────────────────────────
 
 @[inline]

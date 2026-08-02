@@ -567,33 +567,16 @@ fn render_scalar(n cx.ScalarNode) string {
 }
 
 // choose_render_quote picks a quote style for a string scalar in
-// programs-render output. The programs-render contract prefers `"…"`
-// over `'…'` (the canonical-CX cx_choose_quote prefers single first;
-// matching that would churn every existing fixture's out_text). The
-// rules: prefer double; fall back to single when the string contains
-// `"`; fall back to triple-single when both; fall back to triple-
-// double when even triples collide. Empty / quote-free strings get
-// double-quote wrap to keep the existing fixture shape.
+// programs-render output. Since #563 this delegates to the shared
+// single-line §2.3 chooser (no `'` → single-quoted; has `'` no `"` →
+// double-quoted; both → single-quoted with `\'` escape) so the escape
+// rules live in exactly one place. It deliberately bypasses the
+// canonical emitter's multiline triquote branch: the programs-render
+// display lane keeps raw newlines inside the quoted form — the shape
+// the entire fixture corpus is blessed against (csv:emit, to-format,
+// triquote literals, …).
 fn choose_render_quote(s string) string {
-	// Quoting hierarchy per spec/core/canonical.md §2.3 (bare > single >
-	// double; triple is multiline-only):
-	//   - no `'`             → single-quoted (the default quoting form)
-	//   - has `'`, no `"`    → double-quoted (the apostrophe needs no escape)
-	//   - has both `'` & `"` → single-quoted with `\'` escape (the
-	//                          disambiguating tiebreak, line 130; the `"`
-	//                          needs no escape inside `'…'`)
-	// Triple-quoting is RESERVED for values with literal newlines or
-	// consecutive whitespace (line 131) — NOT for escape-avoidance — and is
-	// emitted by the multiline path, not here.
-	has_double := s.contains('"')
-	has_single := s.contains("'")
-	// Minimal backslash re-escape (cx.cx_escape_quoted) so the rendered scalar
-	// round-trips through the data parser's lenient escape decode — shared with
-	// the canonical-CX emitter (no two-copy drift). The both-quotes branch's
-	// `'`→`\'` escape is subsumed by the delimiter-escape pass.
-	if !has_single { return "'" + cx.cx_escape_quoted(s, `'`) + "'" }
-	if !has_double { return '"' + cx.cx_escape_quoted(s, `"`) + '"' }
-	return "'" + cx.cx_escape_quoted(s, `'`) + "'"
+	return cx.cx_choose_quote_render(s)
 }
 
 // ── §9 / decision (a): canonical array-body render ─────────────────────────
@@ -822,6 +805,22 @@ fn render_seq_item(n cx.Node) string {
 		}
 		return '(${parts.join(', ')})'
 	}
+	// #620: a TextNode in ITEM position (a `(…)` sequence entry, an `[…]`
+	// array entry, a `{k: v}` map row value) must round-trip as the SAME
+	// string — bare text that would auto-type (`5` → int) or split on a
+	// structural char re-imports as a DIFFERENT value, a silent type flip.
+	// Element bodies have applied this rule since the body-item fix
+	// (render_body_item); item position missed it — observed as the replay
+	// lane's records rendering `n: 5` where the live lane rendered `n: '5'`
+	// (equal values, the data-parsed one holding TextNode where the program
+	// lane holds a string scalar — the #587/#618 lane-parity invariant).
+	// Bare-safe names (`u`, `admin`) stay bare: their canonical is unchanged.
+	if n is cx.TextNode {
+		if needs_quote_string_item(n.value) {
+			return choose_render_quote(n.value)
+		}
+		return n.value
+	}
 	return render_node(n)
 }
 
@@ -838,6 +837,15 @@ fn render_seq_item_to(mut b strings.Builder, n cx.Node) {
 			render_seq_item_to(mut b, it)
 		}
 		b.write_string(')')
+		return
+	}
+	// #620: same item-position TextNode round-trip rule as render_seq_item.
+	if n is cx.TextNode {
+		if needs_quote_string_item(n.value) {
+			b.write_string(choose_render_quote(n.value))
+			return
+		}
+		b.write_string(n.value)
 		return
 	}
 	render_node_to(mut b, n)

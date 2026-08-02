@@ -109,6 +109,31 @@ fn test_incremental_delete_tombstone_survives_reload() {
 	assert store_doc_present(ms2, h3)
 }
 
+// #603 scan-cursor alignment: deleting a doc BELOW the flush scan cursor shifts
+// doc_order left — a doc put afterwards must still reach the manifest (a
+// misaligned cursor would silently skip it: data loss on reload).
+fn test_incremental_delete_below_cursor_then_put() {
+	root := ci_root('cursor')
+	os.rmdir_all(root) or {}
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	mut ms := ci_new(root)
+	h1 := ci_put(mut ms, '[a [x 1]]')
+	h2 := ci_put(mut ms, '[b [y 2]]') // cursor now sits past both docs
+	// delete below the cursor and stage a NEW doc before any flush: the put
+	// lands at an index the stale cursor would already have covered.
+	store_delete_local(mut ms, h1)
+	c3, h3 := ci_canon_hash('[c [z 3]]')
+	store_put_canonical(mut ms, h3, c3) or { panic('put: ' + err.msg()) }
+	store_cxpack_flush(mut ms) or { panic('flush: ${err.msg()}') }
+
+	mut ms2 := ci_new(root)
+	store_cxpack_load(mut ms2) or { panic('load: ' + err.msg()) }
+	assert ms2.doc_order == [h2, h3], 'doc put after a below-cursor delete must survive reload (got ${ms2.doc_order})'
+	assert store_doc_present(ms2, h3), 'post-delete put lost — scan cursor misaligned'
+}
+
 // Alias set / update / delete are all carried incrementally (A records +
 // last-write-wins, X tombstone) and reload to the final live state.
 fn test_incremental_alias_lifecycle() {
@@ -121,21 +146,15 @@ fn test_incremental_alias_lifecycle() {
 	h1 := ci_put(mut ms, '[a [x 1]]')
 	h2 := ci_put(mut ms, '[b [y 2]]')
 
-	// set, then update, then a second alias, then delete the first.
-	ms.aliases['latest'] = h1
-	ms.alias_order << 'latest'
+	// set, then update, then a second alias, then delete the first — through the
+	// #603 mutation seam (direct map pokes bypass the O(delta) flush discovery).
+	store_alias_set_local(mut ms, 'latest', h1)
 	store_cxpack_flush(mut ms) or { panic('flush: ${err.msg()}') }
-	ms.aliases['latest'] = h2 // update → new 'A' record (last-write-wins)
+	store_alias_set_local(mut ms, 'latest', h2) // update → new 'A' record (last-write-wins)
 	store_cxpack_flush(mut ms) or { panic('flush: ${err.msg()}') }
-	ms.aliases['pinned'] = h1
-	ms.alias_order << 'pinned'
+	store_alias_set_local(mut ms, 'pinned', h1)
 	store_cxpack_flush(mut ms) or { panic('flush: ${err.msg()}') }
-	// delete 'pinned'
-	ms.aliases.delete('pinned')
-	idx := ms.alias_order.index('pinned')
-	if idx >= 0 {
-		ms.alias_order.delete(idx)
-	}
+	assert store_alias_delete_local(mut ms, 'pinned')
 	store_cxpack_flush(mut ms) or { panic('flush: ${err.msg()}') }
 
 	mut ms2 := ci_new(root)
@@ -145,10 +164,11 @@ fn test_incremental_alias_lifecycle() {
 	assert ms2.alias_order == ['latest'], 'alias order wrong after reload (${ms2.alias_order})'
 }
 
-// Once segments accrue past the threshold the store compacts to a single pack,
-// the segment files are removed, and the data reloads identically from the lone
-// compacted pack.
-fn test_incremental_compaction_folds_segments() {
+// #603: garbage-free appends never trip the O(live) full compaction — the
+// size-tiered segment fold (binary counter over segment sizes) keeps the live
+// segment-file count logarithmic instead, and everything reloads identically
+// from the folded segments.
+fn test_incremental_append_only_tiers_segments_no_full_compaction() {
 	root := ci_root('compact')
 	os.rmdir_all(root) or {}
 	defer {
@@ -156,21 +176,23 @@ fn test_incremental_compaction_folds_segments() {
 	}
 	mut ms := ci_new(root)
 	mut hashes := []string{}
-	// exactly the threshold number of puts → the last flush trips compaction.
-	for i in 0 .. cxpack_compact_segments {
+	// well past the old every-16-segments threshold: 3× worth of appends.
+	for i in 0 .. 3 * cxpack_compact_segments {
 		hashes << ci_put(mut ms, '[rec [id ${i}] [v "val-${i}"]]')
 	}
-	// compaction fired inside the threshold-crossing flush.
-	assert os.exists(os.join_path(root, cxpack_pack)), 'compaction should write the single store.cxpack'
-	assert ci_seg_count(root) == 0, 'compaction should remove the folded segment packs (found ${ci_seg_count(root)})'
-	assert ms.obj_pack.segment_count() == 0, 'seg_count should reset after compaction'
+	// no garbage → no full compaction: the single store.cxpack never appears...
+	assert !os.exists(os.join_path(root, cxpack_pack)), 'append-only store must not pay the O(live) full compaction'
+	// ...and tiered folding keeps the segment-file count far below one-per-append.
+	segs := ci_seg_count(root)
+	assert segs > 0 && segs < 8, 'size-tiered fold should bound ${3 * cxpack_compact_segments} appends to a few segment files (found ${segs})'
+	assert ms.obj_pack.live_segments() == segs, 'backend live-segment bookkeeping out of step with the files on disk'
 
 	mut ms2 := ci_new(root)
 	store_cxpack_load(mut ms2) or { panic('load: ' + err.msg()) }
-	assert ms2.doc_order.len == hashes.len, 'doc count changed across compaction reload'
+	assert ms2.doc_order.len == hashes.len, 'doc count changed across tiered-fold reload'
 	for i, h in hashes {
 		// canonical renders quoted scalars with single quotes.
-		assert (store_doc_text(ms2, h) or { '' }) == "[rec [id ${i}] [v 'val-${i}']]", 'doc ${h} wrong after compaction reload'
+		assert (store_doc_text(ms2, h) or { '' }) == "[rec [id ${i}] [v 'val-${i}']]", 'doc ${h} wrong after tiered-fold reload'
 	}
 }
 
@@ -184,7 +206,8 @@ fn test_compaction_reclaims_unreferenced_objects() {
 	}
 	mut ms := ci_new(root)
 	keep := ci_put(mut ms, '[keep [k 1]]')
-	doomed := ci_put(mut ms, '[doomed [big "a-unique-subtree-not-shared-with-keep"] [more [deep "x"]]]')
+	doomed := ci_put(mut ms,
+		'[doomed [big "a-unique-subtree-not-shared-with-keep"] [more [deep "x"]]]')
 	store_delete_local(mut ms, doomed)
 	store_cxpack_flush(mut ms) or { panic('flush: ${err.msg()}') }
 

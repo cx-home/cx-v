@@ -127,6 +127,7 @@ fn pure_flow_directive_table() map[string]bool {
 		'?throw',
 		'?yield',
 		'?do',
+		'?loop',
 		'?when',
 		'?unless',
 		'?case',

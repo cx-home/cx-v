@@ -1,0 +1,186 @@
+[; cx-fabric — platform-level eventing: durable + transient planes
+   (spec/02-working/fabric.md; band CXER4920-4949). Its OWN bundled package
+   (like cx-xap), NOT a cx-stdlib module: fabric COMPOSES journal (durable
+   plane: a fabric stream IS a journal stream — fabric adds delivery, consumer
+   groups, and store-persisted offsets), bus (the §2.2 subscription pattern
+   vocabulary, reused verbatim), and store (offset persistence through the
+   journal's own store). It adds no storage, digest, ordering, or crypto
+   mechanism of its own, and no capability of its own — a mem:// journal is
+   capability-free; file/remote journals are gated at store's own effect
+   points.
+
+   Two planes, one surface, explicit durability axis: publish/subscribe/
+   receive/ack are the DURABLE plane (ordered per stream, attributed,
+   hash-chained, replayable, at-least-once via cumulative ack + committed
+   offsets); emit/read are the TRANSIENT plane (latest-wins per channel, no
+   history, no replay — the generalized xap Tier-2 coord pattern). receive is
+   the batched pull primitive; the embedded tier never blocks (returns what is
+   committed now; empty node-set when nothing). Pattern forms: a topic atom
+   (:order.placed; trailing .* is a prefix-glob), a head-name string, or an
+   arity-1 boolean predicate fn over the published event.
+
+   The bodies forward to the fabric-* primitives (vcx/code/stdlib_fabric.v);
+   receive dispatches through the env-aware path (predicate patterns apply a
+   CX callable). ]
+
+[; construction / lifecycle — open is DUAL-FORM (spec §15: embedded or
+   remote): a [journal] element composes an embedded fabric over it; an
+   xsp://host:port (or xsps:// TLS) URL string dials a fabric-serve daemon
+   and attaches via XSP-AUTH (opts: tenant required; did+seed for a proven
+   identity, absent = anonymous under a floor-policy daemon; responder pins
+   the daemon DID; net-capability-gated at the dial). ]
+[?def open  scope=public impure [returns element] ($target::any $opts::map {}) [$fabric-open $target $opts]]
+[?def close scope=public impure [returns null]    ($fabric::element)  [$fabric-close $fabric]]
+
+[; durable plane ]
+[?def publish   scope=public impure [returns element] ($fabric::element $stream::string $event::element $attribution::map) [$fabric-publish $fabric $stream $event $attribution]]
+[?def subscribe scope=public impure [returns element] ($fabric::element $stream::string $pattern::any $opts::map {}) [$fabric-subscribe $fabric $stream $pattern $opts]]
+[?def observe   scope=public impure [returns element] ($fabric::element $stream::string $pattern::any $opts::map {}) [$fabric-observe $fabric $stream $pattern $opts]]
+[?def receive   scope=public impure [returns [sequence element]] ($sub::element $opts::map {}) [$fabric-receive $sub $opts]]
+[?def ack       scope=public impure [returns null]    ($sub::element $seq::int) [$fabric-ack $sub $seq]]
+
+[; transient plane ]
+[?def emit scope=public impure [returns null] ($fabric::element $channel::string $value::any) [$fabric-emit $fabric $channel $value]]
+[?def read scope=public pure   [returns any]  ($fabric::element $channel::string) [$fabric-read $fabric $channel]]
+
+[; request-reply call conventions (spec §12.1) — ride the transient plane:
+   never journaled, never replayed, no offsets. respond registers an arity-1
+   callable answering a channel (sticky-exclusive; the callable never
+   travels); request is a blocking deadline-bounded call (embedded applies
+   the callable synchronously — the degenerate but fully working form);
+   serve is the remote responder's pump (pull stays the primitive: pushed
+   request frames buffer client-side until served). ]
+[?def respond scope=public impure [returns element] ($fabric::element $channel::string $fn::any) [$fabric-respond $fabric $channel $fn]]
+[?def request scope=public impure [returns any] ($fabric::element $channel::string $value::any $opts::map {}) [$fabric-request $fabric $channel $value $opts]]
+[?def serve   scope=public impure [returns int] ($responder::element $opts::map {}) [$fabric-serve $responder $opts]]
+
+[; co-located docs. ]
+[module-doc name=fabric
+  [scope """Platform-level eventing over the shipped primitives: one subscribe/emit surface with an explicit durability axis. The durable plane rides journal — publish appends an attributed event to a named stream (per-stream total order, hash-chained), subscribe/receive is a batched pull filtered by the bus pattern vocabulary, and ack commits a consumer group's offset cumulatively as store data, giving at-least-once delivery with redelivery of the uncommitted tail; a group may carry a redelivery policy (max-deliveries + dlq) that dead-letters a poison head-of-tail event to an ordinary stream and unblocks the group. The transient plane is latest-wins in-process channels — no history, no replay, no ack — and carries the request-reply call convention: respond registers an arity-1 callable answering a channel (sticky-exclusive), request is a blocking deadline-bounded call, serve pumps a remote responder. fabric introduces no capability of its own; persistence authority is the underlying journal/store's."""]]
+[fn-doc name=open scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a fabric, returning a [fabric] handle — dual-form: a [journal] element composes the embedded tier over it (the journal stays caller-owned); an xsp://host:port URL string dials a fabric-serve daemon and attaches via XSP-AUTH (opts.tenant required; opts.did+seed = the proven identity, absent = anonymous; net-gated at the dial)."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  $f@state]"""] [expect """'open'"""]]
+]
+[fn-doc name=close scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Close the fabric: cancel subscriptions, drop transient channels — idempotent; the journal is untouched."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $c [$fabric:close $f]]
+  [$fabric:read $f "acme/coord/map"]]"""] [expect """cx-err:CXER4921"""]]
+]
+[fn-doc name=publish scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Append an attributed event to a named durable stream, returning a [receipt seq=N stream=…] — the journal append is the sequencing."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  $r@seq]"""] [expect """1"""]]
+]
+[fn-doc name=subscribe scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Register a pull subscription on a durable stream — pattern-filtered; with opts.group it resumes from the group's committed offset. Group subscriptions may declare a redelivery policy (opts.max-deliveries + opts.dlq, together or not at all): the policy persists as group state, later group subscriptions inherit it, a conflicting redeclaration refuses, and a head-of-tail event redelivered past the limit is published to the dlq stream as a [dead-letter] envelope and auto-committed past — the group unblocks, the original entry stays in the source journal."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:subscribe $f "orders" :order.*]]
+  [$count [$fabric:receive $s]]]"""] [expect """1"""]]
+]
+[fn-doc name=observe scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Register a read-only subscription — receive works, ack refuses (the wire-tap shape; no offsets, no group)."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:observe $f "orders" :order.placed]]
+  [$fabric:ack $s 1]]"""] [expect """cx-err:CXER4922"""]]
+]
+[fn-doc name=receive scope=public purity=impure
+  [sig """-> [sequence element]"""]
+  [summary """Batched pull: return the pattern-matching [entry] elements committed since the cursor (up to opts.max), advancing the cursor — never blocks; empty node-set when nothing."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:subscribe $f "orders" "do"]]
+  [$count [$fabric:receive $s]]]"""] [expect """1"""]]
+]
+[fn-doc name=ack scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Commit the group's offset cumulatively through seq, persisted as store data — a later group subscription resumes past it; the uncommitted tail redelivers."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s1 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
+  [= $e1 [$fabric:receive $s1]]
+  [= $a [$fabric:ack $s1 1]]
+  [= $s2 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
+  [$count [$fabric:receive $s2]]]"""] [expect """0"""]]
+]
+[fn-doc name=emit scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Publish a value on a transient channel — latest-wins, no history, no replay, out of the durable audit."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $e1 [$fabric:emit $f "acme/coord/map" [viewport zoom=12]]]
+  [= $e2 [$fabric:emit $f "acme/coord/map" [viewport zoom=13]]]
+  [$fabric:read $f "acme/coord/map"]]"""] [expect """[viewport zoom=13]"""]]
+]
+[fn-doc name=read scope=public purity=pure
+  [sig """-> any"""]
+  [summary """Read a transient channel's latest value — the empty node-set when the channel was never published (absence, never null)."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $e [$fabric:emit $f "acme/coord/map" [viewport zoom=12]]]
+  [$fabric:read $f "acme/coord/map"]]"""] [expect """[viewport zoom=12]"""]]
+]
+[fn-doc name=respond scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Register an arity-1 callable answering a request-reply channel, returning a [fabric-responder …] — sticky-exclusive per channel (a second respond while the holder lives refuses); the callable never travels: on the remote tier only the registration crosses the wire and the serve pump applies it here."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:respond $f "acme/svc/echo" [?fn ($v) $v]]]
+  $r@channel]"""] [expect """'acme/svc/echo'"""]]
+]
+[fn-doc name=request scope=public purity=impure
+  [sig """-> any"""]
+  [summary """Blocking request-reply call on a channel: the reply is the responder callable's return value; a responder err (raised or returned) travels verbatim; no live responder refuses immediately; opts.deadline bounds the remote wait (ms, default 10000). Embedded requests are answered synchronously at the call site."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:respond $f "acme/svc/sum" [?fn ($v) [+ $v/a $v/b]]]]
+  [$fabric:request $f "acme/svc/sum" [args [a 2] [b 3]]]]"""] [expect """5"""]]
+]
+[fn-doc name=serve scope=public purity=impure
+  [sig """-> int"""]
+  [summary """The remote responder's pump (pull is the primitive): drain pushed request frames, apply the registered callable, send the replies — returns the count of calls answered (opts: deadline ms, max). Embedded calls are answered at the request site, so the embedded pump reports 0 by construction."""]
+  [example [code """[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:respond $f "acme/svc/echo" [?fn ($v) $v]]]
+  [$fabric:serve $r]]"""] [expect """0"""]]
+]

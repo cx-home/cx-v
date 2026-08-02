@@ -1457,7 +1457,7 @@ fn read_result_field(el cx.Element, name string) ?cx.Node {
 // (mirror its match arms). It gates §9.2 err-value propagation below: a failed
 // operand to any of these must surface the err — NOT for an unrecognized head,
 // which falls through to data-element construction.
-const operator_element_heads = ['+', '*', '-', '/', '=', '!=', '<', '<=', '>',
+const operator_element_heads = ['+', '*', '-', '/', '%', '=', '!=', '<', '<=', '>',
 	'>=', '~', 'and', 'or', 'not', 'union', 'intersect', 'except']
 
 // eval_operator_element dispatches the operator-headed S-expression
@@ -1557,6 +1557,15 @@ fn eval_operator_element(op string, args_in []cx.Node) ?cx.Node {
 				acc -= val
 			}
 			return num_result(acc, false)
+		}
+		'%' {
+			// modulo operator head (#598, owner ruling a): `[% a b]`
+			// aliases the §6.5 `mod` builtin exactly — binary, sign of
+			// dividend (XPath 3.1 §3.5), int-only when both args int,
+			// divide-by-zero CXER0101. One implementation, two spellings.
+			return invoke_builtin('mod', args) or {
+				return op_arity_err('%', 'two')
+			}
 		}
 		'/' {
 			// unary = reciprocal (float); n-ary = left-fold divide
@@ -3042,6 +3051,10 @@ fn apply_binding_step(focus []FocusedNode, step cx.ProgramPathStep, terminal_fie
 							// directive-as-data node via its Element view.
 							el = eval_directive_view(parent_node as cx.EvalDirectiveNode)
 							has_container = true
+						} else if parent_node is cx.MapNode {
+							// #618: parsed maps walk through their marker view.
+							el = map_node_view(parent_node as cx.MapNode)
+							has_container = true
 						}
 						if has_container {
 							mut matched := []cx.Node{}
@@ -3264,6 +3277,23 @@ fn structurally_same_element(a cx.Node, b cx.Node) bool {
 	return true
 }
 
+// map_node_view is a MapNode's __cx_map__-marker Element view (#618): the
+// exact topology runtime map literals evaluate to, so every path walker
+// sees ONE map representation regardless of which lane produced the value.
+fn map_node_view(m cx.MapNode) cx.Element {
+	mut items := []cx.Node{cap: m.entries.len}
+	for e in m.entries {
+		items << cx.Node(cx.Element{
+			name:  cx.scalar_value_str_public(e.key_value)
+			items: [e.value]
+		})
+	}
+	return cx.Element{
+		name:  map_marker_name
+		items: items
+	}
+}
+
 // collect_descendant_focus walks the focus's subtree appending each
 // Element (in document order) whose name matches `target`. Ancestors
 // are extended as the walk descends; non-element children are walked
@@ -3290,6 +3320,20 @@ fn collect_descendant_focus(n cx.Node, ancestors []cx.Node, target string, mut o
 		for child in n.items {
 			collect_descendant_focus(child, child_anc, target, mut out)
 		}
+	} else if n is cx.SequenceNode {
+		// #587: a PARSED paren-sequence body arrives as a bare SequenceNode
+		// where the runtime lane carries the __cx_seq__ marker element. Two
+		// $cx:equal values must navigate identically, so the walker sees the
+		// SAME topology: wrap and recurse exactly as the marker would walk.
+		collect_descendant_focus(cx.Node(cx.Element{ name: seq_marker_name, items: n.items }),
+			ancestors, target, mut out)
+	} else if n is cx.ArrayNode {
+		// same fidelity for array-valued bodies (the __cx_arr__ twin).
+		collect_descendant_focus(cx.Node(cx.Element{ name: arr_marker_name, items: n.items }),
+			ancestors, target, mut out)
+	} else if n is cx.MapNode {
+		// #618: parsed maps walk through the marker view (same fidelity).
+		collect_descendant_focus(cx.Node(map_node_view(n)), ancestors, target, mut out)
 	}
 }
 
@@ -3523,6 +3567,14 @@ fn walk_path_step(val cx.Node, step cx.ProgramPathStep) !cx.Node {
 	// as they do for an element.
 	if val is cx.EvalDirectiveNode {
 		return walk_path_step(cx.Node(eval_directive_view(val)), step)!
+	}
+	// #618: a PARSED map (cx.MapNode from $cx:parse / store reads / journal
+	// replay) walks through its __cx_map__-marker Element view — the SAME
+	// topology runtime maps carry, so $m/key and $m.key read identically on
+	// both lanes (the #587 equal-values-navigate-identically invariant,
+	// extended to maps).
+	if val is cx.MapNode {
+		return walk_path_step(cx.Node(map_node_view(val)), step)!
 	}
 	// O4 (spec/code.md §6.2): a `/child`, `/@attr`, or `.member` read step
 	// applied to a Sequence / Array DISTRIBUTES over the items, mapping the
@@ -3920,6 +3972,18 @@ fn eval_call_undefined(c cx.ProgramCall, args []cx.Node, mut env MatchEnv) !cx.N
 		}
 		return cx.Node(cx.TextNode{ value: c.name })
 	}
+	// A CALL of a recognized §6.5 builtin name that fell through the whole
+	// dispatch chain did so because its ARGUMENTS are unusable (absence /
+	// multi-item sequence in a scalar slot, arity, scalar typing) — every
+	// name-resolution path was already tried. Surface a real CXER0100
+	// diagnostic naming the argument, never the misleading
+	// `no callable "<name>"` (#536). Placed AFTER the bareword-data arm so
+	// a bare `first` in value position stays data, and at the chain END so
+	// stdlib modules claiming the same bare name with another signature
+	// (similar's `distinct`/`contains`) keep winning first.
+	if builtin_dispatchable(c.name) {
+		return builtin_args_diagnostic(c.name, args)
+	}
 	return mk_err('user-undefined', 'no callable "${c.name}"')
 }
 
@@ -4168,6 +4232,11 @@ fn dispatch_call_fallback(name string, args []cx.Node, mut env MatchEnv) ?cx.Nod
 	// applied per entry (purity enforced → CXER4611). Other journal verbs
 	// (open/append/read/verify/…) are handled env-free below.
 	if r := journal_stdlib_builtin_env(name, args, mut env) {
+		return r
+	}
+	// cx-fabric env-aware path: receive applies predicate subscription
+	// patterns (a CX callable) per entry.
+	if r := fabric_stdlib_builtin_env(name, args, mut env) {
 		return r
 	}
 	// cx-stdlib/sched env-aware path: test-clock-advance / restore fire the
@@ -4510,6 +4579,17 @@ fn all_items_are_expr_position(items []cx.ProgramNode, closures map[string]Closu
 	for it in items {
 		if it is cx.ProgramLiteral {
 			if it.kind == cx.ProgramLiteralKind.cx_element {
+				// The computed-name constructor `[?element NAME-EXPR …]` parses
+				// as a cx_element literal with `name_expr` set and `name` empty
+				// (parse_computed_element_body). It is an EXPRESSION that
+				// evaluates to an element value, never a data child — so it is a
+				// valid positional argument. Without this an inline constructor
+				// in a bareword call (`[render 'cx' [?element 'batch' …]]`)
+				// failed the gate and fell through to data construction (#540):
+				// the call silently became a literal element instead of applying.
+				if it.name_expr != none {
+					continue
+				}
 				// An OPERATOR-headed element (`[- $n 1]`, `[+ …]`, `[> …]`) is an
 				// EXPRESSION that evaluates to a value, not a data child — so it is
 				// a valid positional argument. Without this a recursive / sibling
@@ -4627,8 +4707,98 @@ fn builtin_is_numeric_scalar(name string) bool {
 	}
 }
 
+// builtin_arity returns the spec'd argument-count range (min, max) for a
+// name in the closed §6.5 builtin set; max -1 means variadic (no upper
+// bound). Mirrors the arity column of the code.md §6.5 tables. Used ONLY
+// to word the #536 diagnostic (invoke_builtin's arms remain the dispatch
+// authority) — a drift here mis-words a message, never changes dispatch.
+fn builtin_arity(name string) (int, int) {
+	match name {
+		'contains', 'starts-with', 'ends-with', 'nth', 'position',
+		'mod', 'div', 'idiv', 'pow', 'iterate', 'unfold', 'eq', 'cast' {
+			return 2, 2
+		}
+		'substring', 'range' { return 2, 3 }
+		// concat / logical folds / numeric aggregates take either one
+		// sequence argument or an n-ary scalar spread (both §6.5 surfaces).
+		'concat', 'and', 'or', 'sum', 'max', 'min', 'avg' { return 1, -1 }
+		else { return 1, 1 }
+	}
+}
+
+// builtin_scalar_slot_problem describes an argument that can never
+// satisfy a SCALAR argument slot — the two #536 silent-wrong-answer
+// classes: absence (the empty sequence / empty node-set) and a
+// multi-item sequence / node-set. Returns '' for scalar-shaped values
+// and singleton wrappers (those atomize; they are not the problem).
+fn builtin_scalar_slot_problem(a cx.Node) string {
+	if a is cx.Element {
+		if a.name == '' || a.name == seq_marker_name {
+			if a.items.len == 0 {
+				return 'absence (the empty sequence)'
+			}
+			if a.items.len > 1 {
+				return 'a ${a.items.len}-item sequence'
+			}
+		}
+	}
+	return ''
+}
+
+// builtin_args_diagnostic composes the CXER0100 err-value for a call to
+// a RECOGNIZED §6.5 builtin whose arm rejected the arguments (#536).
+// Arity mismatches are named as such; otherwise the message names the
+// first structurally-unusable argument (absence / multi-item sequence);
+// failing both, the mismatch is scalar typing and the message says so.
+// Returned as an err-VALUE (error-as-value model) — it propagates as the
+// call result per §9.2.
+fn builtin_args_diagnostic(name string, args []cx.Node) cx.Node {
+	min_a, max_a := builtin_arity(name)
+	if args.len < min_a || (max_a >= 0 && args.len > max_a) {
+		want := if max_a < 0 {
+			'at least ${min_a}'
+		} else if min_a == max_a {
+			'${min_a}'
+		} else {
+			'${min_a}–${max_a}'
+		}
+		return mk_err('cx-err:CXER0100',
+			'${name}: expected ${want} argument(s), got ${args.len} (code.md §6.5)')
+	}
+	for i, a in args {
+		problem := builtin_scalar_slot_problem(a)
+		if problem != '' {
+			return mk_err('cx-err:CXER0100',
+				'${name}: argument ${i + 1} is ${problem} — a single scalar (or a node atomizing to one) is required; bind it or default it with [?else] first (code.md §6.5)')
+		}
+	}
+	return mk_err('cx-err:CXER0100',
+		'${name}: an argument does not satisfy the builtin signature (scalar kind/type — code.md §6.5)')
+}
+
+// builtin_collection_items expands the NON-Element collection kinds —
+// IteratorNode (what $filter/$map and the fp combinators return),
+// SequenceNode, ArrayNode — to their items via iterate() (#529). Element
+// shapes return none so each arm keeps its existing Element readings
+// (marker unwrap / table view / plain-element digging) unchanged; only
+// the kinds that previously fell through to the scalar pass-through —
+// silently returning the WHOLE collection — are captured here.
+fn builtin_collection_items(a cx.Node) ?[]cx.Node {
+	if a is cx.IteratorNode || a is cx.SequenceNode || a is cx.ArrayNode {
+		return iterate(a)
+	}
+	return none
+}
+
 // invoke_builtin implements the closed set of pure-functional
-// built-ins the evaluator ships per spec/md §6.3.
+// built-ins the evaluator ships per spec/md §6.3. An arm that bails on
+// its arguments returns none so the DISPATCH CHAIN keeps going — a
+// stdlib module may legitimately claim the same bare name with another
+// signature (similar's 2-arg `distinct`, its 3-arg `contains`). The
+// #536 misdiagnosis fix therefore lives at the chain TERMINALS
+// (eval_call_undefined / invoke_builtin_closure_l), which convert an
+// end-of-chain miss on a recognized §6.5 name into a CXER0100
+// diagnostic naming the argument via builtin_args_diagnostic.
 fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 	match name {
 		'sqrt', 'cbrt', 'exp', 'log', 'log2', 'log10' {
@@ -4724,6 +4894,18 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 		'first' {
 			if args.len != 1 { return none }
 			a0 := args[0]
+			// #529: the non-Element collection kinds ($filter/$map return an
+			// eager IteratorNode; SequenceNode/ArrayNode arrive from range and
+			// array sources) destructure via iterate(), exactly like nth/count
+			// — orderedness is a property, not a representation. Without this
+			// the arm fell to the scalar pass-through and returned the WHOLE
+			// collection (silent wrong answer).
+			if items := builtin_collection_items(a0) {
+				if items.len > 0 {
+					return items[0]
+				}
+				return cx.Node(cx.Element{ name: seq_marker_name })
+			}
 			if a0 is cx.Element {
 				// Table sequence view (D22, #404): first row map.
 				if td := a0.table_opt() {
@@ -4745,6 +4927,13 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 			// at the other end of the sequence.
 			if args.len != 1 { return none }
 			a0 := args[0]
+			// #529: non-Element collection kinds — see 'first'.
+			if items := builtin_collection_items(a0) {
+				if items.len > 0 {
+					return items[items.len - 1]
+				}
+				return cx.Node(cx.Element{ name: seq_marker_name })
+			}
 			if a0 is cx.Element {
 				// Table sequence view (D22, #404): last row map.
 				if td := a0.table_opt() {
@@ -4766,7 +4955,11 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		'upper', 'lower' {
 			if args.len != 1 { return none }
-			s := scalar_string(args[0]) or { return none }
+			// §6.5 string-builtin argument rule: non-string SCALARS stringify
+			// via the canonical scalar printer (scalar_to_string), same as the
+			// sibling contains/starts-with/ends-with arms — `[$upper 5]` is
+			// '5', not an argument error (#536 sweep).
+			s := scalar_to_string(args[0]) or { return none }
 			out := if name == 'upper' { s.to_upper() } else { s.to_lower() }
 			return cx.Node(cx.ScalarNode{
 				value:     cx.ScalarValue(out)
@@ -5235,6 +5428,14 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 		'head' {
 			if args.len != 1 { return none }
 			a0 := args[0]
+			// #529: non-Element collection kinds — see 'first' (head is its
+			// synonym, XQuery fn:head parity).
+			if citems := builtin_collection_items(a0) {
+				if citems.len > 0 {
+					return citems[0]
+				}
+				return cx.Node(cx.Element{ name: seq_marker_name })
+			}
 			if a0 is cx.Element && a0.items.len > 0 {
 				return a0.items[0]
 			}
@@ -5243,6 +5444,14 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 		'tail' {
 			if args.len != 1 { return none }
 			a0 := args[0]
+			// #529: non-Element collection kinds — an iterator's tail was
+			// silently the EMPTY sequence before this.
+			if citems := builtin_collection_items(a0) {
+				if citems.len > 1 {
+					return cx.Node(cx.Element{ name: seq_marker_name, items: citems[1..].clone() })
+				}
+				return cx.Node(cx.Element{ name: seq_marker_name })
+			}
 			if a0 is cx.Element && a0.items.len > 0 {
 				rest := a0.items[1..]
 				mut items := []cx.Node{cap: rest.len}
@@ -5254,6 +5463,15 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 		'reverse' {
 			if args.len != 1 { return none }
 			a0 := args[0]
+			// #529: non-Element collection kinds — an iterator previously
+			// passed through UNREVERSED.
+			if citems := builtin_collection_items(a0) {
+				mut ritems := []cx.Node{cap: citems.len}
+				for i := citems.len - 1; i >= 0; i-- {
+					ritems << citems[i]
+				}
+				return cx.Node(cx.Element{ name: seq_marker_name, items: ritems })
+			}
 			if a0 is cx.Element && (a0.name == '' || a0.name == seq_marker_name) {
 				mut items := []cx.Node{cap: a0.items.len}
 				for i := a0.items.len - 1; i >= 0; i-- {
@@ -6496,6 +6714,19 @@ fn walk_for_path_ctx(el cx.Element, parent_idx int, mut order []cx.Element, mut 
 	for ch in el.items {
 		if ch is cx.Element {
 			walk_for_path_ctx(ch, my_idx, mut order, mut parents, mut children, mut ns_map)
+		} else if ch is cx.SequenceNode {
+			// #587: a parsed paren-sequence body must build the SAME doc-order
+			// topology the runtime lane's __cx_seq__ marker element builds —
+			// $cx:equal values navigate identically under every axis.
+			walk_for_path_ctx(cx.Element{ name: seq_marker_name, items: ch.items },
+				my_idx, mut order, mut parents, mut children, mut ns_map)
+		} else if ch is cx.ArrayNode {
+			walk_for_path_ctx(cx.Element{ name: arr_marker_name, items: ch.items },
+				my_idx, mut order, mut parents, mut children, mut ns_map)
+		} else if ch is cx.MapNode {
+			// #618: parsed maps build the marker-view topology.
+			walk_for_path_ctx(map_node_view(ch), my_idx, mut order, mut parents,
+				mut children, mut ns_map)
 		}
 	}
 }
@@ -7052,6 +7283,8 @@ fn eval_directive(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		'if'    { return eval_if(d, mut env) }
 		'else'  { return eval_else(d, mut env) }
 		'let'   { return eval_let(d, mut env) }
+		'loop'  { return eval_loop(d, mut env) }
+		'do'    { return eval_do(d, mut env) }
 		'pipe'  { return eval_pipe_directive(d, mut env) }
 		'modify' { return eval_modify(d, mut env) }
 		'with-open'  { return eval_with_open(d, mut env) }
@@ -7718,6 +7951,120 @@ fn eval_let(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	return eval_node(positionals[positionals.len - 1], mut extended)!
 }
 
+// eval_loop — `[?loop [= $x INIT]… BODY]` with the `[break V?]` /
+// `[continue V…?]` clause-heads (spec/code.md §8.15; #550, owner ruling
+// 2026-07-21). THE condition-driven loop: anonymous tail recursion driven
+// as a V-level loop (O(1) native stack, the #60 trampoline's semantics
+// without the named def / threaded params / marker returns). No mutation:
+// `[continue V…]` REBINDS the declared loop bindings for the next pass —
+// positionally, arity-checked — exactly like the tail call it replaces; a
+// bare `[continue]` repeats with unchanged state.
+//
+// ALL-EXPLICIT tail contract: each pass's body value must be a
+// `[break …]` (exit; the loop's value is its single item, `null` when
+// bare) or a `[continue …]` element — anything else raises CXER0100.
+// Clojure's implicit exit (any non-recur value) is deliberately rejected:
+// a branch that forgets its exit word is a diagnostic, never a silent
+// wrong answer. An `[err …]` body value propagates as itself (§9.2 —
+// the fault channel outranks the tail contract).
+fn eval_loop(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
+	mut positionals := []cx.ProgramNode{}
+	for s in d.slots {
+		if s.kind == .positional {
+			positionals << s.value
+		}
+	}
+	if positionals.len == 0 {
+		return EvalError{ code: 'cx-err:CXER0100', message: '[?loop] missing body expression' }
+	}
+	// Leading `[= $x INIT]` clauses declare the loop bindings; the LAST
+	// positional is the body (the [?let] rule — a `[= a b]` equality body
+	// is still a body).
+	mut names := []string{}
+	mut extended := env.clone_frame_sharing_closures()
+	for i := 0; i < positionals.len - 1; i++ {
+		name, vexpr := binding_clause(positionals[i]) or {
+			return EvalError{
+				code:    'cx-err:CXER0100'
+				message: '[?loop] expected [= \$x INIT] binding clauses before the body (spec/code.md §8.15)'
+			}
+		}
+		val := eval_node(vexpr, mut extended)!
+		extended.bindings[name] = val
+		names << name
+	}
+	body := positionals[positionals.len - 1]
+	for {
+		result := eval_node(body, mut extended)!
+		if result is cx.Element {
+			if is_err_value(result) {
+				return result
+			}
+			if result.name == 'break' {
+				if result.items.len == 0 {
+					// bare [break] — unit exit (a present null, §9.1.2.1 2b)
+					return cx.Node(cx.ScalarNode{
+						value:     cx.ScalarValue(cx.NullValue{})
+						data_type: cx.ScalarType.null_type
+					})
+				}
+				if result.items.len == 1 {
+					return result.items[0]
+				}
+				return cx.Node(cx.Element{ name: seq_marker_name, items: result.items })
+			}
+			if result.name == 'continue' {
+				if result.items.len == 0 {
+					continue // unchanged state
+				}
+				if result.items.len != names.len {
+					return EvalError{
+						code:    'cx-err:CXER0100'
+						message: '[?loop] [continue …] carries ${result.items.len} value(s) for ${names.len} loop binding(s) — rebind all declared bindings positionally, or none (spec/code.md §8.15)'
+					}
+				}
+				for i, nm in names {
+					extended.bindings[nm] = result.items[i]
+				}
+				continue
+			}
+		}
+		return EvalError{
+			code:    'cx-err:CXER0100'
+			message: '[?loop] body must end in [break …] or [continue …] — every exit is explicit (spec/code.md §8.15)'
+		}
+	}
+	return cx.Node(cx.Element{})
+}
+
+// eval_do — `[?do E …]` (spec/code.md §8.14; #550, resolves #530's ask):
+// the blessed evaluate-FOR-EFFECT sequencing form. Expressions evaluate in
+// order; their values are DISCARDED — except the first `[err …]` result,
+// which propagates immediately per §9.2 instead of vanishing in an
+// unobserved dummy [?let] binding. Success yields `null` (a present
+// unit, §9.1.2.1 role 2b — never absence, which would read as "nothing
+// happened").
+fn eval_do(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
+	mut ran := 0
+	for s in d.slots {
+		if s.kind != .positional {
+			continue
+		}
+		v := eval_node(s.value, mut env)!
+		if v is cx.Element && is_err_value(v) {
+			return v
+		}
+		ran++
+	}
+	if ran == 0 {
+		return EvalError{ code: 'cx-err:CXER0100', message: '[?do] requires at least one expression (spec/code.md §8.14)' }
+	}
+	return cx.Node(cx.ScalarNode{
+		value:     cx.ScalarValue(cx.NullValue{})
+		data_type: cx.ScalarType.null_type
+	})
+}
+
 // ── Tail-call optimization (#60) ─────────────────────────────────────────────
 //
 // cx forever-loops / long-running loops are written as tail recursion (the only
@@ -8336,9 +8683,13 @@ fn close_concurrency_handle(kind string, hid string, mut env MatchEnv) ! {
 	match kind {
 		'future' {
 			mut fut := env.state.future_get(hid) or { return }
-			fut.cancel_requested = true
-			// Join: drive the future to a terminal state if still pending.
-			if fut.state == 'pending' {
+			future_request_cancel(mut fut)
+			// Join: drive a lazy future to terminal; a concurrent one joins
+			// at its await barrier (#541 — the parked/running body observes
+			// the flag at its next cancellation point).
+			if fut.concurrent {
+				await_concurrent(mut fut, i64(0), mut env)
+			} else if fut.state == 'pending' {
 				drive_future(mut fut, mut env)
 			}
 			if fut.state == 'failed' {
@@ -13961,6 +14312,31 @@ fn eval_sleep(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		return EvalError{ code: 'cx-err:CXER0241',
 			message: 'await deadline exceeded' }
 	}
+	// Eager-future PARK (#541): a mock sleep inside a SPAWNED [?async]
+	// body must not self-advance the shared logical clock (the lazy
+	// substrate's move) — with real threads that would race every other
+	// clock reader. Instead the body PARKS: it publishes its wake time on
+	// the record and polls until the await barrier advances the clock to
+	// it (await_concurrent moves time only when every runnable future is
+	// parked) or its cancellation flag is raised — cancel-wake observes
+	// the flag FIRST (§10.5.7.2 precedence: cancel-check ▷ everything).
+	if mock_flag && env.current_future != unsafe { nil } {
+		mut cf := env.current_future
+		wake := env.state.clock_now() + ns
+		cf.parked_until_ns = wake
+		for {
+			if cf.cancel_requested {
+				cf.parked_until_ns = 0
+				return EvalError{ code: 'cx-err:CXER0260',
+					message: 'cancellation observed at sleep' }
+			}
+			if env.state.clock_now() >= wake {
+				cf.parked_until_ns = 0
+				return cx.Element{ name: 'ok' }
+			}
+			time.sleep(time.millisecond)
+		}
+	}
 	// Cooperative-scheduler yield. When this [?sleep] runs inside a
 	// [?test-concurrent] task body (mock-clock-only by design per
 	// scheduler.v), hand control back to the scheduler instead of
@@ -15018,7 +15394,7 @@ fn eval_cancel(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 					return EvalError{ code: 'cx-err:CXER0001',
 						message: '[?cancel] no future "${id}"' }
 				}
-				fut.cancel_requested = true
+				future_request_cancel(mut fut)
 				return cx.Element{ name: 'ok' }
 			}
 			if hv.name == 'worker-handle' {
@@ -15537,6 +15913,7 @@ fn try_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?cx.Nod
 	if r := http_stdlib_builtin_env(name, args, mut env) { return r }
 	if r := bus_stdlib_builtin_env(name, args, mut env) { return r }
 	if r := journal_stdlib_builtin_env(name, args, mut env) { return r }
+	if r := fabric_stdlib_builtin_env(name, args, mut env) { return r }
 	if r := sched_stdlib_builtin_env(name, args, mut env) { return r }
 	if r := xap_stdlib_builtin_env(name, args, mut env) { return r }
 	if r := similar_stdlib_builtin_env(name, args, mut env) { return r }
@@ -15648,6 +16025,13 @@ fn invoke_builtin_closure_l(c Closure, args []cx.Node, mut enclosing MatchEnv) !
 	}
 	if r := stdlib_builtin(c.builtin_name, args) {
 		return r
+	}
+	// End-of-chain miss for a first-class §6.5 builtin value: same #536
+	// argument-naming diagnostic as eval_call_undefined (an err-VALUE, not
+	// a raise — error-as-value model), so `[$map $xs $upper]`-style
+	// applications report the bad argument rather than a generic shrug.
+	if builtin_dispatchable(c.builtin_name) {
+		return builtin_args_diagnostic(c.builtin_name, args)
 	}
 	return EvalError{
 		code:    'cx-err:CXER0001'

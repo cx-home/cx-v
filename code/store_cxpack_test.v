@@ -26,10 +26,8 @@ fn test_cxpack_persist_load_roundtrip() {
 	store_put_canonical(mut ms, 'h1', '[db [rec [id 1] [v 1]]]') or { panic(err.msg()) }
 	store_put_canonical(mut ms, 'h2', '[db [rec [id 2] [v 2]]]') or { panic(err.msg()) }
 	store_put_canonical(mut ms, 'h3', "[note [body 'hello']]") or { panic(err.msg()) }
-	ms.aliases['latest'] = 'h3'
-	ms.alias_order << 'latest'
-	ms.aliases['first'] = 'h1'
-	ms.alias_order << 'first'
+	store_alias_set_local(mut ms, 'latest', 'h3')
+	store_alias_set_local(mut ms, 'first', 'h1')
 	store_cxpack_compact(mut ms) or { panic('compact: ${err.msg()}') }
 	assert os.exists(os.join_path(dir, cxpack_pack))
 	assert os.exists(os.join_path(dir, cxpack_manifest))

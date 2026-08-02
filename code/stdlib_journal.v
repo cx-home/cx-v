@@ -3,6 +3,8 @@ module code
 
 import cx
 import crypto.ed25519
+import sync
+import time
 
 // stdlib_journal.v — native primitives + in-process chain state for the
 // `cx-stdlib/journal` append-only, hash-chained, tenant-partitioned event
@@ -104,6 +106,15 @@ mut:
 	// A stream is the unit of contention/ordering — disjoint streams are
 	// independent chains with their own seq/head (R2, stdlib_journal.md §2.1.1).
 	named map[string]&StreamState
+	// jmu serializes ALL ops on THIS journal instance (#642): the entries
+	// cache, head state, and named-stream map are shared mutable state, and
+	// the fabric daemon's pump now reads (journal-since) CONCURRENTLY with
+	// the sequencer's appends — before #642 the daemon's global srv.mu
+	// serialized every journal touch, which made every consumer's re-pump
+	// render block every publisher. Taken by the journal_stdlib_builtin
+	// dispatch funnel; ops never nest, so a plain (non-reentrant) mutex is
+	// correct.
+	jmu &sync.Mutex = unsafe { nil }
 }
 
 // StreamState is one named stream's chain state — the same shape as the flat
@@ -164,17 +175,32 @@ fn journal_reg() &JournalRegistry {
 	return unsafe { &JournalRegistry(g_journal_reg) }
 }
 
+// g_journal_reg_lock guards the registry map (#642: pump threads look
+// journals up concurrently with registration — same posture as
+// g_store_reg_lock).
+const g_journal_reg_lock = &sync.Mutex(sync.new_mutex())
+
 fn journal_register(j &Journal) int {
+	mut l := unsafe { g_journal_reg_lock }
+	l.@lock()
 	mut reg := journal_reg()
 	reg.next_id++
 	id := reg.next_id
 	reg.journals[id] = j
+	l.unlock()
 	return id
 }
 
 fn journal_lookup(id int) ?&Journal {
+	mut l := unsafe { g_journal_reg_lock }
+	l.@lock()
 	reg := journal_reg()
-	return reg.journals[id] or { return none }
+	r := reg.journals[id] or {
+		l.unlock()
+		return none
+	}
+	l.unlock()
+	return r
 }
 
 // ── value helpers ───────────────────────────────────────────────────────
@@ -259,6 +285,40 @@ fn jrn_map_get(m cx.Node, key string) ?string {
 		for a in m.attrs {
 			if a.name == key {
 				return cx.scalar_value_str_public(a.value)
+			}
+		}
+	}
+	return none
+}
+
+// jrn_map_get_seq reads a sequence-valued opts key as its items' scalar
+// strings (a single scalar value reads as a one-item list).
+fn jrn_map_get_seq(m cx.Node, key string) ?[]string {
+	if m is cx.Element {
+		for it in m.items {
+			if it is cx.Element && it.name == key {
+				mut out := []string{}
+				for v in it.items {
+					if v is cx.Element && (v.name == seq_marker_name || v.name == '') {
+						for s in v.items {
+							if s is cx.ScalarNode {
+								sv := s.value
+								if sv is string {
+									out << sv
+								}
+							}
+						}
+					} else if v is cx.ScalarNode {
+						sv := v.value
+						if sv is string {
+							out << sv
+						}
+					}
+				}
+				if out.len > 0 {
+					return out
+				}
+				return none
 			}
 		}
 	}
@@ -388,6 +448,70 @@ fn jrn_state_entry_node(st &StreamState, seq int) ?cx.Node {
 	}
 	e := jrn_parse_entry(st.entries[idx]) or { return none }
 	return cx.Node(e)
+}
+
+// jrn_state_entry_node_of is jrn_state_entry_node with a STORE fallback
+// (#628): on a shared root, a sibling handle's appends live in the store but
+// not this instance's cache — resolve the entry through its alias so reads
+// see the live tail, not just what this handle wrote/loaded.
+fn jrn_state_entry_node_of(j &Journal, stream string, st &StreamState, seq int) ?cx.Node {
+	if node := jrn_state_entry_node(st, seq) {
+		return node
+	}
+	dhash := jrn_store_get_alias(j.store_id, jrn_entry_alias_s(j.tenant, stream, seq)) or {
+		return none
+	}
+	text := jrn_store_get_doc_text(j.store_id, dhash) or { return none }
+	e := jrn_parse_entry(text) or { return none }
+	return cx.Node(e)
+}
+
+// jrn_state_collect_range_of is jrn_state_collect_range through the store-
+// fallback entry resolver (#628): sibling-appended entries collect too.
+fn jrn_state_collect_range_of(j &Journal, stream string, st &StreamState, from int, to int) []cx.Node {
+	mut items := []cx.Node{}
+	mut lo := from
+	if lo < st.base_seq + 1 {
+		lo = st.base_seq + 1
+	}
+	mut hi := to
+	if hi > st.head_seq {
+		hi = st.head_seq
+	}
+	for s in lo .. hi + 1 {
+		if node := jrn_state_entry_node_of(j, stream, st, s) {
+			items << node
+		}
+	}
+	return items
+}
+
+// jrn_refresh_head re-reads the DURABLE head of one stream into this
+// instance's cache (#628): writable opens of one root share the live store,
+// so a sibling handle's appends advance the durable head past this handle's
+// cache. Forward-only (a durable head can never legitimately be behind the
+// cache this instance just advanced under the commit lock).
+fn jrn_refresh_head(mut j Journal, stream string) {
+	if jrn_is_default(stream) {
+		if hd := jrn_get_meta_doc(j.store_id, jrn_head_alias(j.tenant)) {
+			hs := jrn_entry_attr(hd, 'seq').int()
+			hh := jrn_entry_attr(hd, 'hash')
+			if hs > j.head_seq && hh != '' {
+				j.head_seq = hs
+				j.head_hash = hh
+			}
+		}
+		return
+	}
+	mut st := jrn_named_state(mut j, stream)
+	if hd := jrn_get_meta_doc(j.store_id, jrn_head_alias_s(j.tenant, stream)) {
+		hs := jrn_entry_attr(hd, 'seq').int()
+		hh := jrn_entry_attr(hd, 'hash')
+		if hs > st.head_seq && hh != '' {
+			st.head_seq = hs
+			st.head_hash = hh
+		}
+	}
 }
 
 // jrn_state_collect_range collects a named stream's entries in [from,to] (seq).
@@ -592,8 +716,13 @@ fn jrn_entry_idx(j &Journal, seq int) ?int {
 
 // jrn_entry_text returns the cached canonical doc text for an absolute seq.
 fn jrn_entry_text(j &Journal, seq int) ?string {
-	idx := jrn_entry_idx(j, seq) or { return none }
-	return j.entries[idx]
+	if idx := jrn_entry_idx(j, seq) {
+		return j.entries[idx]
+	}
+	// #628: a sibling handle on a shared root may have appended past this
+	// instance's cache — resolve through the store (the durable truth).
+	dhash := jrn_store_get_alias(j.store_id, jrn_entry_alias(j.tenant, seq)) or { return none }
+	return jrn_store_get_doc_text(j.store_id, dhash) or { return none }
 }
 
 // jrn_entry_node returns the live [entry] node for seq (absolute) from the
@@ -667,7 +796,9 @@ fn jrn_read_stream_index(store_id int, tenant string) []string {
 	return names
 }
 
-fn jrn_write_stream_index(store_id int, tenant string, names []string) {
+// jrn_write_stream_index persists the stream index. Returns the [err] on
+// failure, none on success (#644 — the index write is a wire op on remote).
+fn jrn_write_stream_index(store_id int, tenant string, names []string) ?cx.Node {
 	mut items := []cx.Node{}
 	for n in names {
 		items << cx.Node(cx.Element{
@@ -680,19 +811,27 @@ fn jrn_write_stream_index(store_id int, tenant string, names []string) {
 			]
 		})
 	}
-	jrn_set_meta_alias(store_id, jrn_streams_index_alias(tenant), cx.Element{
+	if e := jrn_set_meta_alias(store_id, jrn_streams_index_alias(tenant), cx.Element{
 		name:  'journal-streams'
 		items: items
 	})
+	{
+		return e
+	}
+	return none
 }
 
 // jrn_index_stream records a newly-seen named stream in the persisted index.
-fn jrn_index_stream(store_id int, tenant string, stream string) {
+// Returns the [err] on failure, none on success (#644).
+fn jrn_index_stream(store_id int, tenant string, stream string) ?cx.Node {
 	mut names := jrn_read_stream_index(store_id, tenant)
 	if stream !in names {
 		names << stream
-		jrn_write_stream_index(store_id, tenant, names)
+		if e := jrn_write_stream_index(store_id, tenant, names) {
+			return e
+		}
 	}
+	return none
 }
 
 fn jrn_reload(mut j Journal) {
@@ -755,31 +894,116 @@ fn jrn_reload_named(mut j Journal) {
 
 // ── store composition helpers (call store native prims directly) ───────────
 
+// jrn_flush_hold / jrn_flush_release scope a #614 group commit over the
+// journal's backing store: N appends inside the scope stage in memory and
+// land as ONE backend flush at release. The caller must not acknowledge
+// any append in the scope until release returns.
+fn jrn_flush_hold(jnode cx.Node) {
+	j, _, ok := jrn_get_open(jnode)
+	if !ok {
+		return
+	}
+	mut ms := store_lookup(j.store_id) or { return }
+	store_flush_hold(mut ms)
+}
+
+fn jrn_flush_release(jnode cx.Node) ! {
+	j, _, ok := jrn_get_open(jnode)
+	if !ok {
+		return
+	}
+	mut ms := store_lookup(j.store_id) or { return }
+	store_flush_release(mut ms)!
+}
+
 fn jrn_store_put_doc(store_id int, doc cx.Node) ?string {
-	r := store_stdlib_builtin('store-put-doc', [jrn_store_handle(store_id), doc]) or { return none }
+	h, _ := jrn_store_put_doc_err(store_id, doc)
+	if h == '' {
+		return none
+	}
+	return h
+}
+
+// jrn_store_put_doc_err is the cause-carrying variant (#644): returns
+// (hash, none) on success, ('', the underlying [err]) on failure — so the
+// append path can surface WHY a persist failed (capability denial, auth
+// rejection, transport) instead of the bare "could not persist" mask that
+// cost the reporter a debugging round.
+fn jrn_store_put_doc_err(store_id int, doc cx.Node) (string, ?cx.Node) {
+	r := store_stdlib_builtin('store-put-doc', [jrn_store_handle(store_id), doc]) or {
+		return '', none
+	}
+	if r is cx.ScalarNode {
+		v := r.value
+		if v is string {
+			return v, none
+		}
+	}
+	if is_err_value(r) {
+		return '', r
+	}
+	return '', none
+}
+
+fn jrn_store_get_doc_text(store_id int, hash string) ?string {
+	// Route through the BUILTIN arm, not the internal doc reads: the arm
+	// carries the per-backend resolution paths — object-graph stores keep
+	// docs in the graph, and a cx-store:// client resolves the ref +
+	// reconstructs over the OBJECT WIRE (#644; the internal
+	// store_doc_present/store_doc_text pair sees only local state and made
+	// remote meta docs — head/algo pointers — unreadable on reattach). The
+	// store funnel is reentrant (#628), so this is safe under a held
+	// group-commit scope.
+	r := store_stdlib_builtin_inner('store-get-doc-text', [jrn_store_handle(store_id),
+		jrn_str(hash)]) or { return none }
 	if r is cx.ScalarNode {
 		v := r.value
 		if v is string {
 			return v
 		}
 	}
-	return none // an [err] — caller treats as a backend fault
+	return none // absence or err → the caller's absent-meta path
 }
 
-fn jrn_store_get_doc_text(store_id int, hash string) ?string {
-	ms := store_lookup(store_id) or { return none }
-	// Route through the doc abstraction so the journal resolves docs on EVERY
-	// backend (object-graph stores keep docs in the graph, not the flat map).
-	if !store_doc_present(ms, hash) {
-		return none
+// jrn_err_caused builds a journal error carrying the underlying failure as
+// its [cause] child (#644): the persist mask ("could not persist entry …")
+// hid the real reason (a capability denial, an auth rejection, a transport
+// failure) and cost the reporter a debugging round.
+fn jrn_err_caused(errcode string, message string, cause cx.Node) cx.Node {
+	return cx.Element{
+		name:  'err'
+		attrs: [
+			cx.Attribute{
+				name:  'code'
+				value: cx.ScalarValue(errcode)
+			},
+			cx.Attribute{
+				name:  'message'
+				value: cx.ScalarValue(message)
+			},
+		]
+		items: [
+			cx.Node(cx.Element{
+				name:  'cause'
+				items: [cause]
+			}),
+		]
 	}
-	return store_doc_text(ms, hash) or { none }
 }
 
-fn jrn_store_set_alias(store_id int, name string, hash string) {
-	store_stdlib_builtin('store-set-alias', [jrn_store_handle(store_id), jrn_str(name), jrn_str(hash)]) or {
-		cx.Node(jrn_null())
+// jrn_store_set_alias writes one chain pointer. Returns the [err] node on
+// failure, none on success (the cap_guard shape: `if e := … { return e }`).
+// Reporting failure matters (#644): on a remote-backed store an alias write
+// is a wire op that can genuinely fail (auth, transport, target refusal),
+// and swallowing it silently strands the entry pointer / head — the chain
+// would read as shorter than its durable entries.
+fn jrn_store_set_alias(store_id int, name string, hash string) ?cx.Node {
+	r := store_stdlib_builtin('store-set-alias', [jrn_store_handle(store_id), jrn_str(name),
+		jrn_str(hash)]) or { return none }
+	if is_err_value(r) {
+		return r
 	}
+	return none
 }
 
 fn jrn_store_get_alias(store_id int, name string) ?string {
@@ -807,9 +1031,22 @@ fn jrn_store_get_alias(store_id int, name string) ?string {
 // are therefore persisted as tiny DOCS and the alias references the doc-hash,
 // exactly like entry docs; reads resolve the alias → doc → attribute.
 
-fn jrn_set_meta_alias(store_id int, name string, doc cx.Node) {
-	h := jrn_store_put_doc(store_id, doc) or { return }
-	jrn_store_set_alias(store_id, name, h)
+// jrn_set_meta_alias persists a metadata doc and points its alias at it.
+// Returns the [err] node on failure, none on success (#644 — see
+// jrn_store_set_alias). A failed doc put is reported the same way.
+fn jrn_set_meta_alias(store_id int, name string, doc cx.Node) ?cx.Node {
+	h, put_err := jrn_store_put_doc_err(store_id, doc)
+	if h == '' {
+		if pe := put_err {
+			return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: could not persist metadata doc for ${name}',
+				pe)
+		}
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: could not persist metadata doc for ${name}')
+	}
+	if e := jrn_store_set_alias(store_id, name, h) {
+		return e
+	}
+	return none
 }
 
 // jrn_get_meta_doc resolves an alias to its backing metadata-doc element.
@@ -868,14 +1105,46 @@ fn jrn_store_handle(store_id int) cx.Node {
 
 // ── env-free primitive dispatch (no $fn verbs) ─────────────────────────────
 
+// journal_stdlib_builtin is the journal-op funnel. #642: every op on an
+// EXISTING handle serializes on that journal's OWN mutex (jmu) — append,
+// read, since, verify, and compact share the entries cache / head state /
+// named-stream map, and the fabric daemon's pump reads run CONCURRENTLY
+// with the sequencer's appends once they leave srv.mu. open/attach CREATE
+// the instance and take no instance lock; ops never nest, so the plain
+// mutex is correct. An op whose handle doesn't resolve falls through
+// unlocked — the inner arm answers with its precise invalid-handle error.
 fn journal_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
+	if name == 'journal-open' {
+		return jrn_open(args)
+	}
+	if name == 'journal-attach' {
+		return jrn_attach(args)
+	}
+	mut jl := &sync.Mutex(unsafe { nil })
+	if args.len > 0 {
+		if id := jrn_handle_of(args[0]) {
+			if j := journal_lookup(id) {
+				jl = j.jmu
+			}
+		}
+	}
+	if jl != unsafe { nil } {
+		jl.@lock()
+	}
+	r := journal_stdlib_builtin_op(name, args) or {
+		if jl != unsafe { nil } {
+			jl.unlock()
+		}
+		return none
+	}
+	if jl != unsafe { nil } {
+		jl.unlock()
+	}
+	return r
+}
+
+fn journal_stdlib_builtin_op(name string, args []cx.Node) ?cx.Node {
 	match name {
-		'journal-open' {
-			return jrn_open(args)
-		}
-		'journal-attach' {
-			return jrn_attach(args)
-		}
 		'journal-close' {
 			return jrn_close(args)
 		}
@@ -914,6 +1183,9 @@ fn journal_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		'journal-compact' {
 			return jrn_compact(args)
+		}
+		'journal-rotate' {
+			return jrn_rotate(args)
 		}
 		else {
 			return none
@@ -983,6 +1255,7 @@ fn jrn_open(args []cx.Node) ?cx.Node {
 		head_seq:   0
 		head_hash:  jrn_genesis_prev
 		entries:    []
+		jmu:        sync.new_mutex()
 	}
 	// Algo-fix check (§4.2): if the partition already records a different algo,
 	// reject. Otherwise stamp the algo.
@@ -996,7 +1269,13 @@ fn jrn_open(args []cx.Node) ?cx.Node {
 	}
 	jrn_reload(mut j)
 	if !read_only && existing_algo == '' {
-		jrn_set_meta_alias(store_id, jrn_algo_alias(tenant), jrn_algo_doc_node(algo))
+		// The algo stamp failing at OPEN must fail the open (#644): on a remote
+		// store this is the first write on the mount — an unreachable/denied
+		// store surfaces HERE, loud at boot, never lazily at seq 1.
+		if e := jrn_set_meta_alias(store_id, jrn_algo_alias(tenant), jrn_algo_doc_node(algo)) {
+			return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: journal store rejected the open-time algo stamp for ${store_url_redact_userinfo(url)}',
+				e)
+		}
 	}
 	id := journal_register(j)
 	return jrn_handle_element(id, j)
@@ -1038,10 +1317,15 @@ fn jrn_attach(args []cx.Node) ?cx.Node {
 		head_seq:   0
 		head_hash:  jrn_genesis_prev
 		entries:    []
+		jmu:        sync.new_mutex()
 	}
 	jrn_reload(mut j)
 	if !read_only && existing_algo == '' {
-		jrn_set_meta_alias(store_id, jrn_algo_alias(tenant), jrn_algo_doc_node(algo))
+		// Same loud-at-attach contract as jrn_open (#644).
+		if e := jrn_set_meta_alias(store_id, jrn_algo_alias(tenant), jrn_algo_doc_node(algo)) {
+			return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: journal store rejected the attach-time algo stamp',
+				e)
+		}
 	}
 	id := journal_register(j)
 	return jrn_handle_element(id, j)
@@ -1086,6 +1370,21 @@ fn jrn_append(args []cx.Node) ?cx.Node {
 	// → the invisible default stream (the flat fields, byte-identical path).
 	stream := jrn_map_get(attribution, 'stream') or { '' }
 	is_def := jrn_is_default(stream)
+	// #628: the WHOLE append (head read → entry doc → entry alias → head
+	// advance) runs inside the backing store's group-commit scope, which also
+	// holds the store's reentrant op-lock — so on a shared root two appenders
+	// serialize and the hash chain can never interleave; and the scope's one
+	// release flushes the append's four mutations as one durable unit (#614).
+	mut msh := store_lookup(j.store_id) or {
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: backing store is gone')
+	}
+	tr := fab_trace_on()
+	t0 := time.sys_mono_now()
+	store_flush_hold(mut msh)
+	// Rebase on the DURABLE stream head under the lock — a sibling handle on
+	// a shared root may have advanced it past this instance's cache.
+	jrn_refresh_head(mut j, stream)
+	t_head := time.sys_mono_now()
 	// Current head/seq of the TARGET stream — the commit lock is per stream, so
 	// disjoint streams never contend (§2.1.1).
 	mut cur_seq := 0
@@ -1103,6 +1402,7 @@ fn jrn_append(args []cx.Node) ?cx.Node {
 	if jrn_map_has(attribution, 'expect-prev-seq') {
 		expect := jrn_map_get_int(attribution, 'expect-prev-seq') or { -1 }
 		if expect != cur_seq {
+			store_flush_release(mut msh) or {}
 			return mk_err(jrn_err_stale_tail, 'E_JOURNAL_STALE_TAIL: expected head-seq ${expect}, was ${cur_seq}')
 		}
 	}
@@ -1114,31 +1414,83 @@ fn jrn_append(args []cx.Node) ?cx.Node {
 	canonical := jrn_canonical_bytes(seq, j.tenant, stream, actor, authority, ts, prev_hash,
 		event)
 	hash := jrn_compute_hash(j.hash_algo, canonical) or {
+		store_flush_release(mut msh) or {}
 		return mk_err(jrn_err_event_unser, 'E_JOURNAL_EVENT_UNSERIALIZABLE: cannot hash event at seq ${seq}')
 	}
 	entry := jrn_build_entry(seq, j.tenant, stream, actor, authority, ts, prev_hash, hash,
 		event)
+	t_hashed := time.sys_mono_now()
 	// Persist the entry doc + advance the (per-stream) head alias.
-	dhash := jrn_store_put_doc(j.store_id, entry) or {
+	dhash, put_err := jrn_store_put_doc_err(j.store_id, entry)
+	if dhash == '' {
+		store_flush_release(mut msh) or {}
+		// Surface the CAUSE (#644): a capability denial / auth rejection /
+		// transport failure on a remote mount was masked by this message and
+		// indistinguishable from a local disk fault.
+		if pe := put_err {
+			return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: could not persist entry at seq ${seq}',
+				pe)
+		}
 		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: could not persist entry at seq ${seq}')
 	}
-	jrn_store_set_alias(j.store_id, jrn_entry_alias_s(j.tenant, stream, seq), dhash)
-	jrn_set_meta_alias(j.store_id, jrn_head_alias_s(j.tenant, stream), jrn_head_doc(seq, hash))
-	// Advance the in-process head + cache (the linearized commit) on the target stream.
+	t_put := time.sys_mono_now()
+	// Chain-pointer writes FAIL the append loudly (#644): on a remote store
+	// these are wire ops; a swallowed failure would leave the entry durable
+	// but unreachable (entry alias) or the head un-advanced — a chain that
+	// reads shorter than its entries. The err carries the real cause
+	// (auth/transport/refusal), not a generic mask.
+	if e := jrn_store_set_alias(j.store_id, jrn_entry_alias_s(j.tenant, stream, seq),
+		dhash)
+	{
+		store_flush_release(mut msh) or {}
+		return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: entry pointer write failed at seq ${seq}',
+			e)
+	}
+	if e := jrn_set_meta_alias(j.store_id, jrn_head_alias_s(j.tenant, stream), jrn_head_doc(seq,
+		hash))
+	{
+		store_flush_release(mut msh) or {}
+		return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: head advance failed at seq ${seq}',
+			e)
+	}
+	t_alias := time.sys_mono_now()
+	if !is_def && seq == 1 {
+		// Record the stream in the persisted index on its genesis so a later
+		// reattach (file://) can repopulate it (§2.1.1, jrn_reload_named) —
+		// inside the scope, so the index rides the same durable release.
+		if e := jrn_index_stream(j.store_id, j.tenant, stream) {
+			store_flush_release(mut msh) or {}
+			return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: stream index write failed at seq ${seq}',
+				e)
+		}
+	}
+	// The append is durable only when the scope's release lands (#614) — the
+	// receipt below must not be returned on a failed flush.
+	store_flush_release(mut msh) or {
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: durable flush failed at seq ${seq}: ${err.msg()}')
+	}
+	// Advance the in-process head + cache (the linearized commit) on the target
+	// stream. The entries cache is a CONTIGUOUS run from base_seq — on a shared
+	// root a sibling's appends can leave a gap, in which case this entry stays
+	// store-resolved (jrn_entry_text's #628 fallback) instead of corrupting the
+	// cache's index math.
 	if is_def {
-		j.entries << render_canonical(entry)
+		if j.base_seq + j.entries.len == seq - 1 {
+			j.entries << render_canonical(entry)
+		}
 		j.head_seq = seq
 		j.head_hash = hash
 	} else {
 		mut st := jrn_named_state(mut j, stream)
-		st.entries << render_canonical(entry)
+		if st.base_seq + st.entries.len == seq - 1 {
+			st.entries << render_canonical(entry)
+		}
 		st.head_seq = seq
 		st.head_hash = hash
-		// Record the stream in the persisted index on its genesis so a later
-		// reattach (file://) can repopulate it (§2.1.1, jrn_reload_named).
-		if seq == 1 {
-			jrn_index_stream(j.store_id, j.tenant, stream)
-		}
+	}
+	if tr {
+		t_done := time.sys_mono_now()
+		eprintln('[fab-trace side=journal step=append stream=${stream} seq=${seq} head-us=${(t_head - t0) / 1000} hash-us=${(t_hashed - t_head) / 1000} put-us=${(t_put - t_hashed) / 1000} alias-us=${(t_alias - t_put) / 1000} tail-us=${(t_done - t_alias) / 1000} total-us=${(t_done - t0) / 1000}]')
 	}
 	return entry
 }
@@ -1203,7 +1555,7 @@ fn jrn_slice(args []cx.Node) ?cx.Node {
 	if args.len < 3 {
 		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: slice expects (journal, from, to)')
 	}
-	j, errn, ok := jrn_get_open(args[0])
+	mut j, errn, ok := jrn_get_open(args[0])
 	if !ok {
 		return errn
 	}
@@ -1217,9 +1569,12 @@ fn jrn_slice(args []cx.Node) ?cx.Node {
 		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: from > to')
 	}
 	stream := jrn_opt_stream(args, 3)
+	// #628: reads see the live tail on a shared root — refresh the durable
+	// head, and resolve cache-missed entries through the store.
+	jrn_refresh_head(mut j, stream)
 	items := if !jrn_is_default(stream) {
 		st := j.named[stream] or { return jrn_empty() }
-		jrn_state_collect_range(st, from, to)
+		jrn_state_collect_range_of(j, stream, st, from, to)
 	} else {
 		jrn_collect_range(j, from, to)
 	}
@@ -1233,7 +1588,7 @@ fn jrn_since(args []cx.Node) ?cx.Node {
 	if args.len < 2 {
 		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: since expects (journal, from)')
 	}
-	j, errn, ok := jrn_get_open(args[0])
+	mut j, errn, ok := jrn_get_open(args[0])
 	if !ok {
 		return errn
 	}
@@ -1241,9 +1596,11 @@ fn jrn_since(args []cx.Node) ?cx.Node {
 		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: since from')
 	}
 	stream := jrn_opt_stream(args, 2)
+	// #628: reads see the live tail on a shared root (see jrn_slice).
+	jrn_refresh_head(mut j, stream)
 	items := if !jrn_is_default(stream) {
 		st := j.named[stream] or { return jrn_empty() }
-		jrn_state_collect_range(st, from, st.head_seq)
+		jrn_state_collect_range_of(j, stream, st, from, st.head_seq)
 	} else {
 		jrn_collect_range(j, from, j.head_seq)
 	}
@@ -1277,17 +1634,19 @@ fn jrn_streams(args []cx.Node) ?cx.Node {
 }
 
 fn jrn_head(args []cx.Node) ?cx.Node {
-	j, errn, ok := jrn_get_open(args[0])
+	mut j, errn, ok := jrn_get_open(args[0])
 	if !ok {
 		return errn
 	}
 	stream := jrn_opt_stream(args, 1)
+	// #628: the head read sees the live tail on a shared root.
+	jrn_refresh_head(mut j, stream)
 	if !jrn_is_default(stream) {
 		st := j.named[stream] or { return jrn_empty() }
 		if st.head_seq < 1 {
 			return jrn_empty()
 		}
-		return jrn_state_entry_node(st, st.head_seq) or { return jrn_empty() }
+		return jrn_state_entry_node_of(j, stream, st, st.head_seq) or { return jrn_empty() }
 	}
 	if j.head_seq < 1 {
 		return jrn_empty() // empty journal → absence (§3.3)
@@ -1944,6 +2303,365 @@ fn jrn_map_snapshot(m cx.Node, key string) ?cx.Element {
 
 // ── compact (copy-forward, source intact — §4.10) ──────────────────────────
 
+// ── rotation (#640 — segmentation + eviction as ONE composed operation) ────
+//
+// `journal-rotate (journal, opts)` seals the live chain at a retention
+// boundary and moves the HOT WINDOW to a fresh store, composing the three
+// §4.9/§4.10 primitives (snapshot → retain → compact) with a persisted
+// SEGMENT INDEX so history stays discoverable:
+//
+//   opts: {keep-after-seq: N | keep-n: N, stream?: S, target: <new store url>,
+//          signing-key: <ed25519 seed hex> | snapshot: [snapshot …]}
+//
+//   1. the covering snapshot: a caller-supplied signed [snapshot], or a
+//      minimal ROTATION COVER built here (state = [rotation-cover], signed
+//      with opts.signing-key — the fabric daemon signs with its identity
+//      seed). The §4.9 contract is unchanged: no signature, no retention.
+//   2. retain validates the boundary against the cover (§4.9);
+//   3. compact copies the retained tail (B+1..head) into `target`, seam-
+//      anchored at B (§4.10) — the target becomes the NEW HOT journal;
+//   4. the segment index (`cx-journal/segments/<tenant>` in the TARGET
+//      store) records the sealed predecessor (range, anchor, redacted
+//      store URL) APPENDED to the predecessors it already carried — a
+//      chain of rotations stays walkable from the newest hot store alone.
+//
+// The SOURCE journal/store are never mutated: rotation is copy-then-swap,
+// so a crash mid-rotate leaves the live chain intact (retry with a fresh
+// target). EVICTION is the swap itself — the caller (the fabric mount, an
+// embedded deployment) repoints at the returned journal and closes the old
+// handle; per-op cost then tracks the hot window, not lifetime volume.
+// Credentials never enter the index: the recorded segment URL is
+// userinfo-redacted (rehydration supplies its own grant at mount time).
+//
+// STREAMS: `stream: S` rotates one chain; `streams: 'all'` rotates the whole
+// tenant journal — the default chain plus every named stream, each sealed at
+// its OWN boundary (head_s − keep-n, floored at 0) — which is what a fabric
+// mount swap requires: any stream not copied into the target would vanish
+// from the hot window. A stream whose boundary floors at 0 is copied whole
+// (nothing sealed, no index entry). `keep-after-seq` and a caller-supplied
+// `snapshot` are single-stream-mode options.
+fn jrn_rotate(args []cx.Node) ?cx.Node {
+	if args.len < 2 {
+		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: rotate expects (journal, opts)')
+	}
+	j, errn, ok := jrn_get_open(args[0])
+	if !ok {
+		return errn
+	}
+	opts := args[1]
+	target := jrn_map_get(opts, 'target') or {
+		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: rotate needs opts.target (the new hot store URL)')
+	}
+	all_mode := (jrn_map_get(opts, 'streams') or { '' }) == 'all'
+	keep_after := jrn_map_get_int(opts, 'keep-after-seq') or { -1 }
+	keep_n := jrn_map_get_int(opts, 'keep-n') or { -1 }
+	if keep_after < 0 && keep_n < 0 {
+		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: rotate needs keep-after-seq or keep-n')
+	}
+	if all_mode && keep_n < 0 {
+		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: streams=all rotation takes keep-n (per-stream boundaries)')
+	}
+	key_hex := jrn_map_get(opts, 'signing-key') or { '' }
+	mut supplied_snap := cx.Element{}
+	mut have_snap := false
+	if sn := jrn_map_snapshot(opts, 'snapshot') {
+		supplied_snap = sn
+		have_snap = true
+	}
+	if !have_snap && key_hex == '' {
+		return mk_err(jrn_err_snap_unsigned, 'E_JOURNAL_SNAPSHOT_UNSIGNED: rotate needs opts.snapshot (signed) or opts.signing-key')
+	}
+	if all_mode && have_snap {
+		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: streams=all builds its own per-stream covers — pass signing-key, not snapshot')
+	}
+	// the streams to move: one, or the whole tenant journal.
+	mut streams := []string{}
+	if all_mode {
+		if j.head_seq > 0 {
+			streams << jrn_default_stream
+		}
+		for name, _ in j.named {
+			streams << name
+		}
+		if streams.len == 0 {
+			return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: rotate found no streams to move')
+		}
+	} else {
+		streams << (jrn_map_get(opts, 'stream') or { '' })
+	}
+	// open the target ONCE — every stream compacts into the same instance
+	// (repeated opens would fragment non-shared substrates like mem://).
+	if target == jrn_store_url(j.store_id) {
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate target collides with the live source chain')
+	}
+	seg_res := jrn_open([jrn_str(target), jrn_str(j.tenant), cx.Element{ name: 'map' }]) or {
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate target')
+	}
+	if is_err_value(seg_res) {
+		return seg_res
+	}
+	seg_hid := jrn_handle_of(seg_res) or {
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate target handle')
+	}
+	mut seg_jm := journal_lookup(seg_hid) or {
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate segment lost')
+	}
+	mut sealed := []cx.Node{}
+	mut moved := 0
+	mut seg := cx.Node(cx.Element{})
+	mut sealed_any := false
+	for stream in streams {
+		is_def_rot := jrn_is_default(stream)
+		head := if is_def_rot {
+			j.head_seq
+		} else {
+			st := j.named[stream] or { &StreamState{} }
+			st.head_seq
+		}
+		mut boundary := 0
+		if keep_after >= 0 {
+			boundary = keep_after
+		} else {
+			boundary = head - keep_n
+			if boundary < 0 {
+				boundary = 0
+			}
+		}
+		if boundary > head {
+			return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: rotate boundary ${boundary} beyond head ${head} (stream ${stream})')
+		}
+		if !all_mode && boundary <= 0 {
+			return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: rotate boundary ${boundary} seals nothing')
+		}
+		anchor := if boundary >= 1 {
+			if is_def_rot {
+				jrn_live_hash(j, boundary)
+			} else {
+				st := j.named[stream] or { &StreamState{} }
+				jrn_state_live_hash(st, boundary)
+			}
+		} else {
+			jrn_genesis_prev
+		}
+		// boundary 0 (all-mode) seals NOTHING for this stream: it is copied
+		// whole into the target, which needs no retention cover — synthesize
+		// the boundary-0 descriptor for compact directly. A sealing boundary
+		// (>0) takes the full §4.9 path: signed cover → retain validation.
+		mut retention := cx.Node(cx.Element{})
+		if boundary == 0 {
+			mut zattrs := [
+				cx.Attribute{
+					name:  'boundary'
+					value: cx.ScalarValue(i64(0))
+				},
+			]
+			if !is_def_rot {
+				zattrs << cx.Attribute{
+					name:  'stream'
+					value: cx.ScalarValue(stream)
+				}
+			}
+			retention = cx.Element{
+				name:  'retention'
+				attrs: zattrs
+			}
+		} else {
+			// the covering snapshot: supplied (single mode) or the signed rotation cover.
+			mut snap := supplied_snap
+			if !have_snap {
+				seed := jrn_hex_to_bytes(key_hex) or {
+					return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: signing-key must be hex')
+				}
+				cover_state := cx.Node(cx.Element{
+					name: 'rotation-cover'
+				})
+				canonical := jrn_snapshot_canonical(cover_state, boundary, stream, anchor,
+					j.hash_algo)
+				sig_hex := jrn_sign(canonical, seed) or {
+					return mk_err(jrn_err_snap_sig, 'E_JOURNAL_SNAPSHOT_SIG_INVALID: rotation-cover signing failed (stream ${stream})')
+				}
+				pub_hex := jrn_derive_pub(seed) or { '' }
+				sb := jrn_build_snapshot(j.tenant, boundary, stream, anchor, j.hash_algo,
+					true, sig_hex, pub_hex, cover_state)
+				if sb is cx.Element {
+					snap = sb
+				}
+			}
+			// retain (§4.9 validation) for THIS stream.
+			mut retain_items := [
+				session_kv('keep-after-seq', bus_int(boundary)),
+				cx.Node(cx.Element{
+					name:  'snapshot'
+					items: [cx.Node(snap)]
+				}),
+			]
+			if !is_def_rot {
+				retain_items << session_kv('stream', bus_str(stream))
+			}
+			retention = jrn_retain([args[0], cx.Node(cx.Element{
+				name:  map_marker_name
+				items: retain_items
+			})]) or {
+				return mk_err(jrn_err_retention, 'E_JOURNAL_RETENTION_UNCOVERED: rotate retain failed (stream ${stream})')
+			}
+			if is_err_value(retention) {
+				return retention
+			}
+		}
+		mut ret_el := cx.Element{}
+		if retention is cx.Element {
+			ret_el = retention
+		}
+		sr := jrn_compact_into(j, mut seg_jm, seg_hid, ret_el) or {
+			return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate compact failed (stream ${stream})')
+		}
+		if is_err_value(sr) {
+			return sr
+		}
+		seg = sr
+		moved++
+		if boundary > 0 {
+			mut sealed_attrs := [
+				cx.Attribute{
+					name:  'to'
+					value: cx.ScalarValue(i64(boundary))
+				},
+				cx.Attribute{
+					name:  'anchor'
+					value: cx.ScalarValue(anchor)
+				},
+				cx.Attribute{
+					name:  'store'
+					value: cx.ScalarValue(store_url_redact_userinfo(jrn_store_url(j.store_id)))
+				},
+			]
+			if !is_def_rot {
+				sealed_attrs << cx.Attribute{
+					name:  'stream'
+					value: cx.ScalarValue(stream)
+				}
+			}
+			sealed << cx.Node(cx.Element{
+				name:  'segment'
+				attrs: sealed_attrs
+			})
+			sealed_any = true
+		}
+	}
+	seg_id := jrn_handle_of(seg) or {
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate segment handle lost')
+	}
+	seg_j := journal_lookup(seg_id) or {
+		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate segment journal lost')
+	}
+	// the segment index in the NEW store: sealed entries appended to the
+	// predecessors the OLD store already recorded — the rotation chain stays
+	// walkable from the newest hot store alone.
+	mut seg_items := jrn_read_segment_index(j.store_id, j.tenant)
+	prior := seg_items.len
+	for s in sealed {
+		seg_items << s
+	}
+	if sealed_any || prior > 0 {
+		if e := jrn_set_meta_alias(seg_j.store_id, jrn_segments_alias(j.tenant), cx.Element{
+			name:  'journal-segments'
+			items: seg_items
+		})
+		{
+			return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate segment-index write failed',
+				e)
+		}
+	}
+	// opts.carry — alias-name prefixes whose entries (doc + pointer) ride into
+	// the new hot store: the consumer plane's durable state (fabric group
+	// offsets / policies / delivery records) lives beside the chain, and a
+	// rotation that left it behind would silently reset every consumer group.
+	if carry := jrn_map_get_seq(opts, 'carry') {
+		lst := store_stdlib_builtin('store-list-aliases', [jrn_store_handle(j.store_id)]) or {
+			cx.Node(jrn_null())
+		}
+		if lst is cx.Element {
+			for it in lst.items {
+				if it is cx.Element && it.name == 'alias' {
+					aname := it.attr('name')
+					mut matched_prefix := false
+					for p in carry {
+						if p != '' && aname.starts_with(p) {
+							matched_prefix = true
+							break
+						}
+					}
+					if !matched_prefix {
+						continue
+					}
+					ahash := it.attr('hash')
+					text := jrn_store_get_doc_text(j.store_id, ahash) or { continue }
+					doc := cx.parse(text) or { continue }
+					if doc.elements.len == 0 {
+						continue
+					}
+					nh, cerr := jrn_store_put_doc_err(seg_j.store_id, doc.elements[0])
+					if nh == '' {
+						if ce := cerr {
+							return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate carry failed for alias ${aname}',
+								ce)
+						}
+						return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate carry failed for alias ${aname}')
+					}
+					if ce := jrn_store_set_alias(seg_j.store_id, aname, nh) {
+						return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: rotate carry pointer failed for ${aname}',
+							ce)
+					}
+				}
+			}
+		}
+	}
+	return cx.Element{
+		name:  'rotated'
+		attrs: [
+			cx.Attribute{
+				name:  'streams'
+				value: cx.ScalarValue(i64(moved))
+			},
+			cx.Attribute{
+				name:  'sealed'
+				value: cx.ScalarValue(i64(sealed.len))
+			},
+			cx.Attribute{
+				name:  'segments'
+				value: cx.ScalarValue(i64(seg_items.len))
+			},
+			cx.Attribute{
+				name:  'target'
+				value: cx.ScalarValue(store_url_redact_userinfo(target))
+			},
+		]
+		items: [seg]
+	}
+}
+
+// jrn_segments_alias names the per-tenant segment index (the sealed-history
+// chain walkable from the newest hot store).
+fn jrn_segments_alias(tenant string) string {
+	return 'cx-journal/segments/${tenant}'
+}
+
+// jrn_read_segment_index returns the store's recorded sealed segments
+// ([] when none — a first rotation).
+fn jrn_read_segment_index(store_id int, tenant string) []cx.Node {
+	e := jrn_get_meta_doc(store_id, jrn_segments_alias(tenant)) or { return []cx.Node{} }
+	if e.name != 'journal-segments' {
+		return []cx.Node{}
+	}
+	mut out := []cx.Node{}
+	for it in e.items {
+		if it is cx.Element && it.name == 'segment' {
+			out << it
+		}
+	}
+	return out
+}
+
 fn jrn_compact(args []cx.Node) ?cx.Node {
 	if args.len < 2 {
 		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: compact expects (journal, opts)')
@@ -1956,7 +2674,6 @@ fn jrn_compact(args []cx.Node) ?cx.Node {
 	retention := jrn_map_retention(opts) or {
 		return mk_err(jrn_err_retention, 'E_JOURNAL_RETENTION_UNCOVERED: compact needs an opts.retention from retain')
 	}
-	boundary := jrn_retention_attr(retention, 'boundary').int()
 	target := jrn_map_get(opts, 'target') or {
 		return mk_err(jrn_err_arg_invalid, 'E_JOURNAL_ARG_INVALID: compact needs opts.target store URL')
 	}
@@ -1979,6 +2696,15 @@ fn jrn_compact(args []cx.Node) ?cx.Node {
 	mut seg := journal_lookup(seg_id) or {
 		return mk_err(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: compact segment lost')
 	}
+	return jrn_compact_into(j, mut seg, seg_id, retention)
+}
+
+// jrn_compact_into copies one stream's retained tail into an ALREADY-OPEN
+// segment journal (#640: a multi-stream rotation opens the target ONCE and
+// compacts every stream into the same instance — repeated jrn_open would
+// land each stream in a fresh store for non-shared substrates like mem://).
+fn jrn_compact_into(j &Journal, mut seg Journal, seg_id int, retention cx.Element) ?cx.Node {
+	boundary := jrn_retention_attr(retention, 'boundary').int()
 	// Per-stream compact (§2.1.1): if the retention is stream-scoped, copy that
 	// named stream's retained tail into the segment's SAME named stream, with the
 	// seam on the named chain. The default chain is left untouched in the segment.
@@ -1994,16 +2720,28 @@ fn jrn_compact(args []cx.Node) ?cx.Node {
 			text := jrn_state_entry_text(src_st, s) or { break }
 			e := jrn_parse_entry(text) or { break }
 			dhash := jrn_store_put_doc(seg.store_id, e) or { break }
-			jrn_store_set_alias(seg.store_id, jrn_entry_alias_s(seg.tenant, cstream, s), dhash)
+			if perr := jrn_store_set_alias(seg.store_id, jrn_entry_alias_s(seg.tenant, cstream,
+				s), dhash)
+			{
+				return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: compact entry pointer write failed at seq ${s}',
+					perr)
+			}
 			seg_st.entries << text
 		}
 		if seg_st.entries.len > 0 {
 			last := jrn_parse_entry(seg_st.entries[seg_st.entries.len - 1]) or { cx.Element{} }
 			seg_st.head_seq = jrn_entry_attr(last, 'seq').int()
 			seg_st.head_hash = jrn_entry_attr(last, 'hash')
-			jrn_set_meta_alias(seg.store_id, jrn_head_alias_s(seg.tenant, cstream), jrn_head_doc(seg_st.head_seq,
-				seg_st.head_hash))
-			jrn_index_stream(seg.store_id, seg.tenant, cstream)
+			if perr := jrn_set_meta_alias(seg.store_id, jrn_head_alias_s(seg.tenant, cstream),
+				jrn_head_doc(seg_st.head_seq, seg_st.head_hash))
+			{
+				return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: compact head write failed',
+					perr)
+			}
+			if perr := jrn_index_stream(seg.store_id, seg.tenant, cstream) {
+				return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: compact stream index write failed',
+					perr)
+			}
 		} else {
 			seg_st.head_seq = boundary
 			seg_st.head_hash = seg_st.seam_anchor
@@ -2022,14 +2760,22 @@ fn jrn_compact(args []cx.Node) ?cx.Node {
 		text := jrn_entry_text(j, s) or { break }
 		e := jrn_parse_entry(text) or { break }
 		dhash := jrn_store_put_doc(seg.store_id, e) or { break }
-		jrn_store_set_alias(seg.store_id, jrn_entry_alias(seg.tenant, s), dhash)
+		if perr := jrn_store_set_alias(seg.store_id, jrn_entry_alias(seg.tenant, s), dhash) {
+			return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: compact entry pointer write failed at seq ${s}',
+				perr)
+		}
 		seg.entries << text
 	}
 	if seg.entries.len > 0 {
 		last := jrn_parse_entry(seg.entries[seg.entries.len - 1]) or { cx.Element{} }
 		seg.head_seq = jrn_entry_attr(last, 'seq').int()
 		seg.head_hash = jrn_entry_attr(last, 'hash')
-		jrn_set_meta_alias(seg.store_id, jrn_head_alias(seg.tenant), jrn_head_doc(seg.head_seq, seg.head_hash))
+		if perr := jrn_set_meta_alias(seg.store_id, jrn_head_alias(seg.tenant), jrn_head_doc(seg.head_seq,
+			seg.head_hash))
+		{
+			return jrn_err_caused(jrn_err_open_failed, 'E_JOURNAL_OPEN_FAILED: compact head write failed',
+				perr)
+		}
 	} else {
 		seg.head_seq = boundary
 		seg.head_hash = seg.seam_anchor
@@ -2075,7 +2821,35 @@ fn jrn_store_url(store_id int) string {
 // Reached from dispatch_call_l in eval.v BEFORE the env-free chain. Returns
 // none for every non-journal-env name so the caller falls through.
 
+// journal_stdlib_builtin_env carries the callable-applying verbs. Same
+// per-journal serialization as journal_stdlib_builtin (#642); the fold
+// callbacks are purity-enforced (CXER4611), so they can never re-enter a
+// journal op and the plain mutex cannot self-deadlock.
 fn journal_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?cx.Node {
+	mut jl := &sync.Mutex(unsafe { nil })
+	if args.len > 0 {
+		if id := jrn_handle_of(args[0]) {
+			if j := journal_lookup(id) {
+				jl = j.jmu
+			}
+		}
+	}
+	if jl != unsafe { nil } {
+		jl.@lock()
+	}
+	r := journal_stdlib_builtin_env_op(name, args, mut env) or {
+		if jl != unsafe { nil } {
+			jl.unlock()
+		}
+		return none
+	}
+	if jl != unsafe { nil } {
+		jl.unlock()
+	}
+	return r
+}
+
+fn journal_stdlib_builtin_env_op(name string, args []cx.Node, mut env MatchEnv) ?cx.Node {
 	match name {
 		'journal-fold' {
 			return jrn_fold(args, mut env)

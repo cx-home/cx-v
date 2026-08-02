@@ -95,7 +95,86 @@ fn cx_mod_value_source(n cx.Node) !string {
 	if cx_mod_contains_closure(n) {
 		return error('a function value is not serialisable')
 	}
-	return cx.codec_emit_node('cx', n, false)!
+	return cx.codec_emit_node('cx', cx_mod_lower_value(n), false)!
+}
+
+// cx_mod_lower_value rewrites evaluator-internal collection envelopes
+// (`__cx_seq__` / `__cx_arr__` / `__cx_map__` marker elements, and lazy
+// iterators) into the plain CXDM collection nodes before a value crosses
+// into the data-codec layer (#564): the cx module has no knowledge of the
+// evaluator's marker spellings, so an unlowered envelope emits as a
+// literal `[__cx_seq__ …]` element — leaking an internal name into the
+// serialized surface and breaking `serialize ∘ parse` identity for any
+// value built from a sequence of elements (e.g. a `[?for]` body handed to
+// `[?element]`). The renderer (render_element_to) unwraps the same
+// markers for display; this is the codec-lane twin of that rule.
+fn cx_mod_lower_value(n cx.Node) cx.Node {
+	match n {
+		cx.Element {
+			// #566: the ANONYMOUS wrapper (name == '', the multi-value shape a
+			// [?for] comprehension yields) is a sequence in body position —
+			// program-conc-018 pins the paren form, render_body_item_to emits
+			// it as `(…)`, and walk_binding_path_seq expands it as a node-set.
+			// Unlowered, the codec emitted it as a NAMELESS element `[ … ]`,
+			// so put-doc (render lane) and cx:serialize (codec lane) disagreed
+			// on the text form and the collection kind flipped through the
+			// store. Attr-less only: a named-but-empty spelling never carries
+			// attrs when it is the evaluator's wrapper.
+			if n.name == '' && n.attrs.len == 0 {
+				return cx.Node(cx.SequenceNode{ items: n.items.map(cx_mod_lower_value(it)) })
+			}
+			if n.name == seq_marker_name {
+				return cx.Node(cx.SequenceNode{ items: n.items.map(cx_mod_lower_value(it)) })
+			}
+			if n.name == arr_marker_name {
+				return cx.Node(cx.ArrayNode{ items: n.items.map(cx_mod_lower_value(it)) })
+			}
+			if n.name == map_marker_name {
+				// entry elements carry name=key, items=[value] (see
+				// render_element_to's `__cx_map__` lane).
+				mut entries := []cx.MapEntry{cap: n.items.len}
+				for it in n.items {
+					if it is cx.Element {
+						value := if it.items.len > 0 {
+							cx_mod_lower_value(it.items[0])
+						} else {
+							cx.Node(cx.ScalarNode{ value: cx.ScalarValue(cx.NullValue{}), data_type: .null_type })
+						}
+						entries << cx.MapEntry{
+							key_type:  .string_type
+							key_value: cx.ScalarValue(it.name)
+							value:     value
+						}
+					}
+				}
+				return cx.Node(cx.MapNode{ entries: entries })
+			}
+			mut e := n
+			e.items = n.items.map(cx_mod_lower_value(it))
+			return cx.Node(e)
+		}
+		cx.SequenceNode {
+			return cx.Node(cx.SequenceNode{ items: n.items.map(cx_mod_lower_value(it)) })
+		}
+		cx.ArrayNode {
+			return cx.Node(cx.ArrayNode{ items: n.items.map(cx_mod_lower_value(it)) })
+		}
+		cx.MapNode {
+			mut entries := []cx.MapEntry{cap: n.entries.len}
+			for en in n.entries {
+				entries << cx.MapEntry{ key_type: en.key_type, key_value: en.key_value, value: cx_mod_lower_value(en.value) }
+			}
+			return cx.Node(cx.MapNode{ entries: entries })
+		}
+		cx.IteratorNode {
+			// materialize at the codec boundary — the memo is force-pulled
+			// so the emitted sequence is the iterator's full item list.
+			return cx.Node(cx.SequenceNode{ items: iterate(n).map(cx_mod_lower_value(it)) })
+		}
+		else {
+			return n
+		}
+	}
 }
 
 // cx_mod_contains_closure deep-checks for a function value (closure
@@ -130,7 +209,7 @@ fn cx_mod_serialize(args []cx.Node) cx.Node {
 	if cx_mod_contains_closure(args[0]) {
 		return mk_err('cx-err:CXER4101', 'cx:serialize: a function value is not serialisable')
 	}
-	out := cx.codec_emit_node('cx', args[0], false) or {
+	out := cx.codec_emit_node('cx', cx_mod_lower_value(args[0]), false) or {
 		return mk_err('cx-err:CXER4101', 'cx:serialize: ${err.msg()}')
 	}
 	return codec_str_node(out)

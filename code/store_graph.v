@@ -30,13 +30,43 @@ import encoding.hex
 // store_graph_getter — the composite object resolver for any object-graph store.
 // Returns the bare getter signature (V coerces it to cxstore.Getter at each call
 // site, exactly as the hand-rolled closures did).
+// store_graph_getter is the composite object resolver: the live sink (this
+// session's writes), then the #637 page cache, then the durable substrate —
+// the pack backend (or its encrypting wrapper for a keyed store) or the
+// non-pack object backend. A backend hit is CACHED so the second touch is
+// memory-speed; the cache is separate from the sink so the flush watermark
+// never sees a paged-in read as a new object. Every backend read
+// self-verifies its hash, so corruption refuses here rather than
+// materializing a wrong doc.
 fn store_graph_getter(ms &MemStore) fn (h []u8) ?[]u8 {
 	return fn [ms] (h []u8) ?[]u8 {
 		if p := ms.obj_sink.get(h) {
 			return p
 		}
+		hx := h.hex()
+		if p := ms.obj_cache[hx] {
+			return p
+		}
+		mut mms := unsafe { &MemStore(ms) }
 		if be := ms.obj_backend {
+			// NOT cached: a remote substrate's reads must keep reaching the
+			// backend. Serving a REVOKED session from a local cache would
+			// swallow the auth failure the doc layer is supposed to surface
+			// (#212 / store_objwire_err) — the #637 page cache is for the
+			// local pack substrate, where there is no such signal to lose.
 			return be.get_object(h)
+		}
+		if ms.obj_pack != unsafe { nil } {
+			// keyed stores resolve through the AEAD wrapper (plaintext-hash
+			// keyed envelopes); plaintext stores read the pack directly.
+			if ms.enc_key_id != '' && ms.obj_pack_enc != unsafe { nil } {
+				p := ms.obj_pack_enc.get_object(h) or { return none }
+				mms.obj_cache[hx] = p
+				return p
+			}
+			p := ms.obj_pack.get_object(h) or { return none }
+			mms.obj_cache[hx] = p
+			return p
 		}
 		return none
 	}
@@ -80,10 +110,21 @@ struct GraphDelta {
 // docs/code (D/C), removed docs (T), new/updated aliases (A), removed aliases
 // (X) — against the doc_manifested / alias_manifested watermarks. Pure compute;
 // commits nothing.
+//
+// COST (#603): the scan is O(delta), never O(live). New docs can only sit past
+// the doc_scanned cursor (doc_order is append-ordered; store_delete_local keeps
+// the cursor aligned across mid-array deletes); changed aliases can only be in
+// alias_dirty (every live alias-set site appends there); the removal scans over
+// the manifested maps run only when a delete-shaped op raised has_removals.
+// The manifested watermarks stay the source of truth for WHAT is durable — the
+// #603 bookkeeping only narrows WHERE the diff can be, and it is consumed by
+// store_graph_delta_commit strictly after the substrate made the lines durable,
+// so a failed flush recomputes the identical delta (self-healing unchanged).
 fn store_graph_delta(ms &MemStore) GraphDelta {
 	mut lines := []string{}
 	mut new_docs := []string{}
-	for h in ms.doc_order {
+	for di := ms.doc_scanned; di < ms.doc_order.len; di++ {
+		h := ms.doc_order[di]
 		if h in ms.doc_manifested {
 			continue
 		}
@@ -93,14 +134,19 @@ fn store_graph_delta(ms &MemStore) GraphDelta {
 		new_docs << h
 	}
 	mut removed_docs := []string{}
-	for h, _ in ms.doc_manifested {
-		if h !in ms.obj_roots {
-			lines << 'T\t${h}\t-'
-			removed_docs << h
+	if ms.has_removals {
+		for h, _ in ms.doc_manifested {
+			if h !in ms.obj_roots {
+				lines << 'T\t${h}\t-'
+				removed_docs << h
+			}
 		}
 	}
 	mut set_aliases := map[string]string{}
-	for a in ms.alias_order {
+	for a in ms.alias_dirty {
+		if a in set_aliases {
+			continue // deduped: set twice since the last flush
+		}
 		dh := ms.aliases[a] or { continue }
 		if pv := ms.alias_manifested[a] {
 			if pv == dh {
@@ -112,11 +158,13 @@ fn store_graph_delta(ms &MemStore) GraphDelta {
 		set_aliases[a] = dh
 	}
 	mut removed_aliases := []string{}
-	for a, _ in ms.alias_manifested {
-		if a !in ms.aliases {
-			nk := cxstore.object_name(a.bytes()).hex()
-			lines << 'X\t${nk}\t-'
-			removed_aliases << a
+	if ms.has_removals {
+		for a, _ in ms.alias_manifested {
+			if a !in ms.aliases {
+				nk := cxstore.object_name(a.bytes()).hex()
+				lines << 'X\t${nk}\t-'
+				removed_aliases << a
+			}
 		}
 	}
 	return GraphDelta{
@@ -143,7 +191,36 @@ fn store_graph_delta_commit(mut ms MemStore, d GraphDelta) {
 	for a in d.removed_aliases {
 		ms.alias_manifested.delete(a)
 	}
+	// #603: the delta's scan window is settled — everything below the cursor /
+	// in the dirty list is either durable now or was a no-op. Committing an
+	// EMPTY delta is valid and still advances the bookkeeping (a scanned tail
+	// of already-manifested docs, unchanged dirty aliases).
+	ms.doc_scanned = ms.doc_order.len
+	ms.alias_dirty = []
+	ms.has_removals = false
 	ms.log_records += d.lines.len
+}
+
+// store_graph_seed_watermarks resets every incremental-flush watermark to "the
+// full live state is durable": the manifested maps cover all live docs/aliases
+// and the #603 delta bookkeeping (scan cursor, dirty aliases, removal flag)
+// starts clean. Call ONLY when the substrate has just made the entire live
+// state durable (load, snapshot persist, compaction). The object-layer
+// watermark (obj_flushed) is the caller's — substrates seed it differently.
+fn store_graph_seed_watermarks(mut ms MemStore) {
+	mut dm := map[string]bool{}
+	for h in ms.doc_order {
+		dm[h] = true
+	}
+	ms.doc_manifested = dm.move()
+	mut am := map[string]string{}
+	for a in ms.alias_order {
+		am[a] = ms.aliases[a] or { continue }
+	}
+	ms.alias_manifested = am.move()
+	ms.doc_scanned = ms.doc_order.len
+	ms.alias_dirty = []
+	ms.has_removals = false
 }
 
 // store_graph_manifest_delta appends the refs delta since the last persist to
@@ -154,6 +231,8 @@ fn store_graph_delta_commit(mut ms MemStore, d GraphDelta) {
 fn store_graph_manifest_delta(mut ms MemStore, mp string) ! {
 	d := store_graph_delta(ms)
 	if d.lines.len == 0 {
+		// nothing to append — still commit so the #603 scan bookkeeping advances
+		store_graph_delta_commit(mut ms, d)
 		return
 	}
 	blob := d.lines.join('\n') + '\n'
@@ -299,14 +378,30 @@ fn store_cxobj_flush(mut ms MemStore) ! {
 	store_cxobj_backend(mut ms) or {
 		return error('cxobj ${ms.root}: backend attach failed: ${err.msg()}')
 	}
+	// #603: O(delta) — persist only the sink tail past the durability watermark
+	// (DirObjectBackend puts are durable immediately, so the watermark advances
+	// right after), and only THIS delta's alias-name objects (set + removed — an
+	// X tombstone resolves its name object on replay), never the whole table.
+	d := store_graph_delta(ms)
 	if mut be := ms.obj_backend {
-		cxstore.persist_objects(mut be, ms.obj_sink) or {
+		nf := cxstore.persist_objects_from(mut be, ms.obj_sink, ms.obj_flushed) or {
+			ms.obj_backend = be
 			return error('cxobj ${ms.root}: object write failed: ${err.msg()}')
 		}
-		store_graph_stage_aliases(mut be, ms) or {
-			return error('cxobj ${ms.root}: alias-name object write failed: ${err.msg()}')
+		for a, _ in d.set_aliases {
+			be.put_object(a.bytes()) or {
+				ms.obj_backend = be
+				return error('cxobj ${ms.root}: alias-name object write failed: ${err.msg()}')
+			}
+		}
+		for a in d.removed_aliases {
+			be.put_object(a.bytes()) or {
+				ms.obj_backend = be
+				return error('cxobj ${ms.root}: alias-name object write failed: ${err.msg()}')
+			}
 		}
 		ms.obj_backend = be
+		ms.obj_flushed = nf
 	}
 	store_graph_manifest_delta(mut ms, os.join_path(ms.root, cxobj_manifest))!
 }

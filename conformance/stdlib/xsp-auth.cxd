@@ -1,7 +1,7 @@
 [test-suite name=xsp-auth
   [doc [#
 conformance fixtures for the XSP-AUTH handshake calculus
-(spec/02-working/xap_identity_model.md §4, fixture plan §9.8–§9.15 — the
+(spec/03-approved/xap/xap_identity_model.md §4, fixture plan §9.8–§9.15 — the
 pure P0 lanes).
 
    Every case is a standalone pure program: randomness is INJECTED as

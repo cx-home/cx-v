@@ -21,12 +21,20 @@ fn run_store_serve(args []string) {
 	mut allow_all := false
 	mut allow_caps := []string{}
 	mut net_specs := []string{}
+	mut stdin_tether := false
 
 	mut i := 0
 	for i < args.len {
 		arg := args[i]
 		if arg == '--allow-all' {
 			allow_all = true
+			i++
+			continue
+		}
+		if arg == '--exit-on-stdin-eof' {
+			// #648: spawner-tethered lifetime — drain gracefully when stdin
+			// reaches EOF (the harness holds a pipe; its death closes it).
+			stdin_tether = true
 			i++
 			continue
 		}
@@ -99,7 +107,9 @@ fn run_store_serve(args []string) {
 			exit(1)
 		}
 		mounts[m.name] = h
-		names << '${m.name} (${m.url})'
+		// #644: redact userinfo — ftp/sftp mounts carry user:pass in the URL
+		// and a banner is log-retained forever.
+		names << '${m.name} (${code.store_url_redact_userinfo(m.url)})'
 	}
 
 	// #180: thread the TLS cert/key PEM into the listener (they were parsed then
@@ -136,6 +146,9 @@ fn run_store_serve(args []string) {
 	}
 
 	code.svc_install_shutdown_signals(server, cfg.drain_ms)
+	if stdin_tether {
+		code.svc_install_stdin_tether('cx store-serve')
+	}
 
 	// gRPC (decision 2b): opt-in second listener on its own addr, bound BEFORE
 	// the ServeContext so the #251 reloader can rotate BOTH TLS listeners.

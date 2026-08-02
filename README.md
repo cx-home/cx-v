@@ -1,6 +1,6 @@
 # cx — CX for V
 
-[![Version](https://img.shields.io/badge/version-v0.13.0-blue.svg)](#status)
+[![Version](https://img.shields.io/badge/version-v0.14.0-blue.svg)](#status)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-cx--home.github.io%2Fcx-brightgreen.svg)](https://cx-home.github.io/cx/)
 [![Status](https://img.shields.io/badge/status-pre--1.0_experimental-orange.svg)](#status)
@@ -47,12 +47,10 @@ This package builds with the **CX project's V fork**
 ([github.com/cx-home/v](https://github.com/cx-home/v)), **not** stock V: the
 `code` module's HTTP/SSE engine uses picoev extensions that live only in the
 fork, and the optimized build needs the fork's macOS GC fix. It also needs a
-**C++ compiler** and **RE2** (the regex engine shim):
-
-```sh
-brew install re2          # macOS
-apt install libre2-dev    # Debian / Ubuntu
-```
+**C++ compiler** (for the RE2 regex shim). RE2 itself is **vendored** —
+`third_party/re2`, submodule-pinned to the last pre-abseil release and built
+as a static archive in-tree by the Makefile (#573) — so no system re2
+package is required on any platform.
 
 ## Install
 

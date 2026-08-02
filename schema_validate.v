@@ -902,7 +902,7 @@ fn validate_map_entries(host string, body BodyRule, entries []MapEntry, mut diag
 // nested `arr[T]` / `seq[T]` / `map[K, V]` item types recurse
 // through validate_container_body-like logic. `:elem` items must
 // be Element nodes (any name); `:any` / `:scalar` bypass per the
-// existing catalogue.
+// existing catalog.
 fn validate_container_item(host string, path string, declared string, item Node, mut diags []Diagnostic) {
 	if k, kk, ik := parse_container_kind(declared) {
 		nested := BodyRule{ declared: true, kind: k, key_kind: kk, item_kind: ik }

@@ -956,7 +956,7 @@ pub mut:
 // model).
 //
 // W3a / W3b foundation surface — the `source_kind` discriminator
-// catalogues which generator the iterator wraps. For W3a only
+// catalogs which generator the iterator wraps. For W3a only
 // `iter_range` is supported (range(start, end, step) sugar / builtin);
 // W3c grafts the combinator family (`iter_map`, `iter_filter`,
 // `iter_take`, `iter_drop`, `iter_concat`) when [?map] / [?filter] /
@@ -1001,7 +1001,7 @@ pub mut:
 	single_use bool
 }
 
-// IteratorSourceKind catalogues which generator backs an IteratorNode.
+// IteratorSourceKind catalogs which generator backs an IteratorNode.
 // W3a shipped `iter_range`; W3c grafts the combinator family per
 //
 // Combinator slot semantics — what `source_args` carries per kind:

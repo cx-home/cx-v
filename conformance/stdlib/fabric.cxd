@@ -1,0 +1,783 @@
+[test-suite name=fabric
+  [doc [#
+conformance fixtures for cx-fabric — platform eventing, embedded tier P0
+   (spec/02-working/fabric.md; #518/#531; band CXER4920-4949).
+
+   HERMETIC. Every case rides a mem:// journal (capability-free,
+   deterministic, offline). The durable plane delegates to journal (a fabric
+   stream IS a journal stream): publish -> journal-append (receipt carries
+   the per-stream seq), receive -> journal-since filtered by the bus §2.2
+   pattern vocabulary (topic atom incl. terminal .* prefix-glob, head-name
+   string, arity-1 predicate fn), ack -> cumulative committed offset
+   persisted as store data through the journal's own store (the doc-backed
+   alias pattern). The transient plane is latest-wins channels.
+
+   Contract lanes: at-least-once (an uncommitted tail REDELIVERS to a fresh
+   group subscription; an acked tail does not — including across fabric
+   handles, proving the offset is store data, not process memory),
+   observe-only refusal (CXER4922), group-less ack refusal (CXER4923),
+   closed-handle refusal (CXER4921), plane/arg guards (CXER4920), and
+   composition honesty (journal's own attribution/lifecycle errors surface
+   verbatim, e.g. CXER4609).
+
+   Cases 001-009 and 031-033 are the stdlib/fabric.cx [fn-doc] examples
+   VERBATIM (example-backing, stdlib_docs_check). Cases 024-030 are the §9.1
+   DLQ/redelivery-policy lanes (poison exhaustion, group-state inheritance,
+   envelope shape, refusal lanes CXER4931); 031-036 are the §12.1
+   request-reply lanes (synchronous embedded call, sticky-exclusive
+   registration CXER4933, no-responder CXER4932, failure-channel
+   propagation).
+  #]]
+
+ [case id=fabric-001-open-state level=core gate=enforced
+  [tags fabric open handle]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  $f@state]
+#]]
+  [out-text [#
+'open'
+#]]
+ ]
+
+ [case id=fabric-002-close-then-use level=core gate=enforced
+  [tags fabric close idempotent handle error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $c [$fabric:close $f]]
+  [$fabric:read $f "acme/coord/map"]]
+#]]
+  [out-err [#
+cx-err:CXER4921
+#]]
+ ]
+
+ [case id=fabric-003-publish-receipt level=core gate=enforced
+  [tags fabric publish durable receipt seq]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  $r@seq]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-004-subscribe-glob-receive level=core gate=enforced
+  [tags fabric subscribe receive pattern glob]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:subscribe $f "orders" :order.*]]
+  [$count [$fabric:receive $s]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-005-observe-ack-refused level=core gate=enforced
+  [tags fabric observe ack refusal error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:observe $f "orders" :order.placed]]
+  [$fabric:ack $s 1]]
+#]]
+  [out-err [#
+cx-err:CXER4922
+#]]
+ ]
+
+ [case id=fabric-006-receive-head-pattern level=core gate=enforced
+  [tags fabric receive pattern head]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:subscribe $f "orders" "do"]]
+  [$count [$fabric:receive $s]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-007-ack-resume level=core gate=enforced
+  [tags fabric ack offset group resume at-least-once]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s1 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
+  [= $e1 [$fabric:receive $s1]]
+  [= $a [$fabric:ack $s1 1]]
+  [= $s2 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
+  [$count [$fabric:receive $s2]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=fabric-008-emit-latest-wins level=core gate=enforced
+  [tags fabric emit transient latest-wins]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $e1 [$fabric:emit $f "acme/coord/map" [viewport zoom=12]]]
+  [= $e2 [$fabric:emit $f "acme/coord/map" [viewport zoom=13]]]
+  [$fabric:read $f "acme/coord/map"]]
+#]]
+  [out-text [#
+[viewport zoom=13]
+#]]
+ ]
+
+ [case id=fabric-009-read-transient level=core gate=enforced
+  [tags fabric read transient]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $e [$fabric:emit $f "acme/coord/map" [viewport zoom=12]]]
+  [$fabric:read $f "acme/coord/map"]]
+#]]
+  [out-text [#
+[viewport zoom=12]
+#]]
+ ]
+
+ [; ── contract lanes beyond the doc examples ── ;]
+
+ [case id=fabric-010-uncommitted-tail-redelivers level=core gate=enforced
+  [tags fabric ack offset group redelivery at-least-once]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s1 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
+  [= $e1 [$fabric:receive $s1]]
+  [= $s2 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
+  [$count [$fabric:receive $s2]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-011-offset-is-store-data level=core gate=enforced
+  [tags fabric ack offset store persistence cross-handle]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f1 [$fabric:open $j]]
+  [= $r [$fabric:publish $f1 "orders" [do :order.placed] {actor: "u" authority: "g"}]]
+  [= $s1 [$fabric:subscribe $f1 "orders" :order.placed {group: "g1"}]]
+  [= $e1 [$fabric:receive $s1]]
+  [= $a [$fabric:ack $s1 1]]
+  [= $f2 [$fabric:open $j]]
+  [= $s2 [$fabric:subscribe $f2 "orders" :order.placed {group: "g1"}]]
+  [$count [$fabric:receive $s2]]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=fabric-012-ungrouped-ack-refused level=core gate=enforced
+  [tags fabric ack group refusal error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $s [$fabric:subscribe $f "orders" :order.placed]]
+  [$fabric:ack $s 1]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER4923 message='E_FABRIC_GROUP: ack needs a group subscription (no group, no committable offset)']
+#]]
+ ]
+
+ [case id=fabric-013-predicate-pattern level=core gate=enforced
+  [tags fabric receive pattern predicate]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "m" [evt kind=a] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:subscribe $f "m" [?fn ($m) [= $m@kind "a"]]]]
+  [$count [$fabric:receive $s]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-014-receive-max-then-rest level=core gate=enforced
+  [tags fabric receive max cursor batch]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r1 [$fabric:publish $f "m" [a 1] {actor: "u" authority: "g"}]]
+  [= $r2 [$fabric:publish $f "m" [a 2] {actor: "u" authority: "g"}]]
+  [= $r3 [$fabric:publish $f "m" [a 3] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:subscribe $f "m" "a"]]
+  [= $c1 [$count [$fabric:receive $s {max: 2}]]]
+  [= $c2 [$count [$fabric:receive $s]]]
+  [+ [* 10 $c1] $c2]]
+#]]
+  [out-text [#
+21
+#]]
+ ]
+
+ [case id=fabric-015-subscribe-from level=core gate=enforced
+  [tags fabric subscribe from cursor]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r1 [$fabric:publish $f "m" [a 1] {actor: "u" authority: "g"}]]
+  [= $r2 [$fabric:publish $f "m" [a 2] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:subscribe $f "m" "a" {from: 2}]]
+  [$count [$fabric:receive $s]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-016-stream-isolation level=core gate=enforced
+  [tags fabric publish subscribe stream isolation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $ra [$fabric:publish $f "a" [do :x] {actor: "u" authority: "g"}]]
+  [= $rb [$fabric:publish $f "b" [do :y] {actor: "u" authority: "g"}]]
+  [= $s [$fabric:subscribe $f "a" "do"]]
+  [$count [$fabric:receive $s]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-017-per-stream-seq level=core gate=enforced
+  [tags fabric publish stream seq ordering]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $ra [$fabric:publish $f "a" [do :x] {actor: "u" authority: "g"}]]
+  [= $rb [$fabric:publish $f "b" [do :y] {actor: "u" authority: "g"}]]
+  $rb@seq]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-018-publish-bad-handle level=core gate=enforced
+  [tags fabric publish handle error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-fabric' :as fabric]
+[$fabric:publish [nope] "s" [e 1] {actor: "u" authority: "g"}]
+#]]
+  [out-text [#
+[err code=cx-err:CXER4920 message='E_FABRIC_ARG_INVALID: not a [fabric] handle']
+#]]
+ ]
+
+ [case id=fabric-019-emit-empty-channel level=core gate=enforced
+  [tags fabric emit channel arg error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [$fabric:emit $f "" [v 1]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER4920 message='E_FABRIC_ARG_INVALID: channel must be a non-empty string']
+#]]
+ ]
+
+ [case id=fabric-020-attribution-honesty level=core gate=enforced
+  [tags fabric publish attribution journal composition error]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [$fabric:publish $f "orders" [do :order.placed] {actor: "u"}]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER4609 message='E_JOURNAL_ATTRIBUTION_INVALID: append requires non-empty actor + authority (no anonymous appends)']
+#]]
+ ]
+
+ [case id=fabric-021-remote-open-net-denied level=core gate=enforced
+  [tags fabric remote open capability net denial]
+  [doc [#
+The remote tier (spec §15 "embedded or remote"; #531 P3) is NET-gated at the
+dial, deny-by-default — the exact posture the embedded tier documents (mem://
+free, remote by net). The denial fires at the capability gate, before any
+I/O, so this lane is offline-deterministic.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-fabric' :as fabric]
+[$fabric:open "xsp://127.0.0.1:1" {tenant: "acme"}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=fabric-022-remote-open-bad-scheme level=core gate=enforced
+  [tags fabric remote open arg error]
+  [doc [#
+A string open target must name a fabric daemon (xsp:// or xsps://) — any
+other string refuses as an invalid target, never a silent embedded fallback.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-fabric' :as fabric]
+[$fabric:open "http://127.0.0.1:1" {tenant: "acme"}]
+#]]
+  [out-text [#
+[err code=cx-err:CXER4920 message='E_FABRIC_ARG_INVALID: a string open target must be an xsp:// or xsps:// daemon URL (got "http://127.0.0.1:1")']
+#]]
+ ]
+
+ [case id=fabric-023-remote-open-needs-tenant level=core gate=enforced
+  [tags fabric remote open tenant arg error]
+  [doc [#
+Tenant is the leading structural partition (§19.4): a remote open without
+opts.tenant refuses before dialing — nothing to attach.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-fabric' :as fabric]
+[$fabric:open "xsp://127.0.0.1:1" {}]
+#]]
+  [out-text [#
+[err code=cx-err:CXER4920 message='E_FABRIC_ARG_INVALID: remote open needs opts.tenant (the mount to attach)']
+#]]
+ ]
+
+ [case id=fabric-024-dlq-poison-dead-letters level=core gate=enforced
+  [tags fabric dlq policy redelivery dead-letter group]
+  [doc [#
+The §9.1 poison loop end to end: a group subscription declares
+{max-deliveries: 2, dlq: "m.dlq"}; the head event is delivered twice as the
+resume head (crash-simulated by resubscribing WITHOUT ack — the uncommitted
+tail redelivers, §19.3); the third resume exhausts the policy — the head is
+NOT delivered (count 0), it publishes to the DLQ stream as a [dead-letter]
+envelope (count 1 there), and the group offset auto-commits through it. The
+second subscription declares no policy keys — it INHERITS the group's
+persisted policy (group state, not subscription state).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "m" [do :boom] {actor: "u" authority: "g"}]]
+  [= $s1 [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 2 dlq: "m.dlq"}]]
+  [= $e1 [$count [$fabric:receive $s1]]]
+  [= $s2 [$fabric:subscribe $f "m" :boom {group: "w"}]]
+  [= $e2 [$count [$fabric:receive $s2]]]
+  [= $s3 [$fabric:subscribe $f "m" :boom {group: "w"}]]
+  [= $e3 [$count [$fabric:receive $s3]]]
+  [= $d [$fabric:subscribe $f "m.dlq" "dead-letter"]]
+  [= $e4 [$count [$fabric:receive $d]]]
+  [+ [* 1000 $e1] [+ [* 100 $e2] [+ [* 10 $e3] $e4]]]]
+#]]
+  [out-text [#
+1101
+#]]
+ ]
+
+ [case id=fabric-025-dlq-group-unblocks level=core gate=enforced
+  [tags fabric dlq policy offset unblock]
+  [doc [#
+Dead-lettering commits the group offset THROUGH the poison seq: a fresh
+group subscription after exhaustion resumes PAST it and receives the next
+event — the group unblocks. The poison event (seq 1) never redelivers; the
+survivor (seq 2) does.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r1 [$fabric:publish $f "m" [do :boom] {actor: "u" authority: "g"}]]
+  [= $r2 [$fabric:publish $f "m" [do :fine] {actor: "u" authority: "g"}]]
+  [= $s1 [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 1 dlq: "m.dlq"}]]
+  [= $e1 [$fabric:receive $s1 {max: 1}]]
+  [= $s2 [$fabric:subscribe $f "m" [?fn ($m) true] {group: "w"}]]
+  [= $es [$fabric:receive $s2]]
+  [$count $es]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-026-dlq-envelope-shape level=core gate=enforced
+  [tags fabric dlq dead-letter envelope attribution]
+  [doc [#
+The dead-letter envelope is delivery metadata plus a pointer: stream/seq
+name the original entry (which stays in the source journal untouched),
+attempts records the head-deliveries that occurred, and the original event
+rides as the child. Attribution of the DLQ append is fabric-constructed:
+actor = the group whose policy fired, authority = fabric:dlq.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:publish $f "m" [do :boom] {actor: "u" authority: "g"}]]
+  [= $s1 [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 1 dlq: "m.dlq"}]]
+  [= $e1 [$fabric:receive $s1]]
+  [= $s2 [$fabric:subscribe $f "m" :boom {group: "w"}]]
+  [= $e2 [$fabric:receive $s2]]
+  [= $d [$fabric:subscribe $f "m.dlq" "dead-letter"]]
+  [= $dl [$first [$fabric:receive $d]]]
+  [= $env $dl/event]
+  $env@attempts]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=fabric-027-dlq-policy-keys-together level=core gate=enforced
+  [tags fabric dlq policy arg error]
+  [doc [#
+The policy keys come together or not at all: a redelivery limit without a
+destination would discard truth, a destination without a limit never fires
+— both refuse loudly (§9.1, CXER4931).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 3}]]
+#]]
+  [out-err [#
+cx-err:CXER4931
+#]]
+ ]
+
+ [case id=fabric-028-dlq-policy-needs-group level=core gate=enforced
+  [tags fabric dlq policy group error]
+  [doc [#
+A redelivery policy is group state (§9.1): an ungrouped subscription has no
+offset, no redelivery, and therefore no policy to carry.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [$fabric:subscribe $f "m" :boom {max-deliveries: 3 dlq: "m.dlq"}]]
+#]]
+  [out-err [#
+cx-err:CXER4931
+#]]
+ ]
+
+ [case id=fabric-029-dlq-conflicting-redeclaration level=core gate=enforced
+  [tags fabric dlq policy conflict error]
+  [doc [#
+The policy persists as group state: an identical redeclaration is
+idempotent, a CONFLICTING one refuses — group siblings never run divergent
+policies silently (§9.1).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $s1 [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 2 dlq: "m.dlq"}]]
+  [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 5 dlq: "m.dlq"}]]
+#]]
+  [out-err [#
+cx-err:CXER4931
+#]]
+ ]
+
+ [case id=fabric-030-dlq-self-loop-refused level=core gate=enforced
+  [tags fabric dlq policy self-loop error]
+  [doc [#
+The DLQ must be a DIFFERENT stream: dead-lettering into the source stream
+would re-enter the same group's tail as a fresh poison candidate (§9.1).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 2 dlq: "m"}]]
+#]]
+  [out-err [#
+cx-err:CXER4931
+#]]
+ ]
+
+ [case id=fabric-031-respond-register level=core gate=enforced
+  [tags fabric request-reply respond responder]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:respond $f "acme/svc/echo" [?fn ($v) $v]]]
+  $r@channel]
+#]]
+  [out-text [#
+'acme/svc/echo'
+#]]
+ ]
+
+ [case id=fabric-032-request-synchronous-call level=core gate=enforced
+  [tags fabric request-reply request call]
+  [doc [#
+The embedded request applies the registered callable synchronously — the
+degenerate but fully working form (§12.1/§13): deterministic, in-proc, the
+reply is the callable's return value.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:respond $f "acme/svc/sum" [?fn ($v) [+ $v/a $v/b]]]]
+  [$fabric:request $f "acme/svc/sum" [args [a 2] [b 3]]]]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=fabric-033-serve-embedded-degenerate level=core gate=enforced
+  [tags fabric request-reply serve pump]
+  [doc [#
+serve is the REMOTE responder's pump; embedded calls are answered at the
+request site, so the embedded pump reports 0 by construction (§12.1).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:respond $f "acme/svc/echo" [?fn ($v) $v]]]
+  [$fabric:serve $r]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=fabric-034-request-no-responder level=core gate=enforced
+  [tags fabric request-reply request error]
+  [doc [#
+A request on a channel with no live responder refuses immediately —
+CXER4932, never a silent hang (§12.1).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [$fabric:request $f "acme/svc/none" [ping]]]
+#]]
+  [out-err [#
+cx-err:CXER4932
+#]]
+ ]
+
+ [case id=fabric-035-respond-sticky-exclusive level=core gate=enforced
+  [tags fabric request-reply respond exclusive error]
+  [doc [#
+Responder registration is sticky-exclusive per channel (§12.1, the §19.3
+posture): a second respond while the holder lives refuses loudly — never a
+silent replacement.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r1 [$fabric:respond $f "acme/svc/echo" [?fn ($v) $v]]]
+  [$fabric:respond $f "acme/svc/echo" [?fn ($v) null]]]
+#]]
+  [out-err [#
+cx-err:CXER4933
+#]]
+ ]
+
+ [case id=fabric-036-responder-err-propagates level=core gate=enforced
+  [tags fabric request-reply request error failure-channel]
+  [doc [#
+The failure channel (§12.1): an err value the responder callable returns
+travels to the requester VERBATIM — composition honesty, never swallowed.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $r [$fabric:respond $f "acme/svc/bad" [?fn ($v) [$fabric:read $v "x"]]]]
+  [$fabric:request $f "acme/svc/bad" [not-a-handle]]]
+#]]
+  [out-err [#
+cx-err:CXER4920
+#]]
+ ]
+
+]

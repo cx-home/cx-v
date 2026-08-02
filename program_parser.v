@@ -2149,7 +2149,7 @@ fn (mut p ProgramParser) parse_bracket(mode BracketMode) !ProgramNode {
 // `[> $x 2]` — operator-as-head element form).
 fn is_element_head_token(k ProgramTokenKind) bool {
 	return k == .ident || k == .star || k == .plus || k == .minus
-	   || k == .slash || k == .eq || k == .neq
+	   || k == .slash || k == .percent || k == .eq || k == .neq
 	   || k == .lt || k == .le || k == .gt || k == .ge
 	   || k == .tilde
 }
@@ -3330,6 +3330,18 @@ fn (mut p ProgramParser) parse_directive() !ProgramNode {
 	if name_tok.text == 'let' {
 		return p.parse_let_body(name_tok.pos)!
 	}
+	// Special-form: [?loop [= $x INIT]… BODY] (spec/code.md §8.15, #550) —
+	// the same positional `[= …]`-clauses-then-body shape as [?let]; eval
+	// extracts the loop bindings and drives the body under the
+	// [break]/[continue] tail contract.
+	if name_tok.text == 'loop' {
+		return p.parse_loop_body(name_tok.pos)!
+	}
+	// Special-form: [?do E …] (spec/code.md §8.14, #550) — one-or-more
+	// positional effect expressions, evaluated in order.
+	if name_tok.text == 'do' {
+		return p.parse_do_body(name_tok.pos)!
+	}
 	// Special-form: [?match] accepts ONLY the clause-child form
 	// `[?match X [case P R] … [else R]]` (and the 2-arg single-arm
 	// `[?match X [pat] [yield E]]`). The legacy `:case/:when/:else/:where/
@@ -3545,6 +3557,57 @@ fn (mut p ProgramParser) parse_let_body(start Position) !ProgramDirective {
 	return ParseError{
 		message: "[?let] requires a `[= \$name value]` binding clause then a body (spec/code.md §8.5); the `\$name = expr :in body` colon form is no longer accepted"
 		pos:     p.peek().pos
+	}
+}
+
+// parse_loop_body parses `[?loop [= $x INIT]… BODY]` (spec/code.md §8.15,
+// #550): zero-or-more `[= …]` binding clauses then ONE body expression —
+// the [?let] positional shape verbatim (eval_loop splits bindings from the
+// body by the same last-positional-is-body rule). [break]/[continue] are
+// ordinary bracket elements inside the body; the TAIL CONTRACT is eval's.
+fn (mut p ProgramParser) parse_loop_body(start Position) !ProgramDirective {
+	mut slots := []ProgramSlot{}
+	for p.peek_kind() != .rbrack && p.peek_kind() != .eof {
+		slots << ProgramSlot{
+			kind:  .positional
+			value: p.parse_expr()!
+		}
+	}
+	p.expect(.rbrack, "']' (closing [?loop])")!
+	if slots.len == 0 {
+		return ParseError{
+			message: '[?loop] requires a body: `[?loop [= \$x INIT]… BODY]` — each body pass ends in [break …] or [continue …] (spec/code.md §8.15)'
+			pos:     start
+		}
+	}
+	return ProgramDirective{
+		name:  'loop'
+		slots: slots
+		pos:   start
+	}
+}
+
+// parse_do_body parses `[?do E …]` (spec/code.md §8.14, #550): one-or-more
+// positional effect expressions.
+fn (mut p ProgramParser) parse_do_body(start Position) !ProgramDirective {
+	mut slots := []ProgramSlot{}
+	for p.peek_kind() != .rbrack && p.peek_kind() != .eof {
+		slots << ProgramSlot{
+			kind:  .positional
+			value: p.parse_expr()!
+		}
+	}
+	p.expect(.rbrack, "']' (closing [?do])")!
+	if slots.len == 0 {
+		return ParseError{
+			message: '[?do] requires at least one expression to evaluate for effect (spec/code.md §8.14)'
+			pos:     start
+		}
+	}
+	return ProgramDirective{
+		name:  'do'
+		slots: slots
+		pos:   start
 	}
 }
 

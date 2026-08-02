@@ -84,6 +84,21 @@ fn store_remote_active(ms &MemStore) bool {
 
 // ── URL parsing ──────────────────────────────────────────────────────────
 
+// store_url_redact_userinfo masks the userinfo segment of a URL for LOG /
+// BANNER output (#644): a `cx-store+http://<token>@host/…` mount printed
+// verbatim leaks the bearer token into logs (ftp/sftp `user:pass@` likewise).
+// `scheme://anything@rest` → `scheme://***@rest`; URLs without userinfo pass
+// through unchanged. Only the authority's userinfo is considered — an `@`
+// after the first `/` past the scheme is path data and left alone.
+pub fn store_url_redact_userinfo(url string) string {
+	scheme_end := url.index('://') or { return url }
+	rest := url[scheme_end + 3..]
+	authority_end := rest.index('/') or { rest.len }
+	authority := rest[..authority_end]
+	at := authority.last_index('@') or { return url }
+	return url[..scheme_end + 3] + '***' + authority[at..] + rest[authority_end..]
+}
+
 // store_remote_parse builds a RemoteBackend from the open URL. S3 credentials
 // and the (optional) custom endpoint come from the standard AWS env chain so a
 // MinIO/R2/B2 deployment needs no code change. Returns an [err] node on a
@@ -476,7 +491,16 @@ fn store_remote_unreachable(method string, url string, errn cx.Element) cx.Node 
 	if c := http_attr(errn, 'code') {
 		detail = c
 	}
-	return mk_err('cx-err:CXER1101', 'E_STORE_BACKEND_UNREACHABLE: ${method} ${url}: ${detail}')
+	// #655: carry the transport error's MESSAGE, not just its code — a §4.5
+	// loopback deny (CXER4504) names the fix ("no admitting literal-IP/
+	// localhost grant") only in its message, and the bare code cost the
+	// reporter the diagnosis.
+	if m := http_attr(errn, 'message') {
+		if m != '' {
+			detail += ': ${m}'
+		}
+	}
+	return mk_err('cx-err:CXER1101', 'E_STORE_BACKEND_UNREACHABLE: ${method} ${store_url_redact_userinfo(url)}: ${detail}')
 }
 
 // ── S3 object operations ─────────────────────────────────────────────────────

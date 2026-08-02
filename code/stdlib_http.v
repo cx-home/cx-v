@@ -1820,17 +1820,7 @@ fn http_exchange_request_real(args []cx.Node) cx.Node {
 	mut query_nodes := []cx.Node{}
 	if qi := target.index('?') {
 		path = target[..qi]
-		raw_q := target[qi + 1..]
-		for pair in raw_q.split('&') {
-			if pair == '' {
-				continue
-			}
-			eqi := pair.index('=') or {
-				query_nodes << http_query_param(pair, '')
-				continue
-			}
-			query_nodes << http_query_param(pair[..eqi], pair[eqi + 1..])
-		}
+		query_nodes = http_parse_query(target[qi + 1..])
 	}
 	body_item := cx.Node(cx.ScalarNode{
 		value:     cx.ScalarValue(body_bytes.bytestr())
@@ -1848,6 +1838,69 @@ fn http_exchange_request_real(args []cx.Node) cx.Node {
 			cx.Node(cx.Element{ name: 'body', items: [body_item] }),
 		]
 	}
+}
+
+// http_parse_query parses a raw query string (`k=v&k2=v2…`) into the §2.2
+// [query-params] children — one `[<name> "<value>"]` element per pair, names
+// and values percent-decoded (`+` = space): the receive-side twin of
+// [$url:query-encode]. A valueless pair (`?flag`) keeps an empty string value.
+// The ONE query parser (#627): the exchange-request lane, the listener's
+// handler/service lanes, and the xap host all route here so the shapes
+// cannot drift.
+fn http_parse_query(raw string) []cx.Node {
+	mut out := []cx.Node{}
+	for pair in raw.split('&') {
+		if pair == '' {
+			continue
+		}
+		eqi := pair.index('=') or {
+			out << http_query_param(http_urldecode(pair), '')
+			continue
+		}
+		out << http_query_param(http_urldecode(pair[..eqi]), http_urldecode(pair[eqi + 1..]))
+	}
+	return out
+}
+
+// http_urldecode percent-decodes a URL component (`%XX` bytes, `+` = space);
+// malformed escapes pass through verbatim (never an error on receive).
+fn http_urldecode(s string) string {
+	mut out := []u8{cap: s.len}
+	mut i := 0
+	for i < s.len {
+		c := s[i]
+		if c == `+` {
+			out << ` `
+			i++
+		} else if c == `%` && i + 2 < s.len {
+			hi := http_hex_val(s[i + 1])
+			lo := http_hex_val(s[i + 2])
+			if hi >= 0 && lo >= 0 {
+				out << u8(hi * 16 + lo)
+				i += 3
+			} else {
+				out << c
+				i++
+			}
+		} else {
+			out << c
+			i++
+		}
+	}
+	return out.bytestr()
+}
+
+fn http_hex_val(c u8) int {
+	if c >= `0` && c <= `9` {
+		return int(c - `0`)
+	}
+	if c >= `a` && c <= `f` {
+		return int(c - `a`) + 10
+	}
+	if c >= `A` && c <= `F` {
+		return int(c - `A`) + 10
+	}
+	return -1
 }
 
 fn http_query_param(name string, value string) cx.Node {

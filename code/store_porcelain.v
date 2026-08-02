@@ -622,10 +622,7 @@ fn store_branch_impl(args []cx.Node, force bool) ?cx.Node {
 			}
 		}
 	}
-	if name !in ms.aliases {
-		ms.alias_order << name
-	}
-	ms.aliases[name] = target
+	store_alias_set_local(mut ms, name, target)
 	store_append(mut ms, store_alias_record(name, target)) or {
 		return store_persist_err(ms, err.msg())
 	}
@@ -639,6 +636,74 @@ fn store_branch_impl(args []cx.Node, force bool) ?cx.Node {
 			cx.Attribute{
 				name:  'target'
 				value: cx.ScalarValue(target)
+			},
+		]
+	}
+}
+
+// ── verify (#637): the whole-graph integrity pass, on demand ──────────────
+//
+// Every live doc reconstructs from the object graph, or the op fails loud.
+// This is the check that used to run inline on EVERY open of an object-graph
+// store — O(live set) work that made boot scale with lifetime volume. With
+// demand paging (#637) it moves here: a corrupt object still refuses loudly
+// at first touch (the composite getter self-verifies each read), and the
+// exhaustive sweep is available on demand or from a background task instead
+// of being paid on every boot.
+//
+//   [$store:verify $s]  ⇒ [verification valid=true docs=N objects=M]
+//                       ⇒ [err code=cx-err:CXER1120 …] on corruption
+//
+// The pass reports the FIRST failure with the offending store-hash, exactly
+// as the load-time check did — same code, same message shape (#129-C).
+fn store_verify(args []cx.Node) ?cx.Node {
+	if args.len < 1 {
+		return mk_err('cx-err:CXER0108', 'E_ARG: verify expects ($store)')
+	}
+	ms, errn, ok := store_get_open(args[0])
+	if !ok {
+		return errn
+	}
+	if !store_objgraph_active(ms) {
+		// the flat document model keeps its docs whole; there is no object
+		// graph to walk, so verification is the doc-hash check `get-doc`
+		// already performs per read. Refuse honestly rather than answering a
+		// hollow valid=true.
+		return mk_err('cx-err:CXER1709',
+			'E_CSRP_OPERATION_UNSUPPORTED: verify walks an object graph — this store is the flat document model (its per-read hash check IS its verification)')
+	}
+	getter := store_graph_getter(ms)
+	mut docs := 0
+	for h, root in ms.obj_roots {
+		if h.starts_with('code:') {
+			getter(root) or {
+				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${ms.root}: code object missing for ${h}')
+			}
+			docs++
+			continue
+		}
+		doc := cxstore.load_document_from(getter, root) or {
+			return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${ms.root}: doc ${h} failed to reconstruct from the object graph (corrupt or missing object): ${err.msg()}')
+		}
+		if doc.elements.len == 0 {
+			return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${ms.root}: doc ${h} reconstructed to an empty document (corruption)')
+		}
+		docs++
+	}
+	return cx.Element{
+		name:  'verification'
+		attrs: [
+			cx.Attribute{
+				name:  'valid'
+				value: cx.ScalarValue(true)
+			},
+			cx.Attribute{
+				name:  'docs'
+				value: cx.ScalarValue(i64(docs))
+			},
+			cx.Attribute{
+				name:  'objects'
+				value: cx.ScalarValue(i64(ms.obj_sink.objects.len + ms.obj_cache.len))
 			},
 		]
 	}

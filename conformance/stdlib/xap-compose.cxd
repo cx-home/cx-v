@@ -958,4 +958,293 @@ cx-err:CXER4872
 'true'
 #]]
   ]
+
+  [case id=xap-compose-037-resolve-closure-composes-demotes level=core
+   [tags xap resolve resolver context-composition tier]
+   [; #535 §3.6 — the context→composition entry applies the {resolver: …}
+      closure ($context $opts); the proposal's reason travels, and the
+      requested :foreground demotes to T2 foreground-propose (§20.2: a
+      resolver proposal never seizes the foreground). ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $resolver [?fn ($ctx $opts)
+    [?if [= [$concat '' $ctx@focus] 'orders']
+      [then [$xap:surface 'order-radar' ([$xap:panel 'order-list' {}])
+              {reason: 'focus=orders matches order-list affinity'}]]
+      [else ()]]]]
+  [= $rt [$xap:run {tenant: 'acme', resolver: $resolver}]]
+  [$xap:resolve $rt [?element 'context' [?attr 'focus' 'orders']] {tier: :foreground}]]
+#]]
+   [out-text [#
+[xap-surface name=order-radar reason='focus=orders matches order-list affinity' tier=T2 ([xap-panel component=order-list {}])]
+#]]
+  ]
+
+  [case id=xap-compose-038-resolve-default-tier-peripheral level=core
+   [tags xap resolve resolver tier peripheral]
+   [; #535 — unrequested placement grants T3 (peripheral-ready, the §20.2
+      default posture). ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $resolver [?fn ($ctx $opts)
+    [$xap:surface 'radar' () {reason: 'always'}]]]
+  [= $rt [$xap:run {tenant: 'acme', resolver: $resolver}]]
+  [$xap:resolve $rt [?element 'context'] {}]]
+#]]
+   [out-text [#
+[xap-surface name=radar reason=always tier=T3 ()]
+#]]
+  ]
+
+  [case id=xap-compose-039-resolve-scripted-default-absence level=core
+   [tags xap resolve resolver scripted absence]
+   [; #535 — the :scripted default with no declared context-affinity rules
+      resolves to the ABSENCE channel (nothing meets threshold), never an
+      error and never a fabricated surface. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $rt [$xap:run {tenant: 'acme'}]]
+  [$empty [$xap:resolve $rt [?element 'context' [?attr 'focus' 'orders']] {}]]]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=xap-compose-040-resolve-proposal-requires-reason level=core
+   [tags xap resolve resolver reason CXER4853]
+   [; #535 §19 — decisions are journaled WITH :reason; a proposal without
+      one refuses with an actionable diagnostic. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $noreason [?fn ($ctx $opts) [$xap:surface 'bare' () {}]]]
+  [= $rt [$xap:run {tenant: 'acme', resolver: $noreason}]]
+  [$xap:resolve $rt [?element 'context'] {}]]
+#]]
+   [out-text [#
+[err code=cx-err:CXER4853 message='E_XAP_SURFACE_INVALID: a resolver proposal must carry reason=… — the decision is journaled and auditable (xap.md §19); stamp the attr on the proposed surface']
+#]]
+  ]
+
+  [case id=xap-compose-041-resolve-shape-dispatch-names-both level=core
+   [tags xap resolve shape-dispatch CXER4852]
+   [; #535 ask 2 — the one head carries two contracts; a first argument
+      that is neither names BOTH so debugging goes to the right section. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[$xap:resolve [?element 'neither-shape'] 'term' {}]
+#]]
+   [out-text [#
+[err code=cx-err:CXER4852 message='E_XAP: resolve is shape-dispatched on its first argument — a composed [grammar …] = §8.1 ρ term resolution (grammar, term, context?); an [xap-runtime …] handle = §3.6 context→composition (runtime, context, opts?); got neither']
+#]]
+  ]
+
+  [case id=xap-compose-043-scripted-affinity-pin-composes level=core
+   [tags xap resolve resolver-default affinity ramp dial]
+   [; #535 PR 2 — the scripted fold end-to-end: a fresh system surfaces
+      NOTHING unsolicited (§20.1 level 0 = summon-only); a §20.1 manual pin
+      — an ordinary dial delegation at scope ramp/<component>/<class> with
+      [setting level=N] (§21.3, one mechanism) — raises the capability to
+      peripheral-suggest and the declared §3.2 affinity composes with a
+      GENERATED deterministic reason. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $c [$xap:component 'rl43-orders' {bind: '/orders',
+      affinity: ([affinity when="context[= $_@focus 'rl43']" class=:rl43.triage rank=1])}]]
+  [= $rt [$xap:run {tenant: 'acme'}]]
+  [= $fresh [$empty [$xap:resolve $rt [?element 'context' [?attr 'focus' 'rl43']] {}]]]
+  [= $pin [$xap:dial $rt [from id="principal:dana"] [to id="agent:resolver"]
+            [scope 'ramp/rl43-orders/rl43.triage'] [setting level=2]]]
+  [= $hit [$xap:resolve $rt [?element 'context' [?attr 'focus' 'rl43']] {}]]
+  [probe [fresh $fresh] [hit $hit]]]
+#]]
+   [out-text [#
+[probe [fresh true] [hit [xap-surface name=scripted reason="scripted: rl43-orders: affinity :rl43.triage matched context[= $_@focus 'rl43'] (ramp level 2)" tier=T3 ([xap-panel component=rl43-orders {}])]]]
+#]]
+  ]
+
+  [case id=xap-compose-044-scripted-t2-needs-level-3 level=core
+   [tags xap resolve resolver-default ramp tier]
+   [; #535 PR 2 — a T2 (foreground-propose) placement gates at ramp level 3
+      (§20.1 = ramp level 3 ↔ §20.2 T2): a level-2 pin surfaces peripherally
+      but gates out of :foreground; raising the pin to 3 grants T2 (the
+      LAST matching dial wins — later dials adjust earlier ones). ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $c [$xap:component 'rl45-orders' {bind: '/o',
+      affinity: ([affinity when="context[= $_@focus 'rl45']" class=:rl45.c rank=1])}]]
+  [= $rt [$xap:run {tenant: 'acme'}]]
+  [= $p2 [$xap:dial $rt [from id="principal:d"] [to id="agent:resolver"]
+           [scope 'ramp/rl45-orders/rl45.c'] [setting level=2]]]
+  [= $gated [$empty [$xap:resolve $rt [?element 'context' [?attr 'focus' 'rl45']] {tier: :foreground}]]]
+  [= $p3 [$xap:dial $rt [from id="principal:d"] [to id="agent:resolver"]
+           [scope 'ramp/rl45-orders/rl45.c'] [setting level=3]]]
+  [= $t2 [$xap:resolve $rt [?element 'context' [?attr 'focus' 'rl45']] {tier: :foreground}]]
+  [probe [gated $gated] [t2-tier [$concat '' $t2@tier]]]]
+#]]
+   [out-text [#
+[probe [gated true] [t2-tier 'T2']]
+#]]
+  ]
+
+  [case id=xap-compose-045-affinity-malformed-refuses level=core
+   [tags xap component affinity validation CXER4852]
+   [; #535 PR 2 — a malformed [affinity] clause (here the retired infix
+      predicate) refuses AT DECLARATION with the engine's actionable
+      diagnostic — never a silently inert rule. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[$xap:component 'rl46-bad' {affinity: ([affinity when="ctx[@x=1]" class=:c])}]
+#]]
+   [out-text [#
+[err code=cx-err:CXER4852 message='E_XAP_COMPONENT_INVALID: affinity when="ctx[@x=1]" is not a CXPath expression: cx-err:CXER0100: infix attribute comparison `[@x=…]` in a CXPath predicate is retired — predicates are homoiconic CX code; write the prefix operator form `[= $_@x …]` (code.md §5.5.2) at line 1:15']
+#]]
+  ]
+
+  [case id=xap-compose-046-resolver-default-value-ranks level=core
+   [tags xap resolver-default rank dial]
+   [; #535 PR 2 — [$xap:resolver-default $rules] returns a first-class
+      [scripted-resolver …] value {resolver: …} accepts; the fold ranks by
+      declared rank (alpha rank 1 before beta rank 2 despite declaration
+      order) and a GENERAL ramp/<component> pin (no class) applies too. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $rd [$xap:resolver-default (
+      [affinity component='rl47-beta'  when="context" class=:rl47 rank=2],
+      [affinity component='rl47-alpha' when="context" class=:rl47 rank=1])]]
+  [= $rt [$xap:run {tenant: 'acme', resolver: $rd}]]
+  [= $p1 [$xap:dial $rt [from id="principal:d"] [to id="agent:resolver"] [scope 'ramp/rl47-alpha/rl47'] [setting level=2]]]
+  [= $p2 [$xap:dial $rt [from id="principal:d"] [to id="agent:resolver"] [scope 'ramp/rl47-beta'] [setting level=2]]]
+  [$xap:resolve $rt [?element 'context'] {}]]
+#]]
+   [out-text [#
+[xap-surface name=scripted reason='scripted: rl47-alpha: affinity :rl47 matched context (ramp level 2); rl47-beta: affinity :rl47 matched context (ramp level 2)' tier=T3 ([xap-panel component=rl47-alpha {}], [xap-panel component=rl47-beta {}])]
+#]]
+  ]
+
+  [case id=xap-compose-047-resolver-default-needs-component level=core
+   [tags xap resolver-default validation CXER4852]
+   [; #535 PR 2 — standalone rules carry component=… (no declaration to
+      ride on); missing it refuses. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[$xap:resolver-default ([affinity when="context" class=:c])]
+#]]
+   [out-text [#
+[err code=cx-err:CXER4852 message='E_XAP: resolver-default rules carry component=… (the standalone form has no component declaration to ride on; xap.md §3.6)']
+#]]
+  ]
+
+  [case id=xap-compose-048-respond-fold-promotes-demotes level=core
+   [tags xap resolve-respond ramp fold summon]
+   [; #553 — the §20.1 fold end-to-end WITHOUT a pin: fresh = absence;
+      opts.summon composes at level 0 (summon-only IS level 0's right,
+      the organic bootstrap) with [candidate …] metadata RELOCATED to the
+      journaled decision (0 in the surface); four consecutive acted-ons =
+      level 2 → anticipatory surfacing; ONE dismissal drops a level (fast
+      to lose) → absence again. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $c [$xap:component 'rl48-x' {bind: '/o',
+      affinity: ([affinity when="context[= $_@focus 'rl48']" class=:rl48.c rank=1])}]]
+  [= $rt [$xap:run {tenant: 'acme'}]]
+  [= $ctx [?element 'context' [?attr 'focus' 'rl48']]]
+  [= $fresh [$empty [$xap:resolve $rt $ctx {}]]]
+  [= $sum [$xap:resolve $rt $ctx {summon: 'rl48-x'}]]
+  [= $r1 [$xap:resolve-respond $rt 'rl48-x' :acted-on]]
+  [= $r2 [$xap:resolve-respond $rt 'rl48-x' :acted-on]]
+  [= $r3 [$xap:resolve-respond $rt 'rl48-x' :acted-on]]
+  [= $r4 [$xap:resolve-respond $rt 'rl48-x' :acted-on]]
+  [= $promoted [$xap:resolve $rt $ctx {}]]
+  [= $d1 [$xap:resolve-respond $rt 'scripted' :glanced-dismissed]]
+  [= $demoted [$empty [$xap:resolve $rt $ctx {}]]]
+  [probe
+    [fresh $fresh]
+    [sum-name [$concat '' $sum@name]]
+    [cand-in-surface [$count $sum//candidate]]
+    [promoted-name [$concat '' $promoted@name]]
+    [demoted $demoted]]]
+#]]
+   [out-text [#
+[probe [fresh true] [sum-name 'rl48-x'] [cand-in-surface 0] [promoted-name 'scripted'] [demoted true]]
+#]]
+  ]
+
+  [case id=xap-compose-049-respond-suppression-sticky level=core
+   [tags xap resolve-respond ramp suppressed]
+   [; #553 — :suppressed sticks at level 0 ("don't show me this"); a later
+      acted-on run (re-engagement, e.g. after a fresh summon) clears it
+      and re-promotes. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $c [$xap:component 'rl49-x' {bind: '/o',
+      affinity: ([affinity when="context" class=:rl49.c rank=1])}]]
+  [= $rt [$xap:run {tenant: 'acme'}]]
+  [= $ctx [?element 'context']]
+  [= $sum [$xap:resolve $rt $ctx {summon: 'rl49-x'}]]
+  [= $s [$xap:resolve-respond $rt 'rl49-x' :suppressed]]
+  [= $suppressed [$empty [$xap:resolve $rt $ctx {}]]]
+  [= $a1 [$xap:resolve-respond $rt 'rl49-x' :acted-on]]
+  [= $a2 [$xap:resolve-respond $rt 'rl49-x' :acted-on]]
+  [= $a3 [$xap:resolve-respond $rt 'rl49-x' :acted-on]]
+  [= $a4 [$xap:resolve-respond $rt 'rl49-x' :acted-on]]
+  [= $back [$xap:resolve $rt $ctx {}]]
+  [probe [suppressed $suppressed] [back-name [$concat '' $back@name]]]]
+#]]
+   [out-text [#
+[probe [suppressed true] [back-name 'scripted']]
+#]]
+  ]
+
+  [case id=xap-compose-050-respond-vocabulary-closed level=core
+   [tags xap resolve-respond validation CXER4852]
+   [; #553 — the response vocabulary is the closed §20.1 set; anything else
+      refuses with the set named. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let
+  [= $rt [$xap:run {tenant: 'acme'}]]
+  [$xap:resolve-respond $rt 'whatever' :meh]]
+#]]
+   [out-text [#
+[err code=cx-err:CXER4852 message='E_XAP: resolve-respond response must be :acted-on, :glanced-dismissed, :ignored, or :suppressed (xap.md §20.1); got "meh"']
+#]]
+  ]
+
+  [case id=xap-compose-042-run-resolver-option-validates level=core
+   [tags xap run resolver-option CXER4852]
+   [; #535 §3.1 — {resolver: …} takes :scripted or a CX closure; the spec'd
+      external-handle variant refuses loudly until it ships (never
+      accept-and-ignore). ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[$xap:run {tenant: 'acme', resolver: 'not-a-closure'}]
+#]]
+   [out-text [#
+[err code=cx-err:CXER4852 message='E_XAP: run {resolver: …} takes :scripted, a CX closure, or a [$xap:resolver-default …] value — an external resolver handle is not yet a shipped surface (xap.md §3.1/§3.6)']
+#]]
+  ]
 ]

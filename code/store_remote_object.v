@@ -29,8 +29,11 @@ mut:
 	// upstream as CXER1120 (integrity mismatch) — masking an auth failure as data
 	// corruption. Record the last non-2xx status so the doc-level path
 	// (store_objwire_err) raises the real code (401/403 → CXER1131, 429 → 1132).
+	// #655: fail_detail carries the transport's own error text (a §4.5 net
+	// deny, a dial refusal) so the surfaced error NAMES the cause.
 	fail_status int
 	fail_op     string
+	fail_detail string
 }
 
 fn (mut b RemoteObjectBackend) ow_note_fail(st int, op string) {
@@ -38,12 +41,28 @@ fn (mut b RemoteObjectBackend) ow_note_fail(st int, op string) {
 	b.fail_op = op
 }
 
+fn (mut b RemoteObjectBackend) ow_note_fail_d(st int, op string, detail string) {
+	b.fail_status = st
+	b.fail_op = op
+	b.fail_detail = detail
+}
+
 // ow_take_fail returns-and-clears the recorded transport failure.
 pub fn (mut b RemoteObjectBackend) ow_take_fail() (int, string) {
 	st, op := b.fail_status, b.fail_op
 	b.fail_status = 0
 	b.fail_op = ''
+	b.fail_detail = ''
 	return st, op
+}
+
+// ow_take_fail_d is ow_take_fail plus the transport's own error text (#655).
+pub fn (mut b RemoteObjectBackend) ow_take_fail_d() (int, string, string) {
+	st, op, d := b.fail_status, b.fail_op, b.fail_detail
+	b.fail_status = 0
+	b.fail_op = ''
+	b.fail_detail = ''
+	return st, op, d
 }
 
 // ow_result_hashes collects the h="…" attrs of the [o …] children of a result doc.
@@ -71,7 +90,7 @@ pub fn (b &RemoteObjectBackend) has_object(hash []u8) bool {
 	st, body, ok := b.transport.send('objects-have', '', '[have [o h="${hx}"]]')
 	if !ok || st != 200 {
 		mut mb := unsafe { &RemoteObjectBackend(b) }
-		mb.ow_note_fail(if ok { st } else { -1 }, 'objects-have')
+		mb.ow_note_fail_d(if ok { st } else { -1 }, 'objects-have', if ok { '' } else { body })
 		return false
 	}
 	// objects-have replies the MISSING hashes; present iff hx is NOT reported missing.
@@ -83,7 +102,7 @@ pub fn (b &RemoteObjectBackend) get_object(hash []u8) ?[]u8 {
 	st, body, ok := b.transport.send('objects-get', '', '[get [o h="${hx}"]]')
 	if !ok || st != 200 {
 		mut mb := unsafe { &RemoteObjectBackend(b) }
-		mb.ow_note_fail(if ok { st } else { -1 }, 'objects-get')
+		mb.ow_note_fail_d(if ok { st } else { -1 }, 'objects-get', if ok { '' } else { body })
 		return none
 	}
 	doc := cx.parse(body) or { return none }
@@ -125,7 +144,7 @@ pub fn (b &RemoteObjectBackend) resolve_ref(key string) ?[]u8 {
 	st, body, ok := b.transport.send('refs', '', '[refs [k key="${key}"]]')
 	if !ok || st != 200 {
 		mut mb := unsafe { &RemoteObjectBackend(b) }
-		mb.ow_note_fail(if ok { st } else { -1 }, 'refs')
+		mb.ow_note_fail_d(if ok { st } else { -1 }, 'refs', if ok { '' } else { body })
 		return none
 	}
 	doc := cx.parse(body) or { return none }
@@ -167,6 +186,71 @@ pub fn (b &RemoteObjectBackend) set_ref_cas(key string, root []u8, expect string
 	if !ok || st != 200 {
 		return error('refs-set failed (transport/status ${st}) for ${key}')
 	}
+}
+
+// ── alias wire (#645 — the mutable-pointer layer over the daemon's alias table) ────
+//
+// get/list/set-alias on a cx-store:// CLIENT route to the daemon's AUTHORITATIVE
+// alias table via `aliases` / `aliases-set` (spec §3.14): one authority, so gc
+// pinning, target-presence enforcement, and pack alias records all apply on the
+// daemon exactly as for a local set-alias. Reads answer per-name EXPLICIT
+// presence (present="true|false") — an absent alias is a server-asserted
+// absence, resolving the #264 miss-vs-absence concern that grounded the old
+// blanket CXER1709 refusal.
+
+// alias_get resolves one alias. Returns (hash, present, ok); ok=false is a
+// transport / auth / server failure (recorded via the ow_take_fail pattern),
+// distinct from an honest present=false absence.
+pub fn (b &RemoteObjectBackend) alias_get(name string) (string, bool, bool) {
+	st, body, ok := b.transport.send('aliases', '', '[aliases [k name="${csrp_msg_esc(name)}"]]')
+	if !ok || st != 200 {
+		mut mb := unsafe { &RemoteObjectBackend(b) }
+		mb.ow_note_fail_d(if ok { st } else { -1 }, 'aliases', if ok { '' } else { body })
+		return '', false, false
+	}
+	doc := cx.parse(body) or { return '', false, false }
+	if doc.elements.len > 0 {
+		top := doc.elements[0]
+		if top is cx.Element {
+			for it in top.items {
+				if it is cx.Element && it.name == 'a' && csrp_attr(it, 'name') == name {
+					return csrp_attr(it, 'hash'), csrp_attr(it, 'present') == 'true', true
+				}
+			}
+		}
+	}
+	return '', false, true
+}
+
+// alias_list returns the daemon's full alias table as (name, hash) pairs in
+// server order.
+pub fn (b &RemoteObjectBackend) alias_list() ?[][]string {
+	st, body, ok := b.transport.send('aliases', '', '[aliases all="true"]')
+	if !ok || st != 200 {
+		mut mb := unsafe { &RemoteObjectBackend(b) }
+		mb.ow_note_fail_d(if ok { st } else { -1 }, 'aliases', if ok { '' } else { body })
+		return none
+	}
+	mut out := [][]string{}
+	doc := cx.parse(body) or { return none }
+	if doc.elements.len > 0 {
+		top := doc.elements[0]
+		if top is cx.Element {
+			for it in top.items {
+				if it is cx.Element && it.name == 'a' && csrp_attr(it, 'present') == 'true' {
+					out << [csrp_attr(it, 'name'), csrp_attr(it, 'hash')]
+				}
+			}
+		}
+	}
+	return out
+}
+
+// alias_set applies one unconditional alias write on the daemon. Returns the
+// wire status + body so the caller maps 404 (target missing → CXER1121) and
+// 409 (CAS conflict → CXER1114) onto the std-lib error space.
+pub fn (b &RemoteObjectBackend) alias_set(name string, hash string) (int, string, bool) {
+	return b.transport.send('aliases-set', '', '[aliases-set [a name="${csrp_msg_esc(name)}" hash="${hash}"]]')
 }
 
 // ── doc-level wire (the live [$store] cx-store:// put-doc / get-doc path, §3) ──────
@@ -216,7 +300,13 @@ fn (b &RemoteObjectBackend) push_sink(sink cxstore.ObjectSink) !int {
 	have_body += ']'
 	hst, hbody, hok := b.transport.send('objects-have', '', have_body)
 	if !hok || hst != 200 {
-		return error('objects-have failed (transport/status ${hst})')
+		// #655: record + NAME the failure — on !ok the body slot carries the
+		// transport's own error (a §4.5 net deny, a dial refusal), and
+		// dropping it left an anonymous "transport/status 0" misclassified
+		// as integrity corruption at the doc layer.
+		mut mb := unsafe { &RemoteObjectBackend(b) }
+		mb.ow_note_fail_d(if hok { hst } else { -1 }, 'objects-have', if hok { '' } else { hbody })
+		return error('objects-have failed (transport/status ${hst})${if hok { '' } else { ' — ' + hbody }}')
 	}
 	missing := ow_result_hashes(hbody) // the hashes the daemon reports it lacks
 	if missing.len == 0 {
@@ -228,9 +318,11 @@ fn (b &RemoteObjectBackend) push_sink(sink cxstore.ObjectSink) !int {
 		put_body += ' [o bytes="${payload.hex()}"]'
 	}
 	put_body += ']'
-	pst, _, pok := b.transport.send('objects-put', '', put_body)
+	pst, pbody, pok := b.transport.send('objects-put', '', put_body)
 	if !pok || pst != 200 {
-		return error('objects-put failed (transport/status ${pst})')
+		mut mb := unsafe { &RemoteObjectBackend(b) }
+		mb.ow_note_fail_d(if pok { pst } else { -1 }, 'objects-put', if pok { '' } else { pbody })
+		return error('objects-put failed (transport/status ${pst})${if pok { '' } else { ' — ' + pbody }}')
 	}
 	return missing.len
 }
@@ -276,16 +368,20 @@ fn store_objwire_client(ms &MemStore) ?&RemoteObjectBackend {
 fn store_objwire_err(mut ms MemStore) ?cx.Node {
 	if mut be := ms.obj_backend {
 		if mut be is RemoteObjectBackend {
-			st, op := be.ow_take_fail()
+			st, op, detail := be.ow_take_fail_d()
 			ms.obj_backend = be
+			// #655: the transport's own error text (recorded at the failure
+			// site) NAMES the cause — a §4.5 loopback deny under a bare
+			// --allow-net read as an anonymous "transport" fault without it.
+			tail := if detail != '' { ' — ${detail}' } else { '' }
 			if st == 401 || st == 403 {
-				return mk_err('cx-err:CXER1131', 'E_STORE_AUTH_FAILED: object-wire ${op} rejected (status ${st}) for ${ms.url}')
+				return mk_err('cx-err:CXER1131', 'E_STORE_AUTH_FAILED: object-wire ${op} rejected (status ${st}) for ${store_url_redact_userinfo(ms.url)}${tail}')
 			}
 			if st == 429 {
-				return mk_err('cx-err:CXER1132', 'E_STORE_RATE_LIMIT: object-wire ${op} throttled for ${ms.url}')
+				return mk_err('cx-err:CXER1132', 'E_STORE_RATE_LIMIT: object-wire ${op} throttled for ${store_url_redact_userinfo(ms.url)}${tail}')
 			}
 			if st != 0 {
-				return mk_err('cx-err:CXER1101', 'E_STORE_BACKEND_UNREACHABLE: object-wire ${op} failed (status ${st}) for ${ms.url}')
+				return mk_err('cx-err:CXER1101', 'E_STORE_BACKEND_UNREACHABLE: object-wire ${op} failed (status ${st}) for ${store_url_redact_userinfo(ms.url)}${tail}')
 			}
 		} else {
 			ms.obj_backend = be
@@ -301,10 +397,14 @@ struct CsrpObjWireTransport {
 }
 
 fn (t &CsrpObjWireTransport) send(op string, query string, body string) (int, string, bool) {
-	resp, _, ok := remote_http('POST', csrp_op_url(t.rb, op, query), csrp_client_headers(t.rb,
+	resp, errn, ok := remote_http('POST', csrp_op_url(t.rb, op, query), csrp_client_headers(t.rb,
 		'application/cxd'), body.bytes())
 	if !ok {
-		return 0, '', false
+		// #655: the transport error TEXT rides the body slot on failure —
+		// dropping it flattened a §4.5 loopback deny (E_NET_FORBIDDEN_ADDRESS)
+		// to an anonymous "transport/status 0" misreported as integrity
+		// mismatch, which cost the reporter the whole diagnosis.
+		return 0, render_canonical(errn), false
 	}
 	return resp.status, resp.body.bytestr(), true
 }

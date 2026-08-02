@@ -10,9 +10,17 @@
    never-raising conflict report, bare-term resolution ρ, and the Tier-1 hash. ]
 [?def compose        scope=public pure [returns element] (*$features)                            [$xap-compose $features]]
 [?def compose-report scope=public pure [returns element] (*$features)                            [$xap-compose-report $features]]
-[?def resolve        scope=public pure [returns string]  ($grammar::element $term::string $context::map {}) [$xap-resolve $grammar $term $context]]
+[; resolve carries TWO shape-dispatched contracts on one head (#535):
+   ρ term resolution (grammar, term, context?) -> string  — pure, §8.1;
+   context→composition (runtime, context, opts?) -> element|absence — impure
+   (applies the configured resolver, journals the decision), §3.6. The def
+   is typed to the union (impure, unannotated return); the primitive
+   dispatches on the first argument's shape. ]
+[?def resolve        scope=public impure ($target::element $arg $opts::map {}) [$xap-resolve $target $arg $opts]]
 [?def grammar-hash   scope=public pure [returns string]  ($grammar::element)                     [$xap-grammar-hash $grammar]]
-[?def surface     scope=public pure   [returns element] ($name $panels $opts::map {})      [$xap-surface $name $panels]]
+[?def resolver-default scope=public pure [returns element] ($rules)                              [$xap-resolver-default $rules]]
+[?def resolve-respond scope=public impure [returns null]   ($runtime::element $surface $response) [$xap-resolve-respond $runtime $surface $response]]
+[?def surface     scope=public pure   [returns element] ($name $panels $opts::map {})      [$xap-surface $name $panels $opts]]
 [?def panel       scope=public pure   [returns element] ($component $opts::map {})         [$xap-panel $component $opts]]
 [?def render      scope=public impure [returns element] ($surface::element $opts::map {})  [$xap-render $surface $opts]]
 [?def run         scope=public impure [returns element] ($opts::map {})                    [$xap-run $opts]]
@@ -22,7 +30,7 @@
 [?def emit        scope=public impure [returns element] ($runtime::element $intent::element $opts::map {}) [$xap-emit $runtime $intent $opts]]
 [?def on          scope=public impure [returns null]    ($runtime::element $pattern::element $handler)     [$xap-on $runtime $pattern $handler]]
 [?def state       scope=public impure [returns element] ($runtime::element $cxpath::string) [$xap-state $runtime $cxpath]]
-[; #25 Tier-2: transient coordination channel — ephemeral viewport/selection, latest-wins, off the journal/PEP cascade ]
+[; #25 Tier-2: transient coordination channel — ephemeral viewport/selection, latest-wins, off the journal/PEP cascade; rides the cx-fabric transient plane (#531 P2, fabric.md §12 — one transient-channel mechanism on the platform) ]
 [?def coord-publish scope=public impure [returns element] ($runtime::element $channel::string $frame::element) [$xap-coord-publish $runtime $channel $frame]]
 [?def coord-read    scope=public impure [returns element] ($runtime::element $channel::string) [$xap-coord-read $runtime $channel]]
 [; §6.1 distribution surface (xap_feature_distribution_market.md) — the package
@@ -68,13 +76,21 @@
   [sig """-> element"""]
   [summary """The never-raising tooling face of the compose gate — [compose-report ok=bool [conflict ...]*]; agrees with compose: it raises iff this reports ok=false."""]
 ]
-[fn-doc name=resolve scope=public purity=pure
-  [sig """-> string"""]
-  [summary """Resolve a bare or qualified verb term against a composed grammar (rho) — qualified wins, context narrows, ambiguity is CXER4871 with candidates, unknown is CXER4872."""]
+[fn-doc name=resolve scope=public purity=impure
+  [sig """-> string | element | absence"""]
+  [summary """One head, two shape-dispatched contracts. With a composed [grammar ...] first: rho term resolution (grammar, term, context?) -> string — qualified wins, context narrows, ambiguity is CXER4871 with candidates, unknown is CXER4872 (pure, no journal). With an [xap-runtime ...] handle first: the context->composition entry (runtime, context, opts?) — applies the runtime's configured resolver ({resolver: ...} at run time; :scripted default, or a CX closure applied as ($context $opts) returning an [xap-surface ...] proposal carrying reason=..., or the absence channel), demotes the requested opts.tier per the attention gate (a proposal never seizes the foreground; :foreground caps at foreground-propose), journals the decision as a [resolved ...] event with :reason, and returns the composed surface or absence when nothing meets threshold."""]
 ]
 [fn-doc name=grammar-hash scope=public purity=pure
   [sig """-> string"""]
   [summary """The Tier-1 content hash of a composed grammar under canonical form — the structural-equality oracle and the distribution supply-chain witness."""]
+]
+[fn-doc name=resolve-respond scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Record the principal's response to a surfacing (xap.md §20.1) — the ramp fold's second input: (runtime, surface-name, response) with response one of :acted-on / :glanced-dismissed / :ignored / :suppressed. Journals a [resolution-response ...] event; the fold attributes it to the (component x class) candidates of the most recent [resolved ...] decision for that surface and scores asymmetrically — two consecutive acted-ons per level step (slow to gain), a dismissal drops a level and any response resets the streak (fast to lose), suppressed sticks at level 0 until a later acted-on or a dial pin. The organic bootstrap for a fresh capability is a summon ([$xap:resolve $rt $ctx {summon: 'component'}] — level 0's own semantics) whose surfacing then accumulates responses."""]
+]
+[fn-doc name=resolver-default scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Build the deterministic scripted resolver from explicit affinity rules ([affinity component=... when=<CXPath> class=<atom> rank=<int>?] ...) — validated now, malformed rules refuse. Returns a [scripted-resolver ...] value that [$xap:run {resolver: ...}] accepts; resolve then runs the fold: when-filter against the [context ...] projection, ramp-level gate per capability x context-class (level >=2 to surface, >=3 for a T2 placement; pins ride the dial as delegations at scope 'ramp/<component>/<class>' with [setting level=N]; unpinned capabilities start at 0 = summon-only), declared rank, and one composed [xap-surface ...] with a generated auditable reason — or the absence channel. The runtime's bare :scripted default runs the same fold over the components' own §3.2 affinity declarations."""]
 ]
 [fn-doc name=surface scope=public purity=pure
   [sig """-> element"""]

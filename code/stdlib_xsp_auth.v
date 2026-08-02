@@ -6,7 +6,7 @@ import crypto.ed25519
 import crypto.sha256
 
 // stdlib_xsp_auth.v — native primitives backing the XSP-AUTH handshake calculus
-// (spec/02-working/xap_identity_model.md §4). XSP-AUTH is the mutual,
+// (spec/03-approved/xap/xap_identity_model.md §4). XSP-AUTH is the mutual,
 // channel-bound proof-of-control handshake for XSP: SIGMA-style signed
 // ephemeral X25519, four messages riding ordinary XSP v1 frames on stream 0.
 // This file is the PURE calculus (§10 P0): message build/validate, transcript,

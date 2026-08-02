@@ -3,6 +3,7 @@ module code
 import cxstore
 import os
 import encoding.hex
+import time
 
 // cxpack:// backend persistence for the [$store] stdlib (additive — mem:// and
 // file:// paths are untouched). The store's in-memory MemStore model is the
@@ -112,21 +113,22 @@ fn cxpack_discover_packs(root string) ([]string, int) {
 // route here for backend 'cxpack'. When segments or manifest redundancy build up,
 // it folds them back via store_cxpack_compact.
 //
-// COST: the DURABLE work — serialize/compress/hash/CRC each object and write it,
-// the heavy part the old whole-pack snapshot redid for every object on every
-// mutation — is O(delta): only objects/records new since the last flush touch the
-// disk. The delta is computed by diffing the live graph against the obj_flushed /
-// doc_manifested / alias_manifested watermarks: an O(live) in-memory scan (map
-// lookups, no I/O). That scan is deliberately watermark-diff rather than a
-// caller-maintained dirty queue: the watermarks are the single source of truth
-// for "what is durable", so the flush self-heals after any partial-write
-// interleaving (a crash between the segment and the manifest just re-emits the
-// pending records next time) — correctness the data path values over shaving the
-// in-memory scan.
+// COST (#603): O(delta) end to end — both the DURABLE work (serialize/compress/
+// hash/CRC only the objects new since the last flush; append only the new
+// manifest records) AND the in-memory diff that finds it. The diff used to be an
+// O(live) scan per mutation, which made every journal append O(journal) and sank
+// publish latency linearly with history; store_graph_delta now walks only the
+// doc_order tail past its scan cursor, the dirty-alias list, and (when a delete
+// happened) the manifested maps. The manifested/obj_flushed watermarks remain
+// the single source of truth for "what is durable" — they advance strictly
+// after the segment + manifest land, so a crash or failed flush between the two
+// just re-emits the same pending delta next time (self-healing unchanged).
 fn store_cxpack_flush(mut ms MemStore) ! {
 	if ms.root == '' {
 		return
 	}
+	tr := fab_trace_on()
+	t0 := time.sys_mono_now()
 	store_cxpack_backend(mut ms)!
 	os.mkdir_all(ms.root) or { return error('cxpack ${ms.root}: mkdir failed: ${err.msg()}') }
 
@@ -139,88 +141,66 @@ fn store_cxpack_flush(mut ms MemStore) ! {
 	//    write_pack of a caller-diffed payload list. #229: on an encrypted store
 	//    the objects route through the EncryptingWrapper instead — same seam, same
 	//    plaintext keys, AEAD envelopes staged keyed on the pack backend.
+	// #603: stage only the sink TAIL past the durability watermark — the
+	// per-mutation flush is O(delta), not O(every object ever). The
+	// watermark advances at step 5 (after the segment + manifest land), so
+	// a failed flush re-stages the same tail (self-healing unchanged).
+	mut staged_upto := 0
 	if ms.enc_key_id != '' {
-		cxstore.persist_objects(mut ms.obj_pack_enc, ms.obj_sink) or {
+		staged_upto = cxstore.persist_objects_from(mut ms.obj_pack_enc, ms.obj_sink, ms.obj_flushed) or {
 			return error('cxpack ${ms.root}: object stage failed: ${err.msg()}')
 		}
 	} else {
-		cxstore.persist_objects(mut ms.obj_pack, ms.obj_sink) or {
+		staged_upto = cxstore.persist_objects_from(mut ms.obj_pack, ms.obj_sink, ms.obj_flushed) or {
 			return error('cxpack ${ms.root}: object stage failed: ${err.msg()}')
 		}
 	}
 
-	// 2. Manifest delta lines (the REFS layer — store-key → doc-root, and aliases).
-	mut lines := []string{}
-
-	// 2a. Docs / code defs with no live manifest record yet.
-	mut new_docs := []string{}
-	for h in ms.doc_order {
-		if h in ms.doc_manifested {
-			continue
-		}
-		root := ms.obj_roots[h] or { continue }
-		// #128-A: a code: entry is a verbatim raw-leaf object (not a data doc) → a
-		// 'C' record so load restores it raw instead of reconstructing a doc graph.
-		rec := if h.starts_with('code:') { 'C' } else { 'D' }
-		lines << '${rec}\t${h}\t${root.hex()}'
-		new_docs << h
-	}
-
-	// 2b. Docs removed since they were manifested → tombstone.
-	mut removed_docs := []string{}
-	for h, _ in ms.doc_manifested {
-		if h !in ms.obj_roots {
-			lines << 'T\t${h}\t-'
-			removed_docs << h
-		}
-	}
-
-	// 2c. New / updated aliases. The alias NAME is itself a content-addressed
-	//     object (a raw leaf of the name bytes); stage it through the seam so the
-	//     A/X records can resolve it on replay (put_object dedups if already present).
-	mut set_aliases := map[string]string{}
-	for a in ms.alias_order {
-		dh := ms.aliases[a] or { continue }
-		if pv := ms.alias_manifested[a] {
-			if pv == dh {
-				continue // unchanged
-			}
-		}
-		nb := a.bytes()
-		nk := store_cxpack_stage(mut ms, nb) or {
+	// 2. Manifest delta (the REFS layer — store-key → doc-root, and aliases):
+	//    the ONE shared O(delta) computation (store_graph_delta, #603 — the
+	//    former inline copy here is retired). The alias NAMES the A/X records
+	//    reference are themselves content-addressed objects (raw leaves of the
+	//    name bytes); stage them through the seam so replay can resolve them
+	//    (put_object dedups if already present — re-staging a tombstoned name
+	//    is an idempotent no-op that also self-heals a missing name object).
+	t_staged := time.sys_mono_now()
+	d := store_graph_delta(ms)
+	for a, _ in d.set_aliases {
+		store_cxpack_stage(mut ms, a.bytes()) or {
 			return error('cxpack ${ms.root}: alias-name object stage failed: ${err.msg()}')
 		}
-		lines << 'A\t${nk.hex()}\t${dh}'
-		set_aliases[a] = dh
 	}
-
-	// 2d. Aliases removed since they were manifested → tombstone (referencing the
-	//     name object, which was staged when the alias was first written;
-	//     re-staging is an idempotent no-op that also self-heals a missing name).
-	mut removed_aliases := []string{}
-	for a, _ in ms.alias_manifested {
-		if a !in ms.aliases {
-			nb := a.bytes()
-			nk := store_cxpack_stage(mut ms, nb) or {
-				return error('cxpack ${ms.root}: alias-tombstone object stage failed: ${err.msg()}')
-			}
-			lines << 'X\t${nk.hex()}\t-'
-			removed_aliases << a
+	for a in d.removed_aliases {
+		store_cxpack_stage(mut ms, a.bytes()) or {
+			return error('cxpack ${ms.root}: alias-tombstone object stage failed: ${err.msg()}')
 		}
 	}
+	lines := d.lines
 
 	if ms.obj_pack.pending_count() == 0 && lines.len == 0 {
-		return // nothing changed
+		// Nothing reached the disk, but the scan window is settled: the staged
+		// tail deduped to already-durable objects and the delta was empty —
+		// advance the #603 watermarks so the same ground is not re-walked.
+		ms.obj_flushed = staged_upto
+		store_graph_delta_commit(mut ms, d)
+		return
 	}
 
+	t_delta := time.sys_mono_now()
+	pending := ms.obj_pack.pending_count()
 	// 3. Flush the staged objects as a fresh segment pack — durable BEFORE the
 	//    manifest references them, so a crash between the two leaves unreferenced
 	//    objects (reclaimed at compaction), never a dangling manifest pointer.
 	ms.obj_pack.flush_segment() or {
 		return error('cxpack ${ms.root}: segment flush failed: ${err.msg()}')
 	}
+	t_seg := time.sys_mono_now()
 
-	// 4. Append the manifest deltas (no header — load splits on lines).
+	// 4. Append the manifest deltas (no header — load splits on lines). #624:
+	//    fsync before the watermarks advance — the receipt the caller returns
+	//    means power-loss durable, not just in the page cache. A kill mid-append
+	//    can still tear the TRAILING line; the loader treats a torn tail as
+	//    WAL discard (that flush never returned, so nothing acked is lost).
 	mp := os.join_path(ms.root, cxpack_manifest)
 	blob := lines.join('\n') + '\n'
 	if lines.len > 0 {
@@ -232,35 +212,41 @@ fn store_cxpack_flush(mut ms MemStore) ! {
 				f.close()
 				return error('cxpack ${ms.root}: manifest append failed: ${err.msg()}')
 			}
+			f.flush()
+			C.fsync(f.fd)
 			f.close()
 		} else {
-			os.write_file(mp, blob) or {
+			store_write_file_sync(mp, blob) or {
 				return error('cxpack ${ms.root}: manifest write failed: ${err.msg()}')
 			}
 		}
 	}
 
-	// 5. Advance manifest watermarks now that the deltas are durable.
-	for h in new_docs {
-		ms.doc_manifested[h] = true
-	}
-	for h in removed_docs {
-		ms.doc_manifested.delete(h)
-	}
-	for a, dh in set_aliases {
-		ms.alias_manifested[a] = dh
-	}
-	for a in removed_aliases {
-		ms.alias_manifested.delete(a)
-	}
-	ms.log_records += lines.len
+	t_manifest := time.sys_mono_now()
+	// 5. Advance the watermarks now that the deltas are durable.
+	ms.obj_flushed = staged_upto
+	store_graph_delta_commit(mut ms, d)
 
-	// 6. Compaction: fold segments back into one pack when they accrue, or when
-	//    the append-only manifest carries materially more records than live state
-	//    (updates/removals leave superseded lines that only a rewrite clears).
+	// 6. Amortization work — never on this receipt's critical path. #617: the
+	//    #603 size-tiered segment fold runs OFF the flush turn (background
+	//    worker on locked stores; inline only for lockless direct-model
+	//    stores — see store_cxpack_fold.v). Kicked BEFORE the compaction
+	//    check so a fold backlog reads as fold_pending (should_compact stays
+	//    false) instead of tripping the O(live) full compaction.
+	store_cxpack_fold_kick(mut ms)!
+	//    Compaction proper: fold segments back into one pack when a genuine
+	//    16-tier tower accrues, or when the append-only manifest carries
+	//    materially more records than live state (updates/removals leave
+	//    superseded lines that only a rewrite clears).
 	live := ms.doc_order.len + ms.alias_order.len
+	mut compacted := false
 	if ms.obj_pack.should_compact() || ms.log_records > 2 * live + 64 {
 		store_cxpack_compact(mut ms)!
+		compacted = true
+	}
+	if tr {
+		t_done := time.sys_mono_now()
+		eprintln('[fab-trace side=store step=cxpack-flush objs=${pending} lines=${lines.len} live=${live} stage-us=${(t_staged - t0) / 1000} delta-us=${(t_delta - t_staged) / 1000} seg-us=${(t_seg - t_delta) / 1000} manifest-us=${(t_manifest - t_seg) / 1000} compact=${compacted} compact-us=${(t_done - t_manifest) / 1000} total-us=${(t_done - t0) / 1000}]')
 	}
 }
 
@@ -283,6 +269,24 @@ fn store_cxpack_backend(mut ms MemStore) ! {
 		ms.obj_pack_enc = cxstore.new_encrypting_wrapper(ms.obj_pack, ms.enc_key_id, kms)
 	}
 }
+
+// store_write_file_sync writes content to path and fsyncs it before returning
+// (#624): the caller is about to treat the file as durable (rename it over a
+// live manifest, or return a durability receipt) — without the fsync a power
+// loss could drop acked bytes. Process kill alone never loses completed
+// writes (page cache), but the journal contract is power-loss durability.
+fn store_write_file_sync(path string, content string) ! {
+	mut f := os.create(path)!
+	f.write_string(content) or {
+		f.close()
+		return err
+	}
+	f.flush()
+	C.fsync(f.fd)
+	f.close()
+}
+
+fn C.fsync(fd int) int
 
 // store_cxpack_stage stages one content-addressed object on the store's pack
 // backend, routing through the EncryptingWrapper when the store is encrypted
@@ -346,6 +350,39 @@ fn store_cxpack_compact(mut ms MemStore) ! {
 		}
 	}
 
+	// #624 CRASH ORDERING: land the manifest SNAPSHOT before the pack fold.
+	// The snapshot references only live docs/aliases, whose objects are all
+	// durable in the CURRENT pack+segments — so a kill after the snapshot but
+	// before the fold leaves a loadable store (extra unreferenced objects,
+	// reclaimed next compaction). The OLD order (pack fold first) destroyed
+	// objects that the still-on-disk append-log manifest referenced through
+	// superseded/tombstoned lines: a kill in that window made the store
+	// unloadable (E_STORE_INTEGRITY_MISMATCH on reopen — the #624 corruption).
+	//
+	// Rewrite the manifest as a clean snapshot (live D/C/A only — no
+	// tombstones). Temp-file (fsynced) + atomic rename: a reopen sees either
+	// the old or the new manifest, whole.
+	mut lines := []string{}
+	for h in ms.doc_order {
+		root := ms.obj_roots[h] or { continue }
+		rec := if h.starts_with('code:') { 'C' } else { 'D' }
+		lines << '${rec}\t${h}\t${root.hex()}'
+	}
+	for a in ms.alias_order {
+		dh := ms.aliases[a] or { continue }
+		nk := cxstore.object_name(a.bytes()).hex()
+		lines << 'A\t${nk}\t${dh}'
+	}
+	mp := os.join_path(ms.root, cxpack_manifest)
+	tmp := mp + '.tmp.${os.getpid()}'
+	store_write_file_sync(tmp, lines.join('\n') + '\n') or {
+		return error('cxpack ${ms.root}: manifest snapshot write failed: ${err.msg()}')
+	}
+	os.mv(tmp, mp) or {
+		os.rm(tmp) or {}
+		return error('cxpack ${ms.root}: manifest snapshot rename failed: ${err.msg()}')
+	}
+
 	// Fold every live object into a single compacted pack through the backend; it
 	// drops the now-folded segments and resets its durable watermark to exactly the
 	// reachable set (the on-disk GC — objects no longer referenced are reclaimed).
@@ -395,43 +432,11 @@ fn store_cxpack_compact(mut ms MemStore) ! {
 		}
 	}
 
-	// Rewrite the manifest as a clean snapshot (live D/C/A only — no tombstones).
-	// Temp-file + atomic rename: a truncate-in-place write torn by a crash would
-	// leave a manifest referencing nothing (data loss); rename is atomic on the
-	// same filesystem, so a reopen sees either the old or the new manifest, whole.
-	mut lines := []string{}
-	for h in ms.doc_order {
-		root := ms.obj_roots[h] or { continue }
-		rec := if h.starts_with('code:') { 'C' } else { 'D' }
-		lines << '${rec}\t${h}\t${root.hex()}'
-	}
-	for a in ms.alias_order {
-		dh := ms.aliases[a] or { continue }
-		nk := cxstore.object_name(a.bytes()).hex()
-		lines << 'A\t${nk}\t${dh}'
-	}
-	mp := os.join_path(ms.root, cxpack_manifest)
-	tmp := mp + '.tmp.${os.getpid()}'
-	os.write_file(tmp, lines.join('\n') + '\n') or {
-		return error('cxpack ${ms.root}: manifest snapshot write failed: ${err.msg()}')
-	}
-	os.mv(tmp, mp) or {
-		os.rm(tmp) or {}
-		return error('cxpack ${ms.root}: manifest snapshot rename failed: ${err.msg()}')
-	}
-
-	// Reset the manifest (refs) watermarks to the compacted state. The object-layer
-	// watermark was reset by write_compacted.
-	mut dm := map[string]bool{}
-	for h in ms.doc_order {
-		dm[h] = true
-	}
-	ms.doc_manifested = dm.move()
-	mut am := map[string]string{}
-	for a in ms.alias_order {
-		am[a] = ms.aliases[a] or { continue }
-	}
-	ms.alias_manifested = am.move()
+	// Reset the watermarks to the compacted state: the full live state is durable
+	// here (the pack backend's own watermark was reset by write_compacted; the
+	// sink was pruned to exactly the reachable set above, all of it durable).
+	store_graph_seed_watermarks(mut ms)
+	ms.obj_flushed = ms.obj_sink.objects.len
 	ms.log_records = ms.doc_order.len + ms.alias_order.len
 }
 
@@ -453,7 +458,7 @@ fn store_cxpack_load(mut ms MemStore) ! {
 	mp := os.join_path(ms.root, cxpack_manifest)
 	pack_paths, _ := ms.obj_pack.discover_packs()
 	if !os.exists(mp) && pack_paths.len == 0 {
-		return // never persisted — a legitimately empty store, not an error
+		return
 	}
 	if !os.exists(mp) || pack_paths.len == 0 {
 		return error('cxpack store at ${ms.root} is incomplete (manifest/pack missing) — refusing to open a partially-present store')
@@ -464,6 +469,18 @@ fn store_cxpack_load(mut ms MemStore) ! {
 	// A bad pack/object is a HARD error inside load_objects (#129-C / spec §4) —
 	// as is a keyed(v2)↔plaintext(v1) mode mismatch (an encrypted store opened
 	// without its key, or a key given for a plaintext store).
+	// #637 LAZY (the default): skip the whole-graph slurp — open populates only
+	// the REFS layer below, and objects page in on first touch through the
+	// composite getter (self-verifying, so corruption still refuses loudly at
+	// that touch). Boot then costs O(refs) instead of O(live set), and RSS
+	// tracks the working set rather than the whole graph. The eager
+	// whole-graph reconstruction that used to run at every open is now the
+	// explicit `[$store:verify]` pass (§ store.md), runnable on demand or in
+	// the background. `[opts eager="true"]` restores load-time verification
+	// for a caller that wants it inline.
+	if ms.lazy_objects {
+		return store_cxpack_load_refs(mut ms, mp)
+	}
 	objs := ms.obj_pack.load_objects()!
 	if ms.enc_key_id != '' {
 		// #229: the loaded bytes are AEAD envelopes keyed by the plaintext hash —
@@ -483,63 +500,141 @@ fn store_cxpack_load(mut ms MemStore) ! {
 			ms.obj_sink.put(payload)
 		}
 	}
-	snk := ms.obj_sink
-	getter := cxstore.getter_of(ms.obj_sink)
-	content := os.read_file(mp) or { return error('cxpack manifest ${mp} unreadable: ${err.msg()}') }
-	for line in content.split_into_lines() {
+	return store_cxpack_replay(mut ms, mp, true)
+}
+
+// store_cxpack_load_refs is the #637 LAZY open: replay the refs layer with no
+// whole-graph slurp and no load-time doc reconstruction. Alias-name objects
+// (the few the replay itself needs) page in through the composite getter.
+fn store_cxpack_load_refs(mut ms MemStore, mp string) ! {
+	// The eager path seeded the pack backend's durability state as a side
+	// effect of slurping every object; a lazy open seeds it from the pack
+	// INDEXES instead (hash lists, never payloads — O(objects) index entries,
+	// no bytes materialized). Without this the next flush would restart the
+	// segment numbering and overwrite a pack on disk, and put_object would
+	// re-persist objects already durable.
+	ms.obj_pack.seed_index()!
+	return store_cxpack_replay(mut ms, mp, false)
+}
+
+// store_cxpack_replay applies the manifest's append-log to the refs layer.
+// `verify_docs` runs the #129-C whole-graph pass (every live doc must
+// reconstruct) — true on an eager open, false on a lazy one, where the same
+// guarantee is enforced per-object at first touch (the self-verifying getter)
+// and wholesale by the explicit `[$store:verify]` pass.
+fn store_cxpack_replay(mut ms MemStore, mp string, verify_docs bool) ! {
+	// the COMPOSITE getter: the sink for an eager open (already whole), the
+	// pack backend for a lazy one (paging + caching per hash).
+	getter := store_graph_getter(ms)
+	content := os.read_file(mp) or {
+		return error('cxpack manifest ${mp} unreadable: ${err.msg()}')
+	}
+
+	// #624 TWO-PASS REPLAY. Pass 1 applies the append-log records to the refs
+	// maps WITHOUT verifying doc reconstruction; pass 2 verifies exactly the
+	// FINAL live state. Eager per-line verification was wrong twice over: it
+	// hard-failed on docs a LATER tombstone removes (whose objects a compaction
+	// legitimately reclaimed — the pre-#624 crash-window corruption, now also
+	// the recovery path for stores damaged by the old ordering), and it did
+	// wasted graph walks for superseded records.
+	//
+	// TORN TAIL (WAL discard): a kill mid-append can tear the manifest's LAST
+	// line STRUCTURALLY — wrong field count, or a truncated/odd hex hash. The
+	// flush that wrote it never returned, so nothing acked is lost; the tail
+	// is discarded LOUDLY (stderr) and the store opens at the last whole
+	// record. The rule is deliberately structural-only: the flush fsyncs the
+	// segment BEFORE the manifest line, so a structurally whole record always
+	// has durable objects — a whole record that fails pass-2 verification is
+	// GENUINE corruption and stays a hard error (#129-C), as does any
+	// structural defect before the final record.
+	all_lines := content.split_into_lines()
+	mut recs := [][]string{cap: all_lines.len}
+	for line in all_lines {
 		if line.trim_space() == '' {
 			continue
 		}
-		parts := line.split('\t')
+		recs << line.split('\t')
+	}
+	// A refused load leaves NO partial refs state (#129-C: the caller sees a
+	// hard error and an empty view, never a silently half-loaded store).
+	mut load_ok := false
+	defer {
+		if !load_ok {
+			ms.obj_roots = map[string][]u8{}
+			ms.doc_order = []
+			ms.aliases = map[string]string{}
+			ms.alias_order = []
+		}
+	}
+	mut torn := false // the final record was discarded as a torn tail
+	for ri, parts in recs {
+		is_last := ri == recs.len - 1
 		if parts.len != 3 {
-			return error('cxpack manifest ${mp}: malformed line (${parts.len} fields): ${line}')
+			if is_last {
+				torn = true
+				break
+			}
+			return error('cxpack manifest ${mp}: malformed line (${parts.len} fields): ${parts.join('\t')}')
 		}
 		match parts[0] {
-			'D' {
+			'D', 'C' {
+				// #128-A: 'C' is a code: entry — a verbatim raw leaf, presence-
+				// checked (not doc-reconstructed) in pass 2.
 				store_hash := parts[1]
 				root := hex.decode(parts[2]) or {
-					return error('cxpack manifest ${mp}: bad object hash for doc ${store_hash}: ${err.msg()}')
+					if is_last {
+						torn = true
+						break
+					}
+					return error('cxpack manifest ${mp}: bad object hash for ${store_hash}: ${err.msg()}')
 				}
-				// eager integrity: the doc MUST reconstruct from the live graph.
-				doc := cxstore.load_document_from(getter, root) or {
-					return error('cxpack ${ms.root}: doc ${store_hash} failed to reconstruct from the object graph (corrupt or missing object): ${err.msg()}')
-				}
-				if doc.elements.len == 0 {
-					return error('cxpack ${ms.root}: doc ${store_hash} reconstructed to an empty document (corruption)')
+				if root.len != 32 {
+					if is_last {
+						torn = true
+						break
+					}
+					return error('cxpack manifest ${mp}: object hash for ${store_hash} is ${root.len} bytes, not 32')
 				}
 				if store_hash !in ms.obj_roots {
-					ms.obj_roots[store_hash] = root
 					ms.doc_order << store_hash
 				}
+				ms.obj_roots[store_hash] = root
 			}
-			'C' {
-				// #128-A: a code: entry — its object is a verbatim raw leaf (source
-				// text), restored as-is, NOT reconstructed as a data-doc graph.
-				key := parts[1]
-				root := hex.decode(parts[2]) or {
-					return error('cxpack manifest ${mp}: bad object hash for code ${key}: ${err.msg()}')
-				}
-				snk.get(root) or {
-					return error('cxpack ${ms.root}: code object missing from pack for ${key}')
-				}
-				if key !in ms.obj_roots {
-					ms.obj_roots[key] = root
-					ms.doc_order << key
-				}
-			}
-			'A' {
+			'A', 'X' {
 				obj := hex.decode(parts[1]) or {
+					if is_last {
+						torn = true
+						break
+					}
 					return error('cxpack manifest ${mp}: bad alias object hash: ${err.msg()}')
 				}
-				doc_hash := parts[2]
-				payload := snk.get(obj) or {
-					return error('cxpack ${ms.root}: alias object missing from pack: ${parts[1]}')
+				if obj.len != 32 {
+					if is_last {
+						torn = true
+						break
+					}
+					return error('cxpack manifest ${mp}: alias name hash is ${obj.len} bytes, not 32')
+				}
+				payload := getter(obj) or {
+					return error('cxpack ${ms.root}: alias ${if parts[0] == 'X' {
+						'tombstone '
+					} else {
+						''
+					}}object missing from pack: ${parts[1]}')
 				}
 				alias := payload.bytestr()
-				if alias !in ms.aliases {
-					ms.alias_order << alias
+				if parts[0] == 'A' {
+					if alias !in ms.aliases {
+						ms.alias_order << alias
+					}
+					ms.aliases[alias] = parts[2]
+				} else {
+					ms.aliases.delete(alias)
+					idx := ms.alias_order.index(alias)
+					if idx >= 0 {
+						ms.alias_order.delete(idx)
+					}
 				}
-				ms.aliases[alias] = doc_hash
 			}
 			'T' {
 				// #129-B: doc tombstone — remove a previously-set doc/code entry.
@@ -550,37 +645,39 @@ fn store_cxpack_load(mut ms MemStore) ! {
 					ms.doc_order.delete(idx)
 				}
 			}
-			'X' {
-				// #129-B: alias tombstone — resolve the name object and remove it.
-				obj := hex.decode(parts[1]) or {
-					return error('cxpack manifest ${mp}: bad alias tombstone hash: ${err.msg()}')
-				}
-				payload := snk.get(obj) or {
-					return error('cxpack ${ms.root}: alias tombstone object missing from pack: ${parts[1]}')
-				}
-				alias := payload.bytestr()
-				ms.aliases.delete(alias)
-				idx := ms.alias_order.index(alias)
-				if idx >= 0 {
-					ms.alias_order.delete(idx)
-				}
-			}
 			else {} // unknown record type — forward-compatible, ignore
 		}
 	}
+	if torn {
+		eprintln('cx store: ${ms.root}: manifest tail was torn by an unclean shutdown — discarded the final (unacknowledged) record and opened at the last whole state')
+	}
+	// Pass 2: verify the FINAL live state (#129-C hard integrity, unchanged in
+	// strength — only superseded records are no longer verified, which is also
+	// the recovery path for stores damaged by the pre-#624 compaction ordering:
+	// their dangling doc references are all tombstoned later in the same log).
+	if verify_docs {
+	for h, root in ms.obj_roots {
+		if h.starts_with('code:') {
+			getter(root) or {
+				return error('cxpack ${ms.root}: code object missing from pack for ${h}')
+			}
+			continue
+		}
+		doc := cxstore.load_document_from(getter, root) or {
+			return error('cxpack ${ms.root}: doc ${h} failed to reconstruct from the object graph (corrupt or missing object): ${err.msg()}')
+		}
+		if doc.elements.len == 0 {
+			return error('cxpack ${ms.root}: doc ${h} reconstructed to an empty document (corruption)')
+		}
+	}
+	}
 
-	// Seed the manifest (refs) watermarks to match the loaded on-disk state, so the
-	// next mutation appends only its own delta. The object-layer watermark and the
-	// segment number were seeded by the backend's load_objects.
-	mut dm := map[string]bool{}
-	for h in ms.doc_order {
-		dm[h] = true
-	}
-	ms.doc_manifested = dm.move()
-	mut am := map[string]string{}
-	for a in ms.alias_order {
-		am[a] = ms.aliases[a] or { continue }
-	}
-	ms.alias_manifested = am.move()
+	load_ok = true
+	// Seed the watermarks to match the loaded on-disk state, so the next mutation
+	// appends only its own delta. The pack backend's own watermark and the segment
+	// number were seeded by load_objects; the sink was loaded FROM the packs, so
+	// all of it is durable.
+	store_graph_seed_watermarks(mut ms)
+	ms.obj_flushed = ms.obj_sink.objects.len
 	ms.log_records = ms.doc_order.len + ms.alias_order.len
 }

@@ -38,6 +38,7 @@ pub enum ProgramTokenKind {
 	pipe              // '|'
 	plus              // '+'
 	minus             // '-' (standalone; '-DIGIT' is a number literal)
+	percent           // '%' — modulo operator head [% a b] (#598, aliases $mod)
 	// Comparison operators (used in pattern @attr predicates and exprs)
 	eq                // '='
 	neq               // '!='
@@ -162,6 +163,12 @@ pub const directive_names = [
 	// `[?meta {…} FORM]` attaches a side-band metadata map to FORM's value;
 	// read back via the `meta-of` builtin.
 	'meta',
+	// Control/effect forms (spec/code.md §8.14/§8.15, owner ruling
+	// 2026-07-21, #550): `[?do E …]` effect sequencing (first [err]
+	// propagates) + `[?loop [= $x INIT]… BODY]` with the [break]/[continue]
+	// clause-heads (anonymous trampolined tail recursion; all-explicit
+	// exits).
+	'do', 'loop',
 ]
 
 // is_directive_name reports whether `name` is a registered directive

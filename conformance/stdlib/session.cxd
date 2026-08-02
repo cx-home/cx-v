@@ -759,7 +759,7 @@ cx-err:CXER4801
  ]
 
  [; ── XSP-AUTH attach transport + #24 session multiplicity ──────────────────
-    (spec/02-working/xap_identity_model.md §4.8/§4.9). attach-xsp binds a
+    (spec/03-approved/xap/xap_identity_model.md §4.8/§4.9). attach-xsp binds a
     session from a completed XSP-AUTH handshake; the selector opens mirror /
     independent / named sessions. RFC 7748/8032 vectors injected so the lanes
     are offline + deterministic. ]

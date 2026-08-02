@@ -574,6 +574,11 @@ fn svc_permission_for_op(op string) string {
 		'metrics' { 'metrics' }
 		'objects-have', 'objects-get', 'refs' { 'read' }
 		'objects-put', 'refs-set' { 'write' }
+		// #645 alias remoting: reads answer explicit presence, writes apply
+		// through the daemon's local set-alias arm — same classes as their
+		// data-op peers.
+		'aliases' { 'read' }
+		'aliases-set' { 'write' }
 		// #248 admin plane (§3.10–3.12): status (store stats), gc (compaction
 		// trigger), mounts (daemon-level enumeration) — explicit App C rows; the
 		// else-branch would map them to admin anyway, but the matrix is normative.

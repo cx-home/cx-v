@@ -56,10 +56,8 @@ fn penc_load_ok(mut ms MemStore) bool {
 }
 
 fn penc_set_alias(mut ms MemStore, name string, hash string) {
-	if name !in ms.aliases {
-		ms.alias_order << name
-	}
-	ms.aliases[name] = hash
+	// #603: route through the mutation seam so the incremental flush sees it
+	store_alias_set_local(mut ms, name, hash)
 }
 
 fn test_store_cxpack_encrypted_roundtrip_and_at_rest() {

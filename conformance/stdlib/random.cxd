@@ -805,4 +805,268 @@ false
 #]]
  ]
 
+ [case id=random-057-handle-gen-int-golden level=core
+  [tags random prng handle new gen-int golden]
+  [doc [# §3.7 parity invariant: [$random:new 42] + gen-int computes the SAME
+     golden value as from-seed(42) + next-int-with — one seed→sequence mapping
+     across all three generator forms. #]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-int [$random:new 42]]
+#]]
+  [out-text [#
+7510639304993616975
+#]]
+ ]
+
+ [case id=random-058-handle-streams-are-independent level=core
+  [tags random prng handle independence]
+  [doc [# two handles from one seed advance independently: interleaved draws on
+     $a never perturb $b's sequence (the #625 worker-corpus failure mode). #]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $a [$random:new 7]]
+      [= $b [$random:new 7]]
+      [= $a1 [$random:gen-int $a]]
+      [= $a2 [$random:gen-int $a]]
+      [= $b1 [$random:gen-int $b]]
+  [and [= $a1 $b1] [not [= $a1 $a2]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=random-059-thread-seed-then-draw-golden level=core
+  [tags random prng seed thread-stream golden]
+  [doc [# §2: [$random:seed] seeds the CALLING THREAD's stream — seed-then-draw
+     is deterministic within a thread and yields the pinned §4.1 vector. #]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $s [$random:seed 42]] [$random:next-int]]
+#]]
+  [out-text [#
+7510639304993616975
+#]]
+ ]
+
+ [case id=random-060-gen-float-golden level=core
+  [tags random prng handle gen-float golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-float [$random:new 42]]
+#]]
+  [out-text [#
+0.8143051451229099
+#]]
+ ]
+
+ [case id=random-061-gen-bool-golden level=core
+  [tags random prng handle gen-bool golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-bool [$random:new 42]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=random-062-gen-int-range-degenerate level=core
+  [tags random prng handle gen-int-range edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-int-range [$random:new 7] 9 9]
+#]]
+  [out-text [#
+9
+#]]
+ ]
+
+ [case id=random-063-gen-float-range-degenerate level=core
+  [tags random prng handle gen-float-range edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-float-range [$random:new 7] 2.5 2.5]
+#]]
+  [out-text [#
+2.5
+#]]
+ ]
+
+ [case id=random-064-gen-shuffle-deterministic level=core
+  [tags random prng handle gen-shuffle deterministic golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-shuffle [$random:new 42] (1, 2, 3, 4, 5)]
+#]]
+  [out-text [#
+(4, 3, 1, 5, 2)
+#]]
+ ]
+
+ [case id=random-065-gen-choose-singleton level=core
+  [tags random prng handle gen-choose]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-choose [$random:new 3] ("solo")]
+#]]
+  [out-text [#
+'solo'
+#]]
+ ]
+
+ [case id=random-066-gen-sample-zero level=core
+  [tags random prng handle gen-sample edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-sample [$random:new 1] (1, 2, 3) 0]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=random-067-gen-gaussian-zero-stddev level=core
+  [tags random distribution handle gen-gaussian edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-gaussian [$random:new 1] 5.0 0.0]
+#]]
+  [out-text [#
+5.0
+#]]
+ ]
+
+ [case id=random-068-gen-exponential-deterministic level=core
+  [tags random distribution handle gen-exponential golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-exponential [$random:new 42] 1.0]
+#]]
+  [out-text [#
+1.683650517646569
+#]]
+ ]
+
+ [case id=random-069-gen-poisson-deterministic level=core
+  [tags random distribution handle gen-poisson golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-poisson [$random:new 42] 4.0]
+#]]
+  [out-text [#
+6
+#]]
+ ]
+
+ [case id=random-070-gen-choose-weighted-zero-weight level=core
+  [tags random weighted handle gen-choose-weighted zero-weight]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-choose-weighted [$random:new 5] ("a", "b") (0.0, 1.0)]
+#]]
+  [out-text [#
+'b'
+#]]
+ ]
+
+ [case id=random-071-gen-sample-weighted-zero level=core
+  [tags random weighted handle gen-sample-weighted edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-sample-weighted [$random:new 5] ("a", "b") (1.0, 1.0) 0]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=random-072-gen-floats-zero level=core
+  [tags random prng handle gen-floats edge]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-floats [$random:new 1] 0]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=random-073-gen-ints-golden level=core
+  [tags random prng handle gen-ints golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[$random:gen-ints [$random:new 42] 1]
+#]]
+  [out-text [#
+(7510639304993616975)
+#]]
+ ]
+
+ [case id=random-074-gen-draw-after-free-refuses level=core
+  [tags random prng handle free CXER1906]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $g [$random:new 7]] [= $f [$random:free $g]] [$random:gen-int $g]]
+#]]
+  [out-err [#
+cx-err:CXER1906
+#]]
+ ]
+
 ]
