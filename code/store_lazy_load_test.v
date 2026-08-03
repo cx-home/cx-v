@@ -128,3 +128,41 @@ fn test_eager_open_opt_out_still_slurps() {
 	assert ms.obj_sink.objects.len > 0, 'an eager open loads the graph at open'
 	store_stdlib_builtin_inner('store-close', [h]) or { panic('close2') }
 }
+
+// #662 regression guard: the demand-paged getter must page via the object-
+// location index — every durable object gets an obj_where entry at seed (lazy
+// open), load (eager open), and flush (new segment). Without the index every
+// first touch re-scanned the pack directory and probed every pack (the 33x
+// embedded-ingest collapse). Structural, not timed: index coverage == durable
+// object count across multi-segment stores and reopens.
+fn test_pack_location_index_covers_every_durable_object() {
+	caps_set_all()
+	root := slz_root('where')
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	// Three puts on one handle → per-put flushes → multiple segment packs.
+	w := store_open_impl('file://${root}', '', '', false, true, map[string]string{})
+	slz_put(w, '[doc n=1 [body "a"]]')
+	slz_put(w, '[doc n=2 [body "b"]]')
+	slz_put(w, '[doc n=3 [body "c"]]')
+	wms := store_for_guard(w) or { panic('guard w') }
+	assert wms.obj_pack.located_count() == wms.obj_pack.object_count() - wms.obj_pack.pending_count(), 'flush indexes every durable object: located=${wms.obj_pack.located_count()} durable=${wms.obj_pack.object_count() - wms.obj_pack.pending_count()}'
+	store_stdlib_builtin_inner('store-close', [w]) or { panic('close w') }
+
+	// Lazy reopen: seed_index fills the index without reading payloads.
+	h := store_open_impl('file://${root}', '', '', false, true, map[string]string{})
+	ms := store_for_guard(h) or { panic('guard') }
+	assert ms.lazy_objects, 'cxpack opens lazy by default'
+	assert ms.obj_pack.located_count() > 0, 'seed_index fills the location index'
+	assert ms.obj_pack.located_count() == ms.obj_pack.object_count(), 'lazy open: located=${ms.obj_pack.located_count()} vs objects=${ms.obj_pack.object_count()}'
+	store_stdlib_builtin_inner('store-close', [h]) or { panic('close') }
+
+	// Eager reopen: load_objects fills it too (verify et al. still page).
+	e := store_open_impl('file://${root}', '', '', false, true, {
+		'eager': 'true'
+	})
+	ems := store_for_guard(e) or { panic('guard e') }
+	assert ems.obj_pack.located_count() == ems.obj_pack.object_count(), 'eager open: located=${ems.obj_pack.located_count()} vs objects=${ems.obj_pack.object_count()}'
+	store_stdlib_builtin_inner('store-close', [e]) or { panic('close e') }
+}

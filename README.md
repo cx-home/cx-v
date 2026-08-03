@@ -1,6 +1,6 @@
 # cx — CX for V
 
-[![Version](https://img.shields.io/badge/version-v0.14.0-blue.svg)](#status)
+[![Version](https://img.shields.io/badge/version-v0.15.0-blue.svg)](#status)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-cx--home.github.io%2Fcx-brightgreen.svg)](https://cx-home.github.io/cx/)
 [![Status](https://img.shields.io/badge/status-pre--1.0_experimental-orange.svg)](#status)

@@ -2801,6 +2801,31 @@ fn http_sse_open_source(url string, opts_node cx.Node, leid string) cx.Node {
 		return mk_err('cx-err:CXER4506', 'E_HTTP: sse-connect produced no handle')
 	}
 	mut head := 'GET ${path} HTTP/1.1\r\nHost: ${host}\r\nAccept: text/event-stream\r\n'
+	// #661: opts.headers reaches the subscription GET, exactly as it reaches
+	// every other request (§3.6 'plus the parent client keys'). Without this
+	// a caller cannot authenticate a stream at all — xap_identity_model §4.12
+	// requires `GET /stream` to carry the same three XSP proof headers as any
+	// other request, and they had nowhere to ride.
+	//
+	// Managed fields are ignored, not errors (§4.6): Host / Connection /
+	// Content-Length / Transfer-Encoding are the implementation's. `Accept`
+	// and `Last-Event-ID` join them here because they ARE this verb — Accept
+	// selects the event stream (a non-stream 2xx is CXER4547) and
+	// Last-Event-ID is owned by opts.last-event-id and the auto-reconnect
+	// path. CR/LF in a name or value is request-splitting → CXER4531.
+	for hdr in http_opts_headers(opts_node) {
+		lname := hdr[0].to_lower()
+		if lname in ['host', 'connection', 'content-length', 'transfer-encoding', 'accept',
+			'last-event-id'] {
+			continue
+		}
+		joined := hdr[0] + hdr[1]
+		if joined.contains('\r') || joined.contains('\n') {
+			net_close_id(fd)
+			return mk_err(http_err_field_invalid, 'E_HTTP_HEADER_INVALID: CR/LF in sse-connect header "${hdr[0]}"')
+		}
+		head += '${hdr[0]}: ${hdr[1]}\r\n'
+	}
 	if leid != '' {
 		head += 'Last-Event-ID: ${leid}\r\n'
 	}
