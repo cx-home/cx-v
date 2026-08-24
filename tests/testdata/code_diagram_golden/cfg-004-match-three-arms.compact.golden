@@ -1,0 +1,14 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  m{"match $age"}
+  a1["'child'"]
+  m -- "< 13" --> a1
+  a1 --> done
+  a2["'teen'"]
+  m -- "< 18" --> a2
+  a2 --> done
+  a3["'adult'"]
+  m -- "else" --> a3
+  a3 --> done
+  start --> m

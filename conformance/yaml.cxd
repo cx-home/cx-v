@@ -1,4 +1,4 @@
-[test-suite name=yaml
+[test-suite name=yaml ring=0
   [doc [#
 # CX Conformance — YAML import (YAML → CX) tests
 # Version: 1.0 — 2026-07-14
@@ -34,7 +34,7 @@ library:
     year: 1984
 #]]
   [out-cx [#
-{library: {book: [{author: J.R.R. Tolkien, available: true, title: The Hobbit, year: 1937}, {author: Frank Herbert, available: false, title: Dune, year: 1965}, {author: William Gibson, available: true, title: Neuromancer, year: 1984}]}}
+{library: {book: [{author: 'J.R.R. Tolkien', available: true, title: 'The Hobbit', year: 1937}, {author: 'Frank Herbert', available: false, title: Dune, year: 1965}, {author: 'William Gibson', available: true, title: Neuromancer, year: 1984}]}}
 #]]
  ]
 
@@ -294,7 +294,7 @@ x: [1, [2, 3], {k: [4]}]
 top: {m: {n: 5}, l: [true, null, 1.5]}
 #]]
   [out-cx [#
-{x: [1, [2, 3], {k: [4]}], top: {m: {n: 5}, l: [true, null, 1.5]}}
+{x: [1, [2, 3], {k: [4]}], top: {m: {n: 5}, l: [true, null, 1.5e0]}}
 #]]
  ]
 
@@ -342,7 +342,7 @@ keys: {"k 1": 1, 'two words': 2}
   [tags yaml emit quoting]
   [title strings containing dots or the letter e emit bare when they cannot re-read as numbers]
   [in-cx [#
-{library: {title: The Hobbit, year: 1937, home: hello.world, ip: 0.0.0.0}}
+{library: {title: 'The Hobbit', year: 1937, home: hello.world, ip: 0.0.0.0}}
 #]]
   [out-yaml [#
 library:

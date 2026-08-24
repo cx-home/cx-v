@@ -25,15 +25,44 @@
 [?const TASK-ATTRIBUTION {actor: "a2a" authority: "a2a/task"}]
 
 # ── task event shaping ─────────────────────────────────────────────────────────
-# task-event — one task lifecycle transition as a journalable element.
-[?def task-event scope=public pure [returns element] ($id::string $state::string)
-  [a2a-task id=$id state=$state]]
+# task-event — one task lifecycle transition as a journalable element. `address`
+# (additive, stream 18) carries the Tier-1 address of the value the transition
+# is ABOUT — for the input-required (pending-approval) state, the proposal
+# address an out-of-band approval binds. Empty = no subject address.
+[?def task-event scope=public pure [returns element] ($id::string $state::string $address::string '')
+  [?if [= $address '']
+    [then [a2a-task id=$id state=$state]]
+    [else [a2a-task id=$id state=$state address=$address]]]]
 
 # ── recording (effectful — appends to the journal) ─────────────────────────────
 # record — append a task transition to the journal, returning the committed [entry]
 # (with its sequence, content hash, and predecessor link).
 [?def record scope=public impure [returns element] ($jr::element $id::string $state::string)
   [$journal:append $jr [$task-event $id $state] TASK-ATTRIBUTION]]
+
+# ── the durable pending-approval realization (stream 18, L140) ──────────────────
+# A2A's `input-required` task state IS the pending-approval slot: a proposed
+# command parks its task in input-required with the PROPOSAL's Tier-1 address
+# journaled on the transition — durable, replayable, tamper-evident. The
+# approval happens OUT-OF-BAND (the adjudicate precedent; MCP elicitation is a
+# non-goal — the signing interaction never sits on the agent's client): a
+# principal approves the ADDRESS (authz:approve / a DID-signed credential),
+# authz:commit re-checks everything, and the task transitions on.
+
+# propose-task — park a task pending approval: journal the input-required
+# transition carrying the proposal's Tier-1 address. Returns the committed
+# [entry] — the durable, addressable pending-approval record.
+[?def propose-task scope=public impure [returns element] ($jr::element $id::string $proposal::element)
+  [$journal:append $jr [$task-event $id "input-required" [$cx:hash $proposal]] TASK-ATTRIBUTION]]
+
+# approval-credential — the DID/VC approval substrate (stream 18): a DID-signed
+# credential whose delegation subject IS the proposal address — the SAME
+# delegation value shape the PEP consumes (#7), so an A2A-carried approval and
+# an authz-store approval speak one language. `opts` carries {id, issued-at,
+# expires} as with grant-credential.
+[?def approval-credential scope=public pure [returns element] ($issuer-did::string $issuer-key::bytes $subject-did::string $proposal-address::string $opts::map)
+  [$vc:issue $issuer-did $issuer-key $subject-did
+    [delegation $proposal-address [capabilities [commit]]] $opts]]
 
 # history — the recorded task entries in sequence order (the replayable lifecycle).
 [?def history scope=public impure [returns [sequence element]] ($jr::element $from::int $to::int)
@@ -98,8 +127,17 @@
    grant-status) — decentralized, verifiable, and the input to #7's PEP. Together
    (journal + bus + did/vc) this is the distinctive A2A-over-xap positioning."""]]
 [fn-doc name=task-event scope=public purity=pure
-  [sig """-> element"""]
-  [summary """Shape one A2A task transition [a2a-task id= state=] as a journalable element."""]]
+  [sig """($id::string $state::string $address::string '') -> element"""]
+  [summary """Shape one A2A task transition [a2a-task id= state= address=?] as a journalable element; address carries the Tier-1 subject (the proposal address for input-required)."""]]
+[fn-doc name=propose-task scope=public purity=impure
+  [sig """($jr::element $id::string $proposal::element) -> element"""]
+  [summary """Park a task pending approval: journal the input-required transition carrying the proposal's Tier-1 address — the durable, replayable pending-approval record (approval happens out-of-band)."""]
+  [param-doc name=jr """The open journal handle the task lifecycle records into."""]
+  [param-doc name=id """The A2A task id."""]
+  [param-doc name=proposal """The cx:propose proposal value; its Tier-1 address rides the transition."""]]
+[fn-doc name=approval-credential scope=public purity=pure
+  [sig """($issuer-did::string $issuer-key::bytes $subject-did::string $proposal-address::string $opts::map) -> element"""]
+  [summary """Issue a DID-signed credential whose delegation subject IS the proposal address — the same delegation value shape the PEP consumes, so A2A-carried approvals and authz approvals speak one language."""]]
 [fn-doc name=record scope=public purity=impure
   [sig """-> element"""]
   [summary """Append a task transition to the journal, returning the committed hash-chained [entry]."""]]

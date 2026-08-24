@@ -1,0 +1,214 @@
+[test-suite name=map ring=1
+  [doc [#
+conformance fixtures for cx-stdlib/map (spec/03-approved/std-lib/map.md;
+#925, RULED: PYE-1).
+
+   The XPath 3.1 §17.1 operation family over CXDM maps. Key identity
+   everywhere is the (kind, image) pair (cxdm §2.6): an int key 1 and a
+   string key '1' are two keys, and every row that touches identity pins
+   both. Maps are immutable — constructors return NEW maps. Each program
+   imports the bundled module via [?lib 'cx-stdlib/map'] then calls
+   [$map:fn args].
+#]]
+
+ # ── read ──
+ [case id=map-001-get-present level=core
+  [tags map get read]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:get {port: 8080, host: 'x'} 'port']
+#]]
+  [out-text [# 8080 #]]
+ ]
+ [case id=map-002-get-absent-is-empty level=core
+  [tags map get absence 584]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:get {a: 1} 'zz']
+#]]
+  [out-text [# () #]]
+ ]
+ [case id=map-003-get-kind-strict level=core
+  [tags map get identity kind 927]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[?let [= $m {1: iv, '1': sv}] ([$map:get $m 1], [$map:get $m '1'])]
+#]]
+  [out-text [# (iv, sv) #]]
+ ]
+ [case id=map-004-keys-typed level=core
+  [tags map keys identity kind]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:keys {1: iv, '1': sv, b: 2}]
+#]]
+  [out-text [# (1, '1', b) #]]
+ ]
+ [case id=map-005-size-and-contains level=core
+  [tags map size contains]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[?let [= $m {a: 1, b: 2}] ([$map:size $m], [$map:contains $m 'b'], [$map:contains $m 'q'], [$map:contains {1: x} '1'])]
+#]]
+  [out-text [# (2, true, false, false) #]]
+ ]
+
+ # ── construct ──
+ [case id=map-006-put-appends-and-replaces level=core
+  [tags map put construct order]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[?let [= $m {a: 1, b: 2}] ([$map:put $m 'c' 3], [$map:put $m 'a' 9], $m)]
+#]]
+  [out-text [# ({a: 1, b: 2, c: 3}, {a: 9, b: 2}, {a: 1, b: 2}) #]]
+ ]
+ [case id=map-007-entry level=core
+  [tags map entry construct]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:entry 'k' 7]
+#]]
+  [out-text [# {k: 7} #]]
+ ]
+ [case id=map-008-merge-later-wins level=core
+  [tags map merge construct order]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:merge ({a: 1, b: 2}, {b: 9, c: 3})]
+#]]
+  [out-text [# {a: 1, b: 9, c: 3} #]]
+ ]
+ [case id=map-009-remove-and-miss-identity level=core
+  [tags map remove construct]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+([$map:remove {a: 1, b: 2} 'a'], [$map:remove {a: 1} 'zz'])
+#]]
+  [out-text [# ({b: 2}, {a: 1}) #]]
+ ]
+
+ # ── traverse ──
+ [case id=map-010-for-each level=core
+  [tags map for-each traverse fn]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:for-each {a: 1, b: 2} [?fn ($k $v) ($k, [* $v 10])]]
+#]]
+  [out-text [# ((a, 10), (b, 20)) #]]
+ ]
+
+ # ── seams + refusals ──
+ [case id=map-011-data-seam-mapnode level=core
+  [tags map data-seam cx-parse]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[?let [= $m [$cx:parse '{x: 41}']] [$map:get $m 'x']]
+#]]
+  [out-text [# 41 #]]
+ ]
+ [case id=map-012-non-map-refuses level=core
+  [tags map refusal]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:size [1, 2]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ # ── fn-doc examples (guide-check backing, verbatim) ──
+ [case id=map-101-doc-get level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:get {port: 8080} 'port']
+#]]
+  [out-text [# 8080 #]]
+ ]
+ [case id=map-102-doc-keys level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:keys {a: 1, b: 2}]
+#]]
+  [out-text [# (a, b) #]]
+ ]
+ [case id=map-103-doc-size level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:size {a: 1, b: 2}]
+#]]
+  [out-text [# 2 #]]
+ ]
+ [case id=map-104-doc-contains level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:contains {a: 1} 'a']
+#]]
+  [out-text [# true #]]
+ ]
+ [case id=map-105-doc-put level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:put {a: 1} 'b' 2]
+#]]
+  [out-text [# {a: 1, b: 2} #]]
+ ]
+ [case id=map-106-doc-entry level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:entry 'a' 1]
+#]]
+  [out-text [# {a: 1} #]]
+ ]
+ [case id=map-107-doc-merge level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:merge ({a: 1, b: 2}, {b: 9, c: 3})]
+#]]
+  [out-text [# {a: 1, b: 9, c: 3} #]]
+ ]
+ [case id=map-108-doc-remove level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:remove {a: 1, b: 2} 'a']
+#]]
+  [out-text [# {b: 2} #]]
+ ]
+ [case id=map-109-doc-for-each level=core
+  [tags map fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/map']
+[$map:for-each {a: 1, b: 2} [?fn ($k $v) $v]]
+#]]
+  [out-text [# (1, 2) #]]
+ ]
+]

@@ -1,0 +1,5 @@
+erDiagram
+  item {
+    int id "@"
+    string kind "@"
+  }

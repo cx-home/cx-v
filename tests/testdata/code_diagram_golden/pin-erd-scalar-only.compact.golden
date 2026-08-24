@@ -1,0 +1,5 @@
+erDiagram
+  point {
+    int x
+    int y
+  }

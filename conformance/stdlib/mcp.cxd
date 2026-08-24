@@ -1,7 +1,7 @@
-[test-suite name=mcp
+[test-suite name=mcp ring=1
   [doc [#
 Conformance fixtures for cx-x/mcp — a minimal MCP (Model Context Protocol) client
-(spec/02-working/agentic_positioning.md #6 S9). NB cx-x/mcp is an EXPERIMENTAL
+(spec/03-approved/x/mcp.md; #6 S9). NB cx-x/mcp is an EXPERIMENTAL
 x/-TIER module (D3): bundled + gated but exempt from the frozen-std stability
 promise. Programs name the tier via [?lib 'cx-x/mcp'].
 
@@ -99,6 +99,25 @@ sequences in paren form, the validate outcome as [ok]/[invalid …]).
 #]]
    [out-text [#
 ('/location')
+#]]
+  ]
+
+  [case id=mcp-007-initialize-request-protocol-pin level=core
+   [tags mcp initialize protocol-pin stream-18 690 L138]
+   [meta [#
+note: the ONE protocol target (L138): the client handshake pins the
+note: 2025-06-18 revision — the revision that carries outputSchema,
+note: annotations, structuredContent, and _meta. No
+note: revision-conditional emission anywhere.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/json' :as json]
+[$json:emit [$mcp:initialize-request 1 "cx-demo" "0.1"]]
+#]]
+   [out-text [#
+'{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{},"clientInfo":{"name":"cx-demo","version":"0.1"},"protocolVersion":"2025-06-18"}}'
 #]]
   ]
 ]

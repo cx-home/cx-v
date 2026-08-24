@@ -4,6 +4,21 @@ import strconv
 
 // ── TOML → CX / AST Parser ───────────────────────────────────────────────────
 // Minimal TOML parser. Uses a reader struct to track position.
+//
+// STRICT READER (conversions.md §6.1, RULED: 738-2a). Malformed input is
+// REFUSED with cx-err:CXER0100 — never folded into a best-effort tree.
+// Before this the reader could not fail AT ALL: every reader returned
+// unconditionally and every top-level branch ended in `or { continue }`,
+// so `qty = [1, 2` plus a bare `bad` line silently became
+// `{qty: [1, '2 bad']}` at rc=0 (#738). A Ring-0 data-profile surface
+// whose pitch is safety on untrusted input does not guess; the XML /
+// JSON / YAML lanes already fail loud through this same `!Document` seam.
+
+// toml_parse_error is the ONE refusal shape for this reader, so every
+// class carries the same code and reads the same way in a diagnostic.
+fn toml_parse_error(what string) IError {
+	return error('cx-err:CXER0100 PARSE_ERROR: TOML — ${what}')
+}
 
 struct TReader {
 mut:
@@ -19,12 +34,13 @@ fn (mut r TReader) skip_ws() {
 	for !r.at_end() && (r.peek() == ` ` || r.peek() == `\t`) { r.advance() }
 }
 
-fn (mut r TReader) read_basic_str() string {
+fn (mut r TReader) read_basic_str() !string {
 	r.advance() // skip '"'
 	mut s := []u8{}
+	mut closed := false
 	for !r.at_end() {
 		b := r.peek()
-		if b == `"` { r.advance(); break }
+		if b == `"` { r.advance(); closed = true; break }
 		if b == `\\` {
 			r.advance()
 			if !r.at_end() {
@@ -42,50 +58,66 @@ fn (mut r TReader) read_basic_str() string {
 			r.advance()
 		}
 	}
+	if !closed {
+		return toml_parse_error('unterminated basic string (no closing double quote)')
+	}
 	return s.bytestr()
 }
 
-fn (mut r TReader) read_literal_str() string {
+fn (mut r TReader) read_literal_str() !string {
 	r.advance() // skip "'"
 	mut s := []u8{}
+	mut closed := false
 	for !r.at_end() {
 		b := r.peek()
-		if b == `'` { r.advance(); break }
+		if b == `'` { r.advance(); closed = true; break }
 		s << b
 		r.advance()
 	}
+	if !closed {
+		return toml_parse_error('unterminated literal string (no closing quote)')
+	}
 	return s.bytestr()
 }
 
-fn (mut r TReader) read_multiline_basic_str() string {
+fn (mut r TReader) read_multiline_basic_str() !string {
 	// already consumed '"""'
 	if !r.at_end() && r.peek() == `\n` { r.advance() } // strip leading newline
 	mut s := []u8{}
+	mut closed := false
 	for !r.at_end() {
 		if r.pos + 2 < r.src.len && r.src[r.pos] == `"` && r.src[r.pos+1] == `"` && r.src[r.pos+2] == `"` {
-			r.pos += 3; break
+			r.pos += 3; closed = true; break
 		}
 		s << r.peek(); r.advance()
+	}
+	if !closed {
+		return toml_parse_error('unterminated multi-line basic string')
 	}
 	return s.bytestr()
 }
 
-fn (mut r TReader) read_multiline_literal_str() string {
+fn (mut r TReader) read_multiline_literal_str() !string {
 	// already consumed "'''"
 	if !r.at_end() && r.peek() == `\n` { r.advance() }
 	mut s := []u8{}
+	mut closed := false
 	for !r.at_end() {
 		if r.pos + 2 < r.src.len && r.src[r.pos] == `'` && r.src[r.pos+1] == `'` && r.src[r.pos+2] == `'` {
-			r.pos += 3; break
+			r.pos += 3; closed = true; break
 		}
 		s << r.peek(); r.advance()
+	}
+	if !closed {
+		return toml_parse_error('unterminated multi-line literal string')
 	}
 	return s.bytestr()
 }
 
-fn (mut r TReader) read_inline_array() JV {
+fn (mut r TReader) read_inline_array() !JV {
 	r.advance() // skip '['
 	mut arr := []JV{}
+	mut closed := false
 	for !r.at_end() {
 		r.skip_ws()
 		if r.peek() == `\n` || r.peek() == `\r` { r.advance(); continue }
@@ -93,34 +125,50 @@ fn (mut r TReader) read_inline_array() JV {
 			for !r.at_end() && r.peek() != `\n` { r.advance() }
 			continue
 		}
-		if r.peek() == `]` { r.advance(); break }
+		if r.peek() == `]` { r.advance(); closed = true; break }
 		if r.peek() == `,` { r.advance(); continue }
-		val := r.read_value()
+		val := r.read_value()!
 		arr << val
+	}
+	if !closed {
+		return toml_parse_error('unterminated inline array (no closing `]`)')
 	}
 	return JV(arr)
 }
 
-fn (mut r TReader) read_inline_table() JV {
+fn (mut r TReader) read_inline_table() !JV {
 	r.advance() // skip '{'
 	mut obj := map[string]JV{}
+	mut closed := false
 	for !r.at_end() {
 		r.skip_ws()
-		if r.peek() == `}` { r.advance(); break }
+		if r.peek() == `}` { r.advance(); closed = true; break }
 		if r.peek() == `,` { r.advance(); continue }
-		key := r.read_key()
+		key := r.read_key()!
+		if key.len == 0 {
+			return toml_parse_error('inline table entry has no key')
+		}
 		r.skip_ws()
-		if r.peek() == `=` { r.advance() }
-		val := r.read_value()
+		if r.peek() != `=` {
+			return toml_parse_error('inline table key `${key}` is not followed by `=`')
+		}
+		r.advance()
+		val := r.read_value()!
+		if key in obj {
+			return toml_parse_error('duplicate key `${key}` in inline table')
+		}
 		obj[key] = val
+	}
+	if !closed {
+		return toml_parse_error('unterminated inline table (no closing `}`)')
 	}
 	return JV(obj)
 }
 
-fn (mut r TReader) read_key() string {
+fn (mut r TReader) read_key() !string {
 	r.skip_ws()
-	if r.peek() == `"` { return r.read_basic_str() }
-	if r.peek() == `'` { return r.read_literal_str() }
+	if r.peek() == `"` { return r.read_basic_str()! }
+	if r.peek() == `'` { return r.read_literal_str()! }
 	mut s := []u8{}
 	for !r.at_end() {
 		b := r.peek()
@@ -130,23 +178,23 @@ fn (mut r TReader) read_key() string {
 	return s.bytestr().trim_space()
 }
 
-fn (mut r TReader) read_value() JV {
+fn (mut r TReader) read_value() !JV {
 	r.skip_ws()
 	if r.at_end() { return JV(JVNull{}) }
 	b := r.peek()
 	// multiline strings
 	if b == `"` && r.pos+2 < r.src.len && r.src[r.pos+1] == `"` && r.src[r.pos+2] == `"` {
 		r.pos += 3
-		return JV(r.read_multiline_basic_str())
+		return JV(r.read_multiline_basic_str()!)
 	}
 	if b == `'` && r.pos+2 < r.src.len && r.src[r.pos+1] == `'` && r.src[r.pos+2] == `'` {
 		r.pos += 3
-		return JV(r.read_multiline_literal_str())
+		return JV(r.read_multiline_literal_str()!)
 	}
-	if b == `"` { return JV(r.read_basic_str()) }
-	if b == `'` { return JV(r.read_literal_str()) }
-	if b == `[` { return r.read_inline_array() }
-	if b == `{` { return r.read_inline_table() }
+	if b == `"` { return JV(r.read_basic_str()!) }
+	if b == `'` { return JV(r.read_literal_str()!) }
+	if b == `[` { return r.read_inline_array()! }
+	if b == `{` { return r.read_inline_table()! }
 	// bare scalar
 	mut s := []u8{}
 	for !r.at_end() {
@@ -159,6 +207,23 @@ fn (mut r TReader) read_value() JV {
 	if raw == 'true'  { return JV(true) }
 	if raw == 'false' { return JV(false) }
 	if raw == '' || raw == 'null' { return JV(JVNull{}) }
+	// TOML date / datetime are NATIVE value kinds, and conversions.md §6.1's
+	// mapping table is normative on where they land: "TOML datetime →
+	// ScalarNode with `datetime` type", "TOML date → ScalarNode with `date`
+	// type" (and §0.2's "dates stay native"). They arrived here as bare
+	// scalars and fell through to the string arm, so `2026-08-01` imported
+	// as the STRING '2026-08-01' while the YAML lane — same target model,
+	// same carrier — imported it as a date (#738).
+	//
+	// The carrier is JVTyped, which exists for exactly this ("format-native
+	// typing (YAML dates, …)"), and the classifiers are the SAME is_datetime
+	// / is_date the YAML lane and the CX data scanner use — one temporal
+	// grammar ([L24]), so a value that is a date in one reading cannot be a
+	// string in another. Datetime is tested FIRST: a datetime token is
+	// longer than 10 bytes and is_date only admits exactly 10, but the order
+	// makes the precedence explicit rather than incidental.
+	if is_datetime(raw) { return JV(JVTyped{ typ: 'datetime', text: raw }) }
+	if is_date(raw)     { return JV(JVTyped{ typ: 'date',     text: raw }) }
 	if iv := raw.parse_int(10, 64) { return JV(iv) }
 	if raw.contains('.') || raw.to_lower().contains('e') {
 		fv := strconv.atof64(raw) or { return JV(raw) }
@@ -290,16 +355,28 @@ pub fn parse_toml(src string) !Document {
 	mut current_path := []string{}
 	mut aot_path := []string{} // array of tables path
 
+	// seen_keys refuses a duplicate key WITHIN one table. The scope key is
+	// the table path plus, for an array-of-tables, that table's ORDINAL —
+	// repeating a key across two `[[items]]` entries is legal TOML and must
+	// not be confused with redefining one inside a single entry.
+	mut seen_keys := map[string]bool{}
+	mut aot_ordinal := map[string]int{}
 	for raw_line in lines {
 		line := raw_line.trim_space()
 		if line.len == 0 || line.starts_with('#') { continue }
 
 		if line.starts_with('[[') {
 			// array-of-tables header
-			end := line.index(']]') or { continue }
+			end := line.index(']]') or {
+				return toml_parse_error('unterminated array-of-tables header `${line}` (no closing `]]`)')
+			}
 			header := line[2..end].trim_space()
+			if header.len == 0 {
+				return toml_parse_error('empty array-of-tables header `${line}`')
+			}
 			current_path = header.split('.').map(it.trim_space())
 			aot_path = current_path.clone()
+			aot_ordinal[header] = (aot_ordinal[header] or { 0 }) + 1
 			root = toml_append_aot(root, current_path, map[string]JV{})
 		} else if line.starts_with('[') {
 			// table header (not a value line)
@@ -309,8 +386,9 @@ pub fn parse_toml(src string) !Document {
 				key_raw := line[..ei].trim_space()
 				val_raw := line[ei+1..].trim_space()
 				mut r := TReader{ src: val_raw, pos: 0 }
-				val := r.read_value()
+				val := r.read_value()!
 				key := key_raw.trim('"\'')
+				toml_claim_key(mut seen_keys, current_path, aot_path, aot_ordinal, key)!
 				if current_path.len == 0 {
 					root[key] = val
 				} else if aot_path.len > 0 {
@@ -319,20 +397,34 @@ pub fn parse_toml(src string) !Document {
 					root = toml_set_path(root, current_path, key, val)
 				}
 			} else {
-				end := line.index(']') or { continue }
+				end := line.index(']') or {
+					return toml_parse_error('unterminated table header `${line}` (no closing `]`)')
+				}
 				header := line[1..end].trim_space()
+				if header.len == 0 {
+					return toml_parse_error('empty table header `${line}`')
+				}
 				current_path = header.split('.').map(it.trim_space())
 				aot_path = []string{}
 			}
 		} else {
 			// key = value
-			ei := line.index('=') or { continue }
+			ei := line.index('=') or {
+				// Neither a comment, nor a header, nor a pair — the class the
+				// old reader dropped on the floor, and the one that let the
+				// #738 repro's stray `bad` token vanish into a value.
+				return toml_parse_error('line is neither a comment, a table header, nor a `key = value` pair: `${line}`')
+			}
 			key_raw := line[..ei].trim_space()
 			val_raw := line[ei+1..].trim_space()
 
 			mut r := TReader{ src: val_raw, pos: 0 }
-			val := r.read_value()
+			val := r.read_value()!
 			key := key_raw.trim('"\'')
+			if key.len == 0 {
+				return toml_parse_error('key-value pair has no key: `${line}`')
+			}
+			toml_claim_key(mut seen_keys, current_path, aot_path, aot_ordinal, key)!
 
 			if current_path.len == 0 {
 				root[key] = val
@@ -393,4 +485,25 @@ fn toml_set_in_aot(root map[string]JV, aot_path []string, key string, val JV) ma
 pub fn parse_toml_cx(src string) !ParseResult {
 	doc := parse_toml(src)!
 	return ParseResult{ is_multi: false, single: doc }
+}
+
+// toml_claim_key records a key in its table's scope and refuses a second
+// claim. The scope is the table path — plus the array-of-tables ORDINAL
+// when one is active, so `sku` in two successive `[[items]]` entries are
+// two different keys while `sku` twice inside ONE entry is a duplicate.
+// Silently taking the last value is the failure this exists to prevent:
+// a config whose two `a =` lines disagree has no single correct reading.
+fn toml_claim_key(mut seen map[string]bool, current_path []string, aot_path []string,
+                  aot_ordinal map[string]int, key string) ! {
+	mut scope := current_path.join('.')
+	if aot_path.len > 0 {
+		header := aot_path.join('.')
+		scope = '${header}#${aot_ordinal[header] or { 0 }}'
+	}
+	k := '${scope}\x00${key}'
+	if k in seen {
+		where := if scope.len == 0 { 'the document root' } else { 'table `${scope}`' }
+		return toml_parse_error('duplicate key `${key}` in ${where}')
+	}
+	seen[k] = true
 }

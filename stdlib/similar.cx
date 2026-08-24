@@ -55,7 +55,7 @@
   [sig """-> element"""]
   [summary """Build the sort key spec that ranks values by nearness to a reference — similarity is relational, so sort requires one (nearest first)."""]
   [example [code """[?lib 'cx-stdlib/similar']
-[$sort ("acme corp", "globex", "acme inc") {by: [$similar:similarity-to "acme"]}]"""] [expect """('acme inc', 'acme corp', 'globex')"""]]
+[$sort ("acme corp", "globex", "acme inc") {by: [$similar:similarity-to "acme"]}]"""] [expect """('acme inc', 'acme corp', globex)"""]]
 ]
 [fn-doc name=score-of scope=public purity=pure
   [sig """-> float"""]

@@ -129,7 +129,12 @@ pub fn cx_code_eval_caps(input &char, program &char,
 	caps_v := if caps == unsafe { nil } { '' } else {
 		unsafe { cstring_to_vstring(caps) }
 	}
-	caps_apply_spec(caps_v)
+	caps_apply_spec(caps_v) or {
+		// #713: an unknown grant name / retired `:` scope spelling is a LOUD
+		// typed refusal (CXER0274) — never a silent no-grant evaluation.
+		caps_set_empty()
+		return code_err(err.msg(), err_out)
+	}
 	out := eval_code(in_v, prog_v, target_v) or {
 		caps_set_empty()
 		return code_err(err.msg(), err_out)
@@ -173,7 +178,11 @@ pub fn cx_code_diagram(source &char, source_len usize,
 	if fmt_base != 'mermaid' {
 		return code_c_string('CXER0100:cx_code_diagram: format \'${fmt_v}\' not supported in wasm (only \'mermaid[:detail]\' is browser-safe; SVG/PNG require graphviz on PATH)')
 	}
-	prog := cx.parse_program(src_v) or {
+	// The parse here is a DIAGNOSTIC gate only — `render_diagram` lifts
+	// from the source itself now (#889: one path, through
+	// `[$diagram:of-source]`). Keeping it preserves this export's
+	// parse-error wire strings byte-for-byte.
+	_ := cx.parse_program(src_v) or {
 		wire := if err.msg().starts_with('cx-err:') {
 			err.msg()['cx-err:'.len..]
 		} else {
@@ -181,7 +190,7 @@ pub fn cx_code_diagram(source &char, source_len usize,
 		}
 		return code_c_string(wire)
 	}
-	out := render_diagram(prog, src_v, fmt_v) or {
+	out := render_diagram(src_v, fmt_v) or {
 		wire := if err.msg().starts_with('cx-err:') {
 			err.msg()['cx-err:'.len..]
 		} else {
@@ -250,6 +259,29 @@ fn global_stream_sink(chunk string) ! {
 	if rc != 0 {
 		return error('write_cb returned ${rc}')
 	}
+}
+
+// cx_code_eval_streamable answers, WITHOUT evaluating, whether
+// cx_code_eval_streaming will actually deliver this (program, target)
+// incrementally — or silently buffer the whole result and hand it over
+// in one chunk (#821). A caller about to stream a large input can ask
+// first and pick a different program or target instead of discovering
+// the memory cost after paying it.
+//
+// Returns 1 = streams incrementally, 0 = buffers (including when the
+// program does not parse, since the streaming call would surface that
+// error on the one-shot path). Never allocates; nothing to free.
+@[export: 'cx_code_eval_streamable']
+pub fn cx_code_eval_streamable(program &char, program_len usize,
+		output_target &char) int {
+	if program == unsafe { nil } || program_len == 0 {
+		return 0
+	}
+	prog_v := unsafe { cstring_to_vstring(program) }
+	target_v := if output_target == unsafe { nil } { '' } else {
+		unsafe { cstring_to_vstring(output_target) }
+	}
+	return if eval_code_streamable(prog_v, target_v) { 1 } else { 0 }
 }
 
 @[export: 'cx_code_eval_streaming']

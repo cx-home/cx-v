@@ -1,0 +1,4 @@
+[?match $x
+  [case 1 'one']
+  [else  'other']
+]

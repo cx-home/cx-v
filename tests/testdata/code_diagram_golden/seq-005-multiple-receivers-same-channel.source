@@ -1,0 +1,1 @@
+[?let [= $ch [?channel name="ch" buffer=2]] [?let [= $_a [?worker name="wa" [?let [= $m [?receive from=$ch]] [ok value=$m]]]] [?worker name="wb" [?let [= $m [?receive from=$ch]] [ok value=$m]]]]]

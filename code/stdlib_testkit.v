@@ -4,6 +4,7 @@ module code
 import cx
 import os
 import math
+import strconv
 
 // stdlib_test.v — native primitives backing the `cx-stdlib/test` module
 // (spec/std-lib/test.md): assertion / fixture / lifecycle helpers used by
@@ -82,10 +83,26 @@ fn test_node_f64(n cx.Node) ?f64 {
 		match v {
 			i64 { return f64(v) }
 			f64 { return v }
+			string {
+				// I1 stream 11 (2b): the test harness accepts the exact
+				// family — assert-near is a TOLERANCE check, not an
+				// exactness surface, so a decimal/bigint image reads
+				// through f64.
+				if n.data_type == cx.ScalarType.decimal_type
+					|| n.data_type == cx.ScalarType.bigint_type {
+					if fv := test_atof(v) {
+						return fv
+					}
+				}
+			}
 			else {}
 		}
 	}
 	return none
+}
+
+fn test_atof(s string) ?f64 {
+	return strconv.atof64(s) or { return none }
 }
 
 // test_seq_items returns the member nodes of a sequence / array value, or

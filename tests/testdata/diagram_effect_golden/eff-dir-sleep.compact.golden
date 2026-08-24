@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  eff_sleep[["[?sleep]"]]
+  cap_clock{{"clock --allow-clock"}}
+  prog --> eff_sleep
+  eff_sleep --> cap_clock

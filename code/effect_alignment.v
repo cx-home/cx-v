@@ -29,6 +29,52 @@ module code
 // `module code` consts the dispatchers read; the arm-level / prefix-gated
 // families are listed literally with a pointer to their guard.
 
+// ── Pack cap-name tables (I4, #651/#516) ──────────────────────────────────────
+// These const lists are PROFILE-INVARIANT purity data: builtin_purity_table()
+// folds them to `impure_`, and a name's purity classification must not vary
+// with the artifact's pack composition (an embed-profile artifact still
+// classifies `io-read-file` impure — the name is simply not callable there).
+// They therefore live HERE, outside the `-d cx_no_pack_*`-gated pack files;
+// the pack dispatchers read these same consts for their cap_guard fences, so
+// the drift-canary property (table == live guard list) still holds by
+// construction.
+
+// io_read_caps / io_write_caps name the read-path / write-path primitives
+// (io.md §7 table, minus open which is mode-derived, and close which needs
+// none). The cap_guard at the top of io dispatch fail-closes BEFORE any work.
+const io_read_caps = ['io-read-file', 'io-read-file-bytes', 'io-read-file-lines',
+	'io-read-all', 'io-read-all-bytes', 'io-read-bytes', 'io-read-line', 'io-line-iter',
+	'io-stat', 'io-exists', 'io-is-file', 'io-is-directory', 'io-is-symlink', 'io-is-eof',
+	'io-list-dir', 'io-glob', 'io-glob-iter', 'io-walk', 'io-readlink', 'io-size',
+	'io-created-time', 'io-modified-time', 'io-tell', 'io-seek', 'io-system-temp-dir',
+	'io-temp-dir'] // io-watch / io-watch-next gate themselves in iowatch_ring2_builtin (I3)
+
+const io_write_caps = ['io-open-with-opts', 'io-write-bytes', 'io-write-file',
+	'io-write-file-bytes', 'io-write-file-lines', 'io-write-line', 'io-write-string',
+	'io-append-file', 'io-append-file-bytes', 'io-make-dir', 'io-make-dirs', 'io-remove',
+	'io-remove-dir', 'io-remove-tree', 'io-rename', 'io-copy', 'io-copy-tree', 'io-symlink',
+	'io-lock', 'io-unlock', 'io-flush', 'io-temp-file']
+
+// env_uncapped_prims are the capability-FREE env names: pure accessors over
+// parsed-args/spec shapes plus the ambient process basics env.md §7 makes
+// "never gated" (standard streams, process identity, argv, CPU count,
+// exit/abort; parse-args is argv-derived).
+const env_uncapped_prims = ['env-os-name', 'env-os-arch', 'env-flag', 'env-positional',
+	'env-remaining', 'env-usage', 'env-parse-args', 'env-stdin', 'env-stdout', 'env-stderr',
+	'env-pid', 'env-ppid', 'env-argv', 'env-cpu-count', 'env-exit', 'env-abort']
+
+// time_clock_prims are the impure wall-clock reads gated under the `clock`
+// capability (security.md §2). Pure calendar/duration math and the `*-mock`
+// variants need no capability.
+const time_clock_prims = ['time-now', 'time-today', 'time-instant-now',
+	'time-monotonic-now', 'time-utc-now', 'time-system-timezone']
+
+// random_entropy_prims are the crypto-random surfaces drawing OS/CSPRNG
+// entropy — gated under the `random` capability (security.md §2). The
+// seeded PRNG (xoshiro) is deterministic and needs no capability.
+const random_entropy_prims = ['random-crypto-bytes', 'random-crypto-int',
+	'random-crypto-hex', 'random-crypto-base64-url', 'random-crypto-token-urlsafe']
+
 // ── Direction 1: capability-gated ⇒ impure ────────────────────────────────────
 
 // gated_env_prims / read_env_prims are every `env-*` dispatcher arm EXCEPT
@@ -38,6 +84,24 @@ module code
 // gated under the right cap, and vice versa.
 //
 // `env` cap — environment/identity reads.
+// http CLIENT pack (Ring 1) — every verb that touches a socket, gated on
+// `net` by cap_guard inside the pack (http_gated_prims + the two SSE impls).
+// Mirrored here the way io/env already are: the pack file is conditionally
+// compiled (`-d cx_no_pack_http_client`), so this map cannot reference the
+// pack's own const directly.
+//
+// These rows landed in security.md §2.1 first (RULED: tables-1a, #827) —
+// the spec table is the normative closed set and this map is its mirror, so
+// the fold below may only name effect points the spec declares.
+//
+// `http-client` / `http-close` are deliberately NOT here: they are
+// connection-pool bookkeeping that touches no socket, and the pack documents
+// them as intentionally ungated. They are impure all the same (pool state) —
+// see the direction-2 exception table.
+const http_client_gated_prims = ['http-get', 'http-post', 'http-put', 'http-del',
+	'http-patch', 'http-head', 'http-options', 'http-request', 'http-send',
+	'http-sse-connect', 'http-sse-events']
+
 const gated_env_prims = ['env-has-var', 'env-hostname', 'env-username', 'env-var',
 	'env-var-bool', 'env-var-float', 'env-var-int', 'env-var-or-default',
 	'env-var-required', 'env-vars']
@@ -86,6 +150,17 @@ pub fn capability_gated_prims() map[string]string {
 		t[n] = 'read'
 	}
 
+	// http client — every socket-touching verb (#827; §2.1 rows landed first).
+	for n in http_client_gated_prims {
+		t[n] = 'net'
+	}
+
+	// io-edit-file — the one primitive requiring BOTH read and write, so it
+	// self-guards at its dispatch site rather than riding io_read_caps /
+	// io_write_caps. Listed under its nominal capability `read`, matching the
+	// §2.1 scoping note (#827).
+	t['io-edit-file'] = 'read'
+
 	// random — CSPRNG/entropy surfaces (stdlib_random.v ~524). Cap `random`.
 	// The seeded/state-bearing PRNG (random-next-*, -seed, -shuffle, …) is
 	// deterministic and NOT gated → it lives in the direction-2 exceptions.
@@ -124,6 +199,14 @@ pub fn capability_gated_prims() map[string]string {
 	for n in crypto_entropy_prims {
 		t[n] = 'random'
 	}
+	// #828 (RULED: 828-1a) — the two surfaces that were classified impure
+	// but ungated now charge, so they move OUT of the direction-2 exception
+	// table and IN here. mime-multipart-boundary draws OS entropy like every
+	// other entropy surface; locale-default-locale reads an environment
+	// variable, which env.md §7 states flatly requires `env`.
+	t['mime-multipart-boundary'] = 'random'
+	t['locale-default-locale'] = 'env'
+
 	// crypto — jwks-fetch GETs the JWKS over cx-stdlib/http (stdlib_crypto.v
 	// crypto_stdlib_builtin head). Cap `net` (same grant http uses; §3.10/§7).
 	t['crypto-jwks-fetch'] = 'net'
@@ -137,6 +220,17 @@ pub fn capability_gated_prims() map[string]string {
 	for n in gated_prof_prims {
 		t[n] = 'clock'
 	}
+
+	// io-watch / io-watch-next — filesystem watch (Ring 2,
+	// stdlib_iowatch.v; the live adapters route through the same
+	// dispatch). Cap `read`. They gate themselves in
+	// iowatch_ring2_builtin — previously listed only as a comment on
+	// io_read_caps, which left them outside BOTH alignment directions
+	// (the drift-canary hole the stream-6 EV-EFFECT-SET move closed:
+	// the normative security.md §2.1 table lists them, so the mirror
+	// must too).
+	t['io-watch'] = 'read'
+	t['io-watch-next'] = 'read'
 
 	// i18n — load-catalog reads a sibling file (stdlib_i18n.v ~1008). Cap
 	// `read`. Every other i18n surface is pure in-memory message work.
@@ -160,6 +254,26 @@ pub fn capability_gated_prims() map[string]string {
 	// real filesystem) and consistent with deny-by-default.
 	t['path-absolute'] = 'read'
 	t['path-canonical'] = 'read'
+
+	// live — executing a QUOTED planar comprehension is dynamic execution
+	// (the L99 [?eval] posture, live.md §1): every verb cap_guards `eval` on
+	// every path that executes (stdlib_live.v; stream 3, #675) — observe at
+	// creation (the anchor replay) and again on each [?receive] poll;
+	// materialize at creation (the seed fold) and advance on every tick.
+	// live-read is NOT here: its normal path is a checkpoint doc read; the
+	// derived-state replay branch alone carries an inline eval guard (a
+	// conditional execution path, same posture as store modify-doc's
+	// closure arm).
+	t['live-changes-since'] = 'eval'
+	t['live-observe'] = 'eval'
+	t['live-materialize'] = 'eval'
+	t['live-advance'] = 'eval'
+	// live-adapt-watch creates the watched directory — an unconditional
+	// write effect at the prim. (live-adapt-poll and live-ingest are NOT
+	// here: their execution guards fire inside the changes-since core they
+	// call per tick, and ingest's read guard is the watch-path conditional
+	// — the live-read posture.)
+	t['live-adapt-watch'] = 'write'
 
 	return t
 }
@@ -242,6 +356,12 @@ pub fn impure_without_capability_exceptions() map[string]string {
 		t[n] = '(b) mock clock: test-clock state, reads no real wall clock'
 	}
 
+	// (f) capability introspection (stdlib_caps.v, security.md C4 / L104):
+	// [$caps] reads the ACTIVE grant set — a program can only OBSERVE its
+	// own authority, never exceed it (§3 narrow-only), so the read is not
+	// a gated effect; impure so pure bodies stay cap-set-invariant (§6.5.1).
+	t['caps'] = '(f) capability introspection: reads the active grant set — observation of own authority, never a gated effect'
+
 	// (d) ambient process basics (stdlib_env.v): standard streams, process
 	// identity, argv, CPU count, exit/abort. env.md §7 `(none)` row — never
 	// gated; effectful (impure) but capability-free.
@@ -280,6 +400,69 @@ pub fn impure_without_capability_exceptions() map[string]string {
 	] {
 		t[n] = '(c) spec-classified impure; impl-pending; will be cap-gated at impl time'
 	}
+
+	// (g) Ring-1 pack state, capability-free (#818). Each of these is impure
+	// — it reads or mutates process-global state — but crosses no gated
+	// effect point, so it belongs here rather than in the gated map. The
+	// wrapping [?def]s declare `impure` in stdlib/*.cx; before #818 the
+	// classifier read their bodies as PURE, which is the CXER4611 slip #788
+	// closed for the Ring-2 packs.
+	for n in [
+		// the OBJECT PRNG (stdlib_random ~642): a handle-scoped generator,
+		// SEEDED FROM AN ARGUMENT (random_arg_int), never from OS entropy —
+		// the same rationale as bucket (a)'s process-global twin.
+		'random-new', 'random-free', 'random-gen-bool', 'random-gen-choose',
+		'random-gen-choose-weighted', 'random-gen-exponential', 'random-gen-float',
+		'random-gen-float-range', 'random-gen-floats', 'random-gen-gaussian',
+		'random-gen-int', 'random-gen-int-range', 'random-gen-ints',
+		'random-gen-poisson', 'random-gen-sample', 'random-gen-sample-weighted',
+		'random-gen-shuffle',
+	] {
+		t[n] = '(g) object PRNG: handle-scoped generator seeded from an argument, draws no OS entropy'
+	}
+	for n in [
+		'test-assert', 'test-assert-contains', 'test-assert-equal',
+		'test-assert-match', 'test-assert-near', 'test-assert-not-equal',
+		'test-assert-shape', 'test-assert-snapshot', 'test-assert-throws',
+		'test-before-all', 'test-before-each', 'test-after-all', 'test-after-each',
+		'test-configure', 'test-fail', 'test-skip',
+	] {
+		t[n] = '(g) test harness: per-run assertion / hook / config state, in-process only'
+	}
+	for n in [
+		'prof-counter-add', 'prof-counter-all', 'prof-counter-get',
+		'prof-counter-inc', 'prof-counter-reset', 'prof-flamegraph-emit',
+		'prof-gc-trigger', 'prof-histogram-observe', 'prof-histogram-reset',
+		'prof-histogram-stats', 'prof-mem-snapshot', 'prof-prof-configure',
+		'prof-trace-flush',
+	] {
+		t[n] = '(g) profiler: process-global counters / histograms / GC + trace control'
+	}
+	for n in [
+		'log-configure', 'log-current-scope', 'log-debug', 'log-emit-raw',
+		'log-error', 'log-fatal', 'log-info', 'log-log', 'log-warn',
+	] {
+		t[n] = '(g) logging: sink writes + scope state; the sink is a standard stream, which env.md §7 keeps capability-free'
+	}
+	for n in [
+		'sched-after', 'sched-at', 'sched-cancel', 'sched-cron', 'sched-every',
+		'sched-recur', 'sched-restore', 'sched-test-clock-advance',
+	] {
+		t[n] = '(g) scheduler: in-process timer registry + the test clock (bucket (b) twin)'
+	}
+	for n in ['mime-load-mime-types', 'mime-register-type'] {
+		t[n] = '(g) mime registry: process-global type-table mutators'
+	}
+	// http pool bookkeeping — the pack documents these as intentionally
+	// ungated (no socket is touched); impure because the pool is state.
+	for n in ['http-client', 'http-close'] {
+		t[n] = '(g) http connection-pool bookkeeping: pool state, touches no socket'
+	}
+	// io-close — stdlib_io ~742 states it outright: "§7: no capability.
+	// Idempotent." Impure because it mutates handle state.
+	t['io-close'] = '(g) io handle close: documented capability-free and idempotent (io.md §7)'
+
+
 
 	return t
 }

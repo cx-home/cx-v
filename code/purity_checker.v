@@ -113,40 +113,27 @@ pub fn new_purity_checker(defs []&cx.DefNode) PurityChecker {
 // `now` site.
 fn pure_flow_directive_table() map[string]bool {
 	mut t := map[string]bool{}
+	// MIRROR of code.md §6.5.0's normative closed table (RULED tables-1a).
+	// The spec owns the classification; this list is checked against it in
+	// BOTH directions by the check-directive-purity gate, so it can neither
+	// lag the vocabulary nor invent a class the spec does not carry.
+	//
+	// pure-flow = the directive introduces no effect of its own; its purity
+	// is DERIVED FROM ITS BODY. Adding a directive means adding a §6.5.0 row
+	// first — the mirror may not lead the spec.
 	for n in [
-		'?if',
-		'?cond',
-		'?match',
-		'?let',
-		'?for',
-		'?def',
-		'?const',
-		'?fn',
-		'?lib',
-		'?try',
-		'?throw',
-		'?yield',
-		'?do',
-		'?loop',
-		'?when',
-		'?unless',
-		'?case',
-		'?return',
-		'?begin',
-		'?and',
-		'?or',
-		'?not',
-		// NOTE: [?eval] is NOT here — it is inherently impure (tree-eval, the
-		// effect dual of cx:eval per §6.4.4); see impure_directive_table. Only
-		// the construction forms below are body-derived (pure unless their holes
-		// reach an impure callee).
-		'?quote',
-		'?unquote',
-		'?splice',
-		// [?str] compile-time string interpolation (§8.12) is pure — its
-		// holes are binding-paths (reads only), never calls. Body-derived
-		// so the tokeniser still scans the (call-free) template content.
-		'?str',
+		'?attr', '?chunks', '?concat', '?const',
+		'?cycle', '?def', '?do', '?drop',
+		'?element', '?else', '?entry', '?enumerate',
+		'?filter', '?flatten', '?fn', '?for',
+		'?for-array', '?for-map', '?group-by', '?if',
+		'?let', '?lib', '?loop', '?map',
+		'?match', '?meta', '?name', '?partition',
+		'?pipe', '?quote', '?reduce', '?scan',
+		'?secret', '?splice', '?str', '?take',
+		'?to-array', '?to-map', '?to-sequence', '?unquote',
+		'?view', '?views', '?with-caps', '?with-error-hook',
+		'?with-open', '?with-scope', '?zip',
 	] {
 		t[n] = true
 	}
@@ -163,7 +150,9 @@ fn builtin_purity_table() map[string]cx.Purity {
 
 	// Pure — Sequence builtins.
 	for n in ['count', 'length', 'empty', 'first', 'last', 'head', 'tail',
-		'reverse', 'distinct', 'nth', 'position', 'range', 'identity'] {
+		'reverse', 'distinct', 'nth', 'position', 'range', 'identity',
+		// §6.5.x Sequence — presence predicate (#854, #849); pure.
+		'present'] {
 		t[n] = cx.Purity.pure_
 	}
 
@@ -187,7 +176,34 @@ fn builtin_purity_table() map[string]cx.Purity {
 	}
 
 	// Pure — Node-accessor + type-test + EBV + path/cxpath.
-	for n in ['name', 'cast', 'exists'] {
+	// `local-name` / `string` are §6.5.x Node-accessor rows that were missing
+	// here (#859) — the spec classified them, the table did not.
+	for n in ['name', 'cast', 'exists', 'local-name', 'string'] {
+		t[n] = cx.Purity.pure_
+	}
+
+	// Pure — Generator (§6.5.x). `iterate`/`unfold` are pure iff their `f` is;
+	// the per-call purity of `f` is checked where the argument is, not here.
+	// Missing from this table until #859, for the same reason the others were:
+	// nothing could observe the omission while CXER0234 was unreachable.
+	for n in ['iterate', 'unfold'] {
+		t[n] = cx.Purity.pure_
+	}
+
+	// Pure — native primitives that BACK stdlib module bodies rather than the
+	// language surface: cx-stdlib/math's powers/logs/roots, and the validation
+	// primitive. All total and effect-free (math domain errors return NaN per
+	// IEEE 754, never raise).
+	//
+	// §6.5.x's own tables classify THE LANGUAGE — the same distinction it draws
+	// when it excludes the `[?test-…]` harness directives. These are
+	// dispatchable, so they must be classified SOMEWHERE for the CXER0234 check
+	// below to be decidable; classifying them here is the implementation
+	// discharging §6.5.x's requirement, not an amendment to its lists. Whether
+	// the spec text should also enumerate them is a separate question, filed
+	// rather than decided here.
+	for n in ['sqrt', 'cbrt', 'exp', 'log', 'log2', 'log10', 'pow',
+		'validate-item'] {
 		t[n] = cx.Purity.pure_
 	}
 
@@ -205,6 +221,13 @@ fn builtin_purity_table() map[string]cx.Purity {
 	for n in ['random', 'random-int', 'uuid', 'random-bytes'] {
 		t[n] = cx.Purity.impure_
 	}
+
+	// Impure — evaluation-environment introspection (security.md C4, L104):
+	// [$caps] reads the ACTIVE grant set. Classified impure because a pure
+	// body observing the cap set would break the §6.5.1 cap-set-invariance
+	// the pure ⇒ deterministic theorem rests on; capability-FREE by the
+	// narrow-only invariant (exception table, effect_alignment.v).
+	t['caps'] = cx.Purity.impure_
 
 	// Impure — cx-stdlib native primitives (derived from each wrapping
 	// [?def]'s declared purity in stdlib_*.v): environment reads, the
@@ -225,6 +248,57 @@ fn builtin_purity_table() map[string]cx.Purity {
 		'random-sample-weighted', 'random-seed', 'random-shuffle', 'time-instant-now', 'time-mock-advance', 'time-mock-set',
 		'time-monotonic-now', 'time-now', 'time-system-timezone', 'time-today', 'time-utc-now', 'uuid-v4',
 		'uuid-v4-bytes', 'uuid-v7', 'uuid-v7-bytes',
+	] {
+		t[n] = cx.Purity.impure_
+	}
+
+	// Ring-1 pack prims that are IMPURE WITHOUT A CAPABILITY (#818). Each
+	// wrapping [?def] in stdlib/*.cx declares `impure`; before this the
+	// classifier reached no impure callee from those bodies and read them as
+	// PURE — the declaration said impure, the classifier said pure, and a
+	// pure-required context (a fold reducer, a pure [?def]) admitted them
+	// instead of refusing loud. That is the CXER4611 slip #788 closed for the
+	// Ring-2 packs, arriving through the Ring-1 door.
+	//
+	// The GATED members of these packs are NOT here — they arrive via the
+	// capability_gated_prims() fold below, by construction. Every name in
+	// this list carries a matching reason in
+	// effect_alignment.impure_without_capability_exceptions() (bucket (g) or
+	// (h)), and the §6.5.1 direction-2 gate fails if the two ever disagree.
+	for n in [
+		// object PRNG (handle-scoped, seeded from an argument)
+		'random-new', 'random-free', 'random-gen-bool', 'random-gen-choose',
+		'random-gen-choose-weighted', 'random-gen-exponential', 'random-gen-float',
+		'random-gen-float-range', 'random-gen-floats', 'random-gen-gaussian',
+		'random-gen-int', 'random-gen-int-range', 'random-gen-ints',
+		'random-gen-poisson', 'random-gen-sample', 'random-gen-sample-weighted',
+		'random-gen-shuffle',
+		// test harness state
+		'test-assert', 'test-assert-contains', 'test-assert-equal',
+		'test-assert-match', 'test-assert-near', 'test-assert-not-equal',
+		'test-assert-shape', 'test-assert-snapshot', 'test-assert-throws',
+		'test-before-all', 'test-before-each', 'test-after-all', 'test-after-each',
+		'test-configure', 'test-fail', 'test-skip',
+		// profiler process-global state
+		'prof-counter-add', 'prof-counter-all', 'prof-counter-get',
+		'prof-counter-inc', 'prof-counter-reset', 'prof-flamegraph-emit',
+		'prof-gc-trigger', 'prof-histogram-observe', 'prof-histogram-reset',
+		'prof-histogram-stats', 'prof-mem-snapshot', 'prof-prof-configure',
+		'prof-trace-flush',
+		// logging sinks + scope state
+		'log-configure', 'log-current-scope', 'log-debug', 'log-emit-raw',
+		'log-error', 'log-fatal', 'log-info', 'log-log', 'log-warn',
+		// scheduler registry + test clock
+		'sched-after', 'sched-at', 'sched-cancel', 'sched-cron', 'sched-every',
+		'sched-recur', 'sched-restore', 'sched-test-clock-advance',
+		// mime registry mutators + the boundary draw (bucket (h) gap)
+		'mime-load-mime-types', 'mime-register-type', 'mime-multipart-boundary',
+		// http connection-pool bookkeeping (the socket verbs are gated)
+		'http-client', 'http-close',
+		// io handle close (documented capability-free, io.md §7)
+		'io-close',
+		// locale default read (bucket (h) gap)
+		'locale-default-locale',
 	] {
 		t[n] = cx.Purity.impure_
 	}
@@ -251,37 +325,29 @@ fn builtin_purity_table() map[string]cx.Purity {
 // directly.
 fn impure_directive_table() map[string]bool {
 	mut t := map[string]bool{}
+	// MIRROR of code.md §6.5.0 (RULED tables-1a) — impure = the directive IS
+	// an effect point whatever its body does.
 	for n in [
-		'?modify',
-		'?send',
-		'?receive',
-		'?try-send',
-		'?try-receive',
-		'?close',
-		'?select',
-		'?worker',
-		'?async',
-		'?await',
-		'?await-all',
-		'?await-any',
-		'?await-race',
-		'?cancel',
-		'?check-cancel',
-		'?sleep',
-		'?service',
-		'?service-handle',
-		'?http-client',
-		'?retry',
-		'?timeout',
-		'?circuit-breaker',
-		'?fallback',
-		'?rate-limit',
-		'?bulkhead',
-		// Tree-eval (§6.4.4): [?eval] evaluates a CXDM value as code — the
-		// effect dual of cx:eval. A pure [?def] reaching it raises CXER0233
-		// (the cx:eval-tree call form is subject to the source scanner's
-		// pre-existing prefix:local limitation, tracked separately).
-		'?eval',
+		'?async', '?await', '?await-all', '?await-any',
+		'?await-race', '?bulkhead', '?cancel', '?channel', 
+		'?check-cancel', '?circuit-breaker', '?close', '?eval',
+		'?fallback', '?http-client', '?http-service', '?modify',
+		'?monitor', '?rate-limit', '?receive', '?retry',
+		'?reveal', '?select', '?send', '?service-handle',
+		'?sleep', '?stop', '?subscribe', '?timeout',
+		'?try-receive', '?try-send', '?wait-for', '?worker',
+		'?worker-handle',
+	] {
+		t[n] = true
+	}
+	// Test-only diagnostics: NOT in the §4.1 registry and not language
+	// surface, so §6.5.0 deliberately does not carry them (it classifies the
+	// language, not the harness). They mutate per-run harness state, so they
+	// are impure; the gate permits impl-only rows for exactly this set.
+	for n in [
+		'?test-always-err', '?test-bulkhead-full', '?test-cb-open', '?test-clock',
+		'?test-close-log', '?test-closeable', '?test-counter', '?test-current-scope',
+		'?test-err-then-ok', '?test-rate-limited', '?test-single-use-iter',
 	] {
 		t[n] = true
 	}
@@ -297,7 +363,9 @@ pub fn builtin_is_impure(name string) bool {
 	if p := t[name] {
 		return p == cx.Purity.impure_
 	}
-	return false
+	// Ring-2 pack verbs classify through the registration seam (they are
+	// invisible to this table by the I3 ring rule).
+	return ring2_is_impure(name)
 }
 
 // impure_builtin_names returns every name the closed §6.5.x classification
@@ -393,20 +461,14 @@ fn walk_impure(node cx.ProgramNode, impure_dirs map[string]bool) bool {
 			}
 		}
 		cx.ProgramForComp {
-			for clause in node.clauses {
-				if src := clause.source {
-					if walk_impure(src, impure_dirs) {
-						return true
-					}
+			// L100 (stream-2 W2): the ONE traversal. The hand-rolled walk
+			// this replaces SKIPPED the [yield-map K V] VALUE node — an
+			// impure expression in map-value position escaped the purity
+			// refusal (probed live; pinned by the W2 fixture).
+			for item in cx.for_comp_children(node) {
+				if walk_impure(item.node, impure_dirs) {
+					return true
 				}
-				if expr := clause.expr {
-					if walk_impure(expr, impure_dirs) {
-						return true
-					}
-				}
-			}
-			if walk_impure(node.yield, impure_dirs) {
-				return true
 			}
 		}
 		cx.ProgramPattern {
@@ -482,18 +544,52 @@ fn (checker &PurityChecker) walk_body_for_def(def_name string, body string, mut 
 	// `(args) BODY` slot.)
 	check_reserved_bindings_outside_predicate(body)!
 
+	// Stream-2 W2 (L100 fallout): classify EVERY token before deciding —
+	// the earlier `!`-propagating loop ABORTED at the first unclassified
+	// directive head (CXER0234), so a single unknown head SHIELDED every
+	// later token from the purity check. Probed live: `[?for-map]` was
+	// missing from the pure-flow table, so ANY declared-pure for-map def
+	// escaped CXER0233 entirely, impure calls and all. Now: impurity
+	// (CXER0233) surfaces immediately; the first CXER0234 is raised only
+	// after the full pass (impurity dominates; callers that swallow 0234
+	// keep their posture, minus the shielding).
 	tokens := scan_body_for_calls(body)
+	mut first_unclassified := ?IError(none)
 	for tok in tokens {
-		checker.classify_callee(tok, mut seen, .from_def)!
+		checker.classify_callee(tok, mut seen, .from_def) or {
+			if err.msg().contains('CXER0234') {
+				if first_unclassified == none {
+					first_unclassified = err
+				}
+				continue
+			}
+			return err
+		}
+	}
+	if uc := first_unclassified {
+		return uc
 	}
 }
 
 // walk_predicate_body verifies that the predicate body is pure. Raises
 // CXER0230 on the first impure callee.
 fn (checker &PurityChecker) walk_predicate_body(predicate &cx.PredicateExpr, mut seen map[string]bool) ! {
+	// Same full-pass discipline as walk_body_for_def (no 0234 shielding).
 	tokens := scan_body_for_calls(predicate.source)
+	mut first_unclassified := ?IError(none)
 	for tok in tokens {
-		checker.classify_callee(tok, mut seen, .from_predicate)!
+		checker.classify_callee(tok, mut seen, .from_predicate) or {
+			if err.msg().contains('CXER0234') {
+				if first_unclassified == none {
+					first_unclassified = err
+				}
+				continue
+			}
+			return err
+		}
+	}
+	if uc := first_unclassified {
+		return uc
 	}
 	// Recurse into structural children if any (bool_expr will appear
 	// here in later phases — sound to walk now).
@@ -566,13 +662,26 @@ fn (checker &PurityChecker) classify_callee(callee string, mut seen map[string]b
 		return
 	}
 
+	// #859 ENFORCED (both prior findings resolved): a callee the evaluator
+	// would DISPATCH as a builtin but that has no purity row raises CXER0234
+	// here, with the BUILTIN-specific message — the def-registration site
+	// swallows only the directive-head 0234, so this one propagates (the
+	// earlier "measured not to fire" was that swallow eating the raise, not
+	// this branch failing to make it). `builtin_dispatchable` covers the
+	// bare-name dispatch surface; the `$`-only names outside it (`present`
+	// class) are enforced by the source-scan gate in the module umbrella
+	// (test_every_dispatch_arm_has_a_purity_row_859), which cross-references
+	// EVERY `invoke_builtin` match arm against this table at test time — so
+	// a new builtin missing its row is red at CI even when this runtime
+	// branch cannot see it.
+	if builtin_dispatchable(callee) {
+		return unclassified_builtin_error(callee)
+	}
+
 	// Unclassified identifier — could be a parameter reference or a
-	// runtime variable. At Phase 2.22 we ONLY raise CXER0234 if the
-	// identifier matches a known-builtin-shaped name that hasn't been
-	// classified. Unknown identifiers that have no classification entry
-	// at all are treated as parameter references (safe assumption — the
-	// dev-strict validator will flag unknown identifiers separately at
-	// Phase 2.16).
+	// runtime variable. Unknown identifiers that are NOT builtins are
+	// treated as parameter references (safe assumption — the dev-strict
+	// validator flags unknown identifiers separately at Phase 2.16).
 	//
 	// However if the callee is "$_position" / "$_last" reached via
 	// scan_body_for_calls (it never is — bindings start with `$`, which
@@ -597,7 +706,15 @@ fn purity_error(origin CalleeOrigin, reason string) IError {
 // unclassified_error formats CXER0234 for a reference to a builtin or
 // directive missing from the closed purity classification list.
 fn unclassified_error(name string) IError {
-	return error('cx-err:CXER0234 E_PURITY_UNCLASSIFIED_BUILTIN: reference to unclassified builtin or directive `${name}`')
+	return error('cx-err:CXER0234 E_PURITY_UNCLASSIFIED_BUILTIN: reference to unclassified directive `${name}`')
+}
+
+// unclassified_builtin_error is the BUILTIN-specific CXER0234 (#859): the
+// def-registration site swallows the directive-head spelling above as a
+// non-purity concern, so the builtin case needs a message it can
+// discriminate — 'unclassified builtin' — to propagate.
+fn unclassified_builtin_error(name string) IError {
+	return error('cx-err:CXER0234 E_PURITY_UNCLASSIFIED_BUILTIN: reference to unclassified builtin `${name}` — every builtin must have a §6.5.x purity row in the same amendment that adds it')
 }
 
 // ── Helpers: bind-name / reserved-binding checks ──────────────────────────────
@@ -788,4 +905,42 @@ fn purity_is_name_start(b u8) bool {
 @[inline]
 fn purity_is_name_cont(b u8) bool {
 	return purity_is_name_start(b) || (b >= `0` && b <= `9`) || b == `-`
+}
+
+// ── the §6.5.0 mirror accessors (RULED tables-1a, #756) ────────────────
+//
+// code.md §6.5.0 is the NORMATIVE closed directive-purity table and the
+// two tables above are its mirror. These expose the mirror so the
+// check-directive-purity gate can assert spec ↔ implementation equality
+// in both directions — the same discipline security.md §2.1 carries for
+// effect points, and the reason neither side can drift.
+//
+// Before #756 there was nothing to check against: §6.5.x carried the
+// INVARIANTS only, while the closed head list lived solely here, in a
+// table whose own comments claimed a spec parity that did not exist. It
+// had drifted to 56 classified heads against 85 dispatched, with 13
+// entries naming directives the engine answers "unknown directive" for.
+
+// directive_purity_mirror returns every classified directive head mapped
+// to its class name ('pure-flow' | 'impure'), matching §6.5.0's spelling.
+pub fn directive_purity_mirror() map[string]string {
+	mut t := map[string]string{}
+	for n, _ in pure_flow_directive_table() {
+		t[n] = 'pure-flow'
+	}
+	for n, _ in impure_directive_table() {
+		t[n] = 'impure'
+	}
+	return t
+}
+
+// directive_purity_diagnostics_only names the test-only heads that are
+// classified here but deliberately absent from §6.5.0: they are not in
+// the §4.1 registry and are not language surface, so the spec table
+// classifies the language and this set covers the harness. The gate
+// allows an impl-only row for exactly these and nothing else.
+pub fn directive_purity_diagnostics_only() []string {
+	return ['?test-always-err', '?test-bulkhead-full', '?test-cb-open', '?test-clock',
+		'?test-close-log', '?test-closeable', '?test-counter', '?test-current-scope',
+		'?test-err-then-ok', '?test-rate-limited', '?test-single-use-iter']
 }

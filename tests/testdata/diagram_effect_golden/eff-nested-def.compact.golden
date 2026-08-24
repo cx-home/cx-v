@@ -1,0 +1,9 @@
+flowchart TD
+  prog(["program"])
+  def_outer["def outer"]
+  def_inner["def inner"]
+  eff_io_read_file[["io-read-file"]]
+  cap_read{{"read --allow-read"}}
+  def_inner --> eff_io_read_file
+  prog -->|"call"| def_outer
+  eff_io_read_file --> cap_read

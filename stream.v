@@ -271,7 +271,16 @@ fn build_row_group_plain_body(cols []TableColumn, rows [][]ScalarValue) ![]u8 {
 	mut buf := []u8{cap: 8 + rows.len * cols.len * 4}
 	encode_uvarint(mut buf, u64(rows.len))
 	for col_idx, col in cols {
-		encode_col_payload_strict(col_idx, col, rows, mut buf)!
+		// The STREAMING lane cannot make the whole-table nullable
+		// decision (§3.10.5 header wrapping is a whole-table
+		// property) — null cells REFUSE loudly here instead of the
+		// pre-W3c silent zero/''-coercion (stream 17 W3c honesty).
+		for row in rows {
+			if col_idx < row.len && row[col_idx] is NullValue {
+				return error('streaming table writer: null cell in column `${col.name}` — the streaming lane cannot emit §3.10.5 nullable columns (whole-table header decision); materialize through the plain 0x60 form')
+			}
+		}
+		encode_col_payload_strict(col_idx, col, column_type_code(col.type_name), rows, mut buf)!
 	}
 	return buf
 }

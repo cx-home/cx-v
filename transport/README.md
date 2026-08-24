@@ -3,7 +3,7 @@
 CX owns its HTTP/SSE/XAP transport in its own tree. These three modules are
 **vendored verbatim** from the V standard library (`vlib/`) so CX no longer
 depends on the V fork carrying them — the fork can converge back to stock
-upstream V (see `spec/02-working/evict_cx_from_v_PLAN.md`).
+upstream V (see `spec/_archived/evict_cx_from_v_PLAN.md`).
 
 | Module | Vendored from | Upstream C original |
 |---|---|---|

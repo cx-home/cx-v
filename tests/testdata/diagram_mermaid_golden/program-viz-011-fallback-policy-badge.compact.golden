@@ -1,0 +1,8 @@
+%%cx:Wz9mYWxsYmFjayBbcHJpbWFyeSBbY2FsbCBlbmRwb2ludD0kcHJpbWFyeV1dIFtyZWNvdmVyIFtjYWxsIGVuZHBvaW50PSRiYWNrdXBdXV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?fallback]"]]
+    n4["[?fallback] result"]
+    n1 --> n4
+    n4 --> n2

@@ -1,0 +1,7 @@
+%%cx:Wz9jaXJjdWl0LWJyZWFrZXIgdGhyZXNob2xkPTAuNSB3aW5kb3c9NjBzIHJlc2V0PTMwcyBtaW4tc2FtcGxlcz0xMCBuYW1lPSJ2aXotY2IiIFtjYWxsIGVuZHBvaW50PSR1cmxdXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?circuit-breaker] :threshold 0.5 :window 60s …"]]
+    n1 --> n3
+    n3 --> n2

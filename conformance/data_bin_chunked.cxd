@@ -1,4 +1,4 @@
-[test-suite name=data-bin-chunked
+[test-suite name=data-bin-chunked ring=0
   [doc [#
 # CX Conformance — data_bin chunked-table round-trips
 # Version: 0.2 — 2026-05-09 (V core impl landed in Phase 7.72)
@@ -36,7 +36,7 @@
 50 01                                  # map, 1 pair
 30 06 70 6F 69 6E 74 73                # key "points"
 63 02                                  # tag 0x63 = chunked, col_count = 2
-30 04 6E 61 6D 65 30                   # col 0: "name" / type 0x30 string
+30 04 6E 61 6D 65 82 30 06 73 74 72 69 6E 67 30   # col 0: "name" / 0x82 declared "string" / type 0x30
 30 05 73 63 6F 72 65 12                # col 1: "score" / type 0x12 i32
 00                                     # end-of-table marker (no row groups)
 #]]
@@ -54,7 +54,7 @@
 43 58 43 6F 6C 01 01 40 00 00 00 00   # CXCol v1 header
 50 01 30 06 70 6F 69 6E 74 73          # map / key "points"
 63 02                                  # chunked / col_count = 2
-30 04 6E 61 6D 65 30                   # col 0
+30 04 6E 61 6D 65 82 30 06 73 74 72 69 6E 67 30   # col 0 (declared "string" annotation)
 30 05 73 63 6F 72 65 12                # col 1
 14                                     # body_byte_len = 20 (= body-tag + plain body)
 01                                     # body-tag = 0x01 (plain)
@@ -86,7 +86,7 @@ chunk_at: 4
 43 58 43 6F 6C 01 01 40 00 00 00 00   # header
 50 01 30 06 70 6F 69 6E 74 73          # map / key "points"
 63 02                                  # chunked / col_count=2
-30 04 6E 61 6D 65 30                   # col 0
+30 04 6E 61 6D 65 82 30 06 73 74 72 69 6E 67 30   # col 0 (declared "string" annotation)
 30 05 73 63 6F 72 65 12                # col 1
 27 01 04                               # row-group 0: body_len=39, plain, row_count=4
 05 61 6C 69 63 65 03 62 6F 62 05 63 61 72 6F 6C 04 64 61 76 65   # col 0: 21 bytes
@@ -141,7 +141,7 @@ chunk_at: 1048576
 43 58 43 6F 6C 01 01 40 00 00 00 00   # header
 50 01 30 04 65 76 74 73                # map / key "evts"
 63 02                                  # chunked / col_count = 2
-30 04 6E 61 6D 65 30                   # col 0 "name" / type 0x30 string
+30 04 6E 61 6D 65 82 30 06 73 74 72 69 6E 67 30   # col 0 "name" (declared "string" annotation) / type 0x30
 30 04 77 68 65 6E 32                   # col 1 "when" / type 0x32 datetime
 14                                     # body_byte_len = 20
 01                                     # body-tag = 0x01 (plain)
@@ -152,8 +152,15 @@ chunk_at: 1048576
 #]]
  ]
 
- [case id=ch-007-chunked-datetime-offset-normalizes-to-utc level=extended
-  [tags data_bin chunked datetime canonical_offset]
+ [case id=ch-007-chunked-datetime-offset-rides-transport level=extended
+  [; ── wire RE-PINNED at the #807 remainder (arc-2, packet §10):
+     unix_nanos stays UTC-NORMALIZED (the §3.6.1 payload rule this
+     case always pinned) while offset_minutes now RIDES the transport
+     (+02:00 = 120 = 0x78 LE) so the local render survives the wire —
+     the strict-canonical constraint (offset 0) governs strict
+     canonicalization, which runs through text. Pre-remainder this
+     case pinned the transport hard-zeroing the offset.]
+  [tags data_bin chunked datetime canonical_offset 807]
   [in-cx [#
 [evts [table[name::string when::datetime]]
   beta 2025-06-30T23:00:00+02:00
@@ -163,14 +170,101 @@ chunk_at: 1048576
 43 58 43 6F 6C 01 01 40 00 00 00 00   # header
 50 01 30 04 65 76 74 73                # map / key "evts"
 63 02                                  # chunked / col_count = 2
-30 04 6E 61 6D 65 30                   # col 0
+30 04 6E 61 6D 65 82 30 06 73 74 72 69 6E 67 30   # col 0 (declared "string" annotation)
 30 04 77 68 65 6E 32                   # col 1 datetime
 13                                     # body_byte_len = 19
 01                                     # body-tag plain
 01                                     # row_count = 1
 04 62 65 74 61                         # col 0 row 0: "beta"
-00 20 08 EB B6 ED 4D 18 00 00 00 00    # col 1 row 0: 1751317200000000000 ns (UTC-normalized), off=0
+00 20 08 EB B6 ED 4D 18 78 00 00 00    # col 1 row 0: 1751317200000000000 ns (UTC-normalized), off=+120
 00                                     # end-of-table
+#]]
+ ]
+
+ [; ── G5 freeze-pins (I1 manifest row 16 adjacency; corpus audit G5;
+      2026-08-05). The CXCol wire format freezes at 1.0 and the I1
+      epoch touches its scalar tags (0x18/0x28 join at I1) — these
+      goldens pin the CURRENT bytes for the scalar kinds the family
+      did not yet cover, so the epoch's re-bless shows exactly which
+      wire bytes moved and every other kind is proven untouched. ]
+
+ [case id=ch-008-chunked-float-column level=extended
+  [tags data_bin chunked float g5]
+  [in-cx [#
+[readings [table[sensor::string value::f64]]
+  a 1.5
+  b -2.25
+]
+#]]
+  [out-data-bin-hex [#
+4358436f6c010140000000005001300872656164696e67736302300673656e736f72823006737472696e6730300576616c75658230036636342016010201610162000000000000f83f00000000000002c000
+#]]
+ ]
+
+ [case id=ch-009-chunked-bool-column level=extended
+  [; ── wire RE-BLESSED at stream 17 W3 (L89/L92): bool columns are
+     code 0x01 + bit-packed §3.10.4 (was the pre-rise per-byte 0x02
+     deviation).]
+  [tags data_bin chunked bool g5]
+  [in-cx [#
+[flags [table[name::string active::bool]]
+  x true
+  y false
+]
+#]]
+  [out-data-bin-hex [#
+4358436f6c0101400000000050013005666c616773630230046e616d65823006737472696e6730300661637469766501070102017801790100
+#]]
+ ]
+
+ [case id=ch-010-chunked-date-column level=extended
+  [tags data_bin chunked date g5]
+  [in-cx [#
+[orders [table[id::i32 shipped::date]]
+  1 2026-08-01
+  2 2026-08-02
+]
+#]]
+  [out-data-bin-hex [#
+4358436f6c01014000000000500130066f726465727363023002696412300773686970706564311201020100000002000000ea070801ea07080200
+#]]
+ ]
+
+ [case id=ch-011-chunked-i64-column level=extended
+  [tags data_bin chunked i64 g5]
+  [in-cx [#
+[counters [table[name::string total::i64]]
+  hits 4294967296
+]
+#]]
+  [out-data-bin-hex [#
+4358436f6c0101400000000050013008636f756e74657273630230046e616d65823006737472696e67303005746f74616c823003693634130f01010468697473000000000100000000
+#]]
+ ]
+
+ [case id=ch-012-chunked-decimal-column level=extended
+  [tags data_bin chunked decimal g5 stream-14 686 stream-17 689]
+  [in-cx [#
+[prices [table[sku::string amount::decimal]]
+  a 19.99
+  b 0.01
+]
+#]]
+  [out-data-bin-hex [#
+4358436f6c010140000000005001300670726963657363023003736b75823006737472696e67303006616d6f756e7428110102016101620531392e393904302e303100
+#]]
+ ]
+
+ [case id=ch-013-chunked-bigint-column level=extended
+  [tags data_bin chunked bigint g5 stream-14 686 stream-17 689]
+  [in-cx [#
+[counters [table[name::string n::bigint]]
+  a 340282366920938463463374607431768211456
+  b -1
+]
+#]]
+  [out-data-bin-hex [#
+4358436f6c0101400000000050013008636f756e74657273630230046e616d65823006737472696e673030016e183101020161016227333430323832333636393230393338343633343633333734363037343331373638323131343536022d3100
 #]]
  ]
 ]

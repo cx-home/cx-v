@@ -1,0 +1,15 @@
+%%cx:Wz9tYXAgJHhzIHVzaW5nPVs/Zm4gKCR4KSBbKiAkeCAkeF1dIHBhcj10cnVlIG9yZGVyZWQ9dHJ1ZV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["$xs"]
+    n4{{"map :par"}}
+    n3 --> n4
+    n5[["fn(x) → [* …]"]]
+    n4 -- ":using" --> n5
+    n6["preserve order"]
+    n5 --> n6
+    n7(["collect"])
+    n6 --> n7
+    n1 --> n7
+    n7 --> n2

@@ -48,7 +48,7 @@
   [sig """-> string"""]
   [summary """Pretty-print with an options map controlling indent, line width, attribute sorting, and depth."""]
   [example [code """[?lib 'cx-stdlib/format']
-[$format:pretty-with-opts [a [b [c]]] {indent: "    "}]"""] [expect """'[a [b [c] ] ]'"""]]
+[$format:pretty-with-opts [a [b [c]]] {indent: "    "}]"""] [expect """'[a\n    [b\n        [c]\n    ]\n]'"""]]
 ]
 [fn-doc name=canonical-with-context scope=public purity=pure
   [sig """-> element"""]

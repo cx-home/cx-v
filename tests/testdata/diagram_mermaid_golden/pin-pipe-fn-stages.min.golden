@@ -1,0 +1,11 @@
+%%cx:Wz9waXBlICgxLCAyKSB0aHJvdWdoPVs/Zm4gKCR4KSBbKiAkeCAyXV0gdGhyb3VnaD1bP2ZuICgkeSkgWysgJHkgMV1dXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["(1, 2)"]
+    n4[["fn(x) → [* …]"]]
+    n3 --> n4
+    n5[["fn(y) → [+ …]"]]
+    n4 --> n5
+    n1 --> n5
+    n5 --> n2

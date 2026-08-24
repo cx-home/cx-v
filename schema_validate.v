@@ -270,7 +270,7 @@ pub fn validate_with_defaults(doc Document, schema_text string, opts ValidateOpt
 	if sm.root != '' && root.name != sm.root {
 		diags << Diagnostic{
 			code:    'S017'
-			message: 'root element \'${root.name}\' does not match schema-of \'${sm.root}\''
+			message: 'root element \'${root.name}\' does not match the schema header\'s of \'${sm.root}\''
 		}
 		return ValidationReport{ diagnostics: diags, modified_doc: modified }
 	}
@@ -299,7 +299,7 @@ fn validate_against_model(doc Document, sm SchemaModel) ValidationReport {
 	if sm.root != '' && root.name != sm.root {
 		diags << Diagnostic{
 			code:    'S017'
-			message: 'root element \'${root.name}\' does not match schema-of \'${sm.root}\''
+			message: 'root element \'${root.name}\' does not match the schema header\'s of \'${sm.root}\''
 		}
 		return ValidationReport{ diagnostics: diags }
 	}
@@ -323,7 +323,46 @@ fn severity_for_unknown(m SchemaMode) ?Severity {
 // when the element name has no declaration; strict mode emits S001 at
 // `warn` severity and skips the subtree; closed mode emits S001 at
 // `error` severity and skips the subtree (spec/schema.md §9 + §10.1).
+// stamp_positions gives every diagnostic appended since `from` the
+// element's own source position, unless it already carries one (#792).
+// The target-document line/col were never populated — every diagnostic
+// printed `FILE:0:0` — because the DATA AST carried no positions to
+// report; `parse_cx_positioned` now records them and this is where they
+// reach the report.
+//
+// One stamping frame per element covers all ~56 diagnostic construction
+// sites: every diagnostic raised while validating an element is ABOUT
+// that element, and the attribute/body helpers are called from its
+// frame. Recursion makes the attribution precise rather than coarse —
+// a child's frame runs to completion first, so a child's diagnostics are
+// already stamped with the CHILD's position when the parent's frame
+// runs, and the `line != 0` guard leaves them alone.
+//
+// A document read WITHOUT tracking has no positions, so this is a no-op
+// and diagnostics keep the documented 0:0 "unavailable" contract.
+fn stamp_positions(mut diags []Diagnostic, from int, e Element) {
+	p := e.pos() or { return }
+	for i := from; i < diags.len; i++ {
+		d := diags[i]
+		if d.line != 0 || d.col != 0 {
+			continue
+		}
+		diags[i] = Diagnostic{
+			code:       d.code
+			message:    d.message
+			line:       p.line
+			col:        p.col
+			schema_loc: d.schema_loc
+			severity:   d.severity
+		}
+	}
+}
+
 fn validate_element(e Element, type_name string, sm SchemaModel, mut diags []Diagnostic) {
+	from := diags.len
+	defer {
+		stamp_positions(mut diags, from, e)
+	}
 	st := sm.types[type_name] or {
 		if sev := severity_for_unknown(sm.mode) {
 			diags << Diagnostic{
@@ -361,7 +400,33 @@ fn validate_element(e Element, type_name string, sm SchemaModel, mut diags []Dia
 	sev_unknown := severity_for_unknown(sm.mode)
 	for a in e.attrs {
 		if ar := st.attrs[a.name] {
-			if ar.type_name != '' && !attr_value_matches_type(a, ar.type_name) {
+			// (stream 16 W2, L66) — [or T…] attr unions validate
+			// member-wise: the scalar must match at least one member.
+			if ar.type_name == 'or' && ar.members.len > 0 {
+				mut any_ok := false
+				for m in ar.members {
+					if attr_value_matches_type(a, m) {
+						any_ok = true
+						break
+					}
+				}
+				if !any_ok {
+					got := scalar_runtime_type_name(a.value)
+					val := scalar_value_str(a.value)
+					diags << Diagnostic{
+						code:    'S005'
+						message: 'attribute \'${a.name}\' on <${e.name}>: type mismatch (declared :[or ${ar.members.join(" ")}], got :${got} = \'${val}\')'
+					}
+				}
+			} else if ar.type_name.starts_with('unsatisfiable:') {
+				// attrs are strictly scalar (cxdm §2.4 / CXER1603): a
+				// container/tuple/record attr declaration can never
+				// validate — refuse LOUD, never silently pass.
+				diags << Diagnostic{
+					code:    'S024'
+					message: 'attribute \'${a.name}\' on <${e.name}>: the schema declares a ${ar.type_name.all_after(':')} type in attribute position — attributes are strictly scalar (cxdm §2.4); declare the shape on a body or [type] position'
+				}
+			} else if ar.type_name != '' && !attr_value_matches_type(a, ar.type_name) {
 				got := scalar_runtime_type_name(a.value)
 				val := scalar_value_str(a.value)
 				diags << Diagnostic{
@@ -424,8 +489,12 @@ fn validate_element(e Element, type_name string, sm SchemaModel, mut diags []Dia
 	}
 
 	// S005 / S006 / S007 / S008 / S018 — body checks for scalar bodies.
+	// A quoted/prose body parses as a TEXT run, not a ScalarNode — to the
+	// schema it IS a string value (stream 14, #813: int-declared bodies
+	// silently accepted any prose because the text shape was invisible to
+	// this block; the check must be symmetric across both body shapes).
 	if st.body.declared && is_scalar_kind(st.body.kind) {
-		if scalar := single_scalar_value(e) {
+		if scalar := scalar_or_text_body(e) {
 			if !scalar_value_matches_type(scalar, st.body.kind) {
 				got := scalar_runtime_type_name(scalar)
 				val := scalar_value_str(scalar)
@@ -476,6 +545,10 @@ fn validate_element(e Element, type_name string, sm SchemaModel, mut diags []Dia
 	// apply to the item count, not byte length.
 	if st.body.declared && is_container_collection_kind(st.body.kind) {
 		validate_container_body(e, st.body, mut diags)
+	}
+	// (stream 16 W2, L66) — algebraic body shapes + named-type refs.
+	if st.body.declared && st.body.kind in ['or', 'tuple', 'typeref'] {
+		validate_algebraic_body(e, st.body, sm, mut diags)
 	}
 
 	// GG10: `body :ref` declares
@@ -604,6 +677,35 @@ fn apply_defaults_to_element(e Element, type_name string, sm SchemaModel) Elemen
 // one node that counts as body content. Comment / PI / XML-decl /
 // CX-directive nodes do not count (they're metadata). ScalarNode,
 // TextNode, RawTextNode, child Element, and array nodes all count.
+// scalar_or_text_body returns the element's single scalar body, or its
+// single text-run body lifted to a string ScalarValue — the schema-facing
+// value either way (stream 14, #813).
+fn scalar_or_text_body(e Element) ?ScalarValue {
+	if scalar := single_scalar_value(e) {
+		return scalar
+	}
+	mut found := ''
+	mut count := 0
+	for n in e.items {
+		if n is CommentNode || n is PINode || n is XMLDeclNode || n is CXDirectiveNode {
+			continue
+		}
+		if n is TextNode {
+			count++
+			if count > 1 {
+				return none
+			}
+			found = n.value
+			continue
+		}
+		return none
+	}
+	if count == 1 {
+		return ScalarValue(found)
+	}
+	return none
+}
+
 fn element_has_body_content(e Element) bool {
 	for n in e.items {
 		if n is CommentNode || n is PINode || n is XMLDeclNode
@@ -690,11 +792,80 @@ fn scalar_value_as_f64(v ScalarValue) ?f64 {
 	}
 }
 
+// sv_exact_image reports whether `s` is an exact-family digit image
+// (optional sign, digits, at most one fraction point) — the shape
+// cx_exact_num_cmp compares mathematically.
+fn sv_exact_image(s string) bool {
+	mut i := 0
+	if s.len > 0 && (s[0] == `-` || s[0] == `+`) {
+		i = 1
+	}
+	if i >= s.len {
+		return false
+	}
+	mut dots := 0
+	mut digits := 0
+	for j := i; j < s.len; j++ {
+		c := s[j]
+		if c == `.` {
+			dots++
+			if dots > 1 {
+				return false
+			}
+		} else if c >= `0` && c <= `9` {
+			digits++
+		} else {
+			return false
+		}
+	}
+	return digits > 0
+}
+
+// sv_exact_value_image returns the digit image of an exact-family value —
+// i64 (beyond 2^53 an f64 round-trip is lossy) and the string-stored
+// decimal/bigint kinds. f64 values return none (the float path stays
+// approximate by nature).
+fn sv_exact_value_image(v ScalarValue) ?string {
+	return match v {
+		i64 { v.str() }
+		string { if sv_exact_image(v) { v } else { none } }
+		else { none }
+	}
+}
+
 // check_range tests whether `v`'s numeric form lies in [min..max]
 // (inclusive both ends). Empty bound = unbounded on that side.
 // Returns a human-readable message when out of range, else none.
 // Non-numeric values short-circuit (covered by S005).
+//
+// I1 stream 11 / #703 item E: exact-family values (decimal/bigint payloads
+// are string-stored; i64 exceeds f64's 2^53 integer window) compare on the
+// digit images via cx_exact_num_cmp when the bound is itself an exact
+// image — approximate f64 bounds on exact types silently passed
+// out-of-range values whose excess collapsed in the round-trip.
 fn check_range(v ScalarValue, range_min string, range_max string) ?string {
+	if img := sv_exact_value_image(v) {
+		mut exact_ok := true
+		if range_min != '' && sv_exact_image(range_min) {
+			if cx_exact_num_cmp(img, range_min) < 0 {
+				return 'value ${scalar_value_str(v)} below :range min ${range_min}'
+			}
+		} else if range_min != '' {
+			exact_ok = false
+		}
+		if range_max != '' && sv_exact_image(range_max) {
+			if cx_exact_num_cmp(img, range_max) > 0 {
+				return 'value ${scalar_value_str(v)} above :range max ${range_max}'
+			}
+		} else if range_max != '' {
+			exact_ok = false
+		}
+		if exact_ok {
+			return none
+		}
+		// a non-exact bound (e.g. 1e6 notation) falls through to the legacy
+		// float comparison below rather than silently skipping the check.
+	}
 	val := scalar_value_as_f64(v) or { return none }
 	if range_min != '' {
 		if min_v := strconv.atof64(range_min) {
@@ -764,6 +935,179 @@ fn check_enum(v ScalarValue, vals []string) bool {
 //   - Nested productions recurse via parse_container_kind on the
 //     item_kind / key_kind text — `arr[arr[float]]` validates each
 //     outer item as an ArrayNode of floats.
+// validate_algebraic_body (stream 16 W2, L66 — schema.md §4): the
+// [or T…] / [tuple T…] / [ref Name] body shapes, validated recursively.
+//   - or: the body (single scalar or collection) matches AT LEAST ONE
+//     member type — probed member-wise into a scratch diagnostic list;
+//     no member matching is ONE S005 naming the union.
+//   - tuple: exactly one collection literal of EXACTLY len(members)
+//     items; item i validates against member i.
+//   - typeref ([ref Name]): the body validates against the NAMED type's
+//     body rule, resolved from the model FAIL-CLOSED (an unknown name
+//     is S025, never a silent pass).
+fn validate_algebraic_body(e Element, body BodyRule, sm SchemaModel, mut diags []Diagnostic) {
+	match body.kind {
+		'or' {
+			mut any_ok := false
+			for m in body.members {
+				mut scratch := []Diagnostic{}
+				probe_member_type(e, m, sm, mut scratch)
+				if scratch.len == 0 {
+					any_ok = true
+					break
+				}
+			}
+			if !any_ok {
+				diags << Diagnostic{
+					code:    'S005'
+					message: 'body of <${e.name}>: value matches no member of :[or ${body.members.join(" ")}]'
+				}
+			}
+		}
+		'tuple' {
+			collection := single_collection_node(e) or {
+				diags << Diagnostic{
+					code:    'S005'
+					message: 'body of <${e.name}>: declared :[tuple ${body.members.join(" ")}] but no collection literal found'
+				}
+				return
+			}
+			mut items := []Node{}
+			if collection is ArrayNode {
+				items = collection.items.clone()
+			} else if collection is SequenceNode {
+				items = collection.items.clone()
+			} else {
+				diags << Diagnostic{
+					code:    'S005'
+					message: 'body of <${e.name}>: declared :[tuple …], got :${collection_kind_name(collection)}'
+				}
+				return
+			}
+			if items.len != body.members.len {
+				diags << Diagnostic{
+					code:    'S005'
+					message: 'body of <${e.name}>: tuple arity mismatch (declared ${body.members.len}, got ${items.len})'
+				}
+				return
+			}
+			for i, m in body.members {
+				validate_container_item(e.name, '[${i}]', m, items[i], mut diags)
+			}
+		}
+		'typeref' {
+			target := body.item_kind
+			if target == '' {
+				diags << Diagnostic{
+					code:    'S025'
+					message: 'body of <${e.name}>: [ref] missing the target type name'
+				}
+				return
+			}
+			if target !in sm.types {
+				diags << Diagnostic{
+					code:    'S025'
+					message: 'body of <${e.name}>: [ref ${target}] names an unknown type — refs resolve fail-closed, never silently pass'
+				}
+				return
+			}
+			validate_element(e, target, sm, mut diags)
+		}
+		else {}
+	}
+}
+
+// probe_member_type validates the element's body against ONE member type
+// text into a scratch list (the or-union probe).
+fn probe_member_type(e Element, member string, sm SchemaModel, mut scratch []Diagnostic) {
+	m := member.trim_space()
+	// container member: [list T] etc. spelled glued in member position is
+	// retired; the bracket-prefix text arrives verbatim ('[list u16]').
+	if m.starts_with('[') && m.ends_with(']') {
+		inner := m[1..m.len - 1].trim_space()
+		toks := split_ws_quote_bracket(inner)
+		if toks.len > 0 {
+			mut br := BodyRule{
+				declared: true
+			}
+			match toks[0] {
+				'list' {
+					br.kind = 'arr'
+					if toks.len > 1 {
+						br.item_kind = toks[1..].join(' ')
+					}
+					validate_container_body(e, br, mut scratch)
+					return
+				}
+				'seq' {
+					br.kind = 'seq'
+					if toks.len > 1 {
+						br.item_kind = toks[1..].join(' ')
+					}
+					validate_container_body(e, br, mut scratch)
+					return
+				}
+				'map' {
+					br.kind = 'map'
+					if toks.len > 1 {
+						br.key_kind = toks[1]
+					}
+					if toks.len > 2 {
+						br.item_kind = toks[2..].join(' ')
+					}
+					validate_container_body(e, br, mut scratch)
+					return
+				}
+				else {}
+			}
+		}
+		scratch << Diagnostic{
+			code:    'S005'
+			message: 'unsupported member type ${m}'
+		}
+		return
+	}
+	// scalar member: the body's single scalar must match. A single TEXT
+	// body counts as a string scalar (the data-mode quoted-string body
+	// lands as TextNode — same duality the scalar arm tolerates).
+	if scalar := single_scalar_value(e) {
+		if !scalar_value_matches_type(scalar, m) {
+			scratch << Diagnostic{
+				code:    'S005'
+				message: 'member mismatch'
+			}
+		}
+		return
+	}
+	mut text_val := ''
+	mut text_count := 0
+	for n in e.items {
+		if n is TextNode {
+			text_count++
+			text_val = n.value
+		} else if n is CommentNode || n is PINode || n is XMLDeclNode
+			|| n is CXDirectiveNode {
+			continue
+		} else {
+			text_count = -99
+			break
+		}
+	}
+	if text_count == 1 {
+		if !scalar_value_matches_type(ScalarValue(text_val), m) {
+			scratch << Diagnostic{
+				code:    'S005'
+				message: 'member mismatch'
+			}
+		}
+		return
+	}
+	scratch << Diagnostic{
+		code:    'S005'
+		message: 'no scalar body'
+	}
+}
+
 fn validate_container_body(e Element, body BodyRule, mut diags []Diagnostic) {
 	collection := single_collection_node(e) or {
 		diags << Diagnostic{

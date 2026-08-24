@@ -1,0 +1,289 @@
+[test-suite name=array ring=1
+  [doc [#
+conformance fixtures for cx-stdlib/array (spec/03-approved/std-lib/array.md;
+#925, RULED: PYE-1).
+
+   The XPath 3.1 §17.3 operation family over CXDM arrays. Positions are
+   1-BASED; out-of-range refuses loudly. Arrays are immutable — every
+   constructor returns a NEW array — and a boxed-sequence item survives
+   every constructor intact. Each program imports the bundled module via
+   [?lib 'cx-stdlib/array'] then calls [$array:fn args].
+#]]
+
+ # ── read ──
+ [case id=array-001-read-family level=core
+  [tags array size get head tail read]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[?let [= $a [10, 20, 30]] ([$array:size $a], [$array:get $a 2], [$array:head $a], [$array:tail $a])]
+#]]
+  [out-text [# (3, 20, 10, [20, 30]) #]]
+ ]
+ [case id=array-002-empty-reads level=core
+  [tags array empty head tail absence 584]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+([$array:head []], [$array:tail []], [$array:size []], [$array:subarray [] 1 0])
+#]]
+  [out-text [# ((), [], 0, []) #]]
+ ]
+ [case id=array-003-get-out-of-range-refuses level=core
+  [tags array get refusal bounds]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:get [1, 2] 5]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+ [case id=array-004-get-zero-refuses level=core
+  [tags array get refusal bounds 1-based]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:get [1, 2] 0]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ # ── construct ──
+ [case id=array-005-construct-family level=core
+  [tags array append reverse subarray put remove insert-before construct]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[?let [= $a [10, 20, 30, 40]] ([$array:append [1, 2] 3], [$array:reverse [1, 2, 3]], [$array:subarray $a 2 2], [$array:put $a 2 9], [$array:remove $a 2], [$array:insert-before $a 2 15], [$array:insert-before $a 5 99])]
+#]]
+  [out-text [# ([1, 2, 3], [3, 2, 1], [20, 30], [10, 9, 30, 40], [10, 30, 40], [10, 15, 20, 30, 40], [10, 20, 30, 40, 99]) #]]
+ ]
+ [case id=array-006-subarray-clamps level=core
+  [tags array subarray clamp]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:subarray [10, 20, 30] 2 99]
+#]]
+  [out-text [# [20, 30] #]]
+ ]
+ [case id=array-007-flatten-join-sort level=core
+  [tags array flatten join sort construct]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+([$array:flatten [1, [2, [3]], 4]], [$array:join ([1, 2], [3])], [$array:sort [3, 1, 2]])
+#]]
+  [out-text [# ((1, 2, 3, 4), [1, 2, 3], [1, 2, 3]) #]]
+ ]
+ [case id=array-008-boxed-sequence-item-survives level=core
+  [tags array boxed-sequence put identity 587]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[?let [= $a [(1, 2), 3]] ([$array:size $a], [$array:put $a 2 9])]
+#]]
+  [out-text [# (2, [(1, 2), 9]) #]]
+ ]
+
+ # ── traverse ──
+ [case id=array-009-filter-foreach level=core
+  [tags array filter for-each traverse fn]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[?let [= $a [1, 2, 3, 4]] ([$array:filter $a [?fn ($x) [> $x 2]]], [$array:for-each $a [?fn ($x) [* $x 10]]])]
+#]]
+  [out-text [# ([3, 4], [10, 20, 30, 40]) #]]
+ ]
+ [case id=array-010-fold-order level=core
+  [tags array fold-left fold-right traverse order]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+([$array:fold-left [1, 2, 3] 0 [?fn ($acc $x) [- $acc $x]]], [$array:fold-right [1, 2, 3] 0 [?fn ($x $acc) [- $x $acc]]])
+#]]
+  [out-text [# (-6, 2) #]]
+ ]
+ [case id=array-011-filter-nonbool-refuses level=core
+  [tags array filter refusal]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:filter [1, 2] [?fn ($x) [* $x 2]]]
+#]]
+  [out-err [#
+cx-err:CXER0290
+#]]
+ ]
+ [case id=array-012-non-array-refuses level=core
+  [tags array refusal]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:size {a: 1}]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ # ── fn-doc examples (guide-check backing, verbatim) ──
+ [case id=array-101-doc-size level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:size [10, 20, 30]]
+#]]
+  [out-text [# 3 #]]
+ ]
+ [case id=array-102-doc-get level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:get [10, 20, 30] 2]
+#]]
+  [out-text [# 20 #]]
+ ]
+ [case id=array-103-doc-head level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:head [10, 20]]
+#]]
+  [out-text [# 10 #]]
+ ]
+ [case id=array-104-doc-tail level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:tail [10, 20, 30]]
+#]]
+  [out-text [# [20, 30] #]]
+ ]
+ [case id=array-105-doc-append level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:append [1, 2] 3]
+#]]
+  [out-text [# [1, 2, 3] #]]
+ ]
+ [case id=array-106-doc-reverse level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:reverse [1, 2, 3]]
+#]]
+  [out-text [# [3, 2, 1] #]]
+ ]
+ [case id=array-107-doc-subarray level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:subarray [10, 20, 30, 40] 2 2]
+#]]
+  [out-text [# [20, 30] #]]
+ ]
+ [case id=array-108-doc-put level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:put [1, 2, 3] 2 9]
+#]]
+  [out-text [# [1, 9, 3] #]]
+ ]
+ [case id=array-109-doc-remove level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:remove [1, 2, 3] 2]
+#]]
+  [out-text [# [1, 3] #]]
+ ]
+ [case id=array-110-doc-insert-before level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:insert-before [1, 3] 2 2]
+#]]
+  [out-text [# [1, 2, 3] #]]
+ ]
+ [case id=array-111-doc-flatten level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:flatten [1, [2, [3]], 4]]
+#]]
+  [out-text [# (1, 2, 3, 4) #]]
+ ]
+ [case id=array-112-doc-join level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:join ([1, 2], [3])]
+#]]
+  [out-text [# [1, 2, 3] #]]
+ ]
+ [case id=array-113-doc-sort level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:sort [3, 1, 2]]
+#]]
+  [out-text [# [1, 2, 3] #]]
+ ]
+ [case id=array-114-doc-filter level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:filter [1, 2, 3, 4] [?fn ($x) [> $x 2]]]
+#]]
+  [out-text [# [3, 4] #]]
+ ]
+ [case id=array-115-doc-for-each level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:for-each [1, 2, 3] [?fn ($x) [* $x 10]]]
+#]]
+  [out-text [# [10, 20, 30] #]]
+ ]
+ [case id=array-116-doc-fold-left level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:fold-left [1, 2, 3] 0 [?fn ($acc $x) [+ $acc $x]]]
+#]]
+  [out-text [# 6 #]]
+ ]
+ [case id=array-117-doc-fold-right level=core
+  [tags array fn-doc example]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/array']
+[$array:fold-right [1, 2, 3] 0 [?fn ($x $acc) [- $x $acc]]]
+#]]
+  [out-text [# 2 #]]
+ ]
+]

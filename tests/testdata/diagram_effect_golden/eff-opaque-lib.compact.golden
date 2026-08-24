@@ -1,0 +1,9 @@
+flowchart TD
+  prog(["program"])
+  unk_1[/"[?lib] — module body not in the image: ./helper.cx"/]
+  unk_2[/"unresolved callee: h:go"/]
+  any{{"any granted capability"}}
+  prog ==> unk_1
+  unk_1 ==> any
+  prog ==> unk_2
+  unk_2 ==> any

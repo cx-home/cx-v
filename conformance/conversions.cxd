@@ -1,4 +1,4 @@
-[test-suite name=conversions
+[test-suite name=conversions ring=0
   [doc [#
 # CX Conformance — conversions.md §0.2 typed-lane tests (#444 / #458)
 # Version: 1.0 — 2026-07-15
@@ -409,6 +409,264 @@ $children:
 #]]
   [out-cx [#
 [m {'$tag': weird}]
+#]]
+ ]
+
+# ── TOML import lane (corpus audit G7, pre-I2) ───────────────────────────
+# The import surface shipped (parser_toml.v, --from=toml) with emit-only
+# fixtures; these pin the import inverse. Both halves of #738 are now
+# closed: the native date/datetime mapping (conv-023..026, which §6.1's
+# table had already ruled — only the impl was behind) and the STRICT
+# READER (conv-027..033, RULED 738-2a — malformed input is refused with
+# CXER0100 instead of guessed into a best-effort tree).
+
+ [case id=conv-019-toml-import-scalars level=core
+  [tags conversion toml import]
+  [title TOML import — string/int/float/bool scalars map to CX kinds (float keeps the e0 image)]
+  [in-toml [#
+status = "shipped"
+qty = 3
+total = 9.99
+express = true
+#]]
+  [out-cx [#
+{status: shipped, qty: 3, total: 9.99e0, express: true}
+#]]
+ ]
+
+ [case id=conv-020-toml-import-nested-tables level=core
+  [tags conversion toml import]
+  [title TOML import — dotted table headers nest as CX maps]
+  [in-toml [#
+sku = "WIDGET-1"
+
+[customer]
+name = "Acme Retail"
+tier = "gold"
+
+[customer.address]
+city = "Springfield"
+#]]
+  [out-cx [#
+{sku: WIDGET-1, customer: {name: 'Acme Retail', tier: gold, address: {city: Springfield}}}
+#]]
+ ]
+
+ [case id=conv-021-toml-import-array-of-tables level=core
+  [tags conversion toml import]
+  [title TOML import — [[array-of-tables]] rows become a CX array of maps]
+  [in-toml [#
+[[items]]
+sku = "WIDGET-1"
+qty = 2
+
+[[items]]
+sku = "GADGET-7"
+qty = 1
+#]]
+  [out-cx [#
+{items: [{sku: WIDGET-1, qty: 2}, {sku: GADGET-7, qty: 1}]}
+#]]
+ ]
+
+ [case id=conv-022-toml-import-to-json level=core
+  [tags conversion toml import json cross-format]
+  [title TOML import cross-format — TOML source through the registry to idiomatic JSON]
+  [in-toml [#
+order = 7001
+tags = ["priority", "gift"]
+#]]
+  [out-json [#
+{
+  "order": 7001,
+  "tags": [
+    "priority",
+    "gift"
+  ]
+}
+#]]
+ ]
+
+ [case id=conv-023-toml-import-date-native level=core
+  [tags conversion toml import date issue-738]
+  [title TOML date value imports as a native CX date — the §6.1 mapping table, not a string]
+  [meta [#
+note: RE-BLESSED (issue-738). This case pinned the SHIPPED string image
+note: `{placed: '2026-08-01'}` while §6.1's mapping table already read
+note: "TOML date → ScalarNode with `date` type" and §0.2 said dates stay
+note: native — so the pin was recording an impl that sat below its own
+note: approved table. The impl rose; the pin follows it.
+note:
+note: The classifiers are the SAME is_date / is_datetime the YAML import
+note: lane and the CX data scanner use (one temporal grammar, [L24]), so
+note: a value that is a date in one reading cannot be a string in
+note: another — which is exactly the divergence this fixture used to pin.
+#]]
+  [in-toml [#
+placed = 2026-08-01
+#]]
+  [out-cx [#
+{placed: 2026-08-01}
+#]]
+ ]
+
+ [case id=conv-024-toml-import-datetime-native level=core
+  [tags conversion toml import datetime issue-738]
+  [title TOML offset datetime imports as a native CX datetime (§6.1)]
+  [in-toml [#
+placed = 2026-08-01T07:32:00Z
+#]]
+  [out-cx [#
+{placed: 2026-08-01T07:32:00Z}
+#]]
+ ]
+
+ [case id=conv-025-toml-import-invalid-calendar-stays-text level=core
+  [tags conversion toml import date negative lossless issue-738]
+  [title A date-SHAPED TOML value with an impossible calendar date stays text]
+  [meta [#
+note: the boundary of the native mapping, pinned so "looks like a date"
+note: never becomes the rule. `calendar_ok` refuses month 13 / day 45, so
+note: the token classifies as text under BOTH readings — the same answer
+note: the CX data scanner gives for the same bytes.
+note:
+note: The assertion is on the LOSSLESS JSON lane deliberately. In CX text
+note: and in YAML this value's image is bare either way (a string only
+note: quotes where it WOULD otherwise auto-type, and `2026-13-45` never
+note: auto-types), so those projections cannot tell a date from a
+note: date-shaped string — an out-cx pin here would pass whichever way
+note: the impl went. The `cx:type` sidecar names the kind outright, so
+note: the ABSENCE of a `placed: date` entry is the real assertion; see
+note: conv-023 for the positive image it would carry.
+#]]
+  [in-toml [#
+placed = 2026-13-45
+#]]
+  [out-json-lossless [#
+{
+  "placed": "2026-13-45"
+}
+#]]
+ ]
+
+ [case id=conv-026-toml-import-date-parity-with-yaml level=core
+  [tags conversion toml import date yaml parity issue-738]
+  [title TOML and YAML import the same date to the same CX value]
+  [meta [#
+note: the point of issue-738's date half: two import lanes into ONE value
+note: model must not disagree about what a date is. The YAML lane already
+note: mapped natively; this pins that the TOML lane now agrees, so the
+note: fixture fails if either lane drifts.
+#]]
+  [in-toml [#
+placed = 2026-08-01
+shipped = 2026-08-02T09:15:00Z
+#]]
+  [out-cx [#
+{placed: 2026-08-01, shipped: 2026-08-02T09:15:00Z}
+#]]
+ ]
+
+ [case id=conv-027-toml-import-unterminated-inline-array-refused level=core
+  [tags conversion toml import negative strict CXER0100 issue-738]
+  [title TOML strict reader — an unterminated inline array is refused, not guessed]
+  [meta [#
+note: RULED 738-2a. This IS issue-738's repro. The old reader folded the
+note: open bracket and the stray token into `{qty: [1, '2 bad']}` at rc=0
+note: — it could not fail at all: every level ended in `or { continue }`
+note: and every reader returned unconditionally.
+#]]
+  [in-toml [#
+qty = [1, 2
+bad
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=conv-028-toml-import-unterminated-inline-table-refused level=core
+  [tags conversion toml import negative strict CXER0100 issue-738]
+  [title TOML strict reader — an unterminated inline table is refused]
+  [in-toml [#
+a = {x = 1
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=conv-029-toml-import-stray-line-refused level=core
+  [tags conversion toml import negative strict CXER0100 issue-738]
+  [title TOML strict reader — a line that is neither comment, header, nor pair is refused]
+  [in-toml [#
+a = 1
+bad
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=conv-030-toml-import-unterminated-table-header-refused level=core
+  [tags conversion toml import negative strict CXER0100 issue-738]
+  [title TOML strict reader — an unterminated table header is refused]
+  [in-toml [#
+[server
+port = 8080
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=conv-031-toml-import-unterminated-string-refused level=core
+  [tags conversion toml import negative strict CXER0100 issue-738]
+  [title TOML strict reader — an unterminated quoted string is refused]
+  [in-toml [#
+a = "oops
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=conv-032-toml-import-duplicate-key-refused level=core
+  [tags conversion toml import negative strict duplicate-key CXER0100 issue-738]
+  [title TOML strict reader — a duplicate key in one table is refused]
+  [meta [#
+note: silently taking the LAST value is the failure mode this refusal
+note: exists for: a config whose two `a =` lines disagree has no single
+note: correct reading, so the reader must not pick one.
+#]]
+  [in-toml [#
+a = 1
+a = 2
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=conv-033-toml-import-repeated-key-across-aot-entries-is-legal level=core
+  [tags conversion toml import strict duplicate-key array-of-tables issue-738]
+  [title TOML strict reader — the SAME key in two array-of-tables entries is legal, not a duplicate]
+  [meta [#
+note: the boundary of the duplicate-key refusal, and the reason the scope
+note: key carries the array-of-tables ORDINAL: `sku` in two successive
+note: `[[items]]` entries are two different keys, while `sku` twice inside
+note: ONE entry is a duplicate. Without this pin the strictness would
+note: reject ordinary TOML.
+#]]
+  [in-toml [#
+[[items]]
+sku = "WIDGET-1"
+
+[[items]]
+sku = "GADGET-7"
+#]]
+  [out-cx [#
+{items: [{sku: WIDGET-1}, {sku: GADGET-7}]}
 #]]
  ]
 ]

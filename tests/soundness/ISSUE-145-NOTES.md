@@ -261,7 +261,16 @@ overwhelming evidence the residual **does not exist on Linux**.
 
 Implemented the fix above: the darwin block of `thirdparty/vgc/vgc_platform.h` now stops peers
 with a **signal-based suspend** (default), mirroring the proven-sound Linux path; the async
-`mach_suspend` path is retained behind `-DVGC_MACH_SUSPEND` as a fallback. Mechanism: the
+`mach_suspend` path is retained behind `-DVGC_MACH_SUSPEND` as a fallback.
+> **Superseded by cx #743 (2026-08):** the darwin DEFAULT is mach suspension again — but with a
+> KERNEL-AUTHORITATIVE settle (`thread_info` run_state poll after `thread_suspend`) replacing the
+> SP/PC-stability heuristic that owned the #145 capture window (a 1-instruction spin loop defeats
+> that heuristic while still running). Signals are structurally dead in a shared library under a
+> signal-owning host (Go): the host consumes the suspend signal or vgc consumes the host's. The
+> signal path of this section lives on behind `-DVGC_SIGNAL_SUSPEND` (default SIGXCPU) for A/B;
+> `-DVGC_MACH_SUSPEND` (the heuristic-settle legacy) is a compile error now. Under the DEFAULT
+> cooperative collector the mach path only stops stragglers (syscall-blocked — GAP-1-sound — or
+> tight non-allocating loops, now settled by the kernel, not the heuristic). Mechanism: the
 collector `pthread_kill`s each peer (`SIGURG`, via `pthread_from_mach_thread_np` on the stored
 mach port); the peer's handler captures its OWN interrupted register file (x0–x28+fp+lr+SP, plus
 all NEON lanes) from the signal `ucontext` at a kernel-delivered instruction boundary, publishes

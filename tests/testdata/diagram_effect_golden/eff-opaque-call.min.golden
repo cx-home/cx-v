@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  unk_call[/"unresolved callee"/]
+  prog ==> unk_call
+  any{{"any granted capability"}}
+  unk_call ==> any

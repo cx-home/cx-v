@@ -144,7 +144,11 @@ fn codec_registry_dispatch(name string, args []cx.Node) ?cx.Node {
 			if args.len < 1 {
 				return none
 			}
-			out := cx.codec_emit_node(fmt, args[0], false) or {
+			// #918: lower the program-side collection markers to cx-native
+			// nodes BEFORE the codec boundary — the raw __cx_map__ envelope
+			// string-degraded typed keys and would null-conflate a
+			// declaration-only entry.
+			out := cx.codec_emit_node(fmt, flatten_node(args[0]), false) or {
 				return mk_err(codec_parse_err, err.msg())
 			}
 			return codec_str_node(out)
@@ -153,7 +157,8 @@ fn codec_registry_dispatch(name string, args []cx.Node) ?cx.Node {
 			if args.len < 1 {
 				return none
 			}
-			b := cx.codec_emit_bytes_node(fmt, args[0]) or {
+			// #918: same lowering as the text arm.
+			b := cx.codec_emit_bytes_node(fmt, flatten_node(args[0])) or {
 				return mk_err(codec_parse_err, err.msg())
 			}
 			return codec_bytes_node(b)
@@ -178,18 +183,23 @@ fn init() {
 		name:  'json'
 		parse: json_codec_parse
 	})
-	// #234.2: init the CSRP discovery cache mutex + map (module-global; init runs
-	// once before any thread, so the cache is race-free to lock thereafter).
-	g_csrp_disco_mu = sync.new_mutex()
-	g_csrp_disco = map[string]string{}
-	// #234: init the client connection pool (stdlib_http.v) — same discipline.
-	g_http_pool_mu = sync.new_mutex()
-	g_http_pool = map[string][]&HttpPoolConn{}
-	// The listener/dispatch/SSE globals live in services_listener_
-	// notd_wasm32_emcc.v — their init crosses into the per-variant fn so the
-	// wasm build (which excludes that file and its globals) compiles (#329
-	// wasm-revival blocker; the wasm variant is a no-op).
-	services_listener_init_globals()
+	// #234: init the client connection pool (stdlib_http.v) — init runs
+	// once before any thread, so the pool is race-free to lock thereafter.
+	// RING 1 (seam H): the pool belongs to the http-client pack, so it
+	// stayed here at the module split. Compiled out with the pack (I4).
+	$if !cx_no_pack_http_client ? {
+		g_http_pool_mu = sync.new_mutex()
+		g_http_pool = map[string][]&HttpPoolConn{}
+	}
+	// I3 Ring-1/2 dispatch seam: make the registry containers live
+	// (ring_registry.v). The Ring-2 pack REGISTRATION — plus the
+	// g_csrp_disco seeds and services_listener_init_globals that used to
+	// sit here (seam G) — lives in the platform module's own init()
+	// (vcx/platform/platform_init.v), which V runs after this one because
+	// platform imports code. An artifact that never imports platform gets
+	// live-but-empty registries: every ring-2 name falls through to the
+	// not-in-subset refusal (the §4 profile behavior).
+	ring_registry_init()
 }
 
 // json_codec_parse adapts json_do_parse to the registry's parse signature.

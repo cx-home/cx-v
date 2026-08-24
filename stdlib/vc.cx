@@ -9,7 +9,7 @@
 
 [; verify: signature + validity window + non-revocation → [vc-verification status=…]. ]
 [?def verify  scope=public pure   [returns element] ($vc::element $now::datetime $opts::map {}) [$vc-verify $vc $now $opts]]
-[?def valid?  scope=public pure   [returns bool]    ($vc::element $now::datetime $opts::map {}) [$vc-valid $vc $now $opts]]
+[?def valid   scope=public pure   [returns bool]    ($vc::element $now::datetime $opts::map {}) [$vc-valid $vc $now $opts]]
 
 [; present: package a VC for a verifier (holder proof-of-possession later). ]
 [?def present scope=public pure   [returns element] ($vc::element $opts::map {}) [$vc-present $vc $opts]]
@@ -28,6 +28,10 @@
 [fn-doc name=verify scope=public purity=pure
   [sig """-> element"""]
   [summary """Check a credential's signature, validity window, and non-revocation as of a given time, returning a [vc-verification status=…] element."""]
+]
+[fn-doc name=valid scope=public purity=pure
+  [sig """-> bool"""]
+  [summary """Convenience boolean over verify: true iff the credential's signature, validity window, and non-revocation all hold as of the given time."""]
 ]
 [fn-doc name=present scope=public purity=pure
   [sig """-> element"""]

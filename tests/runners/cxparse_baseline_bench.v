@@ -35,6 +35,7 @@ module main
 
 import cx
 import code
+import platform as _
 import os
 import time
 

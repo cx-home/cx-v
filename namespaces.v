@@ -10,7 +10,7 @@ module cx
 //
 // Reserved prefixes:
 //   - `xml`   → http://www.w3.org/XML/1998/namespace (XML built-in)
-//   - `cx`    → https://cx-home.org/ns/cx           (CX metadata)
+//   - `cx`    → tag:cxhome.org,2026:ns/cx            (CX metadata)
 //   - `xmlns` → declaration-only; never resolves as a name prefix
 //
 // Default-namespace semantics (XML Namespaces 1.0 §6.2):
@@ -20,7 +20,38 @@ module cx
 //     are NEVER in any namespace. This module preserves that rule.
 
 pub const xml_namespace_uri = 'http://www.w3.org/XML/1998/namespace'
-pub const cx_namespace_uri  = 'https://cx-home.org/ns/cx'
+
+// I1 stream 15 (L50): the CX namespace URI is the RFC 4151 tag URI —
+// permanently valid independent of DNS registration (the date pins the
+// authority moment). cxhome.org remains only the rotatable
+// resolution/infrastructure host; the URI is an IDENTIFIER, never
+// dereferenced. Changing this string is an identity migration (the XML
+// C14N image signs it) — owner-ruled only.
+pub const cx_namespace_uri = 'tag:cxhome.org,2026:ns/cx'
+
+// L51: both legacy https spellings are RESERVED aliases — recognized only
+// to REJECT (E213 on binding), never carriers, never user namespaces.
+// This closes the squatting/confusion hole the historical
+// cxhome.org / cx-home.org split created (#704).
+pub const cx_namespace_uri_legacy = [
+	'https://cxhome.org/ns/cx',
+	'https://cx-home.org/ns/cx',
+]!
+
+// is_cx_namespace_spelling reports whether `uri` is ANY spelling that ever
+// denoted the CX namespace — the canonical tag URI or a reserved legacy
+// alias. Reserved-URI enforcement (#704) matches on this, not on prefixes.
+pub fn is_cx_namespace_spelling(uri string) bool {
+	if uri == cx_namespace_uri {
+		return true
+	}
+	for l in cx_namespace_uri_legacy {
+		if uri == l {
+			return true
+		}
+	}
+	return false
+}
 
 // resolve_namespaces walks the document and populates expanded-name
 // fields on every Element and Attribute. Idempotent: calling twice
@@ -49,6 +80,61 @@ pub fn resolve_namespaces(mut doc Document) {
 		if mut n is Element {
 			resolve_element_lang(mut n, mut lang_stack)
 			doc.elements[i] = n
+		}
+	}
+}
+
+// validate_reserved_ns_bindings — I1 stream 15 (#704, L50/L51): reserved-
+// namespace enforcement by RESOLVED URI, not literal prefix. Binding any
+// prefix (or the default namespace) to the CX namespace URI is a loud
+// E213, in EVERY spelling that ever denoted it; the reserved `cx` prefix
+// may not be re-bound to anything else. ONE carve-out: `xmlns:cx` bound to
+// the canonical tag URI restates the built-in binding the XML C14N image
+// MUST declare on its root (parser-rules) — accepted; strict canonical
+// strips it (canonical.md §2.7a: cx:/xml: are never emitted as
+// declarations). Called at the tail of every parse entry, right after
+// resolve_namespaces, so no lane (CX, XML, JSON, MD, ast_bin) can smuggle
+// the reserved URI into Tier-1 bytes — the pre-#704 canonicalizer
+// rewrote `p:x`→`cx:x` while PRESERVING the declaration, emitting output
+// its own parser rejects (a canonical∘canonical non-idempotence).
+pub fn validate_reserved_ns_bindings(doc Document) ! {
+	for n in doc.elements {
+		if n is Element {
+			validate_reserved_ns_el(n)!
+		}
+	}
+}
+
+fn validate_reserved_ns_el(e Element) ! {
+	cx_check_reserved_ns_attrs(e.attrs)!
+	for item in e.items {
+		if item is Element {
+			validate_reserved_ns_el(item)!
+		}
+	}
+}
+
+// cx_check_reserved_ns_attrs is the per-element core of the #704
+// enforcement — exposed so the program engine's element-literal lane
+// (which materializes elements without a Document-level parse tail)
+// applies the SAME rule; the two readings must agree on every document.
+pub fn cx_check_reserved_ns_attrs(attrs []Attribute) ! {
+	for a in attrs {
+		is_default := a.name == 'xmlns'
+		is_pfx := a.name.starts_with('xmlns:') && a.name.len > 6
+		if !is_default && !is_pfx {
+			continue
+		}
+		uri := scalar_value_str(a.value)
+		pfx := if is_pfx { a.name[6..] } else { '' }
+		if is_cx_namespace_spelling(uri) {
+			if pfx == 'cx' && uri == cx_namespace_uri {
+				continue // the mandated C14N carrier declaration (no-op)
+			}
+			return error('`${a.name}` binds the reserved CX namespace URI — the namespace is built-in and may not be bound (its legacy https spellings are reserved-to-reject) (cx-err:E213)')
+		}
+		if pfx == 'cx' {
+			return error('the `cx` namespace prefix is reserved and may not be re-bound (`${a.name}=${uri}`) (cx-err:E213)')
 		}
 	}
 }
@@ -87,17 +173,35 @@ fn resolve_element_lang(mut e Element, mut stack []?string) {
 }
 
 fn resolve_element(mut e Element, mut scope []map[string]string) {
-	mut frame := map[string]string{}
+	// Allocate a scope frame only when this element ACTUALLY declares a
+	// namespace (#804). The frame was built unconditionally and then
+	// discarded whenever it came out empty — one map allocation per
+	// element, and the overwhelming majority of elements declare
+	// nothing (gate-15's JSON-shape corpus declares none at all). The
+	// pre-scan reads the same attrs the frame loop does, and `pushed`
+	// still means exactly "a non-empty frame is on the scope stack":
+	// only these two attribute shapes ever write to it.
+	mut declares_ns := false
 	for a in e.attrs {
-		if a.name == 'xmlns' {
-			frame[''] = scalar_value_str(a.value)
-		} else if a.name.starts_with('xmlns:') && a.name.len > 6 {
-			frame[a.name[6..]] = scalar_value_str(a.value)
+		if a.name == 'xmlns' || (a.name.starts_with('xmlns:') && a.name.len > 6) {
+			declares_ns = true
+			break
 		}
 	}
-	pushed := frame.len > 0
-	if pushed {
-		scope << frame
+	mut pushed := false
+	if declares_ns {
+		mut frame := map[string]string{}
+		for a in e.attrs {
+			if a.name == 'xmlns' {
+				frame[''] = scalar_value_str(a.value)
+			} else if a.name.starts_with('xmlns:') && a.name.len > 6 {
+				frame[a.name[6..]] = scalar_value_str(a.value)
+			}
+		}
+		if frame.len > 0 {
+			scope << frame
+			pushed = true
+		}
 	}
 
 	prefix, local := split_ns_prefix(e.name)
@@ -108,7 +212,15 @@ fn resolve_element(mut e Element, mut scope []map[string]string) {
 
 	for i := 0; i < e.attrs.len; i++ {
 		ap, al := split_ns_prefix(e.attrs[i].name)
-		e.attrs[i].set_local(al)
+		// Only record `local` when it DIFFERS from the name — the same
+		// guard the element side above already applies, and what the
+		// AttributeMeta contract says ("Empty when local == name").
+		// Writing it unconditionally forced an AttributeMeta allocation
+		// for every attribute (#804); Attribute.local() now falls back
+		// to the name for an unset slot, exactly as Element.local() does.
+		if al != e.attrs[i].name {
+			e.attrs[i].set_local(al)
+		}
 		if e.attrs[i].name == 'xmlns' || ap == 'xmlns' {
 			e.attrs[i].set_ns_uri(?string(none))
 			continue
@@ -225,6 +337,14 @@ fn canonicalize_element_ns(mut e Element, mut scope []map[string]string) {
 			frame[''] = scalar_value_str(a.value)
 			xmlns_attrs << a
 		} else if a.name.starts_with('xmlns:') && a.name.len > 6 {
+			// I1 stream 15 (§2.7a): `xmlns:cx="<canonical URI>"` restates
+			// the built-in binding (the accepted C14N carrier declaration)
+			// — strict canonical STRIPS it, so the declared and undeclared
+			// spellings of one document share one address. Every other
+			// binding of the reserved URI was rejected at parse (E213).
+			if a.name == 'xmlns:cx' && scalar_value_str(a.value) == cx_namespace_uri {
+				continue
+			}
 			frame[a.name[6..]] = scalar_value_str(a.value)
 			xmlns_attrs << a
 		} else {

@@ -1,0 +1,1 @@
+[?worker name="w" body=[?try-receive from=$ch timeout=50ms]]

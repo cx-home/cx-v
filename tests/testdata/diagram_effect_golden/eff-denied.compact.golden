@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  eff_http_get[["http-get"]]
+  cap_net{{"net --allow-net"}}
+  prog --> eff_http_get
+  eff_http_get --> cap_net

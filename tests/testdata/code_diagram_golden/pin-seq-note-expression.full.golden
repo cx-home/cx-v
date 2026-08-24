@@ -1,0 +1,7 @@
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+  activate w
+  Note over w : [a-plain-element]
+  deactivate w

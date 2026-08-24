@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  cap_read{{"read"}}
+  prog --> cap_read

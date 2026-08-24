@@ -1,4 +1,4 @@
-[test-suite name=code-diagram
+[test-suite name=code-diagram ring=1
   [doc [#
 # CX code_diagram + code_tree Conformance Suite
 Version: 0.1 — 2026-05-23 (gate 37.10 scaffold).
@@ -10,7 +10,7 @@ sources) and `cx_code_tree` (JSON).
 Comparison against `:expected` is **structural**
 node-set + edge-set for Mermaid; key-order- and whitespace-tolerant
 recursive tree-shape compare for JSON. Byte-identical output is
-NOT required. See [`scripts/check_code_diagram_fixtures.py`](../scripts/check_code_diagram_fixtures.py)
+NOT required. See [`scripts/check_code_diagram_fixtures.cx`](../scripts/check_code_diagram_fixtures.cx)
 for the canonical runner.
 
 ---
@@ -107,8 +107,8 @@ kind: data
   [expected [#
 erDiagram
   user {
-    int @id
-    string @name
+    int id "@"
+    string name "@"
   }
 #]]
  ]
@@ -148,8 +148,8 @@ kind: data
   [expected [#
 erDiagram
   user {
-    int @id
-    string @name
+    int id "@"
+    string name "@"
     string email
   }
 #]]
@@ -171,11 +171,54 @@ kind: data
 erDiagram
   user ||--o{ order : has
   user {
-    int @id
+    int id "@"
   }
   order {
-    int @id
-    float @total
+    int id "@"
+    decimal total "@"
+  }
+#]]
+  [meta-note [#
+RE-BLESSED (issue-774) float -> decimal. Not a diagram change: at the I1
+identity epoch a bare fixed-point fraction became a DECIMAL (a float is
+exponent-form since I1), so `total=42.0` genuinely IS a decimal and the
+old row was reporting the wrong type. erd-006a below keeps a FLOAT row
+under the exponent spelling, so the two kinds stay separately pinned.
+#]]
+ ]
+
+ [case id=erd-006a-scalar-kinds-each-named
+  [tags erd attribute-types decimal bigint float date issue-774]
+  [meta [#
+view: graph
+kind: data
+#]]
+  [meta-note [#
+The ERD type map named five scalar kinds and let `else` answer `string`
+for every other, which is how the I1 decimal promotion turned into a
+silent mis-report rather than a failure (issue-774). This case pins the
+kinds that had no arm — decimal, bigint, float-by-exponent, date — so a
+kind moving out from under the map is a red fixture, not a plausible
+`string` in someone's diagram.
+#]]
+  [source [#
+[user id=1
+  [order id=100 total=42.0 rate=4.2e1 when=2026-08-01 big=99999999999999999999 live=true]
+]
+#]]
+  [expected [#
+erDiagram
+  user ||--|| order : has
+  user {
+    int id "@"
+  }
+  order {
+    int id "@"
+    decimal total "@"
+    float rate "@"
+    date when "@"
+    bigint big "@"
+    bool live "@"
   }
 #]]
  ]
@@ -195,10 +238,10 @@ kind: data
 erDiagram
   user ||--|| profile : has
   user {
-    int @id
+    int id "@"
   }
   profile {
-    string @email
+    string email "@"
   }
 #]]
  ]
@@ -228,14 +271,14 @@ erDiagram
   org {
   }
   team {
-    string @name
+    string name "@"
   }
   project {
-    string @name
+    string name "@"
   }
   user {
-    int @id
-    string @name
+    int id "@"
+    string name "@"
   }
 #]]
  ]
@@ -267,7 +310,7 @@ erDiagram
   para {
   }
   span {
-    int @id
+    int id "@"
   }
 #]]
  ]
@@ -493,7 +536,7 @@ view: graph
 kind: code
 #]]
   [source [#
-[?modify /users/user[1]
+[?modify //users/user[1]
   [set-attr status 'active']
   [delete-attr temp]
   [append [tag 'vip']]
@@ -501,7 +544,7 @@ kind: code
 #]]
   [expected [#
 flowchart TD
-  start([entry]) --> u["modify @ /users/user[1] | set | delete | append"]
+  start([entry]) --> u["modify @ //users/user[1] | set | delete | append"]
   u --> done([exit])
 #]]
  ]
@@ -679,8 +722,8 @@ view: graph
   [expected [#
 erDiagram
   user {
-    int @id
-    string @name
+    int id "@"
+    string name "@"
   }
 #]]
  ]
@@ -735,7 +778,7 @@ view: graph
   [expected [#
 erDiagram
   user {
-    int @id
+    int id "@"
   }
 
 ---
@@ -912,17 +955,15 @@ kind: data
   [expected [#
 erDiagram
   DOCUMENT {
-    int node_count
-    int type_count
-    int max_depth
-    string source_path
+    int node_count "2"
+    int type_count "2"
+    int max_depth "1"
   }
   users ||--|| user : has
   users {
-    string note "appears 1× depth 0"
   }
   user {
-    int @id "1"
+    int id "@ 1"
     string note "appears 1× depth 1"
   }
 #]]
@@ -991,17 +1032,15 @@ kind: data
   [expected [#
 erDiagram
   DOCUMENT {
-    int node_count
-    int type_count
-    int max_depth
-    string source_path
+    int node_count "4"
+    int type_count "2"
+    int max_depth "1"
   }
   users ||--o{ user : has
   users {
-    string note "appears 1× depth 0"
   }
   user {
-    int @id "1, 2, 3"
+    int id "@ 1, 2, 3"
     string note "appears 3× depth 1"
   }
 #]]
@@ -1019,23 +1058,21 @@ kind: data
   [expected [#
 erDiagram
   DOCUMENT {
-    int node_count
-    int type_count
-    int max_depth
-    string source_path
+    int node_count "3"
+    int type_count "3"
+    int max_depth "1"
   }
   order }o--o{ user : FK
   doc ||--|| user : has
   doc ||--|| order : has
   doc {
-    string note "appears 1× depth 0"
   }
   user {
-    int @id "1"
+    int id "@ 1"
     string note "appears 1× depth 1"
   }
   order {
-    int @user-id "1"
+    int user-id "@ 1"
     string note "appears 1× depth 1"
   }
 #]]
@@ -1043,6 +1080,28 @@ erDiagram
 
  [case id=full-data-erd-occurrence-badge level=full
   [tags full erd occurrence-badge]
+  [meta-note [#
+RE-BLESSED 2026-08-22: the `string note "appears 1× depth 0"` row is gone
+from the ROOT entity of this case and of full-data-erd-document-root /
+-value-enumeration / -fk-inference. The renderer suppresses the occurrence
+badge at one occurrence, depth zero (58d34e76) — at 1× depth 0 the badge
+carries no information, and the root entity is the only place that shape
+occurs. The badge itself is NOT retired: this case still pins it on `user`
+("appears 4× depth 1"), which is why the case keeps its name.
+
+Recorded because spec/03-approved/std-lib/diagram.md is SILENT on the note
+row — it mentions "the per-entity badges" (§10.5) and never specifies the
+row or a suppression rule. So this is a spec-silent rendering decision,
+pinned only here and in the golden lane; not a spec change, and not a
+fixture nobody checked.
+
+It went stale because 58d34e76 re-blessed
+vcx/tests/testdata/code_diagram_golden/ and not this file. The ONLY gate
+that reads this file is scripts/check_code_diagram_fixtures.cx
+(make test-code-diagram) — in TEST_TARGETS but NOT in test-vcx, so
+`make test-vcx` is structurally blind to it. Same trap the #774 note on
+that Makefile target already records.
+#]]
   [meta [#
 view: graph
 kind: data
@@ -1053,17 +1112,15 @@ kind: data
   [expected [#
 erDiagram
   DOCUMENT {
-    int node_count
-    int type_count
-    int max_depth
-    string source_path
+    int node_count "5"
+    int type_count "2"
+    int max_depth "1"
   }
   doc ||--o{ user : has
   doc {
-    string note "appears 1× depth 0"
   }
   user {
-    int @id "1, 2, 3, 4"
+    int id "@ 1, 2, 3, 4"
     string note "appears 4× depth 1"
   }
 #]]

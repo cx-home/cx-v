@@ -1,0 +1,104 @@
+[test-suite name=lockfile ring=0
+  [doc [#
+# CX Conformance — lockfile.md Ring-0 surface (corpus audit G10, pre-I2)
+# Version: 1.0 — 2026-08-06
+#
+# spec/lockfile.md §3: `cx.lock` is a CX-DATA document — "parsed via the
+# existing data grammar; no new lexer or parser support is required." That
+# claim is exactly what this family pins: the wire form (attribute syntax,
+# grammar [55]) parses, canonicalizes, hashes, and cross-emits as ordinary
+# CX data. Before this family the Ring-0 lockfile surface had ZERO corpus
+# coverage (2 Ring-1 eval cases only) while the reader
+# (vcx/cx/lockfile_reader.v) shipped in every Ring-0 artifact.
+#
+# Reader-level semantics (CXLOCK_PARSE shape checks, version gating,
+# CXER0210-0213) are the reader's own V tests — the doc lane here pins the
+# DOCUMENT: canonical bytes, Tier-1 addresses, cross-format image.
+# M5 commerce substrate per the campaign ruling.
+#]]
+
+ [case id=lock-001-minimal-wire-form level=core
+  [tags lockfile document canonical hash]
+  [title minimal cx.lock wire form — canonical form + Tier-1 address pinned]
+  [in-cx [#
+[cx.lock version="1"
+  [modules
+    [module name="orders-lib" resolved="bundled:0.15.0" version="0.15.0"]]]
+#]]
+  [out-canonical [#
+[cx.lock version='1'
+  [modules
+    [module name=orders-lib resolved=bundled:0.15.0 version=0.15.0]
+  ]
+]
+#]]
+  [out-hash [#
+sha2-256:3a6b3cf0f9dc6f6f826b7f89d10147360d2cdd63a855883eb324560b8973ee13
+#]]
+ ]
+
+ [case id=lock-002-multi-module-sri-transitive level=core
+  [tags lockfile document canonical hash sri transitive-graph]
+  [title full cx.lock — https + file resolvers, an SRI pin, and a transitive-graph block]
+  [in-cx [#
+[cx.lock version="1"
+  [modules
+    [module name="orders-lib" resolved="https://modules.example/orders-lib-1.2.0.cx" version="1.2.0" sri="sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="]
+    [module name="inventory-lib" resolved="file://vendor/inventory-lib.cx" version="0.3.1"]]
+  [transitive-graph
+    [edge from="orders-lib" to="inventory-lib"]]]
+#]]
+  [out-canonical [#
+[cx.lock version='1'
+  [modules
+    [module name=orders-lib resolved=https://modules.example/orders-lib-1.2.0.cx version=1.2.0 sri=sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=]
+    [module name=inventory-lib resolved=file://vendor/inventory-lib.cx version=0.3.1]
+  ]
+  [transitive-graph
+    [edge from=orders-lib to=inventory-lib]
+  ]
+]
+#]]
+  [out-hash [#
+sha2-256:b39b1596932e455da2cc3d4be95e4acae0af19e0d702509f6c9e35f20d809e97
+#]]
+ ]
+
+ [case id=lock-003-empty-modules-json-image level=core
+  [tags lockfile document json cross-format]
+  [title empty modules block — the lockfile is ordinary data to every emitter]
+  [in-cx [#
+[cx.lock version="1" [modules]]
+#]]
+  [out-json [#
+{
+  "cx.lock": {
+    "version": "1",
+    "modules": null
+  }
+}
+#]]
+ ]
+
+ [case id=lock-004-canonical-idempotent level=core
+  [tags lockfile document canonical round-trip]
+  [title canonical form is a fixed point — re-canonicalizing the canonical bytes changes nothing]
+  [in-cx [#
+[cx.lock version='1'
+  [modules
+    [module name=orders-lib resolved=bundled:0.15.0 version=0.15.0]
+  ]
+]
+#]]
+  [out-canonical [#
+[cx.lock version='1'
+  [modules
+    [module name=orders-lib resolved=bundled:0.15.0 version=0.15.0]
+  ]
+]
+#]]
+  [out-hash [#
+sha2-256:3a6b3cf0f9dc6f6f826b7f89d10147360d2cdd63a855883eb324560b8973ee13
+#]]
+ ]
+]

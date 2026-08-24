@@ -1,0 +1,5 @@
+erDiagram
+  order {
+    int order-id
+    int total
+  }

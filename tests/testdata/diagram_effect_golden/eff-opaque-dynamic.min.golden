@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  unk_dynamic[/"source-text hatch — its inner calls are not in the image"/]
+  prog ==> unk_dynamic
+  any{{"any granted capability"}}
+  unk_dynamic ==> any

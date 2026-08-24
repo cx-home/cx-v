@@ -71,14 +71,44 @@ pub fn program_to_xml(node cx.ProgramNode) string {
 fn emit_px_node(mut b strings.Builder, node cx.ProgramNode) {
 	match node {
 		cx.Program          { emit_px_node(mut b, node.body) }
-		cx.ProgramLiteral   { emit_px_literal(mut b, node) }
+		// PS-1 (#886): a node carrying a RESULT step run rides the
+		// bijective <cx:expr> escape hatch (the same hatch dynamic
+		// element names use) — the canonical source round-trips the
+		// steps through code.parse, and every STEP-LESS node keeps its
+		// structural encoding byte-identically. (Calls keep their CRS-1
+		// structural <cx:step> encoding.)
+		cx.ProgramLiteral {
+			if node.path.len > 0 {
+				emit_px_escape(mut b, node)
+			} else {
+				emit_px_literal(mut b, node)
+			}
+		}
 		cx.ProgramBinding   { emit_px_binding(mut b, node) }
 		cx.ProgramCall      { emit_px_call(mut b, node) }
-		cx.ProgramDirective { emit_px_directive(mut b, node) }
+		cx.ProgramDirective {
+			if node.path.len > 0 {
+				emit_px_escape(mut b, node)
+			} else {
+				emit_px_directive(mut b, node)
+			}
+		}
 		cx.ProgramWildcard  { emit_px_wildcard(mut b, node) }
-		cx.ProgramSliceLiteral { emit_px_slice_literal(mut b, node) }
+		cx.ProgramSliceLiteral {
+			if node.path.len > 0 {
+				emit_px_escape(mut b, node)
+			} else {
+				emit_px_slice_literal(mut b, node)
+			}
+		}
 		cx.ProgramSliceAccess  { emit_px_slice_access(mut b, node) }
-		cx.ProgramForComp   { emit_px_for_comp(mut b, node) }
+		cx.ProgramForComp {
+			if node.path.len > 0 {
+				emit_px_escape(mut b, node)
+			} else {
+				emit_px_for_comp(mut b, node)
+			}
+		}
 		cx.ProgramPattern   { emit_px_pattern(mut b, node) }
 		else             { emit_px_escape(mut b, node) }
 	}
@@ -99,6 +129,9 @@ fn emit_px_literal(mut b strings.Builder, n cx.ProgramLiteral) {
 		}
 		.bigint_lit {
 			b.write_string('<cx:bigint>${px_escape(n.str_val)}</cx:bigint>')
+		}
+		.decimal_lit {
+			b.write_string('<cx:decimal>${px_escape(n.str_val)}</cx:decimal>')
 		}
 		.float_lit {
 			b.write_string('<cx:float>${n.flt_val}</cx:float>')
@@ -236,6 +269,12 @@ fn emit_px_map(mut b strings.Builder, n cx.ProgramLiteral) {
 	b.write_string('<cx:map>')
 	for i in 0 .. n.items.len {
 		key := if i < n.keys.len { n.keys[i] } else { '' }
+		// RULED: MSS-4 (#917): a declaration-only entry carries its kind as
+		// an attribute and NO value node (value ABSENT, never null).
+		if i < n.decl_kinds.len && n.decl_kinds[i] != '' {
+			b.write_string('<entry key="${px_escape_attr(key)}" decl-kind="${px_escape_attr(n.decl_kinds[i])}"/>')
+			continue
+		}
 		b.write_string('<entry key="${px_escape_attr(key)}">')
 		emit_px_node(mut b, n.items[i])
 		b.write_string('</entry>')
@@ -259,11 +298,26 @@ fn emit_px_binding(mut b strings.Builder, n cx.ProgramBinding) {
 // predicates is self-closing; predicate-bearing steps wrap `<cx:pred>`
 // children (predicate forms: position / attr-test / general expr).
 fn emit_px_step(mut b strings.Builder, step cx.ProgramPathStep) {
+	// A [131b] kind test adds `kind-test="…"`, emitted ONLY when present
+	// so every step without one keeps its exact pre-existing image (the
+	// §4 projection is compared byte-wise by the round-trip gate).
+	kt := if step.kind_test != .none {
+		' kind-test="${px_step_kind_test_name(step.kind_test)}"'
+	} else {
+		''
+	}
+	// #925 (PYE-1a/1b): a computed step carries its binding name; emitted
+	// only when present so step-less images stay byte-identical.
+	cn := if step.computed_name != '' {
+		' computed="${px_escape_attr(step.computed_name)}"'
+	} else {
+		''
+	}
 	if step.predicates.len == 0 {
-		b.write_string('<cx:step kind="${px_step_kind_name(step.kind)}" name="${px_escape_attr(step.name)}"/>')
+		b.write_string('<cx:step kind="${px_step_kind_name(step.kind)}" name="${px_escape_attr(step.name)}"${cn}${kt}/>')
 		return
 	}
-	b.write_string('<cx:step kind="${px_step_kind_name(step.kind)}" name="${px_escape_attr(step.name)}">')
+	b.write_string('<cx:step kind="${px_step_kind_name(step.kind)}" name="${px_escape_attr(step.name)}"${cn}${kt}>')
 	for p in step.predicates {
 		emit_px_predicate(mut b, p)
 	}
@@ -278,6 +332,9 @@ fn emit_px_predicate(mut b strings.Builder, p cx.ProgramPathPredicate) {
 		}
 		.attr_test {
 			b.write_string('<cx:pred kind="attr" attr-kind="${px_attr_kind_name(p.attr_kind)}" name="${px_escape_attr(p.attr_name)}" op="${px_escape_attr(p.attr_op)}"')
+			if p.type_name != '' {
+				b.write_string(' type-name="${px_escape_attr(p.type_name)}"')
+			}
 			if v := p.attr_value {
 				b.write_string('>')
 				emit_px_node(mut b, v)
@@ -331,6 +388,31 @@ fn px_step_kind_name(k cx.PathStepKind) string {
 	}
 }
 
+// px_step_kind_test_name / px_step_kind_test_from carry the [131b] kind
+// test across the XML projection. The wire name is the bare kind-test
+// name (`node`, not `node()`) — the parens are a SOURCE spelling, and
+// the projection encodes the AST, not the source.
+fn px_step_kind_test_name(k cx.ProgramPathKindTest) string {
+	return match k {
+		.none      { '' }
+		.any_node  { 'node' }
+		.text      { 'text' }
+		.element   { 'element' }
+		.attribute { 'attribute' }
+	}
+}
+
+fn px_step_kind_test_from(s string) !cx.ProgramPathKindTest {
+	if s == '' {
+		return cx.ProgramPathKindTest.none
+	}
+	kt := cx.program_path_kind_test_from_name(s)
+	if kt == .none {
+		return error('program_xml: unknown cx:step kind-test `${s}`')
+	}
+	return kt
+}
+
 fn px_step_kind_from(s string) !cx.PathStepKind {
 	return match s {
 		'child' { cx.PathStepKind.child }
@@ -341,6 +423,27 @@ fn px_step_kind_from(s string) !cx.PathStepKind {
 		'descendant_wildcard' { cx.PathStepKind.descendant_wildcard }
 		'parent' { cx.PathStepKind.parent }
 		else { error('program_xml: unknown cx:step kind `${s}`') }
+	}
+}
+
+// raw_to_path_step decodes one <cx:step> element back to a
+// cx.ProgramPathStep — shared by the <cx:var> binding-path arm and the
+// CRS-1 call-result postfix on <cx:call>.
+fn raw_to_path_step(ch RawXml) !cx.ProgramPathStep {
+	kind := px_step_kind_from(ch.attrs['kind'] or {
+		return error('program_xml: <cx:step> missing kind attribute')
+	})!
+	mut preds := []cx.ProgramPathPredicate{}
+	for pch in ch.children {
+		preds << raw_to_predicate(pch)!
+	}
+	kind_test := px_step_kind_test_from(ch.attrs['kind-test'] or { '' })!
+	return cx.ProgramPathStep{
+		kind:          kind
+		name:          ch.attrs['name'] or { '' }
+		computed_name: ch.attrs['computed'] or { '' }
+		kind_test:     kind_test
+		predicates:    preds
 	}
 }
 
@@ -380,6 +483,12 @@ fn emit_px_call(mut b strings.Builder, n cx.ProgramCall) {
 		for a in n.args {
 			emit_px_node(mut b, a)
 		}
+	}
+	// CRS-1 call-result postfix steps — `<cx:step>` children after the
+	// args, exactly the binding's step encoding (a <cx:step> is never an
+	// arg node, so parse-back separates the two unambiguously).
+	for step in n.path {
+		emit_px_step(mut b, step)
 	}
 	b.write_string('</cx:call>')
 }
@@ -537,12 +646,13 @@ fn px_clause_kind_name(k cx.ProgramForClauseKind) string {
 		.group_by { 'group-by' }
 		.limit { 'limit' }
 		.par { 'par' }
-		.stream { 'stream' }
+		.lazy { 'lazy' }
 		.ordered { 'ordered' }
 		.take { 'take' }
 		.drop { 'drop' }
-		.takewhile { 'takewhile' }
-		.dropwhile { 'dropwhile' }
+		.takewhile { 'take-while' }
+		.dropwhile { 'drop-while' }
+		.fail_fast { 'fail-fast' }
 	}
 }
 
@@ -555,12 +665,12 @@ fn px_clause_kind_from(s string) !cx.ProgramForClauseKind {
 		'group-by' { cx.ProgramForClauseKind.group_by }
 		'limit' { cx.ProgramForClauseKind.limit }
 		'par' { cx.ProgramForClauseKind.par }
-		'stream' { cx.ProgramForClauseKind.stream }
+		'lazy' { cx.ProgramForClauseKind.lazy }
 		'ordered' { cx.ProgramForClauseKind.ordered }
 		'take' { cx.ProgramForClauseKind.take }
 		'drop' { cx.ProgramForClauseKind.drop }
-		'takewhile' { cx.ProgramForClauseKind.takewhile }
-		'dropwhile' { cx.ProgramForClauseKind.dropwhile }
+		'take-while' { cx.ProgramForClauseKind.takewhile }
+		'drop-while' { cx.ProgramForClauseKind.dropwhile }
 		else { error('program_xml: unknown for-comp clause kind `${s}`') }
 	}
 }
@@ -861,14 +971,7 @@ fn raw_to_program(r RawXml) !cx.ProgramNode {
 				if ch.tag != 'cx:step' {
 					return error('program_xml: <cx:var> child must be <cx:step>, got <${ch.tag}>')
 				}
-				kind := px_step_kind_from(ch.attrs['kind'] or {
-					return error('program_xml: <cx:step> missing kind attribute')
-				})!
-				mut preds := []cx.ProgramPathPredicate{}
-				for pch in ch.children {
-					preds << raw_to_predicate(pch)!
-				}
-				steps << cx.ProgramPathStep{ kind: kind, name: ch.attrs['name'] or { '' }, predicates: preds }
+				steps << raw_to_path_step(ch)!
 			}
 			return cx.ProgramNode(cx.ProgramBinding{ name: name, path: steps, pos: cx.Position{} })
 		}
@@ -886,6 +989,7 @@ fn raw_to_program(r RawXml) !cx.ProgramNode {
 			mut args := []cx.ProgramNode{}
 			mut labels := []string{}
 			mut has_arg_wrapper := false
+			mut steps := []cx.ProgramPathStep{}
 			for ch in r.children {
 				if ch.tag == 'cx:arg' {
 					has_arg_wrapper = true
@@ -894,6 +998,10 @@ fn raw_to_program(r RawXml) !cx.ProgramNode {
 					}
 					args << raw_to_program(ch.children[0])!
 					labels << (ch.attrs['label'] or { '' })
+				} else if ch.tag == 'cx:step' {
+					// CRS-1 call-result postfix — a <cx:step> is never an
+					// arg node, so the split is unambiguous.
+					steps << raw_to_path_step(ch)!
 				} else {
 					args << raw_to_program(ch)!
 					labels << ''
@@ -906,6 +1014,7 @@ fn raw_to_program(r RawXml) !cx.ProgramNode {
 				fallible:      fallible
 				must_succeed:  must_succeed
 				explicit_call: explicit
+				path:          steps
 				pos:           cx.Position{}
 			})
 		}
@@ -1009,6 +1118,7 @@ fn raw_to_program(r RawXml) !cx.ProgramNode {
 		'map' {
 			mut keys := []string{}
 			mut vals := []cx.ProgramNode{}
+			mut decls := []string{}
 			for ch in r.children {
 				if ch.tag != 'entry' {
 					return error('program_xml: <cx:map> child must be <entry>, got <${ch.tag}>')
@@ -1016,13 +1126,22 @@ fn raw_to_program(r RawXml) !cx.ProgramNode {
 				k := ch.attrs['key'] or {
 					return error('program_xml: <entry> missing key attribute')
 				}
+				// RULED: MSS-4 (#917): decl-kind restores a declaration-only
+				// entry — no value node (value ABSENT).
+				if dk := ch.attrs['decl-kind'] {
+					keys << k
+					vals << cx.ProgramNode(cx.ProgramLiteral{ kind: .string_lit })
+					decls << dk
+					continue
+				}
 				if ch.children.len != 1 {
 					return error('program_xml: <entry> must wrap exactly one value node')
 				}
 				keys << k
 				vals << raw_to_program(ch.children[0])!
+				decls << ''
 			}
-			return cx.ProgramNode(cx.ProgramLiteral{ kind: .map_lit, keys: keys, items: vals, pos: cx.Position{} })
+			return cx.ProgramNode(cx.ProgramLiteral{ kind: .map_lit, keys: keys, items: vals, decl_kinds: decls, pos: cx.Position{} })
 		}
 		'op' {
 			op_name := r.attrs['name'] or {
@@ -1196,6 +1315,7 @@ fn raw_to_predicate(r RawXml) !cx.ProgramPathPredicate {
 				attr_name:  r.attrs['name'] or { '' }
 				attr_op:    r.attrs['op'] or { '' }
 				attr_value: val
+				type_name:  r.attrs['type-name'] or { '' }
 				pos:        cx.Position{}
 			}
 		}

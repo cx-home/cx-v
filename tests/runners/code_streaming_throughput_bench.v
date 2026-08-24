@@ -16,11 +16,16 @@
 //   1. Generates ≥ TARGET_INPUT_BYTES (default 100 MB) of synthetic
 //      JSON-shape CX text in memory (`[users [user :id N :name "..."
 //      :host "..." :port P :active B :ratio F] ...]`).
-//   2. Constructs a CX program that walks the input and yields a
-//      per-record value (a `[?for ... :yield ...]` over the children).
-//   3. Runs the program via `code.eval_code_streaming`,
-//      feeding a counter sink. Measures input-bytes-per-second AND
-//      output-bytes-per-second.
+//   2. Constructs TWO CX programs that walk the input and produce a
+//      per-record value — a `[?for … [yield …]]` comprehension and the
+//      `[?map]` lane over the same records (#823; see `shapes`).
+//   3. Runs each program via `code.eval_code_streaming`, feeding a
+//      counter sink. Measures input-bytes-per-second AND
+//      output-bytes-per-second, and counts SINK CHUNKS — a shape that
+//      delivers one chunk over a 100 MiB corpus buffered its result
+//      instead of streaming it, whatever it reports.
+//      Every shape is threshold-bearing; the gate's verdict is the
+//      conjunction over all of them.
 //
 // What's measured. The MB/s number is input-bytes / wall-clock,
 // since the §11.4.4 phrasing "bytes-processed" refers to the
@@ -43,6 +48,7 @@
 module main
 
 import code
+import platform as _
 import time
 import os
 import strings
@@ -91,16 +97,40 @@ fn build_input(target_bytes int) string {
 	return b.str()
 }
 
-// build_program emits a CX program that processes the JSON-shape
-// document by yielding each child element. The streaming evaluator
-// thus walks every record + renders it — full end-to-end exercise.
-fn build_program() string {
-	return '[?for [user \$u] :yield \$u]'
+// The gate drives TWO shapes over the same corpus, and both are
+// threshold-bearing (#823).
+//
+// `[?for]` walks every record and yields it — the original shape.
+//
+// `[?map]` produces the SAME records through the map lane, and it is here
+// because a shape that is only ever benched cannot regress quietly while a
+// shape that is never benched can. `[?map]` was excluded from streaming for
+// exactly that reason: its streamed path emitted `[?for]`-style items
+// instead of the sequence literal one-shot renders, and gate 15 did not
+// notice because gate 15 drove `[?for]` only — whose rendering is
+// newline-separated on BOTH paths. The exclusion that followed was correct
+// and honest, and it carried an unmeasured cost: a buffered `[?map]` holds
+// the whole result, which is the 514 MiB-on-10 MB profile #822 closed. With
+// the shape benched, neither the divergence nor the buffering can return
+// without this gate saying so.
+//
+// #710 item 4: the `[?for]` program used to carry the retired pre-reshape
+// slot spelling `[?for [user $u] :yield $u]` (version-literal-ok: the
+// surface-reshape era) and the bench crashed at parse.
+struct Shape {
+	name string
+	prog string
 }
+
+const shapes = [
+	Shape{'for', '[?for [in \$u \$doc/user] [yield \$u]]'},
+	Shape{'map', '[?map \$doc/user [using [?fn \$u \$u]]]'},
+]
 
 struct ByteCounter {
 mut:
-	total int
+	total  int
+	chunks int
 }
 
 fn env_int(name string, dflt int) int {
@@ -120,17 +150,40 @@ fn mbps(bytes int, ms i64) f64 {
 	return f64(bytes) * 1000.0 / f64(ms) / (1024.0 * 1024.0)
 }
 
-fn run_trial(input string, program string) (int, int, i64) {
-	bc := &ByteCounter{ total: 0 }
+struct Trial {
+	in_bytes  int
+	out_bytes int
+	chunks    int
+	ms        i64
+}
+
+fn run_trial(input string, program string) Trial {
+	bc := &ByteCounter{ total: 0, chunks: 0 }
 	sink := fn [bc] (chunk string) ! {
-		unsafe { bc.total += chunk.len }
+		unsafe {
+			bc.total += chunk.len
+			bc.chunks++
+		}
 	}
 	t0 := time.now()
 	code.eval_code_streaming(input, program, 'text', sink) or {
 		panic('eval_code_streaming failed: ${err}')
 	}
 	elapsed_ms := time.since(t0).milliseconds()
-	return input.len, bc.total, elapsed_ms
+	return Trial{
+		in_bytes:  input.len
+		out_bytes: bc.total
+		chunks:    bc.chunks
+		ms:        elapsed_ms
+	}
+}
+
+// ShapeResult is one shape's measured outcome.
+struct ShapeResult {
+	name    string
+	mean_in f64
+	min_in  f64
+	chunks  int
 }
 
 fn main() {
@@ -151,51 +204,88 @@ fn main() {
 	gen_ms := time.since(gen_t0).milliseconds()
 	println('done (${input.len} bytes in ${gen_ms} ms)')
 
-	program := build_program()
-	println('  program           : ${program}')
+	mut results := []ShapeResult{}
+	mut reasons := []string{}
 
-	for _ in 0 .. warmup {
-		_, _, _ := run_trial(input, program)
+	for sh in shapes {
+		println('')
+		println('  shape ${sh.name} : ${sh.prog}')
+
+		// The shape MUST take the streaming path. Without this the
+		// throughput rows below pass vacuously for a shape that quietly
+		// buffers: a one-shot fallback still produces the right bytes, just
+		// with the whole result resident. `[?map]` spent a release excluded
+		// exactly here (#823), so the gate asks the same authority callers
+		// ask (eval_code_stream_mode) rather than inferring from timings.
+		if !code.eval_code_streamable(sh.prog, 'text') {
+			reasons << '${sh.name}: NOT STREAMING — the shape fell back to the buffered path'
+			println('  !! ${sh.name} reports buffered — the streaming exclusion is back (#823)')
+			continue
+		}
+
+		for _ in 0 .. warmup {
+			run_trial(input, sh.prog)
+		}
+
+		mut in_mbps_samples := []f64{cap: trials}
+		mut out_mbps_samples := []f64{cap: trials}
+		mut chunks_min := 0
+		for t in 0 .. trials {
+			tr := run_trial(input, sh.prog)
+			in_s := mbps(tr.in_bytes, tr.ms)
+			out_s := mbps(tr.out_bytes, tr.ms)
+			in_mbps_samples << in_s
+			out_mbps_samples << out_s
+			if t == 0 || tr.chunks < chunks_min { chunks_min = tr.chunks }
+			println('  trial ${t + 1}: in ${fmt_mbps(tr.in_bytes, tr.ms)}  out ${fmt_mbps(tr.out_bytes, tr.ms)}  (${tr.ms} ms, out ${tr.out_bytes} bytes, ${tr.chunks} chunks)')
+		}
+		mut sum_in := 0.0
+		mut sum_out := 0.0
+		mut min_in := in_mbps_samples[0]
+		for v in in_mbps_samples {
+			sum_in += v
+			if v < min_in { min_in = v }
+		}
+		for v in out_mbps_samples {
+			sum_out += v
+		}
+		mean_in := sum_in / f64(trials)
+		mean_out := sum_out / f64(trials)
+
+		println('  mean input throughput  : ${mean_in:7.1f} MB/s')
+		println('  mean output throughput : ${mean_out:7.1f} MB/s')
+		println('  min trial input        : ${min_in:7.1f} MB/s (${(min_in / mean_in) * 100.0:5.1f}% of mean)')
+		println('  min trial chunks       : ${chunks_min}')
+
+		results << ShapeResult{
+			name:    sh.name
+			mean_in: mean_in
+			min_in:  min_in
+			chunks:  chunks_min
+		}
+
+		if mean_in < threshold_mbps {
+			reasons << '${sh.name}: mean ${mean_in:.1f} < ${threshold_mbps:.0f} MB/s'
+		}
+		if min_in < mean_in * trial_jitter_pct {
+			reasons << '${sh.name}: min trial < 80% of mean'
+		}
+		// A single chunk on a corpus this size IS the buffered shape:
+		// the one-shot fallback delivers the entire result in one sink
+		// call. The mode check above catches an honest exclusion; this
+		// catches a path that CLAIMS to stream and then single-flushes.
+		if chunks_min < 2 {
+			reasons << '${sh.name}: delivered ${chunks_min} chunk(s) — the result was buffered, not streamed'
+		}
 	}
 
-	mut in_mbps_samples := []f64{cap: trials}
-	mut out_mbps_samples := []f64{cap: trials}
-	mut out_bytes_first := -1
-	for t in 0 .. trials {
-		in_b, out_b, ms := run_trial(input, program)
-		in_s  := mbps(in_b, ms)
-		out_s := mbps(out_b, ms)
-		in_mbps_samples << in_s
-		out_mbps_samples << out_s
-		if out_bytes_first < 0 { out_bytes_first = out_b }
-		println('  trial ${t + 1}: in ${fmt_mbps(in_b, ms)}  out ${fmt_mbps(out_b, ms)}  (${ms} ms, out ${out_b} bytes)')
+	if results.len != shapes.len {
+		reasons << 'only ${results.len} of ${shapes.len} shapes were measured'
 	}
-	mut sum_in := 0.0
-	mut sum_out := 0.0
-	mut min_in := in_mbps_samples[0]
-	for v in in_mbps_samples {
-		sum_in += v
-		if v < min_in { min_in = v }
-	}
-	for v in out_mbps_samples {
-		sum_out += v
-	}
-	mean_in  := sum_in / f64(trials)
-	mean_out := sum_out / f64(trials)
 
 	println('')
-	println('  mean input throughput  : ${mean_in:7.1f} MB/s')
-	println('  mean output throughput : ${mean_out:7.1f} MB/s')
-	println('  min trial input        : ${min_in:7.1f} MB/s (${(min_in / mean_in) * 100.0:5.1f}% of mean)')
-	println('')
-
-	above_mean    := mean_in >= threshold_mbps
-	jitter_ok     := min_in >= mean_in * trial_jitter_pct
-	verdict       := if above_mean && jitter_ok { 'PASS' } else { 'FAIL' }
-	mut reasons   := []string{}
-	if !above_mean { reasons << 'mean ${mean_in:.1f} < ${threshold_mbps:.0f} MB/s' }
-	if !jitter_ok  { reasons << 'min trial < 80% of mean' }
-	reason_str := if reasons.len == 0 { 'all checks ok' } else { reasons.join(', ') }
+	verdict := if reasons.len == 0 { 'PASS' } else { 'FAIL' }
+	reason_str := if reasons.len == 0 { 'all checks ok' } else { reasons.join('; ') }
 	println('gate-15 ${verdict}  (${reason_str})')
 	if verdict == 'FAIL' { exit(1) }
 }

@@ -65,6 +65,27 @@ pub struct ProgramPathStep {
 pub:
 	kind PathStepKind @[required]
 	name string @[required]
+	// computed_name (#925, RULED: PYE-1a/PYE-1b) — non-empty marks a
+	// COMPUTED step name `$binding` (`$m.$k`, `$x/$k`, `$x//$k`, `$x@$k`):
+	// the step's name resolves from the binding's value at walk time
+	// (resolve_computed_steps in the evaluator). `name` is empty on a
+	// computed step. The computed name is a BARE binding — no inner path,
+	// no QName fold; a non-scalar / empty / kind-inadmissible resolution
+	// refuses loudly (refuse-never-invent).
+	computed_name string
+	// name_kind — set ONLY by the evaluator's resolve_computed_steps on the
+	// RESOLVED copy of a computed step: the CXDM kind of the resolved name
+	// value. A resolved MEMBER step with a non-string kind looks up the map
+	// key by the full (kind, image) identity (`$m.$k` with $k = int 1 finds
+	// the int key, never the string '1'). Empty on every parsed step.
+	name_kind string
+	// kind_test carries a [131b] kind test written in binding-step
+	// NodeTest position (`$x/node()`, `$x//text()`). `.none` = test by
+	// name, the pre-existing behaviour; otherwise `name` is empty and the
+	// kind test is the whole NodeTest. `kind` still carries the AXIS the
+	// step walks (child for `/`, descendant for `//`), so the two are
+	// orthogonal exactly as [131] separates AxisSpecifier from NodeTest.
+	kind_test ProgramPathKindTest
 	predicates []ProgramPathPredicate
 }
 
@@ -99,6 +120,14 @@ pub:
 	// entry marks a positional argument. Empty/absent for all-positional
 	// calls.
 	arg_labels   []string
+	// path (RULED CRS-1, 2026-08-20, #862) carries the optional postfix
+	// step run applied to the call RESULT — `[$first $h]@v`,
+	// `[$nth $xs $i]/*` — mirroring ProgramBinding.path: the same [135a]
+	// compact-step subset, byte-adjacency-gated to the closing `]` (or
+	// `?`/`!`). Stepping a call result is semantically identical to
+	// binding the result and stepping the binding (code.md §6.2). Empty
+	// for step-less calls.
+	path         []ProgramPathStep
 	pos          Position
 }
 
@@ -199,12 +228,21 @@ pub:
 }
 
 // ProgramDirective is the universal directive AST shape. `name` is one of
-// the 39 directive names per directive_names; the parser
+// the directive names per cx.directive_names (the registry is the
+// count of record — a literal number here goes stale, #705); the parser
 // enforces membership and raises CXER0100 on miss.
 pub struct ProgramDirective {
 pub:
 	name  string @[required]
 	slots []ProgramSlot
+	// path (RULED PS-1, 2026-08-20, #886) carries the optional [135a]
+	// compact-step postfix applied to the directive's RESULT —
+	// `[?let …]/name`, `[?if …]@attr` — mirroring ProgramCall.path
+	// (RULED CRS-1): byte-adjacency-gated to the closing `]`, the BP-1
+	// axis:: refusal inherited from the ONE shared step parser. Stepping
+	// a directive result is semantically identical to binding the result
+	// and stepping the binding (code.md §6.2). Empty for step-less forms.
+	path  []ProgramPathStep
 	pos   Position
 }
 
@@ -218,12 +256,23 @@ pub enum ProgramForClauseKind {
 	group_by    // :group-by expr
 	limit       // :limit expr
 	par         // :par         — parallel generator evaluation (§7.3)
-	stream      // :stream      — lazy / streaming evaluation (§7.4)
+	lazy        // [lazy]       — lazy evaluation, yield-as-ready (§7.4;
+	//              renamed from [stream] by U1.1a / #763: 'stream' is the
+	//              delivery concept's name, and this kind's enum spelling
+	//              is IN the Tier-2 preimage — c.kind.str() — so the
+	//              rename moves the address of any hint-using def; the
+	//              corpus had zero)
 	ordered     // :ordered     — preserve input order under :par (§7.3)
 	take        // take N, short-circuit after N yields
 	drop        // drop N, skip first N candidates
 	takewhile   // takewhile P, yield until predicate first fails
 	dropwhile   // dropwhile P, skip while predicate holds, then yield
+	fail_fast   // :fail-fast   — under :par, short-circuit on the FIRST
+	//              observed [err] (stop dispatching, discard in-flight)
+	//              instead of the default earliest-input-index surfacing;
+	//              a no-op without :par (grammar [129r], code.md §7.3 —
+	//              stream-2 W1, #711 item 3: it previously mis-parsed as a
+	//              pattern-generator named fail-fast)
 }
 
 // ProgramForClause is one clause of a for-comprehension.
@@ -281,6 +330,12 @@ pub:
 	yield_value ?ProgramNode  // populated only when yield_form == .map
 	yield_form  ProgramForCompYieldForm = .sequence
 	outer_form  ProgramForCompOuterForm = .sequence
+	// path (RULED PS-1, 2026-08-20, #886) — the optional [135a]
+	// compact-step postfix on the comprehension's RESULT
+	// (`[?for …]/name`), exactly as ProgramDirective.path. A stepped
+	// for-comp is a READ over the materialized result — never a
+	// streamable head. Empty for step-less forms.
+	path        []ProgramPathStep
 	pos         Position
 }
 
@@ -336,9 +391,72 @@ pub:
 	                     // name; ns_prefix carries the prefix.
 	ns_kind       ProgramPathNsKind // namespace-test shape
 	ns_prefix     string // populated when ns_kind ∈ {prefix_local, prefix_any_local}
+	// kind_test carries the [131b] kind-test forms `node()` / `text()` /
+	// `element()` / `attribute()`. `.none` (the default) means the step
+	// tests by NAME — `name`/`ns_kind`/`ns_prefix` govern. When it is
+	// anything else those three fields are EMPTY: the kind test is the
+	// whole NodeTest, exactly as ast-bin.md's node-test discriminator
+	// table records it (payload `""` for 0x04..0x07). One carrier, so the
+	// spelling can never drift from the test — emit derives the source
+	// form from the enum via kind_test.spelling().
+	kind_test     ProgramPathKindTest
 	predicates    []ProgramPathPredicate
 	bind          string // `(bind $NAME)` step annotation [160a]; '' if absent
 	pos           Position
+}
+
+// ProgramPathKindTest selects the [131b] kind-test NodeTest forms. Node
+// KINDS, not names: a kind test admits every node of that kind on the
+// step's axis and nothing else. Semantics per ast.md's node-test table:
+//
+//   any_node  — `node()`      any node on the axis (element, text,
+//                             scalar, comment, PI, directive; on the
+//                             attribute axis, every attribute)
+//   text      — `text()`      character-data nodes only
+//   element   — `element()`   element nodes only (≡ `*`)
+//   attribute — `attribute()` attribute nodes only — so it is non-empty
+//                             on the attribute axis alone; every other
+//                             axis carries no attribute nodes and
+//                             selects nothing (XPath 3.1 §3.3.2).
+pub enum ProgramPathKindTest {
+	none
+	any_node
+	text
+	element
+	attribute
+}
+
+// program_path_kind_test_names is the closed set of [131b] kind-test
+// names. `Name '(' ')'` in NodeTest position is admitted iff the name is
+// in this set; anything else is a parse error (a caller wanting a
+// function call writes it in a predicate body, not in the NodeTest).
+pub const program_path_kind_test_names = ['node', 'text', 'element', 'attribute']
+
+// program_path_kind_test_from_name maps a bare kind-test name (no
+// parens) to its enum. `none` for any other name — callers treat that as
+// "not a kind test" and raise the unknown-kind-test error.
+pub fn program_path_kind_test_from_name(name string) ProgramPathKindTest {
+	return match name {
+		'node'      { ProgramPathKindTest.any_node }
+		'text'      { ProgramPathKindTest.text }
+		'element'   { ProgramPathKindTest.element }
+		'attribute' { ProgramPathKindTest.attribute }
+		else        { ProgramPathKindTest.none }
+	}
+}
+
+// spelling returns the canonical source form of a kind test, parens
+// included per canonical.md §2.12.4 ("kind tests retain their
+// parentheses on output"). Empty for `.none`, which has no spelling of
+// its own — the step's name/namespace fields carry it.
+pub fn (k ProgramPathKindTest) spelling() string {
+	return match k {
+		.none      { '' }
+		.any_node  { 'node()' }
+		.text      { 'text()' }
+		.element   { 'element()' }
+		.attribute { 'attribute()' }
+	}
 }
 
 // ProgramPathNsKind selects the namespace-test shape for a NodeTest per
@@ -388,6 +506,12 @@ pub:
 	attr_name  string
 	attr_op    string
 	attr_value ?ProgramNode
+	// type_name carries the `::T` value-kind tag of a `.type_test` attr
+	// predicate (`[@age::int]` — §5.2 rule 14 semantics in predicate
+	// position); empty for the other kinds. #772: the parser previously
+	// dropped it, degrading every type-test predicate to an existence
+	// test.
+	type_name string
 	// .expr
 	body       ?ProgramNode
 	pos        Position
@@ -422,6 +546,12 @@ pub enum ProgramLiteralKind {
 	// Mirrors the data reading's try_autotype bigint fallback so the two
 	// readings agree on over-i64 integers.
 	bigint_lit
+	// I1 stream 11 (owner ruling 2b): a bare FIXED-POINT fraction literal
+	// is a DECIMAL — exact, scale-preserving. The normalized image rides
+	// `str_val`; eval → ScalarNode of data_type=.decimal_type. Exponent-
+	// form literals stay float_lit — the kinds are lexically
+	// self-describing, mirroring the data reading's try_autotype.
+	decimal_lit
 	float_lit
 	bool_lit
 	duration_lit
@@ -482,6 +612,23 @@ pub:
 	dur_val string         // duration_lit — preserved verbatim ('100ms')
 	items   []ProgramNode      // sequence_lit / array_lit / map_lit values / cx_element body
 	keys    []string       // map_lit keys (parallel to items)
+	// key_kinds — the CXDM KIND of each map_lit key, parallel to `keys`
+	// (#777, RULED: 777-1a). Empty when the literal predates the carriage
+	// or was built without kinds; an empty ENTRY means "the image is
+	// self-identifying" (a bare `7` is an int key, `true` a bool key), so
+	// only a key whose kind does NOT follow from its image carries a tag —
+	// a STRING key with a name/number-shaped image (`'7'`, `'true'`) or an
+	// ASCRIBED numeric (`1::bigint`). Key IDENTITY is the pair (kind,
+	// image): `{'7':}` and `{7:}` are two keys, and #776's `{1:}` ≠
+	// `{1::bigint:}` ≠ `{1.0:}` is delivered by the kind rather than by
+	// smuggling the ascription into the key text.
+	key_kinds []string
+	// decl_kinds — RULED: MSS-4 (#917), parallel to `keys`: a non-empty
+	// entry marks a DECLARATION-ONLY map entry `{k: ::T}` (declared kind T,
+	// value ABSENT — never null). The parallel `items` slot holds an inert
+	// empty string_lit placeholder that eval never reads. The kind draws
+	// from [157] KindName (is_valid_kind_tag), optionally `[]`-suffixed.
+	decl_kinds []string
 	name    string         // cx_element head (empty when name_expr is set)
 	// name_expr dynamic element-name form. When set on a
 	// cx_element ProgramLiteral, the element's name is computed at
@@ -512,6 +659,15 @@ pub:
 	// the body is ONE scalar of T; `'T[]'` → a typed array of T; `'[]'` →
 	// an inferred-type array. An annotation OVERRIDES §9 auto-typing.
 	data_type string
+	// path (RULED PS-1, 2026-08-20, #886) — the optional [135a]
+	// compact-step postfix on the literal's VALUE in program position:
+	// element literals and operator forms (`[user [b 1]]/b`, `[+ 1 2]/x`),
+	// array literals (`[1, 2]/x`), sequence literals (`(1, 2)/x`), map
+	// literals (`{a: 1}.a`). Byte-adjacency-gated to the closing
+	// bracket, exactly as ProgramCall.path (CRS-1); the parser attaches
+	// it only at program-position value sites (never in pattern mode,
+	// never inside data documents). Empty for step-less forms.
+	path    []ProgramPathStep
 	pos     Position
 }
 
@@ -615,5 +771,10 @@ pub:
 pub struct ProgramSliceLiteral {
 pub:
 	axes []SliceAxis @[required]
+	// path (RULED PS-1, 2026-08-20, #886) — the optional [135a]
+	// compact-step postfix on the slice VALUE (`[2:5]/x` — kind-driven,
+	// like any stepped value); a bracketed value form takes steps like
+	// every other. Empty for step-less forms.
+	path []ProgramPathStep
 	pos  Position
 }

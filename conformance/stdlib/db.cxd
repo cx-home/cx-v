@@ -1,4 +1,4 @@
-[test-suite name=db
+[test-suite name=db ring=2
   [doc [#
 conformance fixtures for the database-access layer ($sql-* / $redis-* verbs;
    spec/03-approved/core/db_access.md).

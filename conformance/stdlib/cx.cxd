@@ -1,4 +1,4 @@
-[test-suite name=cx
+[test-suite name=cx ring=1
   [doc [#
 conformance fixtures for the cx: self-host module (spec/03-approved/modules/cx.md).
 
@@ -19,6 +19,9 @@ conformance fixtures for the cx: self-host module (spec/03-approved/modules/cx.m
               internal marker leak
      020-029  serialize / canonical / hash / equal (CLI-verb agreement:
               hash hex pins the `cx hash` digest of the same doc)
+     030-032  #708 Lane-1 witnesses — [?meta] is an inert side-band
+              EXCLUDED from identity: hash / serialize / equal of a
+              meta-annotated value agree with the bare value
      040-049  diff (navigable [diff [change …]…] value) + patch
               (apply ≡ diff⁻¹; fail-loud CXER4102)
      060-067  to-format / from-format against the conversions registry
@@ -28,6 +31,12 @@ conformance fixtures for the cx: self-host module (spec/03-approved/modules/cx.m
               (descendant, predicate, attribute axis, empty, CXER4106)
      090-093  activation lanes (no-[?lib], module lane, as= alias, flat
               [$cx-fn] alias)
+     100-106  plan-address (code.md §7.9, stream-2 L93/W4) — the plan
+              tier above E1 (pair cases share ONE address; E1 stays
+              name-sensitive), the address byte-pin, and the CORPUS
+              membership negatives at the checker's first runtime
+              consumer (ambient generator / impure predicate / [?eval]
+              body → typed CXER0120)
 
    No inter-fixture comment dividers and no inline comments inside
    in-code (the harness extracts sections to end-of-chunk).
@@ -172,7 +181,7 @@ true
 [$cx:serialize [$cx:parse "[row title=\"has 'embedded' quotes\"]"]]
 #]]
   [out-text [#
-'[row title="has \'embedded\' quotes"]'
+'[row title="has \'embedded\' quotes"]\n'
 #]]
  ]
 
@@ -224,7 +233,7 @@ true
 [$cx:serialize [?element "rows" ([?element "row" [?attr "id" "a"]], [?element "row" [?attr "id" "b"]])]]
 #]]
   [out-text [#
-'[rows ([row id=a], [row id=b])]'
+'[rows ([row id=a], [row id=b])]\n'
 #]]
  ]
 
@@ -237,7 +246,7 @@ true
 [?let [= $kids [?for [in $i ("a", "b")] [yield [?element "row" [?attr "id" $i]]]]] [$cx:serialize [?element "rows" $kids]]]
 #]]
   [out-text [#
-'[rows ([row id=a], [row id=b])]'
+'[rows ([row id=a], [row id=b])]\n'
 #]]
  ]
 
@@ -250,7 +259,7 @@ true
 [$cx:serialize [a 1]]
 #]]
   [out-text [#
-'[a 1]'
+'[a 1]\n'
 #]]
  ]
 
@@ -263,7 +272,7 @@ true
 [$cx:serialize "hi"]
 #]]
   [out-text [#
-'hi'
+'hi\n'
 #]]
  ]
 
@@ -276,7 +285,7 @@ true
 [$cx:canonical "[a    1]"]
 #]]
   [out-text [#
-'[a 1]'
+'[a 1]\n'
 #]]
  ]
 
@@ -289,7 +298,7 @@ true
 [$cx:canonical [a 1]]
 #]]
   [out-text [#
-'[a 1]'
+'[a 1]\n'
 #]]
  ]
 
@@ -302,7 +311,7 @@ true
 [$cx:hash [a 1]]
 #]]
   [out-text [#
-'c2de3721009da3ce799e831e8c1293f6c7c47033bca422657fc3693d79ae82b5'
+'sha2-256:e908d52cb2472325f8078e4e6001a0129e14ee3af98728bfcc0e733c940aba23'
 #]]
  ]
 
@@ -368,6 +377,93 @@ false
 #]]
   [out-text [#
 true
+#]]
+ ]
+
+ [case id=cx-030-meta-does-not-participate-in-hash level=core
+  [tags cx hash meta lane-1 issue-708]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $v [?meta {note: draft} [order [total 5]]]] [$eq [$cx:hash $v] [$cx:hash [order [total 5]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-031-meta-serialize-transparent level=core
+  [tags cx serialize meta lane-1 issue-708]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $v [?meta {note: draft} [order [total 5]]]] [$eq [$cx:serialize $v] [$cx:serialize [order [total 5]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-032-meta-equal-reads-through level=core
+  [tags cx equal meta lane-1 issue-708]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $v [?meta {note: draft} [order [total 5]]]] [$cx:equal $v [order [total 5]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [# ── I1 row 14 (E1 totality, audit C4): identity acquisition REFUSES
+       the three value classes with typed errors — no silent fallback,
+       no coercion. Closures were already fail-closed (CXER4101, now
+       normative); iterators refuse (CXER4117 — consumption-state
+       identity; materialize deliberately and hash the value); a
+       secret-bearing value has NO Tier-1 address (CXER4118). ── #]
+ [case id=cx-033-hash-refuses-closures level=core
+  [tags cx hash totality closure e1 i1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $f [?fn ($x) $x]] [$cx:hash $f]]
+#]]
+  [out-err [#
+cx-err:CXER4101
+#]]
+ ]
+
+ [case id=cx-034-hash-refuses-iterators level=core
+  [tags cx hash totality iterator e1 i1]
+  [; A genuine LAZY iterator ([?take] over [$iterate] stays an
+     IteratorNode; a bounded [$range lo hi] is already an eager
+     Sequence and hashes normally). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $i [?take 3 [$iterate [?fn ($x) [+ $x 1]] 0]]] [$cx:hash $i]]
+#]]
+  [out-err [#
+cx-err:CXER4117
+#]]
+ ]
+
+ [case id=cx-035-hash-refuses-secrets level=core
+  [tags cx hash totality secret e1 i1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $s [?secret abc]] [$cx:hash $s]]
+#]]
+  [out-err [#
+cx-err:CXER4118
 #]]
  ]
 
@@ -482,6 +578,36 @@ CXER4102
 #]]
  ]
 
+ [case id=cx-048-merge-policies-and-conflict-values level=core gate=enforced
+  [tags cx merge conflict stream-9 719 CXER4110]
+  [; ── cx:merge (modules/cx.md §2.3; #719 item 3 — the conflict posture
+     ALIGNED to values, stream 9): elements of the same name deep-merge —
+     attrs union (a value collision is one policy point), children pair by
+     name and merge recursively, unpaired children keep source order;
+     maps union per-key. last-wins (default) takes b's side at each policy
+     point, first-wins takes a's. error-on-conflict raises CXER4110 whose
+     err CARRIES each collision as the typed [conflict subject=<path>
+     kind=:merge-value [ours …] [theirs …]] child — the ONE conflict
+     shape, never a bare message.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/cx']
+[?let
+[= $a [order id="o-1" status="open" [customer [name "Dana"]] [line sku="x" qty=1]]]
+[= $b [order id="o-1" status="paid" [customer [name "Dana"]] [note "rush"]]]
+[= $last [$cx:merge $a $b]]
+[= $first [$cx:merge $a $b "first-wins"]]
+[= $conf [?fallback [$cx:merge $a $b "error-on-conflict"] [recover-with [context] [refused [code $err@code] [$count $err/*] [$first $err/*]]]]]
+[= $maps [$cx:merge {a: 1 b: {x: 1}} {b: {x: 2 y: 3} c: 4}]]
+  [probe [last $last] [first $first] [conflicted $conf] [maps $maps]]]
+#]]
+  [out-text [#
+[probe [last [order id=o-1 status=paid [customer [name 'Dana']] [line sku=x qty=1] [note 'rush']]] [first [order id=o-1 status=open [customer [name 'Dana']] [line sku=x qty=1] [note 'rush']]] [conflicted [refused [code 'cx-err:CXER4110'] 1 [conflict subject='/order/@status' kind=:merge-value [ours 'open'] [theirs 'paid']]]] [maps {a: 1, b: {x: 2, y: 3}, c: 4}]]
+#]]
+ ]
+
  [case id=cx-060-to-format-json level=core
   [tags cx to-format json conversions]
   [in-cx [#
@@ -491,9 +617,7 @@ CXER4102
 [$cx:to-format [a 1] "json"]
 #]]
   [out-text [#
-'{
-  "a": 1
-}'
+'{\n  "a": 1\n}'
 #]]
  ]
 
@@ -681,7 +805,7 @@ CXER4106
 [$cx:hash [a 1]]
 #]]
   [out-text [#
-'c2de3721009da3ce799e831e8c1293f6c7c47033bca422657fc3693d79ae82b5'
+'sha2-256:e908d52cb2472325f8078e4e6001a0129e14ee3af98728bfcc0e733c940aba23'
 #]]
  ]
 
@@ -695,7 +819,7 @@ CXER4106
 [$cx:serialize [a 1]]
 #]]
   [out-text [#
-'[a 1]'
+'[a 1]\n'
 #]]
  ]
 
@@ -709,7 +833,7 @@ CXER4106
 [$x:hash [a 1]]
 #]]
   [out-text [#
-'c2de3721009da3ce799e831e8c1293f6c7c47033bca422657fc3693d79ae82b5'
+'sha2-256:e908d52cb2472325f8078e4e6001a0129e14ee3af98728bfcc0e733c940aba23'
 #]]
  ]
 
@@ -722,7 +846,435 @@ CXER4106
 [$cx-serialize [a 1]]
 #]]
   [out-text [#
-'[a 1]'
+'[a 1]\n'
+#]]
+ ]
+
+ [; I1 row 9 (audit C4/L78, DEFINES): quoted trees LOWER to plain
+    authorable CX text — a bare $x binding becomes the variable hole
+    `$x` — so quote → serialize → hash yields a real Tier-1 address
+    (pre-I1 the cx:-namespaced image died on re-parse, E210→CXER4100;
+    the pre-fix pin recorded that death). Expression identity IS the
+    Tier-1 address of the lowered tree (L77/L81): the digest below
+    EQUALS `cx hash` of the data document `[total $x]`. ]
+ [case id=cx-094-quote-hash-is-tier1 level=core
+  [tags cx quote hash lowering c4 i1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $q [?quote [total $x]]] [$cx:hash [$cx:serialize $q]]]
+#]]
+  [out-text [#
+'sha2-256:cf1204b421c2179448e1fe82338d37e64998a1897ea67d8c27674204ebf2c5a0'
+#]]
+ ]
+
+ [; stream-2 L93 (W4): the PLAN ADDRESS is the caching-identity tier
+    ABOVE E1 (code.md §7.9) — equivalent spellings share one address;
+    the byte-pin below guards the canonical plan encoding the way the
+    address baseline guards Tier-2. cx:plan-address is the §7.8
+    membership test's first runtime consumer, so the corpus-level
+    membership negatives (the ruled W3→W4 sequencing) land here. ]
+ [case id=cx-100-plan-address-byte-pin level=core
+  [tags cx plan-address plan-form stream-2 L93]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:plan-address '[?for [in $o [$store:source $s "//order"]] [group-by $o@region] [yield [g r=$key n=$count]]]']
+#]]
+  [out-text [#
+'plan:sha2-256:b42c94eeb2164afea1ce4a8d81b7f21a6b115b4f5d80372b7eeb0cff19e76e34'
+#]]
+ ]
+
+ [case id=cx-101-plan-pair-alpha-respelling level=core
+  [tags cx plan-address plan-form pair-case alpha stream-2 L93]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq
+  [$cx:plan-address '[?for [in $o [$store:source $s "//order"]] [group-by $o@region] [yield [g r=$key n=$count]]]']
+  [$cx:plan-address '[?for [in $x [$store:source $s "//order"]] [group-by $x@region] [yield [g r=$key n=$count]]]']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-102-plan-pair-limit-take-collapse level=core
+  [tags cx plan-address plan-form pair-case lambda stream-2 L93]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq
+  [$cx:plan-address '[?for [in $o [$store:source $s "//o"]] [limit 5] [yield $o]]']
+  [$cx:plan-address '[?for [in $o [$store:source $s "//o"]] [take 5] [yield $o]]']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-103-plan-e1-distinction-preserved level=core
+  [tags cx plan-address plan-form pair-case e1 stream-2 L93]
+  [meta [#
+note: the $o-vs-$x respelling shares ONE plan address (cx-101) while
+note: E1 (text identity) keeps the two spellings distinct — the plan
+note: tier sits ABOVE E1, it does not replace it.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq
+  [$cx:hash '[?for [in $o [$store:source $s "//order"]] [group-by $o@region] [yield [g r=$key n=$count]]]']
+  [$cx:hash '[?for [in $x [$store:source $s "//order"]] [group-by $x@region] [yield [g r=$key n=$count]]]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=cx-104-plan-non-member-ambient-refused level=core
+  [tags cx plan-address membership negative ambient stream-2 L93 CXER0120]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:plan-address '[?for [user] [yield 1]]']
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=cx-105-plan-non-member-impure-refused level=core
+  [tags cx plan-address membership negative purity stream-2 L93 CXER0120]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:plan-address '[?for [in $o [$store:source $s "//o"]] [where [> [$random] 0.5]] [yield $o]]']
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=cx-107-quote-bare-pattern-roundtrip level=core
+  [tags cx quote serialize roundtrip pattern-generator stream-2]
+  [meta [#
+note: the quote lowering re-emits program text — the bare
+note: pattern-generator shortcut MUST re-emit BARE: wrapped as
+note: `[in [user]]` it re-parses as an element-literal SOURCE
+note: (construct-and-iterate), a silent semantics change (found at W6
+note: through the quoted store-query pipeline; the fix rides
+note: program_emit's generator arm).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:serialize [?quote [?for [user] [yield 1]]]]
+#]]
+  [out-text [#
+"[cx:expr '[?for [user] [yield 1]]']\n"
+#]]
+ ]
+
+ [case id=cx-106-plan-non-member-eval-refused level=core
+  [tags cx plan-address membership negative eval stream-2 L93 CXER0120]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:plan-address '[?for [in $o [$store:source $s "//o"]] [yield [?eval "1"]]]']
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=cx-108-computation-id-injectivity level=core
+  [tags cx computation-id tier2 injectivity stream-2 769]
+  [meta [#
+note: #769 (RULED (a) 2026-08-10) — fields that distinguish
+note: computations are IN the Tier-2 stream: slice bounds, pattern-attr
+note: comparison values and type-test names, and predicate attr KIND
+note: (existence vs absence). Each pair below collided on the pre-fix
+note: encoding (false computation-identity merges, verified live).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[probe
+ [slice-bounds [$eq [$cx:computation-id '[?def f ($x) $x[0:2]]']
+                    [$cx:computation-id '[?def f ($x) $x[1:4]]']]]
+ [attr-value [$eq [$cx:computation-id '[?def f ($d) [?match $d [case [user @role="admin"] 1] [else 0]]]']
+                  [$cx:computation-id '[?def f ($d) [?match $d [case [user @role="guest"] 1] [else 0]]]']]]
+ [attr-type-test [$eq [$cx:computation-id '[?def f ($d) [?match $d [case [user @role::str] 1] [else 0]]]']
+                      [$cx:computation-id '[?def f ($d) [?match $d [case [user @role::int] 1] [else 0]]]']]]
+ [pred-existence-absence [$eq [$cx:computation-id '[?def f ($d) $d//x[@k]]']
+                              [$cx:computation-id '[?def f ($d) $d//x[@!k]]']]]
+ [alpha-slice-still-collides [$eq [$cx:computation-id '[?def f ($x $a $b) $x[$a:$b]]']
+                                  [$cx:computation-id '[?def f ($y $p $q) $y[$p:$q]]']]]]
+#]]
+  [out-text [#
+[probe [slice-bounds false] [attr-value false] [attr-type-test false] [pred-existence-absence false] [alpha-slice-still-collides true]]
+#]]
+ ]
+
+ [case id=cx-111-computation-id-injectivity-audit level=core
+  [tags cx computation-id tier2 injectivity stream-2 769 audit]
+  [meta [#
+note: the W7 adversarial audit found five more #769-class holes (same
+note: ruled class): order-by DIRECTION, duration + period payloads
+note: (dur_val, not str_val), map-pattern typed binds, and sequence
+note: rest-captures — each pair collided on the pre-audit encoding.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[probe
+ [direction [$eq [$cx:computation-id '[?def f ($s) [?for [in $o $s] [order-by $o/k asc] [yield $o]]]']
+                 [$cx:computation-id '[?def f ($s) [?for [in $o $s] [order-by $o/k desc] [yield $o]]]']]]
+ [duration [$eq [$cx:computation-id '[?def f () 100ms]'] [$cx:computation-id '[?def f () 200ms]']]]
+ [period [$eq [$cx:computation-id '[?def f () 1mo]'] [$cx:computation-id '[?def f () 2mo]']]]
+ [typed-bind [$eq [$cx:computation-id '[?def f ($d) [?match $d [case {k: $v::int} $v] [else 0]]]']
+                  [$cx:computation-id '[?def f ($d) [?match $d [case {k: $v::str} $v] [else 0]]]']]]
+ [rest-capture [$eq [$cx:computation-id '[?def f ($d) [?match $d [case ($x, *$r) $r] [else 0]]]']
+                    [$cx:computation-id '[?def f ($d) [?match $d [case ($x, $r) $r] [else 0]]]']]]]
+#]]
+  [out-text [#
+[probe [direction false] [duration false] [period false] [typed-bind false] [rest-capture false]]
+#]]
+ ]
+
+ [case id=cx-112-serialize-predicate-type-test-roundtrip level=core
+  [tags cx quote serialize roundtrip predicate type-test issue-772]
+  [meta [#
+note: #772 — program_emit dropped the ::T of a type-test predicate
+note: (the cx-107 lossy-round-trip class): re-emitted text degraded
+note: [@age::int] to the existence test [@age], a semantics change.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:serialize [?quote $d//x[@age::int]]]
+#]]
+  [out-text [#
+"[cx:expr '$d//x[@age::int]']\n"
+#]]
+ ]
+
+ [; E2/L82-L83 type-identity claim machinery (I5 stream 1 W2,
+    semantic_value_model §3): cx:type-binding materializes the Lane-2
+    [type-binding …] claim — pair recoverable-by-computation, anchoring
+    preconditions fail-closed (CXER4116: one-type-per-schema-document is
+    NORMATIVE for anchoring schemas), verification recompute-and-compare
+    (CXER4119 on any mismatch). ]
+ [case id=cx-113-type-binding-claim-shape level=core
+  [tags cx type-binding e2 type-identity i5-s1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:serialize [$cx:type-binding [order id=7] '[schema of=order mode=closed]
+[order [attr id::int [req]]]
+']]
+#]]
+  [out-text [#
+'[type-binding\n  [subject hash=sha2-256:f0133d97150f589c10415631c6ce3a24686bf5131f70e7a058655e0cacae1145]\n  [name order]\n  [schema sha2-256:1b56731226a42f40b4df51e81bcbcd7271d888d524ad077559dc839b34b93697]\n]\n'
+#]]
+ ]
+
+ [case id=cx-114-type-binding-verify-true level=core
+  [tags cx type-binding verify e2 i5-s1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $s '[schema of=order]
+[order [attr id::int]]
+'] [$cx:type-binding-verify [$cx:type-binding [order id=7] $s] [order id=7] $s]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cx-115-type-binding-verify-tamper level=core
+  [tags cx type-binding verify negative CXER4119 i5-s1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $s '[schema of=order]
+[order [attr id::int]]
+'] [$cx:type-binding-verify [$cx:type-binding [order id=7] $s] [order id=8] $s]]
+#]]
+  [out-err [#
+cx-err:CXER4119
+#]]
+ ]
+
+ [case id=cx-116-type-binding-multi-type-refused level=core
+  [tags cx type-binding anchoring negative CXER4116 L83 i5-s1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:type-binding [order id=7] '[schema of=order]
+[order [attr id::int]]
+[line [attr sku::string]]
+']
+#]]
+  [out-err [#
+cx-err:CXER4116
+#]]
+ ]
+
+ [case id=cx-117-version-pure-semver level=core
+  [tags cx version environment L103 stream-5]
+  [; L103 — [$cx:version] is the PURE runtime-version builtin (a constant
+     of the evaluation: full semver derived from the cx_version build
+     define / repo-root VERSION; test builds default 0.0.0-dev). Shape
+     asserted, not the value — fixtures run on every build. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[r [$contains [$cx:version] '.'] [$eq [$cx:version] [$cx:version]]]
+#]]
+  [out-text [#
+[r true true]
+#]]
+ ]
+
+ [case id=cx-118-env-canonical-value level=core
+  [tags cx env environment canonical L103 stream-5]
+  [; L103 — [$cx:env] is the canonical environment CX value of the
+     computation record: {builtins:, runtime:, schema-dialect:} (map =
+     self-canonicalizing). runtime == [$cx:version]; builtins = a plain
+     Tier-1 address; schema-dialect = the S020-enforced dialect semver. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $e [$cx:env]]
+[r [$eq $e/runtime [$cx:version]]
+   [$starts-with $e/builtins 'sha2-256:']
+   [$eq $e/schema-dialect '0.8']]]
+#]]
+  [out-text [#
+[r true true true]
+#]]
+ ]
+
+ [case id=cx-120-tape-composed-identity level=core
+  [tags cx computation tape identity composition L107 stream-5]
+  [; L107 — a witnessed impure computation is hash(fn, inputs UNION
+     {tape}, env, caps): the tape is an ORDINARY Tier-1-addressed input
+     (composition, not a new axis — the record shape is unchanged).
+     Adding the tape input moves the address; the same tape address
+     composes reproducibly; and the tape-bearing record still hashes
+     through the plain Tier-1 path (no new prefix, no registry row). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let
+ [= $tape [$cx:hash '[cx-trace version=1 [seed clock=0 rng=7] [event step=1 effect=receive [result 42]]]']]
+ [= $mk [?fn $extra {computation: {fn: {code: 'computes-as:sha2-256:ab', source: 'sha2-256:cd'}, inputs: [?if [$eq $extra ''] [then {x: 'sha2-256:ef'}] [else {tape: $extra, x: 'sha2-256:ef'}]], env: {runtime: '1.0.0'}, caps: {}}}]]
+ [r [$starts-with $tape 'sha2-256:']
+    [$eq [$cx:hash [$mk $tape]] [$cx:hash [$mk $tape]]]
+    [$eq [$cx:hash [$mk $tape]] [$cx:hash [$mk '']]]]]
+#]]
+  [out-text [#
+[r true true false]
+#]]
+ ]
+
+ [case id=cx-119-builtins-rehash-verifies level=core
+  [tags cx env builtins identity rehash-verify L103 stream-5]
+  [; L103 — the builtin-set id is the Tier-1 hash of a canonical CX value
+     listing the two closed spec tables (the sect-4.1 directive registry +
+     the sect-6.5.x purity classification). [$cx:builtins] exposes that
+     value so ANY party re-derives the id in-language: hash(value) == the
+     env record's builtins field — the M5 re-hash-to-verify property,
+     NEVER cx_features or a binary hash. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[r [$eq [$cx:hash [$cx:builtins]] [?let [= $e [$cx:env]] $e/builtins]]]
+#]]
+  [out-text [#
+[r true]
+#]]
+ ]
+
+ [case id=cx-109-plan-non-member-impure-lambda-count level=core
+  [tags cx plan-address membership negative stream-2 770 CXER0120]
+  [meta [#
+note: #770 (RULED (a) 2026-08-10) — λ clause counts join §7.8 point
+note: 4's purity enumeration: an impure [take] count broke the
+note: determinism guarantee while passing the pre-ruling test.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:plan-address '[?for [in $o [$store:source $s "//o"]] [take [$random]] [yield $o]]']
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=cx-110-plan-non-member-ambient-read-in-predicate level=core
+  [tags cx plan-address membership negative stream-2 770 CXER0120]
+  [meta [#
+note: #770 cousin (RULED with it) — the ambient exclusion covers ALL
+note: expression slots: a document-context read in a [where] predicate
+note: is a dependency the source set cannot name.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:plan-address '[?for [in $o [$store:source $s "//o"]] [where [> [$count //order] 0]] [yield $o]]']
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=cx-121-serialize-canonical-byte-identity level=core
+  [tags cx serialize canonical roundtrip issue-807]
+  [meta [#
+note: #807(f) / I5 audit AF-3 — the §4 identity serialize∘parse ≡
+note: canonical is BYTE-true, trailing LF included. The pre-fix
+note: cx-010..012 masked the missing LF with a [$concat … "\n"]
+note: wrapper (repaired in the same landing); this case pins the
+note: identity with NO mask, on a multi-node body whose canonical
+note: form also exercises attr ordering + child indentation.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $t "[cfg [db host='h' port=5432] [flags on true]]"] [$eq [$cx:serialize [$cx:parse $t]] [$cx:canonical $t]]]
+#]]
+  [out-text [#
+true
 #]]
  ]
 ]

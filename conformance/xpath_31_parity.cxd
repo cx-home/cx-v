@@ -1,4 +1,4 @@
-[test-suite name=xpath-31-parity
+[test-suite name=xpath-31-parity ring=1
   [doc [#
 # CX vs. Saxon-HE XPath 3.1 parity fixtures (gate 28.5)
 #

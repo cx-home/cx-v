@@ -1,0 +1,2 @@
+[?def classify ($age) [?match $age [case 13 'teen'] [else 'adult']]]
+[?for [in $u (1, 2, 3)] [yield [classify $u]]]

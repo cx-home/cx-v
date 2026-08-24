@@ -1,4 +1,4 @@
-[test-suite name=namespaces
+[test-suite name=namespaces ring=0
   [doc [#
 # CX Conformance — Namespace Tests
 # Version: 1.0 — 2026-05-08
@@ -273,6 +273,112 @@
 #]]
   [out-canonical [#
 [doc xml:base=https://example.com xml:id=root content]
+#]]
+ ]
+
+ [# ── stream 15 (I1, L50/L51, #704): the CX namespace URI is the RFC 4151
+       tag URI `tag:cxhome.org,2026:ns/cx` — an IDENTIFIER, never a locator.
+       Enforcement is by RESOLVED URI, not literal prefix: binding ANY
+       prefix (or the default namespace) to the CX URI is E213, in every
+       spelling that ever denoted it — the tag URI plus both
+       reserved-to-reject legacy https spellings. The reserved `cx` prefix
+       may not be re-bound. ONE carve-out: `xmlns:cx="<tag URI>"` restates
+       the built-in binding the XML C14N image mandates on its root — it is
+       ACCEPTED and strict canonical STRIPS it (cx:/xml: are never emitted
+       as declarations, canonical.md §2.7a). ── #]
+ [case id=ns-017-e213-bind-tag-uri level=core
+  [tags namespaces reserved e213 stream-15]
+  [in-cx [#
+[doc xmlns:p='tag:cxhome.org,2026:ns/cx' [p:x 1]]
+#]]
+  [out-err [#
+cx-err:E213
+#]]
+ ]
+
+ [case id=ns-018-e213-bind-legacy-cxhome level=core
+  [tags namespaces reserved e213 legacy stream-15]
+  [in-cx [#
+[doc xmlns:p='https://cxhome.org/ns/cx' [p:x 1]]
+#]]
+  [out-err [#
+cx-err:E213
+#]]
+ ]
+
+ [case id=ns-019-e213-bind-legacy-cx-home level=core
+  [tags namespaces reserved e213 legacy stream-15]
+  [in-cx [#
+[doc xmlns:p='https://cx-home.org/ns/cx' [p:x 1]]
+#]]
+  [out-err [#
+cx-err:E213
+#]]
+ ]
+
+ [case id=ns-020-e213-default-ns-cx-uri level=core
+  [tags namespaces reserved e213 default stream-15]
+  [in-cx [#
+[doc xmlns='tag:cxhome.org,2026:ns/cx' [x 1]]
+#]]
+  [out-err [#
+cx-err:E213
+#]]
+ ]
+
+ [case id=ns-021-e213-rebind-cx-prefix level=core
+  [tags namespaces reserved e213 rebind stream-15]
+  [in-cx [#
+[doc xmlns:cx=urn:other [y 1]]
+#]]
+  [out-err [#
+cx-err:E213
+#]]
+ ]
+
+ [case id=ns-022-carrier-decl-accepted-and-stripped level=core
+  [tags namespaces reserved carrier canonical stream-15]
+  [desc [#
+The one legal binding: xmlns:cx restating the built-in tag URI (the XML
+C14N image mandates it on the root). Accepted at parse; strict canonical
+strips the redundant declaration, so the declared and undeclared spellings
+of one document converge on one address.
+#]]
+  [in-cx [#
+[doc xmlns:cx='tag:cxhome.org,2026:ns/cx' b=1 content]
+#]]
+  [out-canonical [#
+[doc b=1 content]
+#]]
+ ]
+
+ [case id=ns-023-canonical-idempotence-namespaced level=core
+  [tags namespaces canonical idempotence stream-15]
+  [in-cx [#
+[doc xmlns:z=urn:example [z:item v=1]]
+#]]
+  [out-canonical [#
+[doc xmlns:z=urn:example
+  [z:item v=1]
+]
+#]]
+ ]
+
+ [case id=ns-024-e210-authored-cx-name level=core
+  [tags namespaces reserved e210 stream-15 issue-704]
+  [desc [#
+The E210 half of the reserved-URI pair (#704 §5): a name authored INTO
+the CX namespace is refused. The `cx:` prefix is bound built-in, so this
+is the only way a name can resolve into the reserved URI — every other
+route is cut off one step earlier, at the binding, by E213 (ns-017..021).
+The refusal was live but UNPINNED: E213 had five fixtures and E210 none,
+so a regression on the authored-name side would have passed the corpus.
+#]]
+  [in-cx [#
+[doc [cx:x 1]]
+#]]
+  [out-err [#
+cx-err:E210
 #]]
  ]
 ]

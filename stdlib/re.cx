@@ -111,7 +111,7 @@
   [sig """-> [sequence string]"""]
   [summary """Return all capture groups of a match as a sequence, starting with the full match."""]
   [example [code """[?lib 'cx-stdlib/re']
-[$re:groups-all [$re:find [$re:compile "(a+)(b+)"] "aabbb"]]"""] [expect """('aabbb', 'aa', 'bbb')"""]]
+[$re:groups-all [$re:find [$re:compile "(a+)(b+)"] "aabbb"]]"""] [expect """(aabbb, aa, bbb)"""]]
 ]
 [fn-doc name=groups-map scope=public purity=pure
   [sig """-> map"""]
@@ -141,13 +141,13 @@
   [sig """-> [sequence string]"""]
   [summary """Split a string into segments around every match of the pattern."""]
   [example [code """[?lib 'cx-stdlib/re']
-[$re:split [$re:compile ","] "a,b,c"]"""] [expect """('a', 'b', 'c')"""]]
+[$re:split [$re:compile ","] "a,b,c"]"""] [expect """(a, b, c)"""]]
 ]
 [fn-doc name=split-limit scope=public purity=pure
   [sig """-> [sequence string]"""]
   [summary """Split a string on the pattern into at most max+1 segments."""]
   [example [code """[?lib 'cx-stdlib/re']
-[$re:split-limit [$re:compile ","] "a,b,c,d" 1]"""] [expect """('a', 'b,c,d')"""]]
+[$re:split-limit [$re:compile ","] "a,b,c,d" 1]"""] [expect """(a, 'b,c,d')"""]]
 ]
 [fn-doc name=group-count scope=public purity=pure
   [sig """-> int"""]
@@ -159,7 +159,7 @@
   [sig """-> [sequence string]"""]
   [summary """Return the names of the named capture groups in a compiled pattern."""]
   [example [code """[?lib 'cx-stdlib/re']
-[$re:group-names [$re:compile "(?P<year>[0-9]{4})-(?P<month>[0-9]{2})"]]"""] [expect """('year', 'month')"""]]
+[$re:group-names [$re:compile "(?P<year>[0-9]{4})-(?P<month>[0-9]{2})"]]"""] [expect """(year, month)"""]]
 ]
 [fn-doc name=pattern-text scope=public purity=pure
   [sig """-> string"""]

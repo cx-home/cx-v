@@ -1,0 +1,9 @@
+%%cx:Wz9jYW5jZWwgJGEtYmluZGluZy1uYW1lLXRoYXQtaXMtd2VsbC1vdmVyLWZvcnR5LWVpZ2h0LWNoYXJhY3RlcnMtbG9uZy1mb3ItdHJ1bmNhdGlvbl0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?cancel]"]]
+    n4["$a-binding-name-that-is-well-over-forty-eight-ch…"]
+    n3 -- "cancel" --> n4
+    n1 --> n3
+    n3 --> n2

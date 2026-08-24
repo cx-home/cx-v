@@ -1,4 +1,4 @@
-[test-suite name=mcp-server
+[test-suite name=mcp-server ring=2
   [doc [#
 Conformance fixtures for cx-x/mcp-server — minimal MCP server helpers (#6 Y1). NB
 cx-x/mcp-server is an EXPERIMENTAL x/-TIER module (D3): bundled + gated but exempt
@@ -26,7 +26,7 @@ the result (JSON strings single-quoted, the emitted JSON has keys sorted).
 [$json:emit [$srv:initialize-result 1 "cx-demo" "0.1"]]
 #]]
    [out-text [#
-'{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"name":"cx-demo","version":"0.1"}}}'
+'{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2025-06-18","serverInfo":{"name":"cx-demo","version":"0.1"}}}'
 #]]
   ]
 
@@ -92,6 +92,187 @@ the result (JSON strings single-quoted, the emitted JSON has keys sorted).
 #]]
    [out-text [#
 'echo'
+#]]
+  ]
+
+  [# ---- stream 18: the projection-derived tools/list (L138/L141/L142) ---- #]
+
+  [case id=mcp-server-007-tools-list-refund-order-golden level=core
+   [tags mcp-server tools-list projection descriptor golden stream-18 690 L138 L141 L142]
+   [meta [#
+note: THE ruled golden — refund-order's tools/list derived AT LIST TIME
+note: from module source via cx-x/tools (tools-list-result's first
+note: caller; no materialized manifest). The 2025-06-18 entry carries
+note: outputSchema, the four annotation hints, and _meta with the
+note: Tier-1 source address (the trust key an approval binds), the
+note: Tier-2 code address, both schema ids (sha2-256 of the JSON
+note: emission), and the cap: requirements — enforced regardless of
+note: what the client does with them (the lossy-downward rule).
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $src """
+[fn-doc name=refund-order scope=public purity=impure
+  [sig '''($order-id::string $amount::decimal) -> element''']
+  [summary '''Refund an order via the payment provider.''']
+  [param-doc name=order-id '''The order identifier.''']
+  [param-doc name=amount '''The refund amount (decimal string).''']]
+[?def refund-order scope=public impure [effects [write] [net]] [requires cap:orders/refund] [returns element] ($order-id::string $amount::decimal) [refunded $order-id]]
+"""]
+  [$json:emit [$srv:tools-list-result 1 [$srv:tools-for $src]]]]
+#]]
+   [out-text [#
+'{"id":1,"jsonrpc":"2.0","result":{"tools":[{"_meta":{"code":"computes-as:sha2-256:81ef3ae6a7561c8c1a9b01d59bcd9c2132e0c2898c0ff7075aff761b5fb700b8","inputSchemaId":"sha2-256:2b933c24d1c04939b247686c723ac3cbc9194c69f89098dd56355de665a1aa4e","outputSchemaId":"sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0","requires":["cap:orders/refund"],"returnsType":"element","source":"sha2-256:b06b798611469b59efb8b1cfd37454890ef4dd51f75b3968aa8e1f8a96c58861"},"annotations":{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false},"description":"Refund an order via the payment provider.","inputSchema":{"additionalProperties":false,"properties":{"amount":{"description":"The refund amount (decimal string).","type":"string"},"order-id":{"description":"The order identifier.","type":"string"}},"required":["order-id","amount"],"type":"object"},"name":"refund-order","outputSchema":{"type":"object"}}]}}'
+#]]
+  ]
+
+  [case id=mcp-server-008-tools-for-propagates-projection-failure level=core
+   [tags mcp-server tools-list projection fail-loud stream-18 690 L143]
+   [meta [#
+note: a projection failure (here: a command def with no [fn-doc]
+note: [summary]) PROPAGATES as its [err] — a tools/list must never
+note: silently advertise an empty or partial tool set.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[$srv:tools-for "[?def undocumented-cmd impure [effects [write]] ($x::string) [w $x]]"]
+#]]
+   [out-text [#
+[err code=missing-summary ([missing-summary def=undocumented-cmd])]
+#]]
+  ]
+
+  [# ---- stream 18: the propose-only tools/call boundary (L113/L139/L140) -- #]
+
+  [case id=mcp-server-009-propose-call-reply-shape level=core
+   [tags mcp-server propose-call proposal tier1 stream-18 690 L113 L139 L140]
+   [meta [#
+note: the propose-only boundary's reply: one text content block
+note: carrying the proposal's CANONICAL CX text (the identity-bearing
+note: bytes — the Tier-1 address recomputes from them) and
+note: structuredContent.address = the proposal's Tier-1 address (what
+note: an out-of-band approval binds). isError:false — a proposal IS
+note: the successful outcome of a propose-only call.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/json' :as json]
+[?def refund-order scope=public impure [effects [write]] [returns int] ($order-id::string $amount::int 10) $amount]
+[$json:emit [$srv:propose-call 7 refund-order {order-id: 'o-1', amount: 42}]]
+#]]
+   [out-text [#
+'{"id":7,"jsonrpc":"2.0","result":{"content":[{"text":"[proposal\\n  [command tier1=sha2-256:9cfde2203a17c9cbd38bc5acf6780289771b5610a609391c8e3fcb4494ca7fb2 code=sha2-256:80f772c984949093ea73caa1962e6e29fc1004d7e2ba728f5f8e8d65424e1ef5]\\n  [args {order-id: o-1, amount: 42}]\\n  [effects\\n    [write]\\n  ]\\n  [preconditions]\\n  [tenant \'\']\\n]\\n","type":"text"}],"isError":false,"structuredContent":{"address":"sha2-256:fbf263a7b925a0abb2b6baf496f21753723e68899e6bd129e144e25fb0712b93"}}}'
+#]]
+  ]
+
+  [case id=mcp-server-010-propose-call-never-executes level=core
+   [tags mcp-server propose-call out-effects discriminator stream-18 690 L113 L140]
+   [meta [#
+note: the boundary NEVER executes: the command's body is a real
+note: traceable effect ([$time:now] under [effects [clock]]), and the
+note: out-effects trace after propose-call is EMPTY — the body did not
+note: run; only commit (after out-of-band approval) runs it.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-stdlib/time']
+[?def stamp-order scope=public impure [effects [clock]] [returns any] ($order-id::string) [$time:now]]
+[?let [= $r [$srv:propose-call 9 stamp-order {order-id: 'o-2'}]]
+  [proposed has-result=[$exists $r/result]]]
+#]]
+   [out-text [#
+[proposed has-result=true]
+#]]
+   [out-effects [#
+#]]
+  ]
+
+  [case id=mcp-server-011-choreography-end-to-end level=core
+   [tags mcp-server choreography m5 refund-order end-to-end stream-14 686 stream-18 690]
+   [meta [#
+note: THE s18→s14 choreography witness — every boundary leg in ONE
+note: story: tools/list advertises from the projection; the client
+note: validates its arguments against the served inputSchema
+note: (validate-args 'ok'); tools/call PROPOSES (the reply carries the
+note: address; the body has not run); the approval + commit execute
+note: out-of-band (42); the journal chain verifies. Each leg is
+note: pinned separately elsewhere — this witness pins their
+note: COMPOSITION.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/json' :as json]
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?def refund-order scope=public impure [effects [write]] [returns int] ($order-id::string $amount::int 10) $amount]
+[?let
+  [= $src """
+[fn-doc name=refund-order scope=public purity=impure
+  [sig '''($order-id::string $amount::int 10) -> int''']
+  [summary '''Refund an order.''']]
+[?def refund-order scope=public impure [effects [write]] [returns int] ($order-id::string $amount::int 10) $amount]
+"""]
+  [= $tools [$srv:tools-for $src]]
+  [= $tool [$first $tools]]
+  [= $args [$json:parse "{\"order-id\":\"o-1\",\"amount\":42}"]]
+  [= $valid [$mcp:validate-args $tool $args]]
+  [= $reply [$srv:propose-call 7 refund-order {order-id: 'o-1', amount: 42}]]
+  [= $j [$journal:open "mem://choreo" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$cx:propose refund-order {order-id: 'o-1', amount: 42} {tenant: 'acme'}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-1'}]]
+  [= $r [$authz:commit $az $p $a refund-order {actor: 'agent-1'}]]
+  [= $v [$journal:verify $j {}]]
+  [choreo
+    [advertised n=[$count $tools] name=$tool.name]
+    [validated [$name $valid]]
+    [proposed has-address=[$exists $reply/result]]
+    [committed $r]
+    [chain $v/@valid]]]
+#]]
+   [out-text [#
+[choreo [advertised n=1 name=refund-order] [validated 'ok'] [proposed has-address=true] [committed 42] [chain true]]
+#]]
+  ]
+
+  [case id=mcp-server-012-two-boundary-strict-args level=core
+   [tags mcp-server validate-args args-record two-boundary stream-14 686 stream-18 690]
+   [meta [#
+note: the two-boundary strict-args pair: the CLIENT refuses what its
+note: declared jsonschema subset covers (a missing required property —
+note: '/order-id'); an EXTRA key passes the client (additionalProperties
+note: is documented-ignored, jsonschema.md §2.1 — subset by design) and
+note: is refused at the SERVER record (CXER4111: the name-keyed args
+note: record binds the parameter list only). Two boundaries, one
+note: contract; enforcement never depends on the client.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/mcp-server' :as srv]
+[?lib 'cx-x/mcp' :as mcp]
+[?lib 'cx-stdlib/json' :as json]
+[?lib 'cx-stdlib/jsonschema' :as js]
+[?def ship scope=public impure [effects [write]] ($order-id::string) [shipped $order-id]]
+[?let
+  [= $src """
+[fn-doc name=ship scope=public purity=impure [sig '''x'''] [summary '''Ship.''']]
+[?def ship scope=public impure [effects [write]] ($order-id::string) [shipped $order-id]]
+"""]
+  [= $tool [$first [$srv:tools-for $src]]]
+  [= $missing [$js:violation-paths [$mcp:validate-args $tool [$json:parse "{}"]]]]
+  [= $extra-client [$name [$mcp:validate-args $tool [$json:parse "{\"order-id\":\"o-1\",\"quantity\":3}"]]]]
+  [= $extra-server [?fallback [$cx:propose ship {order-id: 'o-1', quantity: 3} {}] [recover-with :refused]]]
+  [two-boundary [client-missing $missing] [client-extra $extra-client] [server-extra $extra-server]]]
+#]]
+   [out-text [#
+[two-boundary [client-missing ('/order-id')] [client-extra 'ok'] [server-extra :refused]]
 #]]
   ]
 ]

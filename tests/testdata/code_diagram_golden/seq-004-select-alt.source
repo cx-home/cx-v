@@ -1,0 +1,1 @@
+[?let [= $ch1 [?channel name="a" buffer=1]] [?select [case [from $ch1 $v] [ok value=$v]] [case [timeout 50ms] [err code="timeout"]]]]

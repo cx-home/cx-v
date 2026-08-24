@@ -1,0 +1,1 @@
+[?worker name="w" body=[?retry max=3 body=[?send "m" to=$ch]]]

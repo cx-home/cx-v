@@ -1,4 +1,4 @@
-[test-suite name=fabric
+[test-suite name=fabric ring=2
   [doc [#
 conformance fixtures for cx-fabric — platform eventing, embedded tier P0
    (spec/02-working/fabric.md; #518/#531; band CXER4920-4949).
@@ -94,7 +94,7 @@ cx-err:CXER4921
   [= $f [$fabric:open $j]]
   [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
   [= $s [$fabric:subscribe $f "orders" :order.*]]
-  [$count [$fabric:receive $s]]]
+  [$count [?receive from=$s max=9]]]
 #]]
   [out-text [#
 1
@@ -132,7 +132,7 @@ cx-err:CXER4922
   [= $f [$fabric:open $j]]
   [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
   [= $s [$fabric:subscribe $f "orders" "do"]]
-  [$count [$fabric:receive $s]]]
+  [$count [?receive from=$s max=9]]]
 #]]
   [out-text [#
 1
@@ -151,10 +151,10 @@ cx-err:CXER4922
   [= $f [$fabric:open $j]]
   [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
   [= $s1 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
-  [= $e1 [$fabric:receive $s1]]
+  [= $e1 [?receive from=$s1 max=9]]
   [= $a [$fabric:ack $s1 1]]
   [= $s2 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
-  [$count [$fabric:receive $s2]]]
+  [$count [?receive from=$s2 max=9]]]
 #]]
   [out-text [#
 0
@@ -212,9 +212,9 @@ cx-err:CXER4922
   [= $f [$fabric:open $j]]
   [= $r [$fabric:publish $f "orders" [do :order.placed] {actor: "u" authority: "g"}]]
   [= $s1 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
-  [= $e1 [$fabric:receive $s1]]
+  [= $e1 [?receive from=$s1 max=9]]
   [= $s2 [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
-  [$count [$fabric:receive $s2]]]
+  [$count [?receive from=$s2 max=9]]]
 #]]
   [out-text [#
 1
@@ -233,11 +233,11 @@ cx-err:CXER4922
   [= $f1 [$fabric:open $j]]
   [= $r [$fabric:publish $f1 "orders" [do :order.placed] {actor: "u" authority: "g"}]]
   [= $s1 [$fabric:subscribe $f1 "orders" :order.placed {group: "g1"}]]
-  [= $e1 [$fabric:receive $s1]]
+  [= $e1 [?receive from=$s1 max=9]]
   [= $a [$fabric:ack $s1 1]]
   [= $f2 [$fabric:open $j]]
   [= $s2 [$fabric:subscribe $f2 "orders" :order.placed {group: "g1"}]]
-  [$count [$fabric:receive $s2]]]
+  [$count [?receive from=$s2 max=9]]]
 #]]
   [out-text [#
 0
@@ -274,7 +274,7 @@ cx-err:CXER4922
   [= $f [$fabric:open $j]]
   [= $r [$fabric:publish $f "m" [evt kind=a] {actor: "u" authority: "g"}]]
   [= $s [$fabric:subscribe $f "m" [?fn ($m) [= $m@kind "a"]]]]
-  [$count [$fabric:receive $s]]]
+  [$count [?receive from=$s max=9]]]
 #]]
   [out-text [#
 1
@@ -295,8 +295,8 @@ cx-err:CXER4922
   [= $r2 [$fabric:publish $f "m" [a 2] {actor: "u" authority: "g"}]]
   [= $r3 [$fabric:publish $f "m" [a 3] {actor: "u" authority: "g"}]]
   [= $s [$fabric:subscribe $f "m" "a"]]
-  [= $c1 [$count [$fabric:receive $s {max: 2}]]]
-  [= $c2 [$count [$fabric:receive $s]]]
+  [= $c1 [$count [?receive from=$s max=2]]]
+  [= $c2 [$count [?receive from=$s max=9]]]
   [+ [* 10 $c1] $c2]]
 #]]
   [out-text [#
@@ -317,7 +317,7 @@ cx-err:CXER4922
   [= $r1 [$fabric:publish $f "m" [a 1] {actor: "u" authority: "g"}]]
   [= $r2 [$fabric:publish $f "m" [a 2] {actor: "u" authority: "g"}]]
   [= $s [$fabric:subscribe $f "m" "a" {from: 2}]]
-  [$count [$fabric:receive $s]]]
+  [$count [?receive from=$s max=9]]]
 #]]
   [out-text [#
 1
@@ -337,7 +337,7 @@ cx-err:CXER4922
   [= $ra [$fabric:publish $f "a" [do :x] {actor: "u" authority: "g"}]]
   [= $rb [$fabric:publish $f "b" [do :y] {actor: "u" authority: "g"}]]
   [= $s [$fabric:subscribe $f "a" "do"]]
-  [$count [$fabric:receive $s]]]
+  [$count [?receive from=$s max=9]]]
 #]]
   [out-text [#
 1
@@ -489,13 +489,13 @@ persisted policy (group state, not subscription state).
   [= $f [$fabric:open $j]]
   [= $r [$fabric:publish $f "m" [do :boom] {actor: "u" authority: "g"}]]
   [= $s1 [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 2 dlq: "m.dlq"}]]
-  [= $e1 [$count [$fabric:receive $s1]]]
+  [= $e1 [$count [?receive from=$s1 max=9]]]
   [= $s2 [$fabric:subscribe $f "m" :boom {group: "w"}]]
-  [= $e2 [$count [$fabric:receive $s2]]]
+  [= $e2 [$count [?receive from=$s2 max=9]]]
   [= $s3 [$fabric:subscribe $f "m" :boom {group: "w"}]]
-  [= $e3 [$count [$fabric:receive $s3]]]
+  [= $e3 [$count [?receive from=$s3 max=9]]]
   [= $d [$fabric:subscribe $f "m.dlq" "dead-letter"]]
-  [= $e4 [$count [$fabric:receive $d]]]
+  [= $e4 [$count [?receive from=$d max=9]]]
   [+ [* 1000 $e1] [+ [* 100 $e2] [+ [* 10 $e3] $e4]]]]
 #]]
   [out-text [#
@@ -522,9 +522,9 @@ survivor (seq 2) does.
   [= $r1 [$fabric:publish $f "m" [do :boom] {actor: "u" authority: "g"}]]
   [= $r2 [$fabric:publish $f "m" [do :fine] {actor: "u" authority: "g"}]]
   [= $s1 [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 1 dlq: "m.dlq"}]]
-  [= $e1 [$fabric:receive $s1 {max: 1}]]
+  [= $e1 [?receive from=$s1 max=1]]
   [= $s2 [$fabric:subscribe $f "m" [?fn ($m) true] {group: "w"}]]
-  [= $es [$fabric:receive $s2]]
+  [= $es [?receive from=$s2 max=9]]
   [$count $es]]
 #]]
   [out-text [#
@@ -551,11 +551,11 @@ actor = the group whose policy fired, authority = fabric:dlq.
   [= $f [$fabric:open $j]]
   [= $r [$fabric:publish $f "m" [do :boom] {actor: "u" authority: "g"}]]
   [= $s1 [$fabric:subscribe $f "m" :boom {group: "w" max-deliveries: 1 dlq: "m.dlq"}]]
-  [= $e1 [$fabric:receive $s1]]
+  [= $e1 [?receive from=$s1 max=9]]
   [= $s2 [$fabric:subscribe $f "m" :boom {group: "w"}]]
-  [= $e2 [$fabric:receive $s2]]
+  [= $e2 [?receive from=$s2 max=9]]
   [= $d [$fabric:subscribe $f "m.dlq" "dead-letter"]]
-  [= $dl [$first [$fabric:receive $d]]]
+  [= $dl [$first [?receive from=$d max=9]]]
   [= $env $dl/event]
   $env@attempts]
 #]]
@@ -780,4 +780,108 @@ cx-err:CXER4920
 #]]
  ]
 
+ [case id=fabric-037-sub-is-delivery-contract level=core gate=enforced
+  [tags fabric receive select delivery contract u1-2a u1-5a 762]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://fab-037" "acme"]]
+[= $f [$fabric:open $j]]
+[= $p1 [$fabric:publish $f "orders" [do :order.placed id=1] {actor: "u" authority: "g"}]]
+[= $s [$fabric:subscribe $f "orders" :order.placed {group: "g1"}]]
+[= $r1 [?receive from=$s]]
+[= $sel1 [?select [case [from $s $m] [got n=[$count $m]]] [case [timeout 0] [idle]]]]
+[= $p2 [$fabric:publish $f "orders" [do :order.placed id=2] {actor: "u" authority: "g"}]]
+[= $sel2 [?select [case [from $s $m] [got seq=$m/@seq]] [case [timeout 0] [idle]]]]
+  ([r1 seq=$r1/@seq], $sel1, $sel2)]
+#]]
+  [out-text [#
+([r1 seq=1], [idle], [got seq=2])
+#]]
+ ]
+
+ [# ── fab-cst-001..003: the stream-7 per-subscription consistency floor
+       (consistency_vocabulary.md L122/L123/F2, #679/#714): declare-and-verify
+       at subscribe, the at-least-once plane discriminator, and the declared
+       :gapless resume guard vs the silent clamp-to-seam pair. ──────────── #]
+
+ [case id=fab-cst-001-floor-declared-satisfied level=core gate=enforced
+  [tags fabric consistency floor declare-and-verify stream-7 679 L123]
+  [; a durable observe subscription advertises the journal-stream read
+     guarantees; declared tokens echo on the sub element. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://fab-cst-001" "acme"]]
+[= $f [$fabric:open $j]]
+[= $p [$fabric:publish $f "orders" [do :order.placed id=1] {actor: "u" authority: "g"}]]
+[= $s [$fabric:observe $f "orders" :order.placed {consistency: (:prefix-consistent, :monotonic-reads, :gapless)}]]
+[= $r [?receive from=$s]]
+  [floor tokens=$s@consistency seq=$r/@seq]]
+#]]
+  [out-text [#
+[floor tokens=':prefix-consistent :monotonic-reads :gapless' seq=1]
+#]]
+ ]
+
+ [case id=fab-cst-002-at-least-once-plane-discriminator level=core gate=enforced
+  [tags fabric consistency at-least-once plane-discriminator CXER4990 stream-7 679 L122]
+  [; :at-least-once is the GROUP plane delivery class (redelivery-until-ack)
+     — a group subscription accepts it; an observe subscription is a cursor
+     replay with NO redelivery contract and refuses it loudly, the advert
+     carried. The two honestly-different planes, no silent promotion. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://fab-cst-002" "acme"]]
+[= $f [$fabric:open $j]]
+[= $g [$fabric:subscribe $f "orders" :order.* {group: "g1" consistency: (:at-least-once)}]]
+[= $r [?fallback [$fabric:observe $f "orders" :order.*  {consistency: (:at-least-once)}]
+  [recover-with [refused code=$err/@code stage=$err/context/stage token=$err/context/token $err/context/guarantees]]]]
+  [pair group-floor=$g@consistency $r]]
+#]]
+  [out-text [#
+[pair group-floor=':at-least-once' [refused code=cx-err:CXER4990 stage=:floor token=:at-least-once [guarantees :prefix-consistent :at-seq-pinned :monotonic-reads :gapless]]]
+#]]
+ ]
+
+ [case id=fab-cst-003-gapless-resume-guard-vs-silent-pair level=core gate=enforced
+  [tags fabric consistency gapless resume-guard CXER4991 discriminator-pair stream-7 679 714 F2]
+  [; the F2 pair on one compacted segment: an UNDECLARED subscription with
+     from=1 silently replays from the seam (the pre-vocabulary behavior,
+     preserved); a subscription declaring :gapless with the same from=
+     refuses CXER4991 naming the requested position and the retained floor. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://fab-cst-003" "acme"]]
+[= $a [$journal:append $j [do :order.a] {actor: "u" authority: "g" stream: "s1"}]]
+[= $b [$journal:append $j [do :order.b] {actor: "u" authority: "g" stream: "s1"}]]
+[= $c [$journal:append $j [do :order.c] {actor: "u" authority: "g" stream: "s1"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 1 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $ret [$journal:retain $j {keep-after-seq: 1 stream: "s1" snapshot: $snap}]]
+[= $seg [$journal:compact $j {retention: $ret target: "mem://fab-cst-003-seg"}]]
+[= $f [$fabric:open $seg]]
+[= $silent [$fabric:observe $f "s1" "do" {from: 1}]]
+[= $r1 [?receive from=$silent]]
+[= $loud [?fallback [$fabric:observe $f "s1" "do" {from: 1 consistency: (:gapless)}]
+  [recover-with [refused code=$err/@code requested=$err/context/requested floor=$err/context/floor]]]]
+  [pair silent-first-seq=$r1/@seq $loud]]
+#]]
+  [out-text [#
+[pair silent-first-seq=2 [refused code=cx-err:CXER4991 requested=1 floor=1]]
+#]]
+ ]
 ]

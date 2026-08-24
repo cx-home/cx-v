@@ -1,9 +1,16 @@
-[test-suite name=include
+[test-suite name=include ring=0
   [doc [#
 # CX Include Resolution Conformance Suite
-# Version: 1.0 — 2026-05-18 (GG5 row at spec/v0_7_0_status.md)
+# Version: 1.0 — 2026-05-18
+# [Provenance note, recovered 2026-08-05 (corpus audit n27): the GG1/
+#  GG5 labels below came from the retired spec/v0_7_0_status.md
+#  worksheet (deleted with the v0.8.0 reshape), and "spec/include.md"
+#  was folded away in the spec reorg — the normative contract is now
+#  split across core/code.md ("[?cx include]", parse-time splice) and
+#  core/cxdm.md (the E901–E911 Include data-parse codes). The labels
+#  are kept only because fixture tags carry them.]
 #
-# Cross-binding byte-identity discipline for the spec/include.md §1-§8
+# Cross-binding byte-identity discipline for the [?cx include]
 # resolver. Fixtures use:
 #   --- include_root         — sentinel: runner materializes a temp
 #                              dir and passes it as the resolver root
@@ -76,17 +83,14 @@
 #]]
  ]
 
- [case id=inc-003-unknown-cx-key-passthrough level=core
-  [tags cx-directive unknown-key passthrough issue-421]
+ [case id=inc-003-unknown-cx-key-refused level=core
+  [tags cx-directive unknown-key fail-closed CXP-1 grammar-34]
   [in-cx [#
 [?cx bogus=1]
 [config [a 1]]
 #]]
-  [out-cx [#
-[?cx bogus=1]
-[config
-  [a 1]
-]
+  [out-err [#
+unknown [?cx] pragma key
 #]]
  ]
 ]

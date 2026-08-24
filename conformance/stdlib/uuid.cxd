@@ -1,4 +1,4 @@
-[test-suite name=uuid
+[test-suite name=uuid ring=1
   [doc [#
 conformance fixtures for cx-stdlib/uuid (spec/std-lib/uuid.md §6).
 

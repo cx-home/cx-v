@@ -1,0 +1,5 @@
+sequenceDiagram
+  participant async-1
+  participant caller
+  participant async-2
+  caller ->> async-2 : start

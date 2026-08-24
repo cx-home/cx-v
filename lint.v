@@ -63,7 +63,19 @@ pub:
 }
 
 pub fn cx_text_lint(input string, opts LintOptions) ![]Finding {
-	doc := parse(input)!
+	doc := parse(input) or {
+		// #921: the reader dispatch must agree with fmt/run (#391) — a
+		// call-shaped PROGRAM document (`[$xap:component …]`) is not a
+		// lint parse failure just because the DATA reading refuses it.
+		// When the program reading accepts the source there is no data
+		// tree for the doc-shaped checks: return no findings rather than
+		// a false refusal. A document BOTH readings refuse keeps
+		// reporting the data diagnostic, exactly like cx_text_fmt's
+		// arbitration.
+		data_err := err
+		parse_program(input) or { return data_err }
+		return []Finding{}
+	}
 	mut findings := []Finding{}
 
 	if check_enabled('CX-L001', opts) {
@@ -83,6 +95,9 @@ pub fn cx_text_lint(input string, opts LintOptions) ![]Finding {
 	}
 	if check_enabled('CX-L006', opts) {
 		check_l006_let_staircase(input, mut findings)
+	}
+	if check_enabled('CX-L008', opts) {
+		check_l008_pipe_stage_flow(input, mut findings)
 	}
 	if check_enabled('CX-L007', opts) {
 		check_l007_field_read_aggregation(input, mut findings)
@@ -234,17 +249,9 @@ fn walk_let_staircase_children(node ProgramNode, mut findings []Finding) {
 			}
 		}
 		ProgramForComp {
-			for c in node.clauses {
-				if src := c.source {
-					walk_let_staircase(src, mut findings)
-				}
-				if e := c.expr {
-					walk_let_staircase(e, mut findings)
-				}
-			}
-			walk_let_staircase(node.yield, mut findings)
-			if yv := node.yield_value {
-				walk_let_staircase(yv, mut findings)
+			// L100: THE ONE traversal (program_for_walk.v).
+			for item in for_comp_children(node) {
+				walk_let_staircase(item.node, mut findings)
 			}
 		}
 		Program {
@@ -336,17 +343,9 @@ fn l007_walk(n ProgramNode, mut findings []Finding) {
 			}
 		}
 		ProgramForComp {
-			for c in n.clauses {
-				if src := c.source {
-					l007_walk(src, mut findings)
-				}
-				if ex := c.expr {
-					l007_walk(ex, mut findings)
-				}
-			}
-			l007_walk(n.yield, mut findings)
-			if yv := n.yield_value {
-				l007_walk(yv, mut findings)
+			// L100: THE ONE traversal (program_for_walk.v).
+			for item in for_comp_children(n) {
+				l007_walk(item.node, mut findings)
 			}
 		}
 		ProgramLiteral {
@@ -802,13 +801,27 @@ pub fn load_lint_config_from(content string) !LintConfig {
 			if n.name != 'lint' { continue }
 			for child in n.items {
 				if child is Element {
+					// attr-EXACT (#203.2 discipline, via #880): an attribute no
+					// clause grants is a loud config error, never silently
+					// ignored — `[disable check=CX-L003 path='legacy/**']` used
+					// to disable the rule REPO-WIDE while reading as scoped.
 					match child.name {
 						'disable' {
+							for a in child.attrs {
+								if a.name != 'check' {
+									return error('.cxlint.cx: [disable] admits only check= — unknown attribute `${a.name}` (per-path scoping is not implemented; scope by directory-level config files instead)')
+								}
+							}
 							if v := element_attr_string(child, 'check') {
 								cfg.disabled << v
 							}
 						}
 						'severity' {
+							for a in child.attrs {
+								if a.name !in ['check', 'level'] {
+									return error('.cxlint.cx: [severity] admits only check= and level= — unknown attribute `${a.name}`')
+								}
+							}
 							if check := element_attr_string(child, 'check') {
 								if level := element_attr_string(child, 'level') {
 									if sev := parse_severity_level(level) {
@@ -817,7 +830,9 @@ pub fn load_lint_config_from(content string) !LintConfig {
 								}
 							}
 						}
-						else {}
+						else {
+							return error('.cxlint.cx: unknown [lint] clause `${child.name}` — the config admits [disable] and [severity]')
+						}
 					}
 				}
 			}
@@ -965,4 +980,171 @@ fn severity_rank(s Severity) int {
 		.warn { 1 }
 		.error_severity { 2 }
 	}
+}
+
+// ── CX-L008 — declared shape flow across [?pipe] stages ──────────────────────
+//
+// The Layer-B advisory at the lint dial (shape_inference.md §2/§4,
+// stream 16 W5): for each adjacent pair of no-hole simple-call [?pipe]
+// stages whose heads are [?def]s DECLARED IN THIS FILE, compare stage
+// i's declared [returns T] with the receiving parameter's ::T on stage
+// i+1 (the no-hole form appends the piped value as the last positional
+// argument → last declared non-rest param). Both boundaries must be
+// declared to participate; compatibility is conservative (equal text,
+// `any`, or int flowing into the float/number family). Warn severity —
+// the runtime refusal is `--strict`'s job; this is the adoption dial.
+
+struct L008Sig {
+	returns_type string
+	last_param   string
+}
+
+fn check_l008_pipe_stage_flow(input string, mut findings []Finding) {
+	prog := parse_program(input) or { return }
+	mut sigs := map[string]L008Sig{}
+	l008_collect_defs(prog.body, mut sigs)
+	l008_walk(prog.body, sigs, mut findings)
+}
+
+fn l008_collect_defs(node ProgramNode, mut sigs map[string]L008Sig) {
+	if node is ProgramDirective {
+		if node.name == 'def' {
+			for sl in node.slots {
+				if sl.label == 'raw-source' {
+					v := sl.value
+					if v is ProgramLiteral && v.kind == .string_lit {
+						if def := parse_def(v.str_val) {
+							mut last := ''
+							for j := def.params.len - 1; j >= 0; j-- {
+								if !def.params[j].is_rest {
+									last = def.params[j].type_expr_source or { '' }
+									break
+								}
+							}
+							sigs[def.name] = L008Sig{
+								returns_type: def.returns_type_source or { '' }
+								last_param:   last
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	match node {
+		ProgramDirective {
+			for s in node.slots {
+				l008_collect_defs(s.value, mut sigs)
+			}
+		}
+		ProgramLiteral {
+			// A multi-statement program parses as one block literal —
+			// the statements are its items.
+			for it in node.items {
+				l008_collect_defs(it, mut sigs)
+			}
+		}
+		Program {
+			l008_collect_defs(node.body, mut sigs)
+		}
+		else {}
+	}
+}
+
+fn l008_walk(node ProgramNode, sigs map[string]L008Sig, mut findings []Finding) {
+	if node is ProgramDirective {
+		if node.name == 'pipe' && node.slots.len >= 3 {
+			mut prev_ret := ''
+			mut prev_name := ''
+			for i in 1 .. node.slots.len {
+				stage := node.slots[i].value
+				mut cur := L008Sig{}
+				mut cur_name := ''
+				mut participates := false
+				if stage is ProgramCall {
+					mut nholes := 0
+					for a in stage.args {
+						if a is ProgramCall && a.name == program_hole_name {
+							nholes++
+						}
+					}
+					if nholes == 0 {
+						if sig := sigs[stage.name] {
+							cur = sig
+							cur_name = stage.name
+							participates = true
+						}
+					}
+				}
+				if participates && prev_ret != '' && cur.last_param != '' {
+					if !l008_compose(prev_ret, cur.last_param) {
+						findings << Finding{
+							check:      'CX-L008'
+							severity:   .warn
+							message:    '[?pipe] stage flow: `${prev_name}` declares [returns ${prev_ret}] but `${cur_name}` receives `::${cur.last_param}`'
+							line:       node.pos.line
+							col:        node.pos.col
+							suggestion: 'align the declared boundary types, or run under --strict for the pre-execution refusal'
+						}
+					}
+				}
+				if participates {
+					prev_ret = cur.returns_type
+					prev_name = cur_name
+				} else {
+					prev_ret = ''
+					prev_name = ''
+				}
+			}
+		}
+	}
+	match node {
+		ProgramDirective {
+			for s in node.slots {
+				l008_walk(s.value, sigs, mut findings)
+			}
+		}
+		ProgramLiteral {
+			if ne := node.name_expr {
+				l008_walk(ne, sigs, mut findings)
+			}
+			for it in node.items {
+				l008_walk(it, sigs, mut findings)
+			}
+			for a in node.attrs {
+				l008_walk(a.value, sigs, mut findings)
+			}
+		}
+		ProgramCall {
+			for a in node.args {
+				l008_walk(a, sigs, mut findings)
+			}
+		}
+		ProgramForComp {
+			for item in for_comp_children(node) {
+				l008_walk(item.node, sigs, mut findings)
+			}
+		}
+		Program {
+			l008_walk(node.body, sigs, mut findings)
+		}
+		else {}
+	}
+}
+
+fn l008_compose(produced string, consumed string) bool {
+	p := produced.trim_space()
+	c := consumed.trim_space()
+	if p == '' || c == '' || p == 'any' || c == 'any' || p == c {
+		return true
+	}
+	_ = parse_type_expr(p) or { return true }
+	_ = parse_type_expr(c) or { return true }
+	if p == 'int' && (c == 'float' || c == 'number') {
+		return true
+	}
+	if (p == 'int' || p == 'float' || p == 'decimal' || p == 'bigint') && c == 'number' {
+		return true
+	}
+	return false
 }

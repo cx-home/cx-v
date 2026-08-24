@@ -88,6 +88,27 @@
 [?def explain scope=public pure [returns element]            ($decision::element)                          [$authz-explain $decision]]
 [?def trace   scope=public pure [returns [sequence element]] ($store::element $req::element $opts::map {}) [$authz-trace $store $req $opts]]
 
+[; §3.8 budgets (stream 6, L112) — meter-as-fold + the commit-point debit.
+   meters folds the bound journal's debit events into the snapshot value
+   check reads ({meters: …} — check stays pure); debit charges a meter at
+   the commit point (journal append under the stream's commit lock),
+   re-checking headroom under the lock (exhausted = the CXER4713-carrying
+   [deny …] VALUE, no event). Both need the durable (journal-bound) tier. ]
+[?def meters scope=public impure [returns element] ($store::element $opts::map {}) [$authz-meters $store $opts]]
+[?def debit  scope=public impure [returns element] ($store::element $id::string $opts::map {}) [$authz-debit $store $id $opts]]
+[?def allocate       scope=public impure [effects [write]] [returns element] ($store::element $alloc-id::string $opts::map) [$authz-allocate $store $alloc-id $opts]]
+[?def allocation-expire scope=public impure [effects [write]] [returns element] ($store::element $alloc-id::string $opts::map {}) [$authz-allocation-expire $store $alloc-id $opts]]
+
+[; §3.9 propose-mode disposition (stream 6, L113/L114) — the engine constructs
+   proposals (cx:propose); authz disposes: approve mints the Lane-2 claim
+   binding the proposal ADDRESS; commit verifies fail-closed (address binding,
+   tier, propose-only screening, requires re-resolution, version binding,
+   precondition re-check) then executes, debits, and journals; resolve-cap
+   resolves a cap: authority-artifact address against the LIVE registry. ]
+[?def approve     scope=public impure [returns element] ($store::element $proposal::element $opts::map {}) [$authz-approve $store $proposal $opts]]
+[?def commit      scope=public impure [returns element] ($store::element $proposal::element $approval::element $command::function $opts::map {}) [$authz-commit $store $proposal $approval $command $opts]]
+[?def resolve-cap scope=public impure [returns element] ($store::element $ref::string $opts::map {}) [$authz-resolve-cap $store $ref $opts]]
+
 [; co-located docs (seeded — refine in place). ]
 [module-doc name=authz
   [scope """The XAP authority model as data plus a single decision function. It represents principals, capabilities, attenuating/time-bounded/revocable delegations, and guardian grants gated behind incapacity-typed predicates, then decides authority at one point of enforcement: check/authorize answers whether an actor holds a capability over a slice in a tenant at the required assurance tier, returning a [permit] or [deny] value. Authority originates only from principals and can only attenuate down a delegation chain, so privilege escalation is structurally impossible. This is delegated authority — who authorized whom to do what — distinct from and AND-composed with the effect-permission capability system."""]]
@@ -234,4 +255,75 @@
 [fn-doc name=trace scope=public purity=pure
   [sig """-> [sequence element]"""]
   [summary """Return the ordered policy-stack evaluation behind a decision — the deep-debug view behind explain."""]
+]
+
+[fn-doc name=meters scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Fold the bound journal's debit events into the [meters ...] snapshot check reads ({meters: ...}) — rate as token-bucket replay, count monotone, spend inside the current UTC-Z window; opts.now pins the fold instant. Needs the journal-bound (durable) tier."""]
+]
+
+[fn-doc name=debit scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Charge a delegation's meters at the commit point: re-checks headroom under the journal stream's commit lock, appends the authz-debited event, and returns a [debited ...] receipt — exhausted yields the CXER4713-carrying [deny ...] value and writes nothing. Refunds never credit back."""]
+]
+[fn-doc name=allocate scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Reserve an ESCROW ALLOCATION from a parent delegation's meter (stream 10, cross_stream_coordination §3): the reservation debits the parent chain AT ALLOCATION TIME under the parent's commit lock (an uncoverable reservation is the CXER4713 deny naming the failing conjunct — the global cap enforces here, never at a later cross-stream draw); window attribution pins at the reservation instant. Scope: count and spend ONLY — rate is a flow property (a reserved rate is unused capacity or double-counted flow) and refuses; a sub-delegation carrying rate meters it locally, un-escrowed. Allocation ids are single-use (reserve once, draw via debit {allocation: id}, expire)."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/authz']
+[?let
+[= $s [$store:open "mem://esc-1"]]
+[= $j [$journal:attach $s "acme"]]
+[= $az [$authz:store {tenant: "acme" journal: $j}]]
+[= $d [$authz:delegate $az
+  [delegation d-parent [tenant acme] [from [principal dana]] [to [agent team-1]]
+    [capabilities [spend-money]] [bounds [count 10] [spend 100.0 :currency :USD :per '1d']] [assurance :t1] [signature s]]]]
+[= $a1 [$authz:allocate $az "esc-1" {from: "d-parent" count: 4 spend: 40.0 currency: "USD" at: "2026-08-12T10:00:00Z"}]]
+[= $rate-refused [?fallback [$authz:allocate $az "esc-r" {from: "d-parent" rate: {n: 5 per: "PT1M"}}] [recover-with [context] [code $err@code]]]]
+[= $over [$authz:allocate $az "esc-2" {from: "d-parent" spend: 70.0 currency: "USD" at: "2026-08-12T10:01:00Z"}]]
+[= $draw1 [$authz:debit $az "d-parent" {allocation: "esc-1" count: 2 spend: 15.0 currency: "USD" at: "2026-08-12T10:05:00Z"}]]
+[= $draw-over [$authz:debit $az "d-parent" {allocation: "esc-1" count: 3 at: "2026-08-12T10:06:00Z"}]]
+[= $exp [$authz:allocation-expire $az "esc-1" {at: "2026-08-12T11:00:00Z"}]]
+[= $draw-late [$authz:debit $az "d-parent" {allocation: "esc-1" count: 1 at: "2026-08-12T11:05:00Z"}]]
+[= $after [$authz:allocate $az "esc-3" {from: "d-parent" spend: 70.0 currency: "USD" at: "2026-08-12T11:10:00Z"}]]
+  [probe [reserved $a1] [rate $rate-refused] [over-reserve $over] [draw $draw1] [draw-over $draw-over] [expired $exp] [draw-late $draw-late] [reclaimed-then-ok $after]]]"""] [expect """[probe [reserved [allocated alloc=esc-1 from=d-parent count=4 spend=40.0 currency=USD]] [rate [code 'cx-err:CXER4711']] [over-reserve [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :spend] [delegation 'd-parent']]] [draw [debited id=d-parent alloc=esc-1 count=2 spend=15.0 currency=USD]] [draw-over [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-count] [delegation 'esc-1']]] [expired [allocation-expired alloc=esc-1 reclaimed-count=2 reclaimed-spend=25.0]] [draw-late [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-expired] [delegation 'esc-1']]] [reclaimed-then-ok [allocated alloc=esc-3 from=d-parent spend=70.0 currency=USD]]]"""]]
+]
+[fn-doc name=allocation-expire scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Expire an allocation, reclaiming its UN-DRAWN remainder — visibly (reclaimed-count/reclaimed-spend) and WITHOUT replenishment: the un-drawn part never left the window's budget, so reclaiming it restores availability while spent budget stays monotone (the two rules compose). After expiry the parent's consumption for the allocation is exactly what was drawn; further draws against it deny naming :allocation-expired. Typically armed via a sched durable timer."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/authz']
+[?let
+[= $s [$store:open "mem://esc-1"]]
+[= $j [$journal:attach $s "acme"]]
+[= $az [$authz:store {tenant: "acme" journal: $j}]]
+[= $d [$authz:delegate $az
+  [delegation d-parent [tenant acme] [from [principal dana]] [to [agent team-1]]
+    [capabilities [spend-money]] [bounds [count 10] [spend 100.0 :currency :USD :per '1d']] [assurance :t1] [signature s]]]]
+[= $a1 [$authz:allocate $az "esc-1" {from: "d-parent" count: 4 spend: 40.0 currency: "USD" at: "2026-08-12T10:00:00Z"}]]
+[= $rate-refused [?fallback [$authz:allocate $az "esc-r" {from: "d-parent" rate: {n: 5 per: "PT1M"}}] [recover-with [context] [code $err@code]]]]
+[= $over [$authz:allocate $az "esc-2" {from: "d-parent" spend: 70.0 currency: "USD" at: "2026-08-12T10:01:00Z"}]]
+[= $draw1 [$authz:debit $az "d-parent" {allocation: "esc-1" count: 2 spend: 15.0 currency: "USD" at: "2026-08-12T10:05:00Z"}]]
+[= $draw-over [$authz:debit $az "d-parent" {allocation: "esc-1" count: 3 at: "2026-08-12T10:06:00Z"}]]
+[= $exp [$authz:allocation-expire $az "esc-1" {at: "2026-08-12T11:00:00Z"}]]
+[= $draw-late [$authz:debit $az "d-parent" {allocation: "esc-1" count: 1 at: "2026-08-12T11:05:00Z"}]]
+[= $after [$authz:allocate $az "esc-3" {from: "d-parent" spend: 70.0 currency: "USD" at: "2026-08-12T11:10:00Z"}]]
+  [probe [reserved $a1] [rate $rate-refused] [over-reserve $over] [draw $draw1] [draw-over $draw-over] [expired $exp] [draw-late $draw-late] [reclaimed-then-ok $after]]]"""] [expect """[probe [reserved [allocated alloc=esc-1 from=d-parent count=4 spend=40.0 currency=USD]] [rate [code 'cx-err:CXER4711']] [over-reserve [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :spend] [delegation 'd-parent']]] [draw [debited id=d-parent alloc=esc-1 count=2 spend=15.0 currency=USD]] [draw-over [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-count] [delegation 'esc-1']]] [expired [allocation-expired alloc=esc-1 reclaimed-count=2 reclaimed-spend=25.0]] [draw-late [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-expired] [delegation 'esc-1']]] [reclaimed-then-ok [allocated alloc=esc-3 from=d-parent spend=70.0 currency=USD]]]"""]]
+]
+
+[fn-doc name=approve scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Mint the [approval ...] claim binding a proposal's Tier-1 ADDRESS (never a name or args — forgeable): opts.by names the principal, opts.tier the assurance tier, opts.signature the suite slot (mandatory; verifiers fail closed)."""]
+]
+
+[fn-doc name=commit scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Dispose an approved proposal fail-closed: the proposal must re-hash to the approval's subject, the approval must verify per its tier, no propose-only link may ground the basis, requires cap: refs re-resolve, the presented command must match the approved def-text address, preconditions re-evaluate — then execute, debit under the commit lock, and journal the transition. Needs the journal-bound tier."""]
+]
+
+[fn-doc name=resolve-cap scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Resolve a cap:sha2-256 authority-artifact address against the LIVE registry view — the artifact must exist, be un-revoked, and un-expired; anything else is the fail-closed CXER4716 (a trust input that cannot be proven live is refused)."""]
 ]

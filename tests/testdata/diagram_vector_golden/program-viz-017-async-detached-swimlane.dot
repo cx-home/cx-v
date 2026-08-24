@@ -1,0 +1,8 @@
+digraph CX {
+  rankdir=TB;
+  node [shape=box,fontname="Helvetica"];
+  n3 [label="[?let]"];
+  n0 -> n3;
+  n5 [label="[?await]"];
+  n3 -> n5;
+}

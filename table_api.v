@@ -499,8 +499,9 @@ fn json_quote_string(s string) string {
 // chunked `0x63` form requires scalar-only cells (strict columnar);
 // for collection-cell tables this method routes through plain
 // `0x60` encoding via emit_data_bin which dispatches on cell
-// type per Phase 2.2 wire-format rule.
-pub fn (t Table) to_data_bin() []u8 {
+// type per Phase 2.2 wire-format rule. Refuses out-of-range
+// integer cells loudly (#807, ruled Q4a).
+pub fn (t Table) to_data_bin() ![]u8 {
 	td_copy := t.data
 	root := Element{
 		name:  '_'
@@ -510,7 +511,7 @@ pub fn (t Table) to_data_bin() []u8 {
 	doc := Document{
 		elements: [Node(root)]
 	}
-	return emit_data_bin(doc)
+	return emit_data_bin(doc)!
 }
 
 // to_dict_list materializes every row as a separate ordered map.

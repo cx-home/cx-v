@@ -314,7 +314,92 @@ fn math_factorial(n i64) ?i64 {
 
 // ── dispatch ─────────────────────────────────────────────────────────
 
+
+// math_div_decimal — the rounding-context division (stream 11 §5 / L44;
+// #683): `[$math:div-decimal $a $b {precision: N mode: :half-up}]` — the
+// exact quotient rounded to `precision` fractional digits per `mode`
+// (:half-up | :half-even | :down | :up). This is the ONLY way to divide
+// a non-terminating decimal quotient; the bare `[/ …]` operator stays
+// exact-or-CXER3002.
+fn math_div_decimal(args []cx.Node) cx.Node {
+	if args.len < 3 {
+		return mk_err('cx-err:CXER0108', 'E_ARG: div-decimal expects (a, b, {precision: N mode: :half-up|:half-even|:down|:up})')
+	}
+	a := atomize_exact_num(args[0]) or {
+		return mk_err('cx-err:CXER3002', 'div-decimal: operands must be exact-family (decimal/bigint/int) — [cast] is the only decimal-float bridge (L44)')
+	}
+	b := atomize_exact_num(args[1]) or {
+		return mk_err('cx-err:CXER3002', 'div-decimal: operands must be exact-family (decimal/bigint/int) — [cast] is the only decimal-float bridge (L44)')
+	}
+	ai := cx.cx_exact_num_image(a) or { '0' }
+	bi := cx.cx_exact_num_image(b) or { '0' }
+	mut precision := -1
+	if pn := math_ctx_get(args[2], 'precision') {
+		if v := scalar_int(pn) {
+			precision = int(v)
+		}
+	}
+	mut mode := ''
+	if mn := math_ctx_get(args[2], 'mode') {
+		if mn is cx.ScalarNode {
+			mode = cx.scalar_value_str_public(mn.value)
+		}
+	}
+	if precision < 0 || mode == '' {
+		return mk_err('cx-err:CXER0108', 'E_ARG: div-decimal — the rounding context needs precision= (>= 0) and mode= (:half-up | :half-even | :down | :up)')
+	}
+	q := cx.cx_exact_div_ctx(ai, bi, precision, mode) or {
+		if err.msg().contains('zero') {
+			return mk_err('cx-err:CXER0101', 'division by zero')
+		}
+		return mk_err('cx-err:CXER3002', 'div-decimal: ${err.msg()}')
+	}
+	return cx.ScalarNode{
+		value:     cx.ScalarValue(q)
+		data_type: cx.ScalarType.decimal_type
+	}
+}
+
+// math_ctx_get reads one `{…}` rounding-context entry.
+fn math_ctx_get(m cx.Node, key string) ?cx.Node {
+	if m is cx.Element {
+		if m.name == map_marker_name {
+			for it in m.items {
+				if it is cx.Element {
+					if it.name == key && it.items.len > 0 {
+						return it.items[0]
+					}
+				}
+			}
+		}
+	}
+	return none
+}
+
 fn math_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
+	// the rounding-context division (stream 11 §5, L44 — #683): the ONE
+	// exact-kind math verb, carved out BEFORE the exact-family refusal
+	// below (it exists precisely to take decimals).
+	if name == 'math-div-decimal' {
+		return math_div_decimal(args)
+	}
+	// I1 (math.md §4.4 + the 2b flip): an exact-family argument
+	// (decimal/bigint) NEVER falls through to "no callable" — every
+	// $math: fn REFUSES it with CXER3002 + the cast hint. The
+	// decimal↔float bridge is [cast], nothing implicit; exact
+	// floor/ceiling/round live on the EVALUATOR builtins (entry 15);
+	// the exact module-lane rounding context is `div-decimal` above.
+	if name.starts_with('math-') {
+		for a in args {
+			if a is cx.ScalarNode {
+				if a.data_type == cx.ScalarType.decimal_type
+					|| a.data_type == cx.ScalarType.bigint_type {
+					return mk_err('cx-err:CXER3002',
+						'${name}: not defined over the exact kinds (decimal/bigint) — [cast … :float] first (math.md §4.4)')
+				}
+			}
+		}
+	}
 	match name {
 		// ── §3.1 basic ───────────────────────────────────────────────
 		'math-sign' {

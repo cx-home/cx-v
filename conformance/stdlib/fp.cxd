@@ -1,4 +1,4 @@
-[test-suite name=fp
+[test-suite name=fp ring=1
   [doc [#
 conformance fixtures for cx-stdlib/fp (spec/std-lib/fp.md).
 
@@ -40,7 +40,7 @@ conformance fixtures for cx-stdlib/fp (spec/std-lib/fp.md).
 [?def up ($s) [$strings:upper $s]]
 [$fp:map ('hi') $up]
 #]]
-  [out-text [# ('HI') #]]
+  [out-text [# (HI) #]]
  ]
  [case id=fp-003-map-list level=core
   [tags fp list sequence map]

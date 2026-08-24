@@ -1,5 +1,0 @@
-[?def greet
-  :scope public
-  :returns string
-  (name:string)
-  [+ "hello, " name]]

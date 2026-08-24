@@ -1,4 +1,4 @@
-[test-suite name=delimited
+[test-suite name=delimited ring=0
   [doc [#
 # CX Conformance — delimited (CSV / TSV / PSV) tests
 # Version: 1.0 — 2026-05-08

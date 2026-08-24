@@ -1,0 +1,8 @@
+[schema of=probe mode=open]
+[probe
+ [attr kind::atom [req]]
+ [attr blob::bytes [opt]]
+ [elem stamp [card "1..1"]]
+ [elem exact [card "1..1"]]]
+[type stamp::datetime]
+[type exact::decimal]

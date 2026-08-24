@@ -1,0 +1,9 @@
+%%cx:Wz9yZXRyeSBtYXg9MyBiYWNrb2ZmPWV4cG9uZW50aWFsIGRlbGF5PTEwMG1zIGJvZHk9Wz9odHRwLWNsaWVudCBnZXQ9Imh0dHBzOi8vYXBpLmV4YW1wbGUuY29tL3giXV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?retry] :max 3 :backoff 'exponential' …"]]
+    n4[["[?http-client] GET https://api.example.com/x"]]
+    n3 -- ":body" --> n4
+    n1 --> n4
+    n4 --> n2

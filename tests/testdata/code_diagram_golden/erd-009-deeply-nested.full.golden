@@ -1,0 +1,21 @@
+erDiagram
+  DOCUMENT {
+    int node_count "4"
+    int type_count "4"
+    int max_depth "3"
+  }
+  para ||--|| span : has
+  section ||--|| para : has
+  doc ||--|| section : has
+  doc {
+  }
+  section {
+    string note "appears 1× depth 1"
+  }
+  para {
+    string note "appears 1× depth 2"
+  }
+  span {
+    int id "@ 1"
+    string note "appears 1× depth 3"
+  }

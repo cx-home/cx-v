@@ -1,0 +1,5 @@
+[?match $age
+  [case '< 13' 'child']
+  [case '< 18' 'teen']
+  [else        'adult']
+]

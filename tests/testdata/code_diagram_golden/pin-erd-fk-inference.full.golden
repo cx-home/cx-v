@@ -1,0 +1,11 @@
+erDiagram
+  DOCUMENT {
+    int node_count "6"
+    int type_count "3"
+    int max_depth "1"
+  }
+  order {
+    int order-id
+    int total
+    string note "appears 2× depth 0"
+  }

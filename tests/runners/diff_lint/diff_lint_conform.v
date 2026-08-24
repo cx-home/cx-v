@@ -8,6 +8,7 @@ module main
 
 import os
 import cx
+import fixtures
 
 struct DiffLintCase {
 mut:
@@ -27,13 +28,13 @@ fn strip_blank_edges(s string) string {
 	return lines.join('\n')
 }
 
-// parse_suite loads a .cxd suite (diff.cxd / lint.cxd) via cx.load_fixtures,
+// parse_suite loads a .cxd suite (diff.cxd / lint.cxd) via fixtures.load_fixtures,
 // replacing the bespoke `=== test:` / `--- key` scanner. level/tags come from
 // the case attr / [tags] element; the runner keys into t.sections[name] by
 // presence exactly as before.
 fn parse_suite(path string) []DiffLintCase {
 	mut tests := []DiffLintCase{}
-	for c in cx.load_fixtures(path) {
+	for c in fixtures.load_fixtures(path) {
 		mut t := DiffLintCase{
 			name:     c.name
 			level:    c.level

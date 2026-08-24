@@ -51,6 +51,7 @@ fn parse_md_document(src string) !Document {
 
 	mut doc := Document{ elements: [Node(doc_elem)] }
 	resolve_namespaces(mut doc)
+	validate_reserved_ns_bindings(doc)!
 	return doc
 }
 

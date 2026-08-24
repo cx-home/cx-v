@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  cap_clock{{"clock"}}
+  prog --> cap_clock

@@ -1,0 +1,8 @@
+flowchart TD
+  prog(["program"])
+  cap_net{{"net"}}
+  prog --> cap_net
+  unk_lib[/"[?lib] — module body not in the image"/]
+  prog ==> unk_lib
+  any{{"any granted capability"}}
+  unk_lib ==> any

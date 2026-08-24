@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  def_double["def double"]
+  prog -->|"call"| def_double

@@ -1,4 +1,4 @@
-[test-suite name=csv
+[test-suite name=csv ring=1
   [doc [#
 conformance fixtures for cx-stdlib/csv (spec/std-lib/csv.md §3, §4, §5, §6).
 
@@ -140,8 +140,7 @@ conformance fixtures for cx-stdlib/csv (spec/std-lib/csv.md §3, §4, §5, §6).
   $row/note]
 #]]
   [out-text [#
-'line1
-line2'
+'line1\nline2'
 #]]
  ]
 
@@ -414,9 +413,7 @@ cx-err:CXER1504
 [$csv:emit ({a: "1", b: "2"})]
 #]]
   [out-text [#
-'a,b
-1,2
-'
+'a,b\n1,2\n'
 #]]
  ]
 
@@ -430,9 +427,7 @@ cx-err:CXER1504
 [$csv:emit ({name: "Alice", note: "a,b"})]
 #]]
   [out-text [#
-'name,note
-Alice,"a,b"
-'
+'name,note\nAlice,"a,b"\n'
 #]]
  ]
 
@@ -446,9 +441,7 @@ Alice,"a,b"
 [$csv:emit ({msg: "He said \"hi\""})]
 #]]
   [out-text [#
-'msg
-"He said ""hi"""
-'
+'msg\n"He said ""hi"""\n'
 #]]
  ]
 
@@ -462,10 +455,7 @@ Alice,"a,b"
 [$csv:emit ({a: "1", b: "2"}, {a: "3", c: "4"})]
 #]]
   [out-text [#
-'a,b,c
-1,2,
-3,,4
-'
+'a,b,c\n1,2,\n3,,4\n'
 #]]
  ]
 
@@ -479,9 +469,7 @@ Alice,"a,b"
 [$csv:emit ([1, 2, 3], [4, 5, 6])]
 #]]
   [out-text [#
-'1,2,3
-4,5,6
-'
+'1,2,3\n4,5,6\n'
 #]]
  ]
 
@@ -495,9 +483,7 @@ Alice,"a,b"
 [$csv:emit ([1, 2, 3], [4, 5])]
 #]]
   [out-text [#
-'1,2,3
-4,5,
-'
+'1,2,3\n4,5,\n'
 #]]
  ]
 
@@ -513,9 +499,7 @@ Alice,"a,b"
 [$csv:emit-with-dialect ({a: "1", b: "2"}) [dialect [name "tsv"]]]
 #]]
   [out-text [#
-'a	b
-1	2
-'
+'a\tb\n1\t2\n'
 #]]
  ]
 
@@ -548,9 +532,7 @@ true
 [$csv:emit-with-dialect ({msg: "He said \"hi\""}) [dialect [escape "backslash"]]]
 #]]
   [out-text [#
-'msg
-"He said \\"hi\\""
-'
+'msg\n"He said \\"hi\\""\n'
 #]]
  ]
 
@@ -564,9 +546,7 @@ true
 [$csv:emit-with-dialect ({a: "1", b: "2", c: "3"}) [dialect [columns [sequence "b" "a"]]]]
 #]]
   [out-text [#
-'b,a
-2,1
-'
+'b,a\n2,1\n'
 #]]
  ]
 
@@ -615,7 +595,7 @@ cx-err:CXER1502
   $tsv/delimiter]
 #]]
   [out-text [#
-'	'
+'\t'
 #]]
  ]
 

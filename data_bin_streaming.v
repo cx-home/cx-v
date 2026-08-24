@@ -168,9 +168,34 @@ mut:
 	fd int = -1
 	// Parsed col-spec.
 	cols []TableColumn
+	// Raw wire col-spec codes (stream 17 W3c): the header byte per
+	// column — authoritative for payload layout (an 0x80 code means
+	// every group's payload for that column is the §3.10.5 wrapper;
+	// the TYPE NAME alone cannot say so).
+	codes []u8
+	// The table's element name from the optional 0x50 wrapper ('' when
+	// the buffer is a bare 0x63 root). Surfaced so the Arrow bridge can
+	// carry it through the root ArrowSchema name (§9 lane-d render
+	// parity — stream 17 W7).
+	table_name string
 	// State flags.
 	header_consumed bool
 	eof             bool
+	// One-group peek buffer (peek_first_row_group_framed).
+	peeked     []u8
+	has_peeked bool
+}
+
+// codes_snapshot exposes the raw wire col-spec codes (the Arrow
+// bridge derives payload layout from these, never from type names).
+pub fn (r &CxTableReader) codes_snapshot() []u8 {
+	return r.codes.clone()
+}
+
+// table_name_snapshot exposes the table's element name from the 0x50
+// wrapper ('' for bare-0x63 buffers).
+pub fn (r &CxTableReader) table_name_snapshot() string {
+	return r.table_name
 }
 
 // new_table_reader_bytes opens a streaming reader over a framed
@@ -216,7 +241,7 @@ fn (mut r CxTableReader) consume_header_and_col_spec_bytes() ! {
 		if key_tag != tag_string {
 			return error('cxcol table reader: outer map key must be string')
 		}
-		_ = br.read_string_payload()!  // table name; not surfaced separately
+		r.table_name = br.read_string_payload()!
 		next_tag := br.take_u8()!
 		if next_tag != tag_table_chunked {
 			return error('cxcol table reader: expected chunked-table tag 0x63; got 0x${next_tag:02x}')
@@ -224,7 +249,7 @@ fn (mut r CxTableReader) consume_header_and_col_spec_bytes() ! {
 	} else if tag != tag_table_chunked {
 		return error('cxcol table reader: expected chunked-table tag 0x63 (or 0x50 wrapper); got 0x${tag:02x}')
 	}
-	r.cols = read_col_spec(mut br)!
+	r.cols, r.codes = read_col_spec(mut br)!
 	r.pos = br.pos
 	r.header_consumed = true
 }
@@ -256,7 +281,8 @@ fn (mut r CxTableReader) consume_header_and_col_spec_fd() ! {
 			return error('cxcol table reader: outer map key must be string')
 		}
 		key_len, _ := fd_read_uvarint(r.fd)!
-		_ := fd_read_n(r.fd, int(key_len))!
+		key_bytes := fd_read_n(r.fd, int(key_len))!
+		r.table_name = key_bytes.bytestr()
 		next_tag, _ := fd_read_byte(r.fd)!
 		if next_tag != tag_table_chunked {
 			return error('cxcol table reader: expected chunked-table tag 0x63 after wrapper; got 0x${next_tag:02x}')
@@ -269,6 +295,7 @@ fn (mut r CxTableReader) consume_header_and_col_spec_fd() ! {
 		return error('cxcol table reader: tag 0x63 with col_count=0')
 	}
 	mut cols := []TableColumn{cap: int(col_count)}
+	mut codes := []u8{cap: int(col_count)}
 	for _ in 0 .. int(col_count) {
 		key_tag, _ := fd_read_byte(r.fd)!
 		if key_tag != tag_string {
@@ -276,37 +303,61 @@ fn (mut r CxTableReader) consume_header_and_col_spec_fd() ! {
 		}
 		name_len, _ := fd_read_uvarint(r.fd)!
 		name_bytes := fd_read_n(r.fd, int(name_len))!
-		col_type_byte, _ := fd_read_byte(r.fd)!
+		mut col_type_byte, _ := fd_read_byte(r.fd)!
+		mut declared := ''
+		if col_type_byte == col_declared_name {
+			// §3.10.1 declared-name annotation (#807(c)).
+			ann_tag, _ := fd_read_byte(r.fd)!
+			if ann_tag != tag_string {
+				return error('cxcol table reader: declared-name annotation must carry a string (tag 0x30)')
+			}
+			ann_len, _ := fd_read_uvarint(r.fd)!
+			ann_bytes := fd_read_n(r.fd, int(ann_len))!
+			declared = ann_bytes.bytestr()
+			if declared == '' {
+				return error('cxcol table reader: declared-name annotation must be non-empty')
+			}
+			col_type_byte, _ = fd_read_byte(r.fd)!
+			if col_type_byte == col_declared_name {
+				return error('cxcol table reader: duplicate declared-name annotation in col-spec')
+			}
+		}
+		codes << col_type_byte
+		type_name := if declared != '' { declared } else { column_type_name_from_code(col_type_byte) }
 		cols << TableColumn{
 			name:      name_bytes.bytestr()
-			type_name: column_type_name_from_code(col_type_byte)
+			type_name: type_name
 		}
 	}
 	r.cols = cols
+	r.codes = codes
 	r.header_consumed = true
 }
 
 // read_col_spec consumes `uvarint(col_count) <col-spec>(col_count)`
 // from the BinReader and returns the parsed TableColumn list.
-fn read_col_spec(mut br BinReader) ![]TableColumn {
+fn read_col_spec(mut br BinReader) !([]TableColumn, []u8) {
 	col_count := br.read_uvarint()!
 	if col_count == 0 {
 		return error('cxcol table reader: tag 0x63 with col_count=0')
 	}
 	mut cols := []TableColumn{cap: int(col_count)}
+	mut codes := []u8{cap: int(col_count)}
 	for _ in 0 .. int(col_count) {
 		key_tag := br.take_u8()!
 		if key_tag != tag_string {
 			return error('cxcol table reader: column name must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		name := br.read_string_payload()!
-		col_type_byte := br.take_u8()!
+		declared, col_type_byte := br.read_col_spec_type()!
+		codes << col_type_byte
+		type_name := if declared != '' { declared } else { column_type_name_from_code(col_type_byte) }
 		cols << TableColumn{
 			name:      name
-			type_name: column_type_name_from_code(col_type_byte)
+			type_name: type_name
 		}
 	}
-	return cols
+	return cols, codes
 }
 
 // schema_bytes returns the col-spec as a framed ast_bin buffer.
@@ -323,6 +374,12 @@ pub fn (r &CxTableReader) schema_bytes() ![]u8 {
 // Returns an empty slice on end-of-table (a row group always has
 // body_byte_len > 0, so an empty return is unambiguous).
 pub fn (mut r CxTableReader) next_row_group_framed() ![]u8 {
+	if r.has_peeked {
+		r.has_peeked = false
+		out := r.peeked
+		r.peeked = []
+		return out
+	}
 	if r.eof {
 		return []u8{}
 	}
@@ -414,6 +471,11 @@ pub struct CxTableWriter {
 mut:
 	cols    []TableColumn
 	opts    ChunkedEmitOptions
+	// The table's element name; when non-empty the header emits the
+	// `0x50 0x01 <name> 0x63` wrapper (mirrors emit_data_bin_chunked),
+	// so a named table round-trips the Arrow bridge with its name
+	// (§9 lane-d render parity — stream 17 W7).
+	table_name string
 	// Bytes mode accumulates the full document (header + col-spec +
 	// all row groups + trailer) into `buf`; close_get_bytes frames it.
 	bytes_mode bool
@@ -439,48 +501,88 @@ mut:
 // chunk options are not configurable through the C ABI; the default
 // auto-zstd-above-64KiB policy applies.
 pub fn new_table_writer_bytes(col_spec_payload []u8) !&CxTableWriter {
+	return new_table_writer_bytes_named(col_spec_payload, '')
+}
+
+// new_table_writer_bytes_named opens an in-memory writer for a NAMED
+// table: a non-empty name emits the `0x50 0x01 <name> 0x63` wrapper
+// (the shape emit_data_bin_chunked produces for named roots).
+pub fn new_table_writer_bytes_named(col_spec_payload []u8, table_name string) !&CxTableWriter {
 	cols := ast_bin_to_col_spec(col_spec_payload)!
 	mut w := &CxTableWriter{
 		cols:       cols
 		opts:       ChunkedEmitOptions{}
 		bytes_mode: true
+		table_name: table_name
 	}
 	w.write_header_and_col_spec_bytes()
 	return w
 }
 
 pub fn new_table_writer_fd(col_spec_payload []u8, fd int) !&CxTableWriter {
+	return new_table_writer_fd_named(col_spec_payload, fd, '')
+}
+
+// new_table_writer_fd_named — the fd twin of
+// new_table_writer_bytes_named.
+pub fn new_table_writer_fd_named(col_spec_payload []u8, fd int, table_name string) !&CxTableWriter {
 	cols := ast_bin_to_col_spec(col_spec_payload)!
 	mut w := &CxTableWriter{
 		cols:       cols
 		opts:       ChunkedEmitOptions{}
 		bytes_mode: false
 		fd:         fd
+		table_name: table_name
 	}
 	w.write_header_and_col_spec_fd()!
 	return w
 }
 
 fn (mut w CxTableWriter) write_header_and_col_spec_bytes() {
-	encode_header(mut w.buf)
+	// #918: the streaming table lane never carries the extended-map form
+	// (its one map is the string-keyed table-name wrapper) — stays v1.
+	encode_header(mut w.buf, false)
+	if w.table_name != '' {
+		w.buf << tag_map
+		encode_uvarint(mut w.buf, 1)
+		encode_string_value(w.table_name, mut w.buf)
+	}
 	w.buf << tag_table_chunked
 	encode_uvarint(mut w.buf, u64(w.cols.len))
 	for col in w.cols {
 		encode_string_value(col.name, mut w.buf)
-		w.buf << column_type_code(col.type_name)
+		code := column_wire_code(col.type_name)
+		// The `?` nullable-carrier prefix (stream 17 W3c) is a wire-
+		// layout marker, NOT a declared spelling — strip it before the
+		// #807 annotation-minimality comparison, and compare the 0x80
+		// wrapper against its INNER's default render (else every
+		// nullable streamed column grew a bogus '?T' annotation).
+		declared := if col.type_name.starts_with('?') { col.type_name[1..] } else { col.type_name }
+		base := if code == col_nullable { column_type_code(declared) } else { code }
+		encode_col_spec_type(declared, code, base, mut w.buf)
 	}
 }
 
 fn (mut w CxTableWriter) write_header_and_col_spec_fd() ! {
 	mut hdr := []u8{cap: 12}
-	encode_header(mut hdr)
+	// #918: same as the bytes lane — stays v1.
+	encode_header(mut hdr, false)
 	fd_write_all(w.fd, hdr)!
 	mut spec := []u8{cap: 16 + w.cols.len * 16}
+	if w.table_name != '' {
+		spec << tag_map
+		encode_uvarint(mut spec, 1)
+		encode_string_value(w.table_name, mut spec)
+	}
 	spec << tag_table_chunked
 	encode_uvarint(mut spec, u64(w.cols.len))
 	for col in w.cols {
 		encode_string_value(col.name, mut spec)
-		spec << column_type_code(col.type_name)
+		code := column_wire_code(col.type_name)
+		// Same `?`-stripping as write_header_and_col_spec_bytes above.
+		declared := if col.type_name.starts_with('?') { col.type_name[1..] } else { col.type_name }
+		base := if code == col_nullable { column_type_code(declared) } else { code }
+		encode_col_spec_type(declared, code, base, mut spec)
 	}
 	fd_write_all(w.fd, spec)!
 }
@@ -553,4 +655,28 @@ pub fn (mut w CxTableWriter) writer_close() ! {
 		fd_write_all(w.fd, eot)!
 	}
 	w.closed = true
+}
+
+// peek_first_row_group_framed reads the FIRST row group without
+// consuming it (bytes mode: cursor restored; fd mode: the group is
+// buffered and replayed by the next next_row_group_framed call).
+// Empty result = zero row groups. (Stream 17 W3c — the Arrow bridge
+// resolves §3.10.5 inner types at schema time from this peek.)
+pub fn (mut r CxTableReader) peek_first_row_group_framed() ![]u8 {
+	body := r.next_row_group_framed()!
+	if body.len > 0 {
+		r.peeked = body.clone()
+		r.has_peeked = true
+	}
+	return body
+}
+
+// column_wire_code maps a col-spec type name to its wire header code;
+// a `?`-prefixed name (the nullable carrier spelling, stream 17 W3c)
+// maps to the §3.10.5 wrapper code.
+fn column_wire_code(type_name string) u8 {
+	if type_name.starts_with('?') {
+		return col_nullable
+	}
+	return column_type_code(type_name)
 }

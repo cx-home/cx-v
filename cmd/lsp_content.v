@@ -55,25 +55,75 @@ fn hover_docs_for(word string) string {
 	return ''
 }
 
-// completion_directive_names returns the canonical directive
-// allowlist with short descriptions. Keep in sync with parser.v
-// directive allowlist and spec/eval.md §3.
+// completion_directive_names returns the directive completion set,
+// DERIVED from the one canonical registry (cx.directive_names) rather
+// than hand-maintained beside it.
+//
+// #705: the hand-kept list had drifted into a different language. It
+// advertised four heads that DO NOT EXIST at either layer (`?xpath`,
+// `?xquery`, `?cxpath` — pure LSP invention — and `?include`, which is a
+// DATA-document assembly directive, not an eval-time head), documented
+// the abolished `:then` / `:else` slot syntax, and cited a spec file that
+// no longer exists. governance.md §10.2 requires an LSP update on every
+// grammar change; nothing enforced it, so the surface rotted quietly.
+//
+// Offering a head no parser knows is the same defect class the
+// shell-completion drift gate exists to prevent. Deriving the SET closes
+// it by construction: a directive cannot be advertised unless the
+// registry has it, and cannot be missed once the registry gains it.
+//
+// Descriptions stay hand-written, because prose is the one part a
+// registry cannot supply. `directive_help` carries them for the heads
+// that have earned one; everything else gets a plain, honest fallback
+// rather than an invented explanation.
 fn completion_directive_names() map[string]string {
+	help := directive_help()
+	mut out := map[string]string{}
+	for name in cx.directive_names {
+		key := '?' + name
+		out[key] = help[key] or { 'Directive `[${key} …]` — see code.md §4.1.' }
+	}
+	return out
+}
+
+// directive_help is the curated hover prose. Every key MUST be a real
+// registry name — the lsp-registry-parity gate fails on a key that is
+// not, which is exactly how the four phantom heads would be caught now.
+fn directive_help() map[string]string {
 	return {
-		'?if':        'Conditional. `[?if cond :then ... :else ...]`'
-		'?for':       'FLWOR iteration. `[?for x in coll :let ... :where ... :return ...]`'
-		'?let':       'Lexical binding. `[?let :x 1 :y 2 :in [+ x y]]`'
-		'?fn':        'First-class function. `[?fn :params [x y] :body [+ x y]]`'
-		'?match':     'Pattern matching. `[?match v :case ... :case ...]`'
-		'?def':       'Top-level definition. `[?def name [?fn :params ... :body ...]]`'
-		'?include':   '?include path (sandboxed, lexical collapse). See spec/include.md.'
-		'?eval':      'Sandboxed nested evaluation. `[?eval cx-source]`'
-		'?cx':        'Self-host directive — operate on CX AST values.'
-		'?xpath':     'Embedded XPath 4.0 query expression.'
-		'?xquery':    'Embedded XQuery 4.0 expression.'
-		'?cxpath':    'Native CXPath query expression.'
+		'?if':         'Conditional. `[?if COND [then …] [else …]]`'
+		'?for':        'Comprehension. `[?for [in $x COLL] [where P] [yield E]]`'
+		'?let':        'Lexical binding. `[?let [= $x 1] [= $y 2] [+ $x $y]]`'
+		'?fn':         'First-class function. `[?fn ($x $y) [+ $x $y]]`'
+		'?match':      'Pattern matching. `[?match V [case P R] [when PRED R] [else R]]`'
+		'?def':        'Module-level function. `[?def NAME ($params) BODY]`'
+		'?const':      'Module-level constant. `[?const NAME VALUE]`'
+		'?lib':        'Import a module. `[?lib \'cx-stdlib/strings\']`'
+		'?eval':       'Sandboxed nested evaluation. `[?eval TREE [context MAP]]`'
+		'?cx':         'Self-host directive. `[?cx include "path.cx"]`, `[?cx cx:hash VALUE]`, …'
+		'?modify':     'Structural edit over a CXPath focus. `[?modify $doc //user [set-attr k v]]`'
+		'?pipe':       'Left-to-right stage composition. `[?pipe V [$f] [$g]]`'
+		'?map':        'Map over a collection. `[?map XS [using $f]]`'
+		'?reduce':     'Fold a collection. `[?reduce XS [using $f] [from INIT]]`'
+		'?with-open':  'Scoped resource: opens, binds, and closes on exit.'
+		'?with-scope': 'Dynamic-scoped context fields for the body.'
+		'?with-caps':  'Narrow authority for the body. `[?with-caps [deny net] BODY]` (narrow-only).'
+		'?send':       'Send a value to a channel. `[?send V to=$ch]`'
+		'?receive':    'Receive from a channel. `[?receive from=$ch]`'
+		'?try-send':   'Non-blocking send; `timeout=` waits up to a deadline.'
+		'?try-receive': 'Non-blocking receive; `timeout=` waits up to a deadline.'
+		'?worker':     'Spawn a named worker.'
+		'?async':      'Evaluate eagerly in an asynchronous context; returns a future.'
+		'?await':      'Await a future.'
+		'?retry':      'Re-run on failure with a bounded attempt count.'
+		'?timeout':    'Bound an evaluation by a duration.'
+		'?secret':     'Wrap a value as a secret (redacted on emit).'
+		'?reveal':     'Reveal a secret — capability-gated (`secret-reveal`).'
+		'?element':    'Computed-name element construction.'
+		'?quote':      'Quote a tree without evaluating it.'
 	}
 }
+
 
 // completion_module_fns returns commonly-used module-prefixed names
 // (cx:, fn:, log:, map:, array:, math:). Editors render this as a
@@ -83,6 +133,7 @@ fn completion_module_fns() map[string]string {
 		// cx: self-host module
 		'cx:parse':              'Parse CX source text into an AST value.'
 		'cx:render':             'Render an AST value back to CX source.'
+		'cx:ast':                'Declaration-AST JSON projection of module source (libs/consts/defs).'
 		'cx:hash':               'SHA-256 of canonical bytes.'
 		'cx:diff':               'Three-policy semantic diff.'
 		'cx:patch':              'Apply a diff to an AST.'
@@ -96,7 +147,7 @@ fn completion_module_fns() map[string]string {
 		'log:warn':              'Log at warn level.'
 		'log:error':             'Log at error level.'
 		'log:with-context':      'Bind ambient context for nested log calls.'
-		// fn: namespace highlights (full ~180 in spec/eval.md)
+		// fn: namespace highlights (full ~180 in code.md)
 		'fn:count':              'Cardinality of a sequence.'
 		'fn:sum':                'Numeric sum.'
 		'fn:avg':                'Numeric average.'
@@ -114,22 +165,41 @@ fn completion_module_fns() map[string]string {
 		'fn:xml-to-json':        'Convert XML value to JSON.'
 		'fn:json-doc':           'Load a JSON document by URI.'
 		'fn:normalize-unicode':  'Apply Unicode normalization (NFC/NFD/NFKC/NFKD).'
-		'fn:safe-url':           'Reject dangerous URL schemes (javascript:, data:, …).'
 		'fn:node-name':          'Element name of a node.'
 		'fn:base-uri':           'Base URI of a node.'
 		'fn:document-uri':       'Document URI of a node.'
 		'fn:lang':               'Inherited cx:lang of a node.'
 		'fn:innermost':          'Deepest matching nodes in a set.'
 		'fn:outermost':          'Top-most matching nodes in a set.'
-		// map:, array: module surface
-		'map:get':               'Lookup a key in a map.'
-		'map:put':               'Insert/replace a key in a map.'
-		'map:keys':              'Sequence of keys.'
-		'map:size':              'Number of entries.'
-		'array:get':             'Index into an array (1-based).'
+		// map:, array: module surface (#925, RULED: PYE-1 — the full
+		// spec/std-lib/map.md + array.md rosters; every name is backed by
+		// stdlib/map.cx / stdlib/array.cx)
+		'map:get':               'Lookup a key in a map — key identity is (kind, image); absent → empty sequence.'
+		'map:put':               'New map with the key bound (replace in place, or append last).'
+		'map:keys':              'Sequence of keys in insertion order, each carrying its kind.'
+		'map:size':              'Number of entries (declarations included).'
+		'map:contains':          'Whether the key is bound, under (kind, image) identity.'
+		'map:entry':             'The single-entry map {k: v}.'
+		'map:merge':             'Fold a sequence of maps left-to-right; later bindings win.'
+		'map:remove':            'New map without the key; a miss is the identity.'
+		'map:for-each':          'Apply fn(key, value) per entry; the sequence of results.'
+		'array:get':             'Index into an array (1-based; out of range refuses).'
 		'array:size':            'Length of an array.'
-		'array:head':            'First element.'
-		'array:tail':            'All but first element.'
+		'array:head':            'First item; empty array → empty sequence.'
+		'array:tail':            'All but the first item; empty array → [].'
+		'array:append':          'New array with the value as the last item.'
+		'array:reverse':         'Items in reverse order.'
+		'array:subarray':        'len items from 1-based start, clamped to the end.'
+		'array:put':             'New array with 1-based position replaced.'
+		'array:remove':          'New array without the 1-based position.'
+		'array:insert-before':   'New array with the value inserted before the position (size+1 appends).'
+		'array:flatten':         'Sequence of leaf items, nested arrays and boxed sequences expanded.'
+		'array:join':            'Concatenate a sequence of arrays into one array.'
+		'array:sort':            'Ascending by the [$sort] arrangement, boxed back into an array.'
+		'array:filter':          'Items for which the predicate answers true.'
+		'array:for-each':        'New array of fn applied per item.'
+		'array:fold-left':       'fn(fn(init, a1), a2)… — fn takes (accumulator, item).'
+		'array:fold-right':      'fn(a1, fn(a2, … init)) — fn takes (item, accumulator).'
 	}
 }
 
@@ -185,18 +255,22 @@ fn stdlib_def_detail(def cx.DefNode) string {
 fn completion_snippet_for(name string) ?string {
 	key := if name.starts_with('?') { name[1..] } else { name }
 	snippets := {
-		'if':       '[?if \${1:cond} :then \${2:then-expr} :else \${3:else-expr}]\$0'
-		'for':      '[?for \${1:x} in \${2:coll} :return \${3:body}]\$0'
-		'let':      '[?let :\${1:name} \${2:value} :in \${3:body}]\$0'
-		'fn':       '[?fn :params [\${1:x}] :body \${2:body}]\$0'
-		'match':    '[?match \${1:value} :case \${2:pattern} \${3:result} :else \${4:default}]\$0'
-		'def':      '[?def \${1:name} \${2:value}]\$0'
-		'include':  '[?include "\${1:path.cx}"]\$0'
-		'eval':     '[?eval \${1:cx-source}]\$0'
-		'cx':       '[?cx \${1:directive}]\$0'
-		'xpath':    '[?xpath \${1:expression}]\$0'
-		'xquery':   '[?xquery \${1:expression}]\$0'
-		'cxpath':   '[?cxpath \${1:expression}]\$0'
+		// Clause-child forms (spec/code.md §7.2, §8.2, §8.4, §8.5, §8.7).
+		// The retired colon-slot spellings these replace were REJECTED by
+		// the parser — `[?let :x 1 :in body]` raises CXER0100 — so the
+		// completion inserted syntax that could not compile (#711 item 5).
+		// `\\\$` is an LSP-snippet-escaped literal `$` (the CX sigil).
+		'if':       '[?if \${1:cond} [then \${2:then-expr}] [else \${3:else-expr}]]\$0'
+		'for':      '[?for [in \\\$\${1:x} \${2:coll}] [yield \${3:body}]]\$0'
+		'let':      '[?let [= \\\$\${1:name} \${2:value}] \${3:body}]\$0'
+		'fn':       '[?fn (\\\$\${1:x}) \${2:body}]\$0'
+		'match':    '[?match \${1:value} [case \${2:pattern} \${3:result}] [else \${4:default}]]\$0'
+		'def':      '[?def \${1:name} (\\\$\${2:param}) \${3:body}]\$0'
+		'eval':     '[?eval \${1:tree}]\$0'
+		'cx':       '[?cx include "\${1:path.cx}"]\$0'
+		'include':  '[?include [\'\${1:path.cx}\']]\$0'
+		// `xpath` / `xquery` / `cxpath` snippets RETIRED with their
+		// completion entries above — no parser knows those heads.
 	}
 	if s := snippets[key] { return s }
 	return none
@@ -205,15 +279,15 @@ fn completion_snippet_for(name string) ?string {
 // ── Static doc tables ───────────────────────────────────────────────
 
 const directive_docs = {
-	'if':       '**?if** — Conditional.\n\n`[?if cond :then expr :else expr]`'
-	'for':      '**?for** — FLWOR iteration.\n\nSlots: `:let`, `:where`, `:order-by`, `:group-by`, `:count`, `:while`, `:return`. Tumbling + sliding windows via `:tumbling-window` / `:sliding-window`.'
-	'let':      '**?let** — Lexical binding.\n\n`[?let :name value :other-name value :in body]`'
-	'fn':       '**?fn** — First-class function.\n\n`[?fn :params [x y] :body expr]`\n\nSupports partial application via `[?partial f arg]` and arrow-lambda `-> (x) { body }` surface (B10).'
-	'match':    '**?match** — Pattern matching.\n\n`[?match value :case pattern result :case ... :else default]`'
-	'def':      '**?def** — Top-level definition.\n\nBinds a name in the current evaluation environment.'
-	'include':  '**?include** — Lexical inclusion.\n\nSandboxed by spec/include.md §6 (path-traversal denied, depth-limit enforced). Errors: E901–E911.'
-	'eval':     '**?eval** — Sandboxed nested evaluation.\n\nGated by M1–M5 caps (max_depth, max_steps, max_alloc, max_time, syscall_deny).'
-	'cx':       '**?cx** — Self-host directive.\n\nAccess to `cx:parse`, `cx:render`, `cx:hash`, `cx:diff`, `cx:patch`, `cx:schema-of`, `cx:resolve-includes`, `cx:eval`.'
+	'if':       '**?if** — Conditional.\n\n`[?if cond [then expr] [else expr]]`'
+	'for':      '**?for** — Comprehension (spec/code.md §7.2).\n\n`[?for [in \$x coll] [where P] [yield E]]`\n\nClause children: `[in \$x SRC]`, `[= \$y E]`, `[where P]`, `[order-by E asc|desc]`, `[group-by E]`, `[limit N]`, `[take N]`, `[drop N]`, `[take-while P]`, `[drop-while P]`, `[par]` / `[par N]`, `[lazy]`, `[ordered]`, `[fail-fast]`.\n\nOuter-container variants `[?for-array]` / `[?for-map]` pair with the `[yield-array E]` / `[yield-map K V]` yield clauses.'
+	'let':      '**?let** — Lexical binding.\n\n`[?let [= \$x 1] [= \$y 2] body]`\n\nFlat multi-binding only — bindings are `[= \$name value]` clause children before the body; nested single-binding staircases are a lint finding (L003).'
+	'fn':       '**?fn** — First-class function.\n\n`[?fn (\$x \$y) body]`\n\nSupports partial application via `[?partial f arg]` and arrow-lambda `-> (x) { body }` surface (B10).'
+	'match':    '**?match** — Pattern matching.\n\n`[?match value [case P R] [case P [where G] R] [when PRED R] [else R]]`\n\n`[case …]` matches a PATTERN; `[when …]` is a boolean GUARD arm.'
+	'def':      '**?def** — Module-level function (§8.7).\n\n`[?def name (\$params) body]`'
+	'include':  '**?include** — PARSE/ASSEMBLY-time inclusion in a DATA document (code.md §13).\n\n`[?include [\'path.cx\']]`\n\nSandboxed by spec/include.md §6 (path-traversal denied, depth-limit enforced). Errors: E901–E911.\n\nNOT an eval-time code head — in a CODE program the spelling is `[?cx include "path.cx"]`.'
+	'eval':     '**?eval** — Sandboxed nested evaluation (§6.4.4).\n\n`[?eval TREE]` / `[?eval TREE [context MAP]]` / `[?eval TREE [context MAP] [opts {"max-depth": 16}]]`\n\nGated by the `eval` capability (deny-by-default → CXER0271) and the M1–M5 caps.'
+	'cx':       '**?cx** — Self-host directive.\n\n`[?cx include "path.cx"]` — lexical inclusion, sandboxed by spec/include.md §6 (path-traversal denied, depth-limit enforced; errors E901–E911). There is no bare `[?include …]` head.\n\nAlso `cx:parse`, `cx:render`, `cx:hash`, `cx:diff`, `cx:patch`, `cx:schema-of`, `cx:resolve-includes`, `cx:eval`.'
 }
 
 const module_fn_docs = {
@@ -232,24 +306,36 @@ const module_fn_docs = {
 	'log:error':           '**log:error(msg, fields…)** — Error-level log.'
 	'log:with-context':    '**log:with-context(fields, body)** — Bind ambient log context for the dynamic extent of `body`.'
 	'fn:format-number':    '**fn:format-number(value, picture, :locale ?)** — Locale-aware number formatting. Currently en/de/fr; full CLDR/ICU is a follow-up.'
-	'fn:safe-url':         '**fn:safe-url(url)** — Returns `url` if the scheme is allowlisted; raises CXER0014 for javascript:, data:, vbscript:, file:.'
 }
 
+// slot_label_docs documents the CLAUSE-CHILD heads of the directive
+// forms — `[where P]`, `[yield E]`, `[then E]`, … — keyed WITHOUT a
+// colon, because the colon-slot spellings this table used to carry
+// (`:where`, `:return`, `:then`, `:params`, …) are not the shipped
+// surface and are rejected by the parser (#711 item 5, stream-2 W2).
 const slot_label_docs = {
-	':let':       'FLWOR `:let` — let-binding inside `?for`. Multiple allowed.'
-	':where':     'FLWOR `:where` — filter predicate.'
-	':order-by':  'FLWOR `:order-by` — sort the iteration.'
-	':group-by':  'FLWOR `:group-by` — group by a key expression.'
-	':count':     'FLWOR `:count` — bind position counter.'
-	':while':     'FLWOR `:while` — early-exit condition.'
-	':return':    'FLWOR `:return` — per-tuple result expression.'
-	':case':      'Pattern-match arm (`?match`).'
-	':catch':     '`?try` catch arm. Multiple `:catch` slots supported.'
-	':params':    '`?fn` parameter list.'
-	':body':      '`?fn` body expression.'
-	':then':      '`?if` then-branch.'
-	':else':      '`?if` / `?match` default branch.'
-	':in':        '`?let` body expression.'
+	// `[?for]` clause children (spec/code.md §7.2)
+	'in':          '`[?for]` generator — `[in \$x SRC]` binds each item of SRC.'
+	'where':       '`[?for]` / `[?match]` filter predicate — `[where P]`. PREFIX form.'
+	'order-by':    '`[?for]` ordering barrier — `[order-by E]` / `[order-by E desc]`.'
+	'group-by':    '`[?for]` grouping barrier — `[group-by E]`. Binds `\$key` and `\$group` (hash-partition; first-key-appearance order).'
+	'limit':       '`[?for]` result limit — `[limit N]`.'
+	'take':        '`[?for]` short-circuit after N yields — `[take N]`.'
+	'drop':        '`[?for]` skip the first N candidates — `[drop N]`.'
+	'take-while':  '`[?for]` yield until the predicate first fails — `[take-while P]`.'
+	'drop-while':  '`[?for]` skip while the predicate holds — `[drop-while P]`.'
+	'par':         '`[?for]` parallel outermost generator — `[par]` (W = min(4, ncpu)), `[par N]`, `[par max]` (§7.3).'
+	'lazy':        '`[?for]` lazy evaluation — yield each item as ready (§7.4; renamed from `[stream]` by U1.1a).'
+	'ordered':     '`[?for]` preserve input order under `[par]` (§7.3).'
+	'fail-fast':   '`[?for]` under `[par]`: short-circuit on the FIRST observed `[err]` (drain queued work, discard in-flight). A no-op without `[par]`.'
+	'yield':       '`[?for]` / `[?match]` result clause — `[yield E]`.'
+	'yield-array': '`[?for-array]` result clause — `[yield-array E]`.'
+	'yield-map':   '`[?for-map]` result clause — `[yield-map K V]` (key and value expressions).'
+	// branch / arm clause children
+	'then':        '`[?if]` then-branch — `[then E]`.'
+	'else':        '`[?if]` / `[?match]` default branch — `[else E]`.'
+	'case':        '`[?match]` PATTERN arm — `[case P R]` or `[case P [where G] R]`.'
+	'when':        '`[?match]` GUARD arm — `[when PRED R]`; fires when PRED is truthy.'
 }
 
 // ── Semantic tokens ─────────────────────────────────────────────────
@@ -366,15 +452,12 @@ fn collect_token_roles(node cx.ProgramNode, source string, mut out map[int]int) 
 			}
 		}
 		cx.ProgramForComp {
-			for clause in node.clauses {
-				if src := clause.source {
-					collect_token_roles(src, source, mut out)
-				}
-				if expr := clause.expr {
-					collect_token_roles(expr, source, mut out)
-				}
+			// L100: THE ONE traversal. The hand-rolled walk this replaces
+			// stopped at `yield`, so tokens inside the `[yield-map K V]`
+			// VALUE expression got NO semantic-token roles at all.
+			for item in cx.for_comp_children(node) {
+				collect_token_roles(item.node, source, mut out)
 			}
-			collect_token_roles(node.yield, source, mut out)
 		}
 		cx.ProgramPattern {
 			for attr in node.attrs {

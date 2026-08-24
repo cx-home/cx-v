@@ -1,4 +1,4 @@
-[test-suite name=hash
+[test-suite name=hash ring=1
   [doc [#
 conformance fixtures for cx-stdlib/hash (spec/std-lib/hash.md §6).
 

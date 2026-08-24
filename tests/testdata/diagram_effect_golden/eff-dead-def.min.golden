@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  cap_subprocess{{"subprocess"}}
+  prog -.->|"charged only in a def nothing calls"| cap_subprocess

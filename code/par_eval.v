@@ -29,14 +29,14 @@ import runtime
 //
 // Result delivery:
 //
-//   * Unordered (`:par` without `:ordered`): one `ParResult` per
-//     completion arrives on a shared `chan ParResult`; the driver
-//     drains exactly N values. The output sequence reflects
-//     completion order. The matched conformance section type is
-// `--- out_multiset`.
-//   * Ordered (`:par :ordered`): drained the same way but reassembled
-//     by `idx` before returning. The output sequence reflects source
-//     order regardless of completion timing.
+//   * One `ParResult` per completion arrives on a shared
+//     `chan ParResult`; the driver drains exactly N values and
+//     reassembles by `idx` before returning. The output sequence is
+//     SOURCE order regardless of completion timing — ALWAYS
+//     (code.md §6.5.1 `pure ⇒ deterministic`, stream-5 ruling L105).
+//     `[ordered]` is a tombstoned no-op: it remains grammatically
+//     valid where it was valid (paired with `[par]`) and changes
+//     nothing.
 //
 // Errors: the first error observed wins. We drain every channel
 // message (workers are already in flight; we can't cancel them) but
@@ -228,10 +228,9 @@ fn par_map_pool_worker(closure Closure, items []cx.Node, state_ptr &ProgramState
 
 // par_map runs `closure` over each item in `items` through a BOUNDED pool of at
 // most `width` workers (#94 — replaces the prior one-thread-per-item spawn).
-// Returns results in completion order when `ordered == false`, in source order
-// when `ordered == true`. Propagates the earliest-index worker error if any
-// worker raises.
-fn par_map(closure Closure, items []cx.Node, ordered bool, width int, mut env MatchEnv) ![]cx.Node {
+// Returns results in SOURCE order always (L105 — completion-order delivery is
+// retired). Propagates the earliest-index worker error if any worker raises.
+fn par_map(closure Closure, items []cx.Node, width int, mut env MatchEnv) ![]cx.Node {
 	n := items.len
 	if n == 0 {
 		return []cx.Node{}
@@ -246,7 +245,6 @@ fn par_map(closure Closure, items []cx.Node, ordered bool, width int, mut env Ma
 		for item in items {
 			seq << invoke_closure(closure, [item], mut env)!
 		}
-		_ = ordered
 		_ = width
 		return seq
 	}
@@ -287,19 +285,12 @@ fn par_map(closure Closure, items []cx.Node, ordered bool, width int, mut env Ma
 			}
 		}
 	}
-	if ordered {
-		mut by_idx := []cx.Node{len: n, init: cx.Node(cx.Element{ name: '' })}
-		for r in received {
-			by_idx[r.idx] = r.value
-		}
-		return by_idx
-	}
-	// Unordered: return in completion order. Strip indices.
-	mut out := []cx.Node{cap: n}
+	// Source order ALWAYS (L105): reassemble by index.
+	mut by_idx := []cx.Node{len: n, init: cx.Node(cx.Element{ name: '' })}
 	for r in received {
-		out << r.value
+		by_idx[r.idx] = r.value
 	}
-	return out
+	return by_idx
 }
 
 // ── for-par (#94 Stage 2) ────────────────────────────────────────────────────
@@ -308,7 +299,7 @@ fn par_map(closure Closure, items []cx.Node, ordered bool, width int, mut env Ma
 // distributed across a bounded pool of `width` workers, and each worker runs the
 // DOWNSTREAM clause pipeline (where / let / nested generators / yield) for its
 // item, producing that item's yield list. The per-item lists are concatenated in
-// source order (`[ordered]`) or completion order (default). Inner generators run
+// SOURCE order always (L105). Inner generators run
 // sequentially within the worker — only the outermost loop is parallel, per
 // spec §7.3. The caller (eval_for_comp) post-applies take/drop/limit on the
 // assembled list and only takes this path when it is semantics-safe (no
@@ -386,7 +377,7 @@ fn par_for_worker(clauses []cx.ProgramForClause, gen cx.ProgramForClause, gen_id
 // par_for_run distributes `items` (the outermost generator's items) across a
 // bounded pool of `width` workers and concatenates the per-item yield lists.
 fn par_for_run(clauses []cx.ProgramForClause, gen cx.ProgramForClause, gen_idx int,
-               spec YieldSpec, items []cx.Node, ordered bool, width int, mut env MatchEnv) ![]cx.Node {
+               spec YieldSpec, items []cx.Node, width int, fail_fast bool, mut env MatchEnv) ![]cx.Node {
 	n := items.len
 	if n == 0 {
 		return []cx.Node{}
@@ -412,7 +403,6 @@ fn par_for_run(clauses []cx.ProgramForClause, gen cx.ProgramForClause, gen_idx i
 			}
 			run_for_clauses(clauses, gen_idx + 1, spec, mut wenv, mut seq, mut ls)!
 		}
-		_ = ordered
 		_ = width
 		return seq
 	}
@@ -432,10 +422,35 @@ fn par_for_run(clauses []cx.ProgramForClause, gen cx.ProgramForClause, gen_idx i
 			env.closures, work, items, ch, mut pp)
 	}
 	mut received := []ParListResult{cap: n}
-	for _ in 0 .. n {
-		received << <-ch
+	mut expected := n
+	mut ff_first := -1 // received[] slot of the first OBSERVED err (fail-fast)
+	mut got := 0
+	for got < expected {
+		r := <-ch
+		received << r
+		got++
+		if fail_fast && r.err_message != '' && ff_first < 0 {
+			ff_first = received.len - 1
+			// [fail-fast] (grammar [129r], code.md §7.3 — stream-2 W1,
+			// #711 item 3): short-circuit on the FIRST observed err —
+			// drain the queued work so idle workers stop starting new
+			// items. Each pulled index sends exactly one result, so the
+			// expected count shrinks by exactly what the drain consumed;
+			// in-flight items still report and are discarded below.
+			mut drained := 0
+			for {
+				dr := <-work or { break }
+				_ = dr
+				drained++
+			}
+			expected -= drained
+		}
 	}
 	par_peak_report('for', pp, w, n)
+	if fail_fast && ff_first >= 0 {
+		fr := received[ff_first]
+		return EvalError{ code: fr.err_code, message: fr.err_message, cause: fr.err_cause, cause_set: fr.err_cause_set }
+	}
 	// earliest-index error wins (matches sequential first-failure semantics).
 	mut first_err_idx := -1
 	for r in received {
@@ -450,20 +465,14 @@ fn par_for_run(clauses []cx.ProgramForClause, gen cx.ProgramForClause, gen_idx i
 			}
 		}
 	}
+	// Source order ALWAYS (L105): reassemble the per-item yield lists by index.
 	mut out := []cx.Node{}
-	if ordered {
-		mut by_idx := [][]cx.Node{len: n, init: []cx.Node{}}
-		for r in received {
-			by_idx[r.idx] = r.values
-		}
-		for lst in by_idx {
-			out << lst
-		}
-	} else {
-		// completion order
-		for r in received {
-			out << r.values
-		}
+	mut by_idx := [][]cx.Node{len: n, init: []cx.Node{}}
+	for r in received {
+		by_idx[r.idx] = r.values
+	}
+	for lst in by_idx {
+		out << lst
 	}
 	return out
 }
@@ -702,7 +711,22 @@ fn par_reduce_range_worker(closure Closure, c_start i64, step i64, c_n i64, init
 // of a single end-of-eval flush. Slot parsing + closure resolution is
 // duplicated rather than refactored to avoid touching the non-
 // streaming hot path's call shape.
-pub fn eval_map_directive_streamed(d cx.ProgramDirective, mut env MatchEnv, mut ctx StreamCtx) ! {
+// MapSlots is the parsed slot shape of a `[?map …]` directive. ONE authority:
+// both the evaluator and the streamed-INPUT precondition check (#845,
+// code/streamed_input.v) read the program's shape through this, so the fast
+// path can never disagree with the evaluator about what a `[?map]` says — the
+// two-spellings drift the streaming predicate authority already guards
+// against for stream_mode_of.
+struct MapSlots {
+	source     cx.ProgramNode
+	using_slot cx.ProgramNode
+	par        bool
+	ordered    bool
+	par_width  int
+	par_max    bool
+}
+
+fn parse_map_slots(d cx.ProgramDirective, mut env MatchEnv) !MapSlots {
 	if d.slots.len == 0 {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?map] requires positional source slot' }
 	}
@@ -766,33 +790,60 @@ pub fn eval_map_directive_streamed(d cx.ProgramDirective, mut env MatchEnv, mut 
 	}
 	if ordered_flag && !par_flag {
 		return EvalError{ code: 'cx-err:CXER0100',
-			message: '[?map] :ordered requires :par' }
+			message: '[?map] [ordered] requires [par] (a tombstoned no-op when paired — L105)' }
 	}
+	return MapSlots{
+		source:     source_node
+		using_slot: using_slot
+		par:        par_flag
+		ordered:    ordered_flag
+		par_width:  par_width
+		par_max:    par_max
+	}
+}
+
+pub fn eval_map_directive_streamed(d cx.ProgramDirective, mut env MatchEnv, mut ctx StreamCtx) ! {
+	sl := parse_map_slots(d, mut env)!
+	source_node := sl.source
+	using_slot := sl.using_slot
+	par_flag := sl.par
+	par_width := sl.par_width
+	par_max := sl.par_max
 	source_val := eval_node(source_node, mut env)!
 	using_val := eval_node(using_slot, mut env)!
 	closure := resolve_closure(using_val, env) or {
-		return EvalError{ code: 'cx-err:CXER0001', message: '[?map] :using must evaluate to a closure' }
+		return EvalError{ code: 'cx-err:CXER0106', message: '[?map] :using must evaluate to a closure (E_USING_NOT_CLOSURE)' }
 	}
 	items := iterate(source_val)
 	if par_flag {
 		width := resolve_par_width(par_width, par_max)!
-		par_map_streamed(closure, items, ordered_flag, width, mut env, mut ctx)!
+		par_map_streamed(closure, items, width, mut env, mut ctx)!
 		return
 	}
 	// Sequential: emit one per iteration; each completes before the
 	// next starts, so the user sees deterministic per-item progress.
+	//
+	// Delivery cadence is the StreamCtx's threshold, NOT a flush per item
+	// (#823). While this path existed only for playground visibility a
+	// per-item flush was free; now that [?map] streams for throughput too,
+	// an unconditional flush meant one sink call per mapped value — ~110 K
+	// of them on a 10 MB document. A caller that genuinely wants per-item
+	// cadence asks for it: `eval_code_streaming_opts(unbuffered: true)`
+	// sets threshold = 1 and emit_node flushes on every item by itself.
 	for item in items {
 		mapped := invoke_closure(closure, [item], mut env)!
 		ctx.emit_node(mapped)!
-		ctx.flush()!
 	}
 }
 
 // par_map_streamed fans workers out through a BOUNDED pool of `width` workers
-// (#94) and emits results as they arrive on the completion channel. Unordered:
-// each result emitted in completion order. Ordered: buffer until all arrive,
-// then emit in source order. Errors abort + propagate the lowest-index failure.
-fn par_map_streamed(closure Closure, items []cx.Node, ordered bool, width int,
+// (#94) and emits results in SOURCE order always (L105): results buffer by
+// index and the contiguous prefix streams out as it becomes complete — the
+// user still sees incremental progress, just never a reordering. An error
+// propagates when the emission frontier reaches its index (earliest-index
+// error wins, matching sequential first-failure semantics); later-index
+// results already received are discarded with it.
+fn par_map_streamed(closure Closure, items []cx.Node, width int,
                     mut env MatchEnv, mut ctx StreamCtx) ! {
 	n := items.len
 	if n == 0 {
@@ -802,12 +853,10 @@ fn par_map_streamed(closure Closure, items []cx.Node, ordered bool, width int,
 	// the user sees results appear one at a time as each invocation
 	// completes (visible cadence under [?sleep DUR] in the body).
 	$if wasm32_emcc ? {
-		_ = ordered
 		_ = width
 		for item in items {
 			v := invoke_closure(closure, [item], mut env)!
 			ctx.emit_node(v)!
-			ctx.flush()!
 		}
 		return
 	}
@@ -826,49 +875,30 @@ fn par_map_streamed(closure Closure, items []cx.Node, ordered bool, width int,
 		spawn par_map_pool_worker(closure, items, env.state, env.bindings, env.closures,
 			work, ch, mut pp)
 	}
-	mut received := []ParResult{cap: n}
-	if ordered {
-		for _ in 0 .. n {
-			received << <-ch
-		}
-		par_peak_report('map-streamed', pp, w, n)
-		mut first_err_idx := -1
-		for r in received {
-			if r.err_message != '' && (first_err_idx < 0 || r.idx < first_err_idx) {
-				first_err_idx = r.idx
-			}
-		}
-		if first_err_idx >= 0 {
-			for r in received {
-				if r.idx == first_err_idx {
-					return EvalError{ code: r.err_code, message: r.err_message, cause: r.err_cause, cause_set: r.err_cause_set }
-				}
-			}
-		}
-		mut by_idx := []cx.Node{len: n, init: cx.Node(cx.Element{ name: '' })}
-		for r in received {
-			by_idx[r.idx] = r.value
-		}
-		for v in by_idx {
-			ctx.emit_node(v)!
-			ctx.flush()!
-		}
-		return
-	}
-	// Unordered: stream as each worker completes.
-	mut emitted := 0
+	// Source order ALWAYS (L105), streamed incrementally: buffer by index,
+	// emit the contiguous prefix as it completes. `frontier` = the next
+	// source index to emit; an error result is held in the buffer and
+	// propagates only when the frontier reaches it, so a lower-index
+	// success still emits and a lower-index error still wins.
+	mut by_idx := []ParResult{len: n}
+	mut have := []bool{len: n}
+	mut frontier := 0
 	for _ in 0 .. n {
 		r := <-ch
-		if r.err_message != '' {
-			return EvalError{ code: r.err_code, message: r.err_message, cause: r.err_cause, cause_set: r.err_cause_set }
-		}
-		ctx.emit_node(r.value)!
-		ctx.flush()!
-		emitted++
-		if emitted == n {
-			par_peak_report('map-streamed', pp, w, n)
+		by_idx[r.idx] = r
+		have[r.idx] = true
+		for frontier < n && have[frontier] {
+			fr := by_idx[frontier]
+			if fr.err_message != '' {
+				par_peak_report('map-streamed', pp, w, n)
+				return EvalError{ code: fr.err_code, message: fr.err_message, cause: fr.err_cause, cause_set: fr.err_cause_set }
+			}
+			// Threshold-paced, like the sequential arm — see there.
+			ctx.emit_node(fr.value)!
+			frontier++
 		}
 	}
+	par_peak_report('map-streamed', pp, w, n)
 }
 
 fn par_reduce_chunk_worker(closure Closure, chunk []cx.Node, init cx.Node, idx int,

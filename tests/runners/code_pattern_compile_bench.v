@@ -47,6 +47,7 @@ module main
 import cx
 
 import code
+import platform as _
 import time
 import os
 import strings
@@ -82,28 +83,34 @@ fn build_pattern(depth int, bindings int) string {
 	assert depth >= 1
 	assert bindings >= depth
 	mut b := strings.new_builder(512)
-	b.write_string('[?for ')
+	// #710 item 4 (I5-s17 W6): the builder carried the retired
+	// pre-reshape `[?for PATTERN :yield ...]` spelling and the bench
+	// crashed at the warmup parse. The measured artifact — parsing a
+	// depth-D, B-binding pattern — now rides the current `[?match]`
+	// case-pattern form; each `\$bN` is a distinct binding
+	// introduction the pattern compiler must track, same realism.
+	b.write_string('[?match [probe] [case ')
 	// Open `depth` nested spine elements, each with one head-bind.
 	for i in 0 .. depth {
 		b.write_string('[e${i} \$b${i + 1} ')
 	}
-	// Leaf carries (bindings - depth) wildcard-bound siblings.
+	// Leaf carries (bindings - depth) bound siblings.
 	for j in 0 .. (bindings - depth) {
 		idx := depth + j + 1
 		if j > 0 { b.write_string(' ') }
-		b.write_string('*\$b${idx}')
+		b.write_string('\$b${idx}')
 	}
 	// Close all `depth` elements.
 	for _ in 0 .. depth {
 		b.write_string(']')
 	}
-	// Yield the spine bindings as a sequence.
-	b.write_string(' :yield (')
+	// The arm body yields the spine bindings as a sequence.
+	b.write_string(' (')
 	for i in 0 .. depth {
 		if i > 0 { b.write_string(', ') }
 		b.write_string('\$b${i + 1}')
 	}
-	b.write_string(')]')
+	b.write_string(')] [else []]]')
 	return b.str()
 }
 

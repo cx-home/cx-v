@@ -4,10 +4,10 @@
 // Measures the median latency of each evaluator-surface addition on
 // a representative input so per-feature regressions show up in the
 // V7 perf gate. Each bench case lives in its own stanza for
-// `scripts/run_bench_json.py` to parse.
+// `scripts/run_bench_json.cx` to parse.
 //
 // Coverage (T1):
-//   - FLWOR clauses (where, count, order-by, group-by, tumbling)
+//   - FLWOR clauses (where, count, order-by, group-by)
 //   - ?fn calls (high-frequency invocation)
 //   - Partial application
 //   - Pipeline operator
@@ -21,6 +21,7 @@
 module main
 
 import code
+import platform as _
 import time
 import os
 
@@ -66,64 +67,66 @@ fn main() {
 	println('  measured runs  : ${measured_runs}')
 	println('')
 
+	// (#805 gate-truth batch, audit AF-5: every row carried the retired
+	// pre-reshape surface — `:in/:where/:return`, `:be`, `|>`, `=>`,
+	// infix `to` ranges — and panicked at the first eval. Rewritten to
+	// the ENFORCED code.cxd spellings, semantically parallel rows; the
+	// labels stay stable for the T1.* baseline keys.)
+
 	// FLWOR — additions over the bare ?for baseline.
 	bench('flwor.where',
 		input,
-		'[?for s :in //service :where @id :return [?=s/@id];]')
+		'[?for [in \$s \$doc//service] [where [> \$s/@id 0]] [yield \$s/@id]]')
+	// (the `:count n` CLAUSE is retired — the aggregation equivalent
+	// counts the assembled walk.)
 	bench('flwor.count',
 		input,
-		'[?for s :in //service :count n :return [?=n]:[?=s/@id];]')
+		'[\$count [?for [in \$s \$doc//service] [yield \$s/@id]]]')
 	bench('flwor.order_by',
 		input,
-		'[?for s :in //service :order-by @id :return [?=s/@id];]')
+		'[?for [in \$s \$doc//service] [order-by \$s/@id] [yield \$s/@id]]')
 	bench('flwor.group_by',
 		input,
-		'[?for s :in //service :group-by [k, s/@id] :return [?=k];]')
+		'[?for [service @id=\$id] [group-by \$id] [yield \$id]]')
 
 	// ?fn invocations — measured by calling a small fn many times
-	// inside a for-loop. The 1..500 range exercises call_depth book-
-	// keeping per call without pushing past max_call_depth=256
-	// (recursion is iterative, not nested).
+	// inside a for-loop.
 	bench('fn.call_x500',
 		'[p]',
-		'[?let f :be [?fn :params [x] :body [?=x]] :return [?for i :in 1 to 500 :return [?f [i]]]]')
+		'[?let [= \$f [?fn \$x \$x]] [?for [in \$i [\$range 1 500]] [yield [\$f \$i]]]]')
 
-	// Partial application — build a partial and invoke it 500 times.
+	// Partial application — placeholder partial invoked 500 times.
 	bench('partial.invoke_x500',
 		'[p]',
-		'[?let f :be [?partial [[?fn-ref [concat, 2]], \'_\']] :return [?for i :in 1 to 500 :return [?=[?apply [f, i]]]]]')
+		"[?lib 'cx-stdlib/math']\n[?let [= \$sq [\$math:pow _ 2]] [?for [in \$i [\$range 1 500]] [yield [\$sq \$i]]]]")
 
-	// Pipeline operator — chained string transforms.
+	// Pipeline directive — the walk piped into the count stage.
 	bench('op.pipeline',
 		input,
-		'[?for s :in //service :return [?=s/@id |> upper];]')
+		'[?pipe [?for [in \$s \$doc//service] [yield \$s/@id]] \$count]')
 
-	// Arrow operator — fn-application syntax sugar.
-	bench('op.arrow',
-		input,
-		'[?for s :in //service :return [?=s/@id => upper()];]')
+	// (`op.arrow` is RETIRED with the postfix arrow itself — the
+	// reshape has one application form; no replacement row.)
 
-	// ?match — exercised against each service's @id; structured
-	// dispatch over a small case set.
+	// ?match — structured dispatch over each service's @id.
 	bench('match.string',
 		input,
-		'[?for s :in //service :return [?match [s/@id, [a, A], [b, B], [*, X]]];]')
+		'[?for [in \$s \$doc//service] [yield [?match \$s/@id [case 1 :a] [case 2 :b] [else :x]]]]')
 
-	// Regex via RE2 — 500 matches of a small pattern.
+	// Regex via RE2 — 500 matches of a small compiled pattern.
 	bench('regex.matches_x500',
-		'[p s=\'hello42world\']',
-		"[?for i :in 1 to 500 :return [?=[?matches ['[a-z]+[0-9]+', @s]]];]")
+		'[p]',
+		"[?lib 'cx-stdlib/re']\n[?let [= \$p [\$re:compile \"[a-z]+[0-9]+\"]] [?for [in \$i [\$range 1 500]] [yield [\$re:matches \$p \"hello42world\"]]]]")
 
-	// to / range operator — sequence materialisation up to a cap
-	// well below max_sequence_len (1M).
+	// Range materialisation up to a cap well below the budget floor.
 	bench('op.to_range_10k',
 		'[p]',
-		'[?for i :in 1 to 10000 :return [?=i];]')
+		'[?for [in \$i [\$range 1 10000]] [yield \$i]]')
 
-	// Tumbling windows — the A13 ?for-tumbling addition.
-	bench('flwor.tumbling',
-		input,
-		'[?for-tumbling w :in //service :size 5 :return [?for x :in w :return [?=x/@id]];]')
+	// (The `flwor.tumbling` case is RETIRED with the `[?for-tumbling]`
+	// head itself — L98, planar_algebra.md: windows are out of v1 and the
+	// future form is a CLAUSE under `[?for]`, never a new head. Stream 13
+	// deleted the implementation; stream-2 W2 deletes the reservation.)
 
 	println('')
 }

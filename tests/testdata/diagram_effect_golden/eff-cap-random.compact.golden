@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  eff_random_crypto_bytes[["random-crypto-bytes"]]
+  cap_random{{"random --allow-random"}}
+  prog --> eff_random_crypto_bytes
+  eff_random_crypto_bytes --> cap_random

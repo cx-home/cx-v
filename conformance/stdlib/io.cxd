@@ -1,4 +1,4 @@
-[test-suite name=io
+[test-suite name=io ring=1
   [doc [#
 conformance fixtures for cx-stdlib/io (spec/std-lib/io.md §6).
 
@@ -1582,7 +1582,7 @@ null
 #]]
  ]
 
- [case id=io-105-watch-cap-denied level=core
+ [case id=io-105-watch-cap-denied level=core ring=2
   [tags io watch capability CXER0271]
   [in-cx [#
 [empty]
@@ -1596,7 +1596,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=io-106-watch-next-cap-denied level=core
+ [case id=io-106-watch-next-cap-denied level=core ring=2
   [tags io watch-next capability CXER0271]
   [in-cx [#
 [empty]
@@ -1614,7 +1614,7 @@ cx-err:CXER0271
  # raises CXER0271 is the nested `watch`, which is read-cap-gated. The
  # close-unblocks-a-parked-next behavior needs a granted handle and lives in the
  # behavioral test (vcx/tests/io_watch_test.v).
- [case id=io-107-watch-close-cap-denied level=core
+ [case id=io-107-watch-close-cap-denied level=core ring=2
   [tags io watch-close capability CXER0271]
   [in-cx [#
 [empty]

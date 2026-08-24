@@ -1,0 +1,8 @@
+[org
+  [team name='alpha'
+    [user id=1 name='alice']
+  ]
+  [project name='beta'
+    [user id=2 name='bob']
+  ]
+]

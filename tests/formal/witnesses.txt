@@ -138,3 +138,61 @@ M-PROGRAM-1	program	node	[$inc $x]	<cx:call cx:head="inc"><cx:var cx:name="x"/><
 M-XMLATTR-1	data	doc	[p xml:space=preserve 'a  b']	<p xml:space="preserve">a  b</p>
 M-ERR-1	data	err	[web, prod]	<cx:err code="CXER0100" offset="4"/>
 M-ERR-2	data	err	[n::int abc]	<cx:err code="CXER0109" offset="8"/>
+
+# ════════════════ evaluation-layer witnesses (stream 22, clean-room §3-C) ════
+# kind = eval  -> compare code.render_canonical(eval(parse_program(input)))
+#                 (the §11.1a EV-RESULT-IMAGE — the run surface's text image)
+#        trace -> compare the ordered admitted-effect-point sequence,
+#                 ';'-joined (the out-effects channel vocabulary)
+# Each EV-* rule id is discharged by a DISCRIMINATOR PAIR: the pair's rows
+# grade differently under the opposite semantic choice.
+
+# EV-RESULT-IMAGE — sequences keep paren shape; scalars are bare (R1/R3).
+EV-RESULT-IMAGE-1	program	eval	[?let [= $s (1, 2, 3)] $s]	(1, 2, 3)
+EV-RESULT-IMAGE-2	program	eval	[?let [= $n 42] $n]	42
+
+# EV-LET-SEQ — let* IS the rule: a later clause sees the earlier binding.
+# (Pair: under parallel-let the second row's $b could not read $a.)
+EV-LET-SEQ-1	program	eval	[?let [= $a 2] [= $b [* $a 3]] $b]	6
+EV-LET-SEQ-2	program	eval	[?let [= $a 1] [?let [= $a 10] [= $b [+ $a 1]] $b]]	11
+
+# EV-EFFECT-SET — the trace records admissions in evaluation order.
+# (Pair: an unordered reading grades both rows identically.)
+EV-EFFECT-SET-1	program	trace	[?do [?lib 'cx-stdlib/env'] [?lib 'cx-stdlib/time'] [$env:var "HOME"] [$time:now]]	env:env-var;clock:time-now
+EV-EFFECT-SET-2	program	trace	[?do [?lib 'cx-stdlib/env'] [?lib 'cx-stdlib/time'] [$time:now] [$env:var "HOME"]]	clock:time-now;env:env-var
+
+# EV-ARG-ORDER — apply args left-to-right; construct = attrs first
+# (source order) then body items (source order). (Pair: R2L gives
+# (3, 2, 1); interleaved-source gives [el a=1 b=3 2].)
+EV-ARG-ORDER-1	program	eval	[?def triple ($a $b $c) ($a, $b, $c)]<NL>[$triple [?test-counter name=ao1 op=inc] [?test-counter name=ao1 op=inc] [?test-counter name=ao1 op=inc]]	(1, 2, 3)
+EV-ARG-ORDER-2	program	eval	[el a=[?test-counter name=ao2 op=inc] [?test-counter name=ao2 op=inc] b=[?test-counter name=ao2 op=inc]]	[el a=1 b=2 3]
+
+# EV-CLOSURE-CAP — snapshot at creation: a closure made in loop
+# iteration 1 sees iteration-1 bindings after [continue] rebinds.
+# (Pair: reference-capture reads the CURRENT frame — row 1 gives 2,
+# row 2 gives (2, 2).)
+EV-CLOSURE-CAP-1	program	eval	[?loop [= $i 1] [= $f 0] [?if [= $i 1] [then [continue 2 [?fn () $i]]] [else [break [$f]]]]]	1
+EV-CLOSURE-CAP-2	program	eval	[?loop [= $i 1] [= $g 0] [= $h 0] [?if [= $i 1] [then [continue 2 [?fn () $i] 0]] [else [?if [= $i 2] [then [continue 3 $g [?fn () $i]]] [else [break ([$g], [$h])]]]]]]	(1, 2)
+
+# EV-CLOCK-PARK — mock sleeps park; await barriers advance the shared
+# clock to each earliest deadline at quiescence (row 1: both futures
+# complete, clock = the LATER deadline); the advance is bounded by the
+# awaiter's own deadline (row 2: timeout=2ms over a 5ms sleeper —
+# CXER0241 and the clock stops at 2ms, never 5).
+EV-CLOCK-PARK-1	program	eval	[?let [= $f1 [?async [?let [= $x [?sleep 10ms mock]] :a]]] [?let [= $f2 [?async [?let [= $x [?sleep 20ms mock]] :b]]] [?let [= $r [?await-all ($f1, $f2)]] ($r, [?test-clock])]]]	((:a, :b), 20000000)
+EV-CLOCK-PARK-2	program	eval	[?let [= $f [?async [?let [= $x [?sleep 5ms mock]] :late]]] [?let [= $r [?fallback [?await $f timeout=2ms] [recover-with [code $err@code]]]] ($r, [?test-clock])]]	([code 'cx-err:CXER0241'], 2000000)
+
+# EV-BUDGET — the force-budget floor: exactly 1,000,000 pulls MUST
+# succeed (the guard may fire only ABOVE the floor). Row 2 drives the
+# floor through a combinator (map), not just the bare source.
+EV-BUDGET-1	program	eval	[$count [$range 1 1000000]]	1000000
+EV-BUDGET-2	program	eval	[$count [?map [$range 1 1000000] [using [?fn $x $x]]]]	1000000
+
+# EV-ASYNC-SPAWN — spawn is eager; fire-and-forget completion is
+# guaranteed: an UN-AWAITED body's effect ADMITS (row 1's trace has the
+# spawned clock read — a lazy drive-at-await substrate leaves it EMPTY,
+# the discriminator; the 100ms sleep is the join margin). Row 2: the
+# main value ignores the future entirely — fire-and-forget is
+# legitimate, no error, no await required.
+EV-ASYNC-SPAWN-1	program	trace	[?lib 'cx-stdlib/time']<NL>[?let [= $t [?async [$time:now]]] [?let [= $z [?sleep 100ms]] :done]]	clock:time-now
+EV-ASYNC-SPAWN-2	program	eval	[?lib 'cx-stdlib/time']<NL>[?let [= $t [?async [$time:now]]] [?let [= $z [?sleep 100ms]] :done]]	:done

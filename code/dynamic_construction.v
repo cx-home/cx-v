@@ -168,15 +168,49 @@ fn eval_dc_body_items(prog_items []cx.ProgramNode, mut items []cx.Node, mut cx_a
 			}
 		}
 		val := eval_node(it, mut env)!
-		// A plain positional child that evaluates to an [err] is a CONTAINED
-		// value: element construction is data-building, not a railway, so the
-		// err is appended as a child (`[a [err …]]`), matching the pre-DC
-		// eval_cx_element behavior. Only the construction holes above
-		// ([?attr]/[?splice]/[?unquote]) abort construction on an err, because
-		// there the err is a failed name/graft computation, not a child value.
+		// #853 (owner ruling 2026-08-18, "2a") — element construction is
+		// OPERAND-CONSUMING for propagation, per code.md §6.4.1 /
+		// §9.2: a positional child that EVALUATES to an [err …] propagates
+		// instead of being adopted as a child. Before this, a refusal spliced
+		// into a document had stopped being a refusal — it no longer
+		// short-circuited and `[?match … [case [err …] …]]` could not see it,
+		// because by then it was a node in a tree. #853 caught it as a 200 OK
+		// with `<err code="…">` serialized into a page.
+		//
+		// THE DISCRIMINATOR IS THE POSITION, NOT THE VALUE — the same
+		// principle as the [?quote] hole half (@ 58df73d5). A SOURCE-LITERAL
+		// `[err …]` element is data and stays data, so err-shaped documents
+		// remain expressible; keying on "is this value an err" would have
+		// passed the headline case and silently made them inexpressible.
+		//
+		// The position test is the literal HEAD NAME: a `[err …]` written in
+		// source is a ProgramLiteral whose name is `err`, and it BUILDS that
+		// element. Every other item — a call, a binding read, a directive, a
+		// computed-name construction, or a nested literal element whose own
+		// construction propagated — is an operand, so an err result
+		// propagates. That last case is what makes propagation TRANSITIVE:
+		// `[section [div [$concat …]]]` propagates from `div` and then from
+		// `section`, so a refusal cannot come to rest at any depth.
+		if is_err_node(val) && !is_literal_err_head(it) {
+			return val
+		}
 		items << val
 	}
 	return dc_ok_sentinel()
+}
+
+// is_literal_err_head reports whether a body item is a SOURCE-LITERAL
+// `[err …]` element — the one child position whose err-shaped value is DATA
+// rather than a propagating refusal (code.md §6.4.1, "the discriminator is
+// POSITION, not value"). A computed-name construction is deliberately NOT
+// covered: a computed name is itself a computation, so it is an operand
+// position like any other.
+@[inline]
+fn is_literal_err_head(it cx.ProgramNode) bool {
+	if it is cx.ProgramLiteral {
+		return it.name == 'err' && it.name_expr == none
+	}
+	return false
 }
 
 fn dc_ok_sentinel() cx.Node {
@@ -253,22 +287,67 @@ fn eval_quote(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	if d.slots.len != 1 {
 		return EvalError{ code: 'cx-err:CXER0100', message: '[?quote] requires exactly one FORM' }
 	}
-	return quote_form(d.slots[0].value, mut env)!
+	// #853 — a HOLE's `[err]` propagates railway-style, per §6.4.3.1:
+	// "holes are evaluated once, left-to-right, at quote-eval time; a hole's
+	// `[err]` propagates railway-style (§9.2) then."
+	//
+	// It did not. The lift resolved each hole through eval_unquote_value /
+	// eval_splice_value — which do surface the err — and then appended that
+	// value to the tree under construction like any other child. The result
+	// was a document with a refusal buried in it: 200 OK with
+	// `<err code="…">` serialized into the page, unmatchable by
+	// `[?match … [case [err …] …]]` because by then it was a node in a tree.
+	//
+	// This also restores §6.4.3's stated equivalence — "building with
+	// [?quote]+holes and building imperatively with
+	// [?element]/[?attr]/[?entry] produce the SAME tree". The imperative path
+	// already aborted on a hole err (eval_dc_body_items' [?attr]/[?splice]/
+	// [?unquote] arms); only the quote path disagreed.
+	//
+	// WHAT IS DELIBERATELY UNCHANGED: a plain positional child that evaluates
+	// to an err is still CONTAINED (`[a [err …]]`), and a literal `[err …]`
+	// written inside a quoted form is still data. Element construction is
+	// data-building, not a railway — see the note in eval_dc_body_items. The
+	// carrier below records only what a HOLE produced, so the two cases cannot
+	// be confused: the discriminator is the POSITION, not the value.
+	mut hole_err := []cx.Node{}
+	lifted := quote_form(d.slots[0].value, mut env, mut hole_err)!
+	if hole_err.len > 0 {
+		return hole_err[0]
+	}
+	return lifted
+}
+
+// note_hole_err records the FIRST err a [?quote] hole produced. Returns true
+// when `v` was an err, so the caller can stop grafting it. The lift keeps
+// walking rather than unwinding: holes are specified to evaluate
+// left-to-right, and the first err is the one that propagates.
+@[inline]
+fn note_hole_err(v cx.Node, mut hole_err []cx.Node) bool {
+	if is_err_node(v) {
+		if hole_err.len == 0 {
+			hole_err << v
+		}
+		return true
+	}
+	return false
 }
 
 // quote_form lifts a cx.ProgramNode to its CXDM data image, resolving holes. A
 // bare $x (cx.ProgramBinding with no path) becomes an inert <cx:var> data node
 // (two-color rule §6.4.3.2).
-fn quote_form(node cx.ProgramNode, mut env MatchEnv) !cx.Node {
+fn quote_form(node cx.ProgramNode, mut env MatchEnv, mut hole_err []cx.Node) !cx.Node {
 	if node is cx.ProgramDirective {
 		if node.name == 'unquote' {
-			return eval_unquote_value(node, mut env)!
+			uv := eval_unquote_value(node, mut env)!
+			note_hole_err(uv, mut hole_err)
+			return uv
 		}
 		if node.name == 'splice' {
 			return EvalError{ code: 'cx-err:CXER0100', message: '[?splice] is valid only in a multi-sibling slot, not a single quoted value' }
 		}
 	}
-	return program_node_to_data_q(node, mut env)!
+	return program_node_to_data_q(node, mut env, mut hole_err)!
 }
 
 fn resolve_name_subform(d cx.ProgramDirective, position string, mut env MatchEnv) !cx.Node {
@@ -291,31 +370,42 @@ fn resolve_name_subform(d cx.ProgramDirective, position string, mut env MatchEnv
 // back (data_to_program_node). Inline `[call()!]` array literals are avoided
 // throughout (they trip V's type_default_impl recursion for the recursive
 // cx.Node sumtype) — children are built via explicit `<<` appends.
-fn program_node_to_data_q(node cx.ProgramNode, mut env MatchEnv) !cx.Node {
+fn program_node_to_data_q(node cx.ProgramNode, mut env MatchEnv, mut hole_err []cx.Node) !cx.Node {
 	if node is cx.ProgramLiteral {
-		return literal_to_data_q(node, mut env)!
+		return literal_to_data_q(node, mut env, mut hole_err)!
 	}
 	if node is cx.ProgramBinding {
 		if node.path.len == 0 {
-			return mk_cx_node('cx:var', node.name, []cx.Node{})
+			// I1 row 9 (L78): a bare $x lowers to the authorable HOLE node
+			// — canonical spelling `$x` — so quoted trees carry plain CX
+			// text and Tier-1 addresses. (The former <cx:var> image died on
+			// re-parse, E210 — cx-094 pinned that death.)
+			return cx.Node(cx.HoleNode{ name: node.name })
 		}
 		return mk_cx_expr(node)
 	}
 	if node is cx.ProgramDirective {
 		if node.name == 'unquote' {
-			return eval_unquote_value(node, mut env)!
+			uv := eval_unquote_value(node, mut env)!
+			note_hole_err(uv, mut hole_err)
+			return uv
 		}
 		if node.name == 'splice' {
-			return eval_splice_value(node, mut env)!
+			sp := eval_splice_value(node, mut env)!
+			note_hole_err(sp, mut hole_err)
+			return sp
 		}
 		mut kids := []cx.Node{}
 		for s in node.slots {
 			if s.kind == .labeled {
-				inner := program_node_to_data_q(s.value, mut env)!
+				inner := program_node_to_data_q(s.value, mut env, mut hole_err)!
 				kids << wrap_cx(('cx:' + s.label), inner)
 			} else {
 				if s.value is cx.ProgramDirective && (s.value as cx.ProgramDirective).name == 'splice' {
 					sp := eval_splice_value(s.value as cx.ProgramDirective, mut env)!
+					if note_hole_err(sp, mut hole_err) {
+						continue
+					}
 					sitems, is_seq := seq_items(sp)
 					if is_seq {
 						for it in sitems {
@@ -326,7 +416,7 @@ fn program_node_to_data_q(node cx.ProgramNode, mut env MatchEnv) !cx.Node {
 					kids << sp
 					continue
 				}
-				kids << program_node_to_data_q(s.value, mut env)!
+				kids << program_node_to_data_q(s.value, mut env, mut hole_err)!
 			}
 		}
 		return mk_cx_node(('cx:' + node.name), '', kids)
@@ -334,7 +424,7 @@ fn program_node_to_data_q(node cx.ProgramNode, mut env MatchEnv) !cx.Node {
 	return mk_cx_expr(node)
 }
 
-fn literal_to_data_q(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
+fn literal_to_data_q(l cx.ProgramLiteral, mut env MatchEnv, mut hole_err []cx.Node) !cx.Node {
 	if l.kind == .int_lit {
 		return mk_cx_scalar('cx:int', i64(l.int_val).str())
 	}
@@ -354,16 +444,16 @@ fn literal_to_data_q(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 		return mk_cx_scalar('cx:dur', l.dur_val)
 	}
 	if l.kind == .cx_element {
-		return element_to_data_q(l, mut env)!
+		return element_to_data_q(l, mut env, mut hole_err)!
 	}
 	if l.kind == .sequence_lit {
-		return mk_cx_node('cx:seq', '', wrap_items_q(l.items, mut env)!)
+		return mk_cx_node('cx:seq', '', wrap_items_q(l.items, mut env, mut hole_err)!)
 	}
 	if l.kind == .array_lit {
-		return mk_cx_node('cx:arr', '', wrap_items_q(l.items, mut env)!)
+		return mk_cx_node('cx:arr', '', wrap_items_q(l.items, mut env, mut hole_err)!)
 	}
 	if l.kind == .block {
-		return mk_cx_node('cx:block', '', wrap_items_q(l.items, mut env)!)
+		return mk_cx_node('cx:block', '', wrap_items_q(l.items, mut env, mut hole_err)!)
 	}
 	if l.kind == .node_lit {
 		// Quoting an embedded pure-DATA construct yields that data node verbatim.
@@ -375,7 +465,7 @@ fn literal_to_data_q(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 	mut entries := []cx.Node{}
 	for i, v in l.items {
 		key := if i < l.keys.len { l.keys[i] } else { '' }
-		inner := program_node_to_data_q(v, mut env)!
+		inner := program_node_to_data_q(v, mut env, mut hole_err)!
 		entries << wrap_cx_attr('entry', 'key', key, inner)
 	}
 	return mk_cx_node('cx:map', '', entries)
@@ -384,7 +474,7 @@ fn literal_to_data_q(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 // wrap_items_q wraps each quoted item in an <item> element. A [?splice] hole
 // expands into multiple siblings (each wrapped), so a spliced sequence inside a
 // quoted (…)/[…]/block grafts as several items, not one nested sequence (§6.4.3).
-fn wrap_items_q(prog_items []cx.ProgramNode, mut env MatchEnv) ![]cx.Node {
+fn wrap_items_q(prog_items []cx.ProgramNode, mut env MatchEnv, mut hole_err []cx.Node) ![]cx.Node {
 	mut out := []cx.Node{}
 	for it in prog_items {
 		if it is cx.ProgramDirective && it.name == 'splice' {
@@ -401,7 +491,7 @@ fn wrap_items_q(prog_items []cx.ProgramNode, mut env MatchEnv) ![]cx.Node {
 			}
 			continue
 		}
-		inner := program_node_to_data_q(it, mut env)!
+		inner := program_node_to_data_q(it, mut env, mut hole_err)!
 		out << wrap_cx('item', inner)
 	}
 	return out
@@ -413,11 +503,14 @@ fn wrap_items_q(prog_items []cx.ProgramNode, mut env MatchEnv) ![]cx.Node {
 // (§6.4.3). All other items ([?unquote], plain forms) lift to one node via
 // program_node_to_data_q. This mirrors the splice handling in the directive-slot
 // loop so element bodies and slot lists expand splice consistently.
-fn lift_quoted_items(prog_items []cx.ProgramNode, mut env MatchEnv) ![]cx.Node {
+fn lift_quoted_items(prog_items []cx.ProgramNode, mut env MatchEnv, mut hole_err []cx.Node) ![]cx.Node {
 	mut out := []cx.Node{}
 	for it in prog_items {
 		if it is cx.ProgramDirective && it.name == 'splice' {
 			sp := eval_splice_value(it, mut env)!
+			if note_hole_err(sp, mut hole_err) {
+				continue
+			}
 			sitems, is_seq := seq_items(sp)
 			if is_seq {
 				for s in sitems {
@@ -435,39 +528,42 @@ fn lift_quoted_items(prog_items []cx.ProgramNode, mut env MatchEnv) ![]cx.Node {
 			// [?element]-construction path (eval_dc_body_items); a non-empty
 			// value injects as one node.
 			uv := eval_unquote_value(it, mut env)!
+			if note_hole_err(uv, mut hole_err) {
+				continue
+			}
 			if is_empty_seq_node(uv) {
 				continue
 			}
 			out << uv
 			continue
 		}
-		out << program_node_to_data_q(it, mut env)!
+		out << program_node_to_data_q(it, mut env, mut hole_err)!
 	}
 	return out
 }
 
-fn element_to_data_q(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
+fn element_to_data_q(l cx.ProgramLiteral, mut env MatchEnv, mut hole_err []cx.Node) !cx.Node {
 	if op_name := operator_xml_names[l.name] {
-		kids := lift_quoted_items(l.items, mut env)!
+		kids := lift_quoted_items(l.items, mut env, mut hole_err)!
 		return mk_cx_node_attr('cx:op', 'name', op_name, kids)
 	}
 	if name_e := l.name_expr {
 		mut kids := []cx.Node{}
-		name_inner := program_node_to_data_q(name_e, mut env)!
+		name_inner := program_node_to_data_q(name_e, mut env, mut hole_err)!
 		kids << wrap_cx('cx:name', name_inner)
 		for a in l.attrs {
-			av := program_node_to_data_q(a.value, mut env)!
+			av := program_node_to_data_q(a.value, mut env, mut hole_err)!
 			kids << wrap_cx_attr('cx:attr', 'name', a.name, av)
 		}
-		kids << lift_quoted_items(l.items, mut env)!
+		kids << lift_quoted_items(l.items, mut env, mut hole_err)!
 		return mk_cx_node('cx:element', '', kids)
 	}
 	mut kids := []cx.Node{}
 	for a in l.attrs {
-		av := program_node_to_data_q(a.value, mut env)!
+		av := program_node_to_data_q(a.value, mut env, mut hole_err)!
 		kids << wrap_cx_attr('cx:attr', 'name', a.name, av)
 	}
-	kids << lift_quoted_items(l.items, mut env)!
+	kids << lift_quoted_items(l.items, mut env, mut hole_err)!
 	return mk_cx_node(l.name, '', kids)
 }
 
@@ -539,6 +635,12 @@ fn data_to_program_node(n cx.Node) !cx.ProgramNode {
 	}
 	if n is cx.Element {
 		return element_data_to_program(n)!
+	}
+	if n is cx.HoleNode {
+		// I1 row 9 (L78): the authorable hole lowers back to a bare
+		// binding reference — [?eval] of a quoted tree resolves it in the
+		// eval-site environment.
+		return cx.ProgramNode(cx.ProgramBinding{ name: n.name, pos: cx.Position{} })
 	}
 	return error('tree-eval: cannot lower this node kind to code')
 }
@@ -656,14 +758,23 @@ fn element_data_to_program(e cx.Element) !cx.ProgramNode {
 	if local == 'map' {
 		mut keys := []string{}
 		mut vals := []cx.ProgramNode{}
+		mut decls := []string{}
 		for ch in element_children(e) {
 			if ch is cx.Element && ch.name == 'entry' {
 				k := cx_elem_attr(ch, 'key') or { '' }
 				keys << k
+				// RULED: MSS-4 (#917): decl-kind marks a declaration-only
+				// entry — no value node (value ABSENT).
+				if dk := cx_elem_attr(ch, 'decl-kind') {
+					vals << cx.ProgramNode(cx.ProgramLiteral{ kind: .string_lit })
+					decls << dk
+					continue
+				}
 				vals << data_to_program_node(first_child(ch)!)!
+				decls << ''
 			}
 		}
-		return cx.ProgramNode(cx.ProgramLiteral{ kind: .map_lit, keys: keys, items: vals, pos: cx.Position{} })
+		return cx.ProgramNode(cx.ProgramLiteral{ kind: .map_lit, keys: keys, items: vals, decl_kinds: decls, pos: cx.Position{} })
 	}
 	if local == 'element' {
 		mut name_expr := cx.ProgramNode(cx.ProgramLiteral{ kind: .string_lit, pos: cx.Position{} })
@@ -847,17 +958,39 @@ fn run_tree_eval(tree_val cx.Node, ctx map[string]cx.Node, max_depth int, mut en
 	for k, v in ctx {
 		sub.bindings[k] = v
 	}
+	// §6.4.4 module non-widening (#808): capture the caller's `[?lib]` alias
+	// set for the duration of the tree-eval, so eval_lib can refuse a lib the
+	// caller did not have (CXER4113). NOT merely unenforced before this — the
+	// sub-env shares `state`, and eval_lib registers into
+	// state.module_table, so a `[?lib]` inside an evaluated tree WIDENED THE
+	// CALLER'S OWN module table as a side effect. The depth-cap twin
+	// (CXER4114, just above) was enforced; this half of the same sandbox rule
+	// was not.
+	//
+	// Saved and restored rather than cleared, so a nested tree-eval narrows
+	// against ITS caller and the outer one is unaffected on the way out.
+	mut prev_allow := ?[]string(none)
 	if has_state {
+		if p := env.state.tree_eval_lib_allow {
+			prev_allow = p.clone()
+		}
+		mut allowed := []string{}
+		for alias, _ in env.state.module_table.alias_modules {
+			allowed << alias
+		}
+		env.state.tree_eval_lib_allow = allowed
 		env.state.eval_depth++
 	}
 	result := eval_node(prog, mut sub) or {
 		if has_state {
 			env.state.eval_depth--
+			env.state.tree_eval_lib_allow = prev_allow
 		}
 		return err
 	}
 	if has_state {
 		env.state.eval_depth--
+		env.state.tree_eval_lib_allow = prev_allow
 	}
 	return result
 }

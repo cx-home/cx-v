@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  eff_time_now[["time-now"]]
+  cap_clock{{"clock --allow-clock"}}
+  prog --> eff_time_now
+  eff_time_now --> cap_clock

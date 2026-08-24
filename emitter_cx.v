@@ -55,6 +55,21 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 	ind := cx_ind(depth, compact)
 	match n {
 		Element          { cx_emit_element(n, depth, compact, mut out) }
+		// #804 leg 2 — a lazy record renders from its span when the scan
+		// certified that span IS the canonical image (804-1d, verified
+		// with 0 false positives over three corpora); otherwise it
+		// materialises and renders like any element. This arm fires on the
+		// record's provenance, never on the shape of the program that
+		// produced it. Indentation is deliberately not re-applied: a
+		// canonical image is complete, and re-indenting it would be the
+		// second normalisation the predicate does not model.
+		LazyRecord       {
+			if n.canonical && !compact && depth == 0 {
+				out << n.canonical_string()
+			} else {
+				cx_emit_element(n.force_or_panic(), depth, compact, mut out)
+			}
+		}
 		TextNode         { out << cx_quote_text_if_needed(n.value) }
 		ScalarNode       { out << cx_scalar(n) }
 		CommentNode      {
@@ -70,6 +85,10 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 		EntityRefNode    { out << '&${n.name};' }
 		RawTextNode      { out << '[#${n.value}#]${nl}' }
 		AliasNode        { out << '${ind}[*${n.name}]${nl}' }
+		// I1 row 9 (L78): the authorable variable hole — bare `$name`.
+		// The STRING "$name" spells '$name' (cx_quote_text_if_needed
+		// quotes $-leading images), so the two never collide.
+		HoleNode         { out << '\$${n.name}' }
 		EntityDeclNode   { cx_emit_entity_decl(n, depth, compact, mut out) }
 		ElementDeclNode  { out << '${ind}[!ELEMENT ${n.name} ${n.contentspec}]${nl}' }
 		AttlistDeclNode  { cx_emit_attlist_decl(n, depth, compact, mut out) }
@@ -91,6 +110,13 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 			// comma form, matching SequenceNode).
 			seq := iterator_to_sequence(n)
 			out << '${ind}${cx_emit_sequence_inline(seq, compact)}${nl}'
+		}
+		PathNode          {
+			// First-class CXPath AST (grafted I5-s17 W6). Same
+			// verbatim-source convention as MatchNode/ModifyNode: the
+			// parser populates `source` with the full path text.
+			src := n.source or { '' }
+			out << '${ind}${src}${nl}'
 		}
 		MatchNode         {
 			// First-class `[?match]` AST. The
@@ -186,7 +212,7 @@ fn cx_emit_array_item_literal(n Node, compact bool) string {
 				}
 				return sv
 			}
-			return cx_scalar(n)
+			return cx_typed_collection_scalar(n)
 		}
 		else {
 			return cx_emit_collection_item(n, compact)
@@ -203,10 +229,56 @@ pub fn cx_emit_map_inline(n MapNode, compact bool) string {
 	mut parts := []string{cap: n.entries.len}
 	for entry in n.entries {
 		key_str := cx_emit_map_key(entry.key_type, entry.key_value)
+		// RULED: MSS-4 (#917): a declaration-only entry renders `k: ::T` —
+		// declared kind, value ABSENT (never null).
+		if entry.decl_kind != '' {
+			parts << '${key_str}: ::${entry.decl_kind}'
+			continue
+		}
 		val_str := cx_emit_collection_item(entry.value, compact)
 		parts << '${key_str}: ${val_str}'
 	}
 	return '{${parts.join(', ')}}'
+}
+
+// cx_typed_collection_scalar renders a non-string scalar in collection
+// position (I1 stream 11, L43/L45): decimal always carries the postfix
+// ascription (its bare image would re-type under the bare rules), bigint
+// carries it exactly when the bare image would re-type differently (≤ i64;
+// over-i64 auto-promotes to bigint per [L20], so bare is canonical there).
+// Every other kind keeps its self-evident image.
+fn cx_typed_collection_scalar(n ScalarNode) string {
+	img := cx_scalar(n)
+	if n.data_type == .decimal_type || n.data_type == .bigint_type || n.data_type == .bytes_type {
+		// I1 ruling 2b: annotation-iff-retyping — a fixed-point image IS a
+		// decimal and an over-i64 image IS a bigint, so both go bare; only
+		// an image that would re-type differently (an integral decimal, a
+		// ≤ i64 bigint) carries the postfix ascription.
+		// #933: bytes joins the same rule — no bytes image auto-types to
+		// bytes (`0x…` is the hex INT literal, base64 is name/string-shaped),
+		// so a bare bytes image always re-typed on re-parse: canonical
+		// `{0x2a::bytes: 1}` emitted `{0x2a: 1}`, whose re-parse is an INT
+		// key — canonical was not a fixpoint (canonical.md §2.11.1: a key
+		// "whose kind would not follow from its bare image carries its
+		// ascription").
+		if re := try_autotype(img) {
+			if re.data_type == n.data_type {
+				return img
+			}
+		}
+		tag := scalar_type_name(n.data_type)
+		return '${img}::${tag}'
+	}
+	return img
+}
+
+// cx_typed_collection_scalar_public exposes the collection-position
+// scalar rule to the `code` render lane (#917/MSS-7 exposed the gap:
+// the PROGRAM render dropped load-bearing decimal/bigint ascriptions in
+// item position — `(2::decimal)` emitted `(2)`, a silent re-type to int
+// the data lane never had).
+pub fn cx_typed_collection_scalar_public(n ScalarNode) string {
+	return cx_typed_collection_scalar(n)
 }
 
 // cx_emit_collection_item renders one item inside a sequence / array / map
@@ -216,10 +288,17 @@ fn cx_emit_collection_item(n Node, compact bool) string {
 	return match n {
 		TextNode      { cx_collection_string(n.value) }
 		ScalarNode    {
-			// #473: a STRING scalar (imported / runtime-built — a CX-source
-			// quoted value arrives as a TextNode) quotes under the same rule
-			// as the TextNode arm; cx_scalar's verbatim string arm let a
-			// number-shaped payload emit bare and re-import as int.
+			// #790 (RULED: 790-1a, 2026-08-15): a STRING scalar in
+			// sequence / map-value position renders BARE-WHEN-SAFE
+			// through the SAME cx_collection_string authority as
+			// TextNode — one semantic string kind, one canonical
+			// spelling, one address (I1 one-value-one-spelling; the
+			// semantic projection already erases the Text/Scalar
+			// distinction, and conversions.md's lossless round-trip
+			// requires the single spelling — json carries one string
+			// kind). Quote-needing payloads (#473: number-shaped,
+			// boundary chars) still quote and re-parse as string
+			// scalars (the kind-faithful parse typing of this batch).
 			if n.data_type == .string_type {
 				sv := match n.value {
 					string { n.value as string }
@@ -227,10 +306,11 @@ fn cx_emit_collection_item(n Node, compact bool) string {
 				}
 				cx_collection_string(sv)
 			} else {
-				cx_scalar(n)
+				cx_typed_collection_scalar(n)
 			}
 		}
 		EntityRefNode { '&${n.name};' }
+		HoleNode      { '$' + n.name }
 		RawTextNode   { '[#${n.value}#]' }
 		SequenceNode  { cx_emit_sequence_inline(n, compact) }
 		ArrayNode     { cx_emit_array_inline(n, compact) }
@@ -261,18 +341,55 @@ fn cx_emit_map_key(kt ScalarType, kv ScalarValue) string {
 		// splits at the first colon → key `cx`), breaking the §1 emit/parse
 		// fixpoint — QName chars are bare-name chars, so cx_is_bare_name
 		// alone admits it. Quote such keys.
-		if cx_is_bare_name(s) && !s.contains(':') { return s }
+		// #777 (RULED: 777-1a): a bare-name STRING key whose image would
+		// AUTO-TYPE must quote too, or the key changes KIND across the
+		// round trip — `{'true': v}` emitted bare re-parses as a BOOL key,
+		// and `'null'` likewise. cx_is_bare_name admits those images (they
+		// are name-shaped); only the auto-typing question separates them
+		// from an ordinary key like `yes`. Number- and date-shaped images
+		// are already covered — they do not start with a name char — so
+		// this guard closes the name-shaped remainder.
+		if cx_is_bare_name(s) && !s.contains(':') && !cx_would_autotype(s) { return s }
 		return cx_choose_quote(s)
 	}
-	return cx_scalar(ScalarNode{ data_type: kt, value: kv })
+	// I1 stream 11 (L47): decimal/bigint keys carry their postfix
+	// ascription exactly like collection values.
+	return cx_typed_collection_scalar(ScalarNode{ data_type: kt, value: kv })
 }
 
-// cx_emit_envelope_map_key renders a map key whose TYPE was erased to its
-// string image — the program-side `__cx_map__` envelope (vcx/code/eval.v
-// eval_map) stores every key as the entry element's name. This is the
-// single home for the envelope-lane key rule; the program renderer's
-// `__cx_map__` paths (vcx/code/render.v, #495) delegate here so the two
-// lanes cannot drift.
+// cx_emit_envelope_map_key_typed renders a `__cx_map__` envelope key that
+// CARRIES ITS KIND (#777, RULED: 777-1a). A map literal's keys keep their
+// CXDM kinds through eval — stamped on the entry element — and a stamped key
+// renders through the SAME authority as the typed data lane
+// (cx_emit_map_key). That shared authority is what makes the two readings
+// one lane.
+//
+// Without the kind the envelope erased it to the name image, and the erasure
+// was not cosmetic: `{'7': 'a', 7: 'b'}` — a STRING key and an INT key, two
+// DISTINCT keys — rendered `{7: 'a', 7: 'b'}`, which `cx canonical` then
+// REFUSES with W014 duplicate map key. The program lane emitted canonical
+// text the canonicalizer rejects.
+pub fn cx_emit_envelope_map_key_typed(s string, kind ?string) string {
+	if k := kind {
+		if k == 'string' {
+			return cx_emit_map_key(ScalarType.string_type, ScalarValue(s))
+		}
+		if st := scalar_type_from_name(k) {
+			return cx_emit_map_key(st, ScalarValue(s))
+		}
+	}
+	return cx_emit_envelope_map_key(s)
+}
+
+// cx_emit_envelope_map_key renders an UNSTAMPED envelope key — one whose
+// TYPE is not recorded, so only its string image is available. Every
+// stdlib-constructed option map builds its entries directly, with bare-name
+// keys where the image IS unambiguous, so this path keeps its historical
+// behavior byte-identically. The program-side `__cx_map__` envelope
+// (vcx/code/eval.v eval_map) stores each key as the entry element's name.
+// This is the single home for the envelope-lane key rule; the program
+// renderer's `__cx_map__` paths (vcx/code/render.v, #495) delegate here so
+// the two lanes cannot drift.
 //
 // The rule intentionally DIFFERS from cx_emit_map_key's string arm: in the
 // typed data lane a number-shaped STRING key must quote (else it re-imports
@@ -427,15 +544,48 @@ fn cx_emit_element(e Element, depth int, compact bool, mut out []string) {
 	}
 
 	has_child_elements := e.items.any(it is Element)
-	has_text := e.items.any(it is TextNode || it is ScalarNode || it is EntityRefNode || it is RawTextNode)
-	is_multiline := !compact && has_child_elements && !has_text
+	has_text := e.items.any(it is TextNode || it is ScalarNode || it is EntityRefNode
+		|| it is RawTextNode || it is HoleNode)
+	// #825: a LINE comment has no inline spelling — §2.9 keeps `# text`
+	// terminated at end of line rather than converting it to block form, so
+	// putting one on a shared line would swallow every following sibling.
+	// Its element takes the multiline lane no matter what else the body
+	// holds; block comments need no such help and ride the inline lane.
+	has_line_comment := e.items.any(it is CommentNode && (it as CommentNode).is_line)
+	is_multiline := !compact && (has_line_comment || (has_child_elements && !has_text))
 
 	if is_multiline {
 		meta := cx_build_meta(e)
+		child_ind := cx_ind(depth + 1, compact)
 		out << '${ind}[${e.name}${meta}${nl}'
-		for item in e.items { cx_emit_node(item, depth + 1, compact, mut out) }
+		for item in e.items {
+			// #829 remainder: already written inside the meta run — see
+			// cx_meta_zone_comment_index.
+			if _ := cx_meta_zone_comment_index(item) {
+				continue
+			}
+			// #825: the multiline lane became reachable for TEXT-bearing
+			// bodies (a line comment forces it), and cx_emit_node writes the
+			// leaf kinds with neither indent nor newline — correct for the
+			// inline lane it was written for, ragged here. Give the leaves
+			// the layout their siblings get; every other kind lays itself
+			// out already.
+			if item is TextNode || item is ScalarNode || item is EntityRefNode
+			   || item is HoleNode {
+				out << child_ind
+				cx_emit_node(item, depth + 1, compact, mut out)
+				out << nl
+				continue
+			}
+			cx_emit_node(item, depth + 1, compact, mut out)
+		}
 		out << '${ind}]${nl}'
-	} else if e.items.len == 0 && e.attrs.len == 0 && e.anchor() == none && e.merge() == none && e.data_type() == none {
+	} else if e.items.len == 0 && e.attrs.len == 0 && e.anchor() == none && e.merge() == none
+		&& e.data_type() == none && e.id() == none {
+		// I1 W-1: the bare-name fast path must not swallow a `#id` — an
+		// otherwise-empty element with an id declaration routes through
+		// cx_build_meta below so the id survives (canonical was emitting
+		// `[a]` for `[a #x1]`, un-reparseable back to the same document).
 		out << '${ind}[${e.name}]${nl}'
 	} else {
 		meta := cx_build_meta(e)
@@ -510,6 +660,9 @@ fn cx_emit_table_element(e Element, td TableData, depth int, compact bool, mut o
 			// would comment out the rest of the record, so a retained
 			// line comment normalizes to `[;…]` (content preserved).
 			for item in items {
+				if _ := cx_meta_zone_comment_index(item) {
+					continue // #829 remainder — already in the meta run
+				}
 				if item is CommentNode {
 					cparts += '[;${item.value}] '
 				}
@@ -525,6 +678,9 @@ fn cx_emit_table_element(e Element, td TableData, depth int, compact bool, mut o
 		// (`[; … ]` block / `# …` line — cx_emit_node keeps both).
 		out << '${ind}[${name}${meta}${nl}'
 		for item in items {
+			if _ := cx_meta_zone_comment_index(item) {
+				continue // #829 remainder — already in the meta run
+			}
 			if item is CommentNode {
 				cx_emit_node(item, depth + 1, compact, mut out)
 			}
@@ -583,6 +739,16 @@ fn cx_format_table_cell(v TableCellValue, col_type string) string {
 			//     literals on the first byte — `{a:b}` flipped string→map),
 			//   • any quote char, either kind (`"q"` re-read as `q` — the
 			//     same both-quote rule cx_collection_string carries).
+			// #794 (RULED: 1a, the #795 batch): an atom-typed column's
+			// cell emits the ATOM spelling `:name` — the quoted-string
+			// render erased the kind (re-parse read string cells under
+			// an atom column; read_table_cell's coercion strips the
+			// leading ':', so `:ok` round-trips exactly). A value that
+			// is NOT a denotable atom name keeps the quoted escape —
+			// never mint an atom the grammar cannot spell.
+			if col_type == 'atom' && is_atom_name(v) && !is_reserved_atom_token(':' + v) {
+				return ':' + v
+			}
 			string_col := col_type == '' || col_type == 'string' || col_type == 's'
 			if v.len == 0 || !string_col || v == 'null'
 				|| v.contains(' ') || v.contains('\t')
@@ -606,13 +772,49 @@ fn cx_format_table_cell(v TableCellValue, col_type string) string {
 	}
 }
 
+// cx_meta_zone_comment_index reports the attribute index a retained
+// ELEMENT-META comment sat before (#829 remainder), or none if this node is
+// not one. It is THE predicate: cx_build_meta writes exactly the comments it
+// answers for, and every body-item loop skips exactly those, so a meta-zone
+// comment can never be emitted twice or dropped.
+//
+// A LINE comment never qualifies. §2.9 terminates `# text` at end of line,
+// so writing one into the meta run would swallow every attribute after it
+// (the same rule that gives line comments their own multiline lane, #825).
+// It keeps the leading-body-item placement it already round-trips through.
+fn cx_meta_zone_comment_index(n Node) ?int {
+	if n !is CommentNode {
+		return none
+	}
+	c := n as CommentNode
+	if c.is_line {
+		return none
+	}
+	return c.meta_attr_index
+}
+
 fn cx_build_meta(e Element) string {
 	mut s := ''
 	if a := e.anchor()    { s += ' &${a}' }
 	if m := e.merge()     { s += ' *${m}' }
 	if id := e.id()       { s += ' #${id}' }
 	if dt := e.data_type() { s += '::${dt}' }
-	for a in e.attrs {
+	for i, a in e.attrs {
+		// #829 remainder: a meta-zone comment goes back BETWEEN the
+		// attributes. Retaining it by prepending to `items` put it after all
+		// of them — `[config [; c ] env=dev]` re-emitted as
+		// `[config env=dev [; c ]]`, which §2.9 ("comment placement preserved
+		// relative to nodes") forbids. The `[; … ]` form is self-delimiting,
+		// so it composes inside the meta run exactly as it does beside any
+		// inline sibling. Only comments an attribute FOLLOWS are stamped, so
+		// nothing needs writing after the loop.
+		for item in e.items {
+			if idx := cx_meta_zone_comment_index(item) {
+				if idx == i {
+					s += ' [;${(item as CommentNode).value}]'
+				}
+			}
+		}
 		// Attributes are strictly scalar (D2 / #396 ruling 1b) — the v3.5
 		// BracketBody round-trip branch is gone with the body channel.
 		s += ' ${cx_attr_scalar(a)}'
@@ -620,12 +822,134 @@ fn cx_build_meta(e Element) string {
 	return s
 }
 
+// cx_run_comment_interleave renders a text run with its MID-RUN comments put
+// back where they sat (#829, RULED: 829-1c). The run is ONE TextNode — the
+// comments ride it as presentation-only `run_offset`s — so this splits the
+// rendered TEXT, never the node, and the Tier-1 hash is untouched (#469).
+//
+// It answers `none` when the split would not round-trip, and the caller then
+// keeps the historical leading placement. Two ways that happens:
+//   - a fragment would need QUOTING: `'a b'` + comment + `' c'` re-parses as
+//     two separate strings, not one run;
+//   - a fragment would AUTO-TYPE: run `x 5` split after `x ` re-parses `5`
+//     as an INT, silently changing the value's kind.
+// Both are checked per fragment, so the interleave is only taken where the
+// emitted bytes provably re-read as the same run.
+fn cx_run_comment_interleave(run string, comments []CommentNode) ?string {
+	mut cut := []int{}
+	for c in comments {
+		o := c.run_offset or { return none }
+		if o < 0 || o > run.len {
+			return none
+		}
+		cut << o
+	}
+	if cut.len == 0 {
+		return none
+	}
+	mut frags := []string{}
+	mut prev := 0
+	for o in cut {
+		if o < prev {
+			return none
+		}
+		frags << run[prev..o]
+		prev = o
+	}
+	frags << run[prev..]
+	for f in frags {
+		trimmed := f.trim_space()
+		if trimmed.len == 0 {
+			continue
+		}
+		// The oracle here is try_autotype, the parser's OWN function, not
+		// cx_would_autotype: that one deliberately OVER-reports (its #473
+		// note calls over-reporting "the safe direction" — it quotes a token
+		// that would in fact stay text, e.g. a bare `e`). Over-quoting is
+		// harmless when the question is "should this be quoted", but here it
+		// silently costs the placement, so ask the parser what the fragment
+		// actually re-reads as.
+		if _ := try_autotype(trimmed) {
+			return none
+		}
+		if cx_has_control_byte(trimmed) || cx_body_leading_sigil(trimmed)
+			|| cx_text_has_boundary_quote(trimmed)
+			|| trimmed.contains('[') || trimmed.contains(']')
+			|| trimmed.contains('&') || trimmed.contains('\\')
+			|| trimmed.contains(',') || trimmed.starts_with(':') {
+			return none
+		}
+	}
+	mut outp := []string{}
+	for i, f in frags {
+		tf := f.trim_space()
+		if tf.len > 0 {
+			outp << tf
+		}
+		if i < comments.len {
+			outp << cx_emit_node_str(comments[i], false)
+		}
+	}
+	return outp.join(' ')
+}
+
 fn cx_build_inline_body(items []Node, compact bool, parent_scalar_typed bool) string {
 	mut parts := []string{}
-	for item in items {
+	// #829 (RULED: 829-1c): indices consumed by a run/comment interleave.
+	mut consumed := map[int]bool{}
+	for idx, item in items {
+		if idx in consumed {
+			continue
+		}
+		// #829 remainder: a stamped ELEMENT-META comment was already written
+		// inside the meta run by cx_build_meta — emitting it here too would
+		// duplicate it.
+		if _ := cx_meta_zone_comment_index(item) {
+			continue
+		}
 		match item {
 			TextNode {
-				if item.value.trim_space().len == 0 { continue }
+				// I1 W-6 + companion (owner-ruled): EVERY string is a value —
+				// the empty string emits `''`, whitespace-only strings emit
+				// quoted (`' '`). The old whitespace-only skip existed to hide
+				// XML-import layout text; that now strips at IMPORT
+				// (xml_parser.v), so anything still in the tree is a value.
+				// ONE exception: a single-space TextNode BETWEEN two siblings
+				// is the parser's reconstructed join space (`[p &amp; &lt;]`
+				// round-trips it) — the bare spelling is canonical, so the
+				// join renders it rather than a quoted `' '`.
+				if item.value == ' ' && idx > 0 && idx < items.len - 1 {
+					continue
+				}
+				if item.value.len == 0 {
+					parts << "''"
+					continue
+				}
+				// #829: gather the comments that sat INSIDE this run and put
+				// them back. Falls through to the plain emit when the split
+				// would not round-trip (see cx_run_comment_interleave).
+				mut inner := []CommentNode{}
+				mut j := idx + 1
+				for j < items.len {
+					nxt := items[j]
+					if nxt is CommentNode {
+						if _ := nxt.run_offset {
+							inner << nxt
+							j++
+							continue
+						}
+					}
+					break
+				}
+				if inner.len > 0 {
+					if woven := cx_run_comment_interleave(item.value, inner) {
+						parts << woven
+						for k in idx + 1 .. idx + 1 + inner.len {
+							consumed[k] = true
+						}
+						continue
+					}
+				}
 				parts << cx_quote_text_if_needed(item.value)
 			}
 			ScalarNode {
@@ -644,7 +968,45 @@ fn cx_build_inline_body(items []Node, compact bool, parent_scalar_typed bool) st
 				}
 			}
 			EntityRefNode { parts << '&${item.name};' }
+			HoleNode      { parts << '$' + item.name }
 			RawTextNode   { parts << '[#${item.value}#]' }
+			CommentNode   {
+			// #825: the inline body lane dropped comments outright — a
+			// canonical form that cannot re-parse to the document it came
+			// from, against canonical.md §1.1 ("preserves every node: …
+			// comments …") and §2.9's explicit "comment placement preserved
+			// relative to nodes".
+			//
+			// Only the BLOCK form is emitted here. `[; … ]` is
+			// self-delimiting, so it composes beside any sibling on one
+			// line. A LINE comment cannot: §2.9 requires `# text` to stay a
+			// line comment "terminated at end of line, not converted to
+			// block form", and emitting one inline would swallow every
+			// following sibling into it. An element whose body carries a
+			// line comment therefore takes the MULTILINE lane instead —
+			// see body_has_line_comment at the caller.
+			//
+			// Routed through cx_emit_node_str so the spelling has ONE
+			// authority shared with the multiline lane and the top level.
+			parts << cx_emit_node_str(item, compact)
+		}
+		AliasNode     {
+				// #736: an alias reference in ELEMENT BODY position was
+				// dropped outright by this lane's `else` arm — `[b [*n]]`
+				// emitted `[b]`, a canonical form that cannot re-parse to
+				// the document it came from. The glued `[*name]` spelling
+				// is the SAME one cx_emit_node writes at top level and in
+				// the MULTILINE body lane — which is exactly why `[*def]`
+				// alone and `[b [*n] [c]]` always round-tripped and only
+				// the inline lane lost it. It is a self-delimiting bracket
+				// form, so it is safe beside any sibling on one line.
+				//
+				// Lossless canonical preserves aliases by contract
+				// (canonical.md §1.1). STRICT canonical never reaches this
+				// arm — cx_canonical_doc_text resolves anchors before it
+				// emits — so no Tier-1 address depends on this line.
+				parts << '[*${item.name}]'
+			}
 			Element {
 				mut tmp := []string{}
 				cx_emit_element(item, 0, compact, mut tmp)
@@ -685,8 +1047,10 @@ fn cx_build_inline_body(items []Node, compact bool, parent_scalar_typed bool) st
 }
 
 fn cx_text_needs_quote(s string) bool {
-	return s.starts_with(' ') || s.ends_with(' ')
-		|| s.contains('  ') || s.contains('\n') || s.contains('\t')
+	// I1 W-6: the empty string has no bare image — it must quote (`''`)
+	// everywhere or it vanishes from the emitted body.
+	return s.len == 0 || s.starts_with(' ') || s.ends_with(' ')
+		|| s.contains('  ') || cx_has_control_byte(s)
 		|| s.contains('[') || s.contains(']') || s.contains('&')
 		|| s.contains('\\')
 		|| s.contains(',')               // a bare comma is the array signal (§9)
@@ -701,6 +1065,19 @@ fn cx_quote_text_if_needed(s string) string {
 	return cx_choose_quote(s)
 }
 
+// cx_has_control_byte reports whether `s` carries any C0 control byte
+// (U+0000–U+001F, which includes LF / CR / tab) or DEL (U+007F). Such a
+// value must take a quoted form so the §2.4 escape pass makes every control
+// character visible in the canonical bytes (I1 L15 / W-12).
+fn cx_has_control_byte(s string) bool {
+	for i := 0; i < s.len; i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // cx_collection_string renders a STRING payload in map-value / sequence-item
 // position (#473). Beyond the element-body rule (cx_text_needs_quote — which
 // carries the would-autotype protection: number / float / bool / null / atom /
@@ -712,9 +1089,43 @@ fn cx_quote_text_if_needed(s string) string {
 // collection early (`}` / `)`). Applied to BOTH TextNode and string-
 // ScalarNode payloads so a CX-authored value and the same value imported
 // from JSON/YAML canonicalize identically (the idempotency fixpoint).
-fn cx_collection_string(s string) string {
-	if cx_text_needs_quote(s) || s.contains("'") || s.contains('"')
-		|| s.contains('}') || s.contains(')') {
+// cx_collection_bare_safe reports whether a STRING may render BARE in
+// collection-ITEM position — a `{k: v}` map value or a `(…)` sequence item —
+// and re-read as THE SAME STRING in BOTH readings (#831, RULED: 831-1a′).
+//
+// The old rule computed "safe" for the DATA reading alone, and that is where
+// it broke: `is_name_char` folds `.` and `:` into a name and a single interior
+// SPACE is legal body text, so the canonical form emitted `{k: a b}`,
+// `{k: a.b}`, `{k: https://a.com}` — none of which the PROGRAM reader can read
+// back (`expected ':' after map key`). That is lexicon [L11]'s ONE DELIBERATE
+// NAME-CHAR MODE FORK showing through a canonical form: the program lexer
+// continues names with `is_ident_part`, which excludes `.`/`:`. Canonical text
+// that only half the language can read is not canonical, so the safe set is
+// the INTERSECTION of the two readings:
+//
+//   - the first byte is a name START (a leading `/` reads as a path —
+//     `//variant`, `/a/b` — and a leading sigil is already excluded below);
+//   - every later byte is an `is_ident_part` char or `/` (`a/b` verified to
+//     round-trip to the same STRING through the program reading; `a.b` and
+//     `a:b` do not).
+//
+// Array-literal position was never affected: cx_emit_array_item_literal
+// already applies a stricter boundary predicate, which is exactly why arrays
+// are the one collection position where the two lanes always agreed.
+pub fn cx_collection_bare_safe(s string) bool {
+	if s.len == 0 || !is_name_start(s[0]) {
+		return false
+	}
+	for i := 1; i < s.len; i++ {
+		if !is_ident_part(s[i]) && s[i] != `/` {
+			return false
+		}
+	}
+	return true
+}
+
+pub fn cx_collection_string(s string) string {
+	if cx_text_needs_quote(s) || !cx_collection_bare_safe(s) {
 		return cx_choose_quote(s)
 	}
 	return s
@@ -738,7 +1149,12 @@ fn cx_collection_string(s string) string {
 // `[in $v //variant]` body of a `[?for]`).
 fn cx_body_leading_sigil(s string) bool {
 	if s.len == 0 { return false }
-	return s[0] in [`+`, `-`, `*`, `@`, `#`]
+	// I1 row 9 (L78): `$` joins the set — a bare `$name…` body image
+	// re-parses as a variable HOLE (or hole + prose), so a STRING whose
+	// image is $-leading must quote ('$x' is the string; $x is the hole).
+	// Directive interiors ([?for [in $v …]]) are unaffected: directives
+	// preserve their source verbatim and never ride this lane.
+	return s[0] in [`+`, `-`, `*`, `@`, `#`, `$`]
 }
 
 // cx_text_has_boundary_quote reports whether a bare-emitted body text
@@ -767,41 +1183,22 @@ pub fn cx_choose_quote(s string) string {
 	has_double := s.contains('"')
 	if !has_single { return "'" + cx_escape_quoted(s, `'`) + "'" }
 	if !has_double { return '"' + cx_escape_quoted(s, `"`) + '"' }
-	// Both quote styles present. Triple-quoted is VERBATIM (lexicon §5 [L31],
-	// canonical.md §2.10.1) — no escape pass — so it is the cheapest lossless
-	// container when the content has no '''-terminator run. Otherwise fall to a
-	// double-quoted form with the minimal escape pass.
-	//
-	// NOTE on newlines: body/collection quoted strings may carry raw newline
-	// bytes (extended/038 pins `[desc 'hello\nworld']` as THE canonical form),
-	// so this chooser is deliberately newline-agnostic. Canonical forms are
-	// identity-bearing (store Tier-1 hashes, xap package pins) — do not change
-	// this function's output shape without an owner-ruled migration.
-	// Attribute values are single-line-only; their multiline handling lives in
-	// cx_quote_attr_if_needed, BEFORE delegation here.
-	if !s.contains("'''") { return "'''${s}'''" }
-	return '"' + cx_escape_quoted(s, `"`) + '"'
+	// Both quote styles present → single-quoted with the `\'` escape
+	// (canonical.md §2.3 "Both" row: the disambiguating tiebreak — the `"`
+	// needs no escape inside `'…'`). I1 identity epoch, owner-ruled L16
+	// (W-13): the data lane converges on this rule, so the render and data
+	// lanes emit ONE spelling per value. Triquote is NEVER emitted (L17 /
+	// W-2) — multiline and control-bearing content escapes per §2.4 inside
+	// the ordinary quoted forms, so no verbatim container is needed.
+	return "'" + cx_escape_quoted(s, `'`) + "'"
 }
 
 // cx_choose_quote_render is the programs-render lane's quote chooser
 // (code.render_canonical → choose_render_quote delegates here so the escape
-// rules live in one place). It differs from cx_choose_quote only in the
-// both-quotes tiebreak: the render display contract uses single-quoted with
-// the `\'` escape (canonical.md §2.3 "Both" row — the shape the fixture
-// corpus is blessed against), where the canonical data lane above prefers
-// the verbatim triquote. Newline-agnostic like its caller — rendered
-// strings may carry raw newline bytes inside the quoted form.
+// rules live in one place). Since the I1 L16 ruling the two lanes share one
+// rule — this is now a thin alias kept for the render call-site's name.
 pub fn cx_choose_quote_render(s string) string {
-	has_single := s.contains("'")
-	has_double := s.contains('"')
-	if !has_single { return "'" + cx_escape_quoted(s, `'`) + "'" }
-	if !has_double { return '"' + cx_escape_quoted(s, `"`) + '"' }
-	// Both quote styles present → single-quoted with the minimal escape
-	// pass (canonical.md §2.3, "Both `'` and `\"`" row: the disambiguating
-	// tiebreak — the `"` needs no escape inside `'…'`). Triple-quoting is
-	// RESERVED for multiline values, NOT for escape-avoidance (§2.3
-	// Triple-quoted row), so it is never chosen here.
-	return "'" + cx_escape_quoted(s, `'`) + "'"
+	return cx_choose_quote(s)
 }
 
 // cx_escape_quoted escapes the content of a single/double-quoted CX string
@@ -830,6 +1227,30 @@ pub fn cx_escape_quoted(s string, delim u8) string {
 		} else if c == delim {
 			out << `\\`
 			out << c
+		} else if c == `\n` {
+			// §2.4 (I1 L15 / W-12): control characters are EMITTED as escapes
+			// — quoted canonical text never carries raw control bytes, so the
+			// same value has one spelling and Windows/Unix line-ending
+			// differences are visible in the bytes (W-25).
+			out << `\\`
+			out << `n`
+		} else if c == `\r` {
+			out << `\\`
+			out << `r`
+		} else if c == `\t` {
+			out << `\\`
+			out << `t`
+		} else if c < 0x20 || c == 0x7f {
+			// Other C0 controls and DEL: \u00xx, lowercase hex (matching the
+			// §2.5 lowercase-hex convention).
+			out << `\\`
+			out << `u`
+			out << `0`
+			out << `0`
+			hi := c >> 4
+			lo := c & 0xf
+			out << if hi < 10 { `0` + hi } else { `a` + (hi - 10) }
+			out << if lo < 10 { `0` + lo } else { `a` + (lo - 10) }
 		} else {
 			out << c
 		}
@@ -876,7 +1297,20 @@ pub fn cx_attr_scalar(a Attribute) string {
 		if type_name_is_auto_recoverable(dt) {
 			return '${a.name}=${cx_quote_attr_if_needed(val_str)}'
 		}
-		// Sized numerics / decimal / bigint / bytes — no self-evident
+		// I1 stream 11 (L45 + ruling 2b): bigint AND decimal drop the
+		// annotation exactly when the bare image re-types the same kind on
+		// its own — over-i64 bigints auto-promote ([L20]); fixed-point
+		// fractions ARE decimals (2b). Integral-image values keep the
+		// glued form (bare would re-type int — a different kind).
+		if dt == 'bigint' || dt == 'decimal' {
+			want := if dt == 'bigint' { ScalarType.bigint_type } else { ScalarType.decimal_type }
+			if re := try_autotype(val_str) {
+				if re.data_type == want {
+					return '${a.name}=${val_str}'
+				}
+			}
+		}
+		// Sized numerics / decimal / small bigint / bytes — no self-evident
 		// lexical form, so carry the glued annotation.
 		return '${a.name}::${dt}=${cx_quote_attr_if_needed(val_str)}'
 	}
@@ -923,18 +1357,13 @@ pub fn cx_would_autotype(s string) bool {
 }
 
 fn cx_quote_attr_if_needed(s string) string {
-	// Multi-line-text symmetry: newline-bearing string values cannot be
-	// emitted as bare / single-quote / double-quote in ATTR position (all
-	// single-line there) without invalidating the round-trip. Triquote is
-	// valid in AttValue position per the [55a] amendment, so use it; a
-	// '''-run inside the value would close the verbatim triquote early, so
-	// that (pathological) case falls to a fully escaped single-line
-	// double-quoted scalar (\n/\r decode per canonical.md §2.4).
-	if s.contains('\n') {
-		if !s.contains("'''") {
-			return "'''${s}'''"
-		}
-		return '"' + cx_escape_quoted(s, `"`).replace('\r', '\\r').replace('\n', '\\n') + '"'
+	// Control-bearing values (newline / CR / tab / other C0 / DEL) take a
+	// quoted form and the §2.4 escape pass renders every control character
+	// as its escape — the attr stays single-line and canonical never emits
+	// triquote (I1 rulings L15+L17; the old verbatim-triquote AttValue
+	// branch is gone with the epoch).
+	if cx_has_control_byte(s) {
+		return cx_choose_quote(s)
 	}
 	// #563: quote-bearing values MUST go through the shared chooser +
 	// escape pass — a verbatim `'…'` wrap around an embedded `'` emits
@@ -1206,4 +1635,17 @@ fn cx_emit_conditional_sect(c ConditionalSectNode, depth int, compact bool, mut 
 	out << '${ind}[![${kind}[${nl}'
 	for n in c.subset { cx_emit_node(n, depth + 1, compact, mut out) }
 	out << '${ind}]]]${nl}'
+}
+
+// cx_autotype_kind_name answers the CXDM kind name a BARE image would take
+// under §9 auto-typing, or `string` when the image stays text (#777, RULED:
+// 777-1a). It is the normalizer that makes an UNSTAMPED envelope key
+// comparable with a stamped one: a directly-constructed stdlib entry carries
+// no kind, but its key still HAS one — `name` is a string key, `7` an int
+// key — and a pattern must match by the same identity either way.
+pub fn cx_autotype_kind_name(s string) string {
+	if n := try_autotype(s) {
+		return scalar_type_name_public(n.data_type)
+	}
+	return 'string'
 }

@@ -2,6 +2,7 @@ module main
 
 import cx
 import code
+import platform as _
 
 // Tests for Phase 2.21-standalone — eval_predicate_filter, eager-iteration
 // PredicateExpr evaluator.

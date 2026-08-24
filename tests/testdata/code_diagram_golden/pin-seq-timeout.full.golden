@@ -1,0 +1,9 @@
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+  activate w
+  Note over w : timeout after=5s
+  participant ch
+  w ->>+ ch : 'm'
+  deactivate w

@@ -1,5 +1,7 @@
 module cx
 
+import strings
+
 // ── JSON AST Emitter ──────────────────────────────────────────────────────────
 // Produces the canonical AST JSON representation.
 
@@ -50,6 +52,10 @@ fn json_document(doc Document) string {
 fn json_node(n Node) string {
 	return match n {
 		Element          { json_element(n) }
+		// A lazy record has no JSON image of its own — its canonical
+		// SPAN is CX text, not JSON — so this serialisation always
+		// materialises (#804 leg 2).
+		LazyRecord       { json_element(n.force_or_panic()) }
 		TextNode         { '{"type":"Text","value":${json_str(n.value)}}' }
 		ScalarNode       { json_scalar(n) }
 		CommentNode      { '{"type":"Comment","value":${json_str(n.value)}}' }
@@ -59,6 +65,7 @@ fn json_node(n Node) string {
 		EntityRefNode    { '{"type":"EntityRef","name":${json_str(n.name)}}' }
 		RawTextNode      { '{"type":"RawText","value":${json_str(n.value)}}' }
 		AliasNode        { '{"type":"Alias","name":${json_str(n.name)}}' }
+		HoleNode         { '{"type":"Hole","name":${json_str(n.name)}}' }
 		EntityDeclNode   { json_entity_decl(n) }
 		ElementDeclNode  { '{"type":"ElementDecl","name":${json_str(n.name)},"contentspec":${json_str(n.contentspec)}}' }
 		AttlistDeclNode  { json_attlist_decl(n) }
@@ -110,6 +117,11 @@ fn json_node(n Node) string {
 			seq := iterator_to_sequence(n)
 			items := seq.items.map(json_node(it))
 			'{"type":"Sequence","items":[${items.join(',')}]}'
+		}
+		PathNode {
+			// Delegate to path_node.v's AST-JSON projection (grafted
+			// I5-s17 W6 — same convention as MatchNode/ModifyNode).
+			path_node_to_json(n)
 		}
 		MatchNode {
 			// Delegate to the canonical AST-JSON
@@ -325,24 +337,35 @@ fn json_conditional_sect(c ConditionalSectNode) string {
 
 // ── JSON string escaping ──────────────────────────────────────────────────────
 
+// json_str_public — the module-external face of json_str (stream 18:
+// cx_mod_ast quotes verbatim doc spans into the Program projection).
+pub fn json_str_public(s string) string {
+	return json_str(s)
+}
+
 fn json_str(s string) string {
-	mut result := '"'
+	// Builder, not string +=: per-byte string concatenation reallocates and
+	// copies the whole accumulator each step — O(n²), and this function takes
+	// whole verbatim module spans via json_str_public (cx-private#941:
+	// 354 KB span = 3.8 s of the 4.5 s cx:ast wall).
+	mut result := strings.new_builder(s.len + 2)
+	result.write_u8(`"`)
 	for b in s.bytes() {
 		match b {
-			`"` { result += '\\"' }
-			`\\` { result += '\\\\' }
-			`\n` { result += '\\n' }
-			`\r` { result += '\\r' }
-			`\t` { result += '\\t' }
+			`"` { result.write_string('\\"') }
+			`\\` { result.write_string('\\\\') }
+			`\n` { result.write_string('\\n') }
+			`\r` { result.write_string('\\r') }
+			`\t` { result.write_string('\\t') }
 			else {
 				if b < 0x20 {
-					result += '\\u${b:04x}'
+					result.write_string('\\u${b:04x}')
 				} else {
-					result += b.ascii_str()
+					result.write_u8(b)
 				}
 			}
 		}
 	}
-	result += '"'
-	return result
+	result.write_u8(`"`)
+	return result.str()
 }

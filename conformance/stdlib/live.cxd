@@ -1,0 +1,1503 @@
+[test-suite name=live ring=2
+  [doc [#
+conformance fixtures for cx-stdlib/live (pack spec spec/02-working/live.md;
+ruled design spec/_archived/live_modes.md L129–L137 + the §10 U1 binding —
+campaign stream 3, #675). W1 corpus: the stateless core `changes-since`;
+W2 corpus (cases 020+): the live ∂ subscription `observe` and its
+delivery.md §4 consumption arms ([?receive] / [?select] / [?close]).
+
+   Each program imports the bundled modules ([?lib 'cx-stdlib/store'] /
+   'cx-stdlib/journal' / 'cx-stdlib/live'), builds a hermetic mem:// source,
+   and calls [$live:changes-since Q BIND CURSOR]. Executing the quoted
+   comprehension requires the `eval` capability (the L99 sandbox posture),
+   so behavior cases carry grant='eval read write' and the deny lane pins
+   CXER0271. Every case uses its OWN mem:// URL (mem stores of one
+   canonical root are shared process-wide, #628).
+
+   THE W1 FIXTURE FAMILIES (ledger done-when + live_modes §8):
+
+   (1) EQUIVALENCE-QUARTET LEG 1 — a one-time [?for] ≡ changes-since from
+   the EMPTY cursor [head-set]: the exact ∂ is the full relation as
+   inserts, for EVERY comprehension (incl. τ members, live-010 — the
+   universal empty-cursor exception; no [recompute] marker).
+
+   (2) HEAD-SET ROUND-TRIP — the returned cursor fed back verbatim answers
+   the empty ∂ at quiescence, exactly the new inserts after source
+   advance, and [retract pos=] after a delete. Consumers re-wrap the
+   cursor entries ([?element "head-set" $c/head-set]) because a path
+   binding unwraps a single matched element to its content.
+
+   (3) ∂ / RECOMPUTE SHAPE PARITY (L131 transparency) — the ROW inside a ∂
+   frame is byte-equal to the recompute relation's row at the same
+   position ($cx:equal-pinned), for σ/π and for γ ([regroup] carries the
+   full group row; a γ retract answers the honest [recompute reason=…] +
+   full-relation-as-inserts form, reason text = the planar_delta marker
+   verbatim).
+
+   Plus the pack's typed refusals as first implemented: CXER5070
+   not-a-quoted-planar-comprehension, CXER0120 membership (reused),
+   CXER5071 unbound/mis-kinded formal, CXER5072 invalid cursor, CXER5073
+   resume below retention (post-prune history loss), CXER0271 eval-cap
+   deny. Journal sources exercise the per-stream seq cursor (the one
+   deliberate L99 widening: store AND journal sources under $bind).
+
+   THE W2 FIXTURE FAMILIES (ledger done-when + live_modes §8):
+
+   (4) EQUIVALENCE-QUARTET LEG 2 — observe ≡ repeated changes-since
+   driven by source advance: each [?receive] answers the LITERAL
+   changes-since value from the subscription's cursor (021 pins three
+   rounds byte-equal, incl. a retract round and a quiescent round).
+
+   (5) ∂-NEVER-COALESCES — the burst discriminator: N inserts ⇒ N
+   [insert] frames, never merged (022); retention=latest on a ∂ stream
+   is the structural CXER5075 policy refusal (025).
+
+   (6) THE HANDLE IS A delivery.md §4 SUBSCRIPTION — rung= always
+   reported (:complete-ordered for native sources; weakest-of-set for a
+   mixed store+journal set), sharing/flow/retention declared, the client
+   anchor as the [head-set] child, on-close + [?with-open] composition,
+   [?close] via the shared close contract (023/024/029/030).
+
+   (7) RESUME + TERMINATION — observe from a pruned-below cursor refuses
+   CXER5073 at creation, never a silent re-seed (036); a mid-stream
+   fault is delivered LOUD as the FINAL FRAME of a terminal batch whose
+   head-set is the unadvanced cursor (031); after it — and after
+   [?close] — receive refuses CXER5074 closed-and-drained (028/032).
+
+   (8) QUIESCENCE EXACTNESS — cursor = head on every source ⇒ the exact
+   ∂ is EMPTY by identity, for EVERY comprehension incl. τ members
+   (037 observe / 038 changes-since — the second universal exactness
+   point beside the empty cursor, live.md §3).
+
+   Consumption arms: [?receive from=] unbatched (the next batch),
+   [?receive from= max= deadline=] the U1.12a batch form (the sequence
+   of non-empty batches, 035), [?select] readiness + timeout fallback
+   (033), journal-source subscriptions (034), the $opts guarantee
+   declaration (:monotonic-reads/:gapless accepted 027; an
+   out-of-vocabulary token refuses CXER5075, 026), observe eval-cap
+   deny CXER0271 (039).
+
+   THE W3 FIXTURE FAMILIES (ledger done-when + live_modes §8):
+
+   (9) EQUIVALENCE-QUARTET LEGS 3+4 — materialize ≡ observe + a durable
+   fold + an address (043: the read snapshot's rows and head-set equal
+   the observe subscription's delivered state at the same coordinate);
+   maintained ≡ recompute (044: after a retract window the read equals
+   the fresh recompute, $cx:equal-pinned).
+
+   (10) PER-AGGREGATE MAINTENANCE (L130) — sum/count/avg absorb a
+   γ-retract (044: `sum` decrements exactly, recomputed=false);
+   max/min/distinct force the LOUD group recompute (045:
+   recomputed=true, value still exact); maintenance="incremental"
+   refuses CXER5076 at creation outside the sub-fragment (046) and at
+   any advance whose window forces the recompute (047).
+
+   (11) THE CHECKPOINT IS THE DURABLE CURSOR — [checkpoint q= [head-set]
+   ROW…], put-doc-then-alias, expect-pos CAS; derived-state posture: a
+   deleted/unreadable checkpoint means FULL REPLAY, same result (048);
+   an alias held by a different value refuses CXER1114, never a silent
+   replace (049); materialize on its own checkpoint RE-ATTACHES (052).
+
+   (12) RETENTION COVER EXTENDED (L133) — journal-retain refuses while
+   a materialization is registered on the stream (051 — the SAME
+   snapshot+policy succeeds before registration, refuses after: the
+   discriminating pair); journal-source folds advance on the
+   per-stream seq, quiescent advance is applied=0 recomputed=false
+   (050).
+
+   THE W5 FIXTURE FAMILIES (the §8 sweep + M5):
+
+   (13) THE γ RETRACT/REINSERT GROUP-POSITION PAIR (L94/L131) — a group
+   whose member is retracted and a new member reinserted keeps its
+   first-appearance position while any member remains (065, maintained
+   ≡ recompute pinned); the ∂-never-coalesces vs materialize-read
+   COALESCE CONTRAST (066: the same burst is N frames on the ∂ stream
+   and ONE point-in-time snapshot on the read).
+
+   (14) M5 END-TO-END (live_modes §8's substrate) — ONE commerce model,
+   all four modes composed (067): revenue-by-region as a one-time
+   query; changes-since carrying a dashboard cursor (a [regroup] frame
+   lands); materialize maintained through a γ-retract window
+   (recomputed=false — the retract-incremental leg; the loud boundary
+   is 045/047) with maintained ≡ recompute pinned and a quiescent
+   advance; an agent observing the :snapshot-diff adapter stream fed
+   by the CDC-less order DB through adapt-poll.
+
+   NAMED-WIRE-REF STORES (the W5 store-feed residual): refs are
+   wire-created (store_ref_advance_local is the CSRP/XSP listeners'
+   funnel), unreachable from public local surface — the per-ref cursor
+   ([s source= ref= pos=] streams; exact retract+insert on a ref
+   advance; the W1 CXER1709 refusal LIFTED) is pinned by the in-module
+   V test vcx/platform/live_refs_feed_test.v.
+
+   Deferred by ruling, none — the pack's ruled families are complete
+   at W5; the wire feed over remote stores is stream 4's (L136,
+   discharged in the XSP store profile).
+
+   NOTE: no inter-fixture comment blocks appear between cases (a comment
+   between sections risks capture into the preceding section payload).
+#]]
+
+ [case id=live-001-empty-cursor-full-inserts level=core grant='eval read write'
+  [tags live changes-since empty-cursor quartet-leg1 l129 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-doc"]]
+[= $h [$store:put-doc $s [order [region "west"] [amount 100]]]]
+  [$live:changes-since [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=1]] [insert pos=0 [order [region 'west'] [amount 100]]]]
+#]]
+ ]
+
+ [case id=live-002-quartet-leg1-for-equivalence level=core grant='eval read write'
+  [tags live changes-since quartet-leg1 equivalence stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-002"]]
+[= $h1 [$store:put-doc $s [order id=1 region=east]]]
+[= $h2 [$store:put-doc $s [order id=2 region=west]]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $for-rows [?for [in $o [$store:source $s "//order"]] [yield $o]]]
+[= $c [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cs-rows [?for [in $f $c/insert] [yield [$first $f/*]]]]
+  [leg1 eq=[$cx:equal $for-rows $cs-rows] n=[$count $cs-rows]]]
+#]]
+  [out-text [#
+[leg1 eq=true n=2]
+#]]
+ ]
+
+ [case id=live-003-headset-roundtrip-quiescent level=core grant='eval read write'
+  [tags live changes-since head-set round-trip stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-003"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+  [$live:changes-since $q {orders: $s} $cur]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=1]]]
+#]]
+ ]
+
+ [case id=live-004-inserts-since-cursor level=core grant='eval read write'
+  [tags live changes-since head-set delta insert stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-004"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $h3 [$store:put-doc $s [order id=3]]]
+  [$live:changes-since $q {orders: $s} $cur]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=3]] [insert pos=1 [order id=2]] [insert pos=2 [order id=3]]]
+#]]
+ ]
+
+ [case id=live-005-retract-frame level=core grant='eval read write'
+  [tags live changes-since delta retract stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-005"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $del [$store:delete-doc $s $h1]]
+  [$live:changes-since $q {orders: $s} $cur]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=3]] [retract pos=0]]
+#]]
+ ]
+
+ [case id=live-006-shape-parity-delta-vs-recompute level=core grant='eval read write'
+  [tags live changes-since shape-parity transparency l131 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-006"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [= $v [* $o@qty 10]] [yield [row id=$o@id total=$v]]]]]
+[= $h1 [$store:put-doc $s [order id=1 qty=2]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $h2 [$store:put-doc $s [order id=2 qty=5]]]
+[= $c2 [$live:changes-since $q {orders: $s} $cur]]
+[= $delta-row [$first [?for [in $f $c2/insert] [yield [$first $f/*]]]]]
+[= $head-rows [?for [in $o [$store:source $s "//order"]] [= $v [* $o@qty 10]] [yield [row id=$o@id total=$v]]]]
+  [parity eq=[$cx:equal $delta-row [$last $head-rows]] $delta-row]]
+#]]
+  [out-text [#
+[parity eq=true [row id=2 total=50]]
+#]]
+ ]
+
+ [case id=live-007-gamma-regroup level=core grant='eval read write'
+  [tags live changes-since gamma regroup delta stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-007"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [group-by $o@region] [yield [rev region=$key n=$count]]]]]
+[= $h1 [$store:put-doc $s [order id=1 region=east]]]
+[= $h2 [$store:put-doc $s [order id=2 region=west]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $h3 [$store:put-doc $s [order id=3 region=east]]]
+  [$live:changes-since $q {orders: $s} $cur]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=3]] [regroup pos=0 [rev region=east n=2]]]
+#]]
+ ]
+
+ [case id=live-008-gamma-retract-recompute level=core grant='eval read write'
+  [tags live changes-since gamma retract recompute honest-marker stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-008"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [group-by $o@region] [yield [rev region=$key n=$count]]]]]
+[= $h1 [$store:put-doc $s [order id=1 region=east]]]
+[= $h2 [$store:put-doc $s [order id=2 region=west]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $del [$store:delete-doc $s $h1]]
+  [$live:changes-since $q {orders: $s} $cur]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=3]] [recompute reason='a retract reaching γ is outside the monotone delta rule (L101) — group state rebuilt'] [insert pos=0 [rev region=west n=1]]]
+#]]
+ ]
+
+ [case id=live-009-tau-recompute-form level=core grant='eval read write'
+  [tags live changes-since tau recompute honest-marker stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-009"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [order-by $o@id] [yield $o]]]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+  [$live:changes-since $q {orders: $s} $cur]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=2]] [recompute reason='τ ([order-by]) is not incrementally maintainable — recompute (L101)'] [insert pos=0 [order id=1]] [insert pos=1 [order id=2]]]
+#]]
+ ]
+
+ [case id=live-010-tau-empty-cursor-exact level=core grant='eval read write'
+  [tags live changes-since tau empty-cursor quartet-leg1 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-010"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [order-by $o@id] [yield $o]]]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+  [$live:changes-since $q {orders: $s} [head-set]]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=2]] [insert pos=0 [order id=1]] [insert pos=1 [order id=2]]]
+#]]
+ ]
+
+ [case id=live-011-journal-stream-cursor level=core grant='eval read write'
+  [tags live changes-since journal stream per-stream-seq widening stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $j [$journal:open "mem://live-011" "acme"]]
+[= $q [?quote [?for [in $e [$journal:source $jrn "orders"]] [yield [ev seq=$e@seq]]]]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "orders"}]]
+[= $c1 [$live:changes-since $q {jrn: $j} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g" stream: "orders"}]]
+[= $c2 [$live:changes-since $q {jrn: $j} $cur]]
+  ($c1, $c2)]
+#]]
+  [out-text [#
+([changes [head-set [s source=jrn pos=1]] [insert pos=0 [ev seq=1]]], [changes [head-set [s source=jrn pos=2]] [insert pos=1 [ev seq=2]]])
+#]]
+ ]
+
+ [case id=live-012-not-planar-refused level=core grant='eval read write'
+  [tags live changes-since negative CXER5070 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-012"]]
+  [$live:changes-since "not-a-quoted-comprehension" {orders: $s} [head-set]]]
+#]]
+  [out-err [#
+cx-err:CXER5070
+#]]
+ ]
+
+ [case id=live-013-membership-refused level=core grant='eval read write'
+  [tags live changes-since negative membership CXER0120 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-013"]]
+  [$live:changes-since [?quote [?for [user] [yield 1]]] {orders: $s} [head-set]]]
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=live-014-unbound-formal-refused level=core grant='eval read write'
+  [tags live changes-since negative bind CXER5071 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-014"]]
+  [$live:changes-since [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {} [head-set]]]
+#]]
+  [out-err [#
+cx-err:CXER5071
+#]]
+ ]
+
+ [case id=live-015-wrong-handle-kind-refused level=core grant='eval read write'
+  [tags live changes-since negative bind kind CXER5071 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-015"]]
+  [$live:changes-since [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: 42} [head-set]]]
+#]]
+  [out-err [#
+cx-err:CXER5071
+#]]
+ ]
+
+ [case id=live-016-cursor-unknown-source-refused level=core grant='eval read write'
+  [tags live changes-since negative cursor CXER5072 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-016"]]
+  [$live:changes-since [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set [s source="nope" pos=1]]]]
+#]]
+  [out-err [#
+cx-err:CXER5072
+#]]
+ ]
+
+ [case id=live-017-cursor-scalar-refused level=core grant='eval read write'
+  [tags live changes-since negative cursor scalar l131 CXER5072 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-017"]]
+  [$live:changes-since [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} 7]]
+#]]
+  [out-err [#
+cx-err:CXER5072
+#]]
+ ]
+
+ [case id=live-018-eval-cap-denied level=core
+  [tags live changes-since negative capability deny l99 CXER0271 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-018"]]
+  [$live:changes-since [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=live-019-below-retention-refused level=core grant='eval read write'
+  [tags live changes-since negative retention prune CXER5073 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-019"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $del [$store:delete-doc $s $h1]]
+[= $pr [$store:prune $s]]
+  [$live:changes-since $q {orders: $s} $cur]]
+#]]
+  [out-err [#
+cx-err:CXER5073
+#]]
+ ]
+
+ [case id=live-020-observe-receive-example level=core grant='eval read write'
+  [tags live observe receive subscription delivery stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-obs-doc"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $h [$store:put-doc $s [order id=1]]]
+  [?receive from=$sub]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=1]] [insert pos=0 [order id=1]]]
+#]]
+ ]
+
+ [case id=live-021-leg2-observe-eq-changes-since level=core grant='eval read write'
+  [tags live observe receive quartet-leg2 equivalence stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-021"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $sub [$live:observe $q {orders: $s} [head-set]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $r1 [?receive from=$sub]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $del [$store:delete-doc $s $h1]]
+[= $r2 [?receive from=$sub]]
+[= $cur1 [?element "head-set" $c1/head-set]]
+[= $c2 [$live:changes-since $q {orders: $s} $cur1]]
+[= $r3 [?receive from=$sub]]
+[= $cur2 [?element "head-set" $c2/head-set]]
+[= $c3 [$live:changes-since $q {orders: $s} $cur2]]
+  [leg2 eq1=[$cx:equal $r1 $c1] eq2=[$cx:equal $r2 $c2] eq3=[$cx:equal $r3 $c3] $r2]]
+#]]
+  [out-text [#
+[leg2 eq1=true eq2=true eq3=true [changes [head-set [s source=orders pos=3]] [insert pos=1 [order id=2]] [retract pos=0]]]
+#]]
+ ]
+
+ [case id=live-022-burst-never-coalesces level=core grant='eval read write'
+  [tags live observe receive burst discriminator no-coalesce l130 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-022"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $quiet [?receive from=$sub]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $h3 [$store:put-doc $s [order id=3]]]
+[= $burst [?receive from=$sub]]
+  ($quiet, $burst, [n frames=[$count $burst/insert]])]
+#]]
+  [out-text [#
+([changes [head-set [s source=orders pos=0]]], [changes [head-set [s source=orders pos=3]] [insert pos=0 [order id=1]] [insert pos=1 [order id=2]] [insert pos=2 [order id=3]]], [n frames=3])
+#]]
+ ]
+
+ [case id=live-023-handle-is-delivery-subscription level=core grant='eval read write'
+  [tags live observe handle subscription delivery rung retention stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-023"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+  [handle rung=$sub@rung sharing=$sub@sharing flow=$sub@flow retention=$sub@retention on-close=$sub@on-close [?element "head-set" $sub/head-set]]]
+#]]
+  [out-text [#
+[handle rung=':complete-ordered' sharing=independent flow=pull retention=window on-close=live-close [head-set [s source=orders pos=0]]]
+#]]
+ ]
+
+ [case id=live-024-mixed-sources-weakest-rung level=core grant='eval read write'
+  [tags live observe rung weakest-of-set mixed stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-024"]]
+[= $j [$journal:open "mem://live-024j" "acme"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [in $e [$journal:source $jrn "audit"]] [yield [pair]]]]]
+[= $sub [$live:observe $q {orders: $s, jrn: $j} [head-set]]]
+  [mixed rung=$sub@rung]]
+#]]
+  [out-text [#
+[mixed rung=':complete-ordered']
+#]]
+ ]
+
+ [case id=live-025-retention-latest-refused level=core grant='eval read write'
+  [tags live observe negative retention latest policy CXER5075 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-025"]]
+  [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set] {retention: "latest"}]]
+#]]
+  [out-err [#
+cx-err:CXER5075
+#]]
+ ]
+
+ [case id=live-026-rung-token-refused level=core grant='eval read write'
+  [tags live observe negative rung policy CXER5075 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-026"]]
+  [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set] {rung: ":exactly-once"}]]
+#]]
+  [out-err [#
+cx-err:CXER5075
+#]]
+ ]
+
+ [case id=live-027-guarantee-declaration-accepted level=core grant='eval read write'
+  [tags live observe rung monotonic-reads gapless stream-7 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-027"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set] {rung: ":gapless :monotonic-reads"}]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+  [?receive from=$sub]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=1]] [insert pos=0 [order id=1]]]
+#]]
+ ]
+
+ [case id=live-028-close-then-receive-drained level=core grant='eval read write'
+  [tags live observe close receive negative closed-and-drained CXER5074 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-028"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $cl [?close $sub]]
+  [?receive from=$sub]]
+#]]
+  [out-err [#
+cx-err:CXER5074
+#]]
+ ]
+
+ [case id=live-029-close-idempotent level=core grant='eval read write'
+  [tags live observe close idempotent sap stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-029"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $c1 [?close $sub]]
+[= $c2 [?close $sub]]
+  ($c1, $c2)]
+#]]
+  [out-text [#
+([ok], [ok])
+#]]
+ ]
+
+ [case id=live-030-with-open-composes level=core grant='eval read write'
+  [tags live observe with-open on-close raii stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-030"]]
+[= $h [$store:put-doc $s [order id=1]]]
+  [?with-open [= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]] [?receive from=$sub]]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=1]] [insert pos=0 [order id=1]]]
+#]]
+ ]
+
+ [case id=live-031-fault-is-final-frame level=core grant='eval read write'
+  [tags live observe receive fault err final-frame stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-031"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $cl [$store:close $s]]
+  [?receive from=$sub]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=0]] [err code=cx-err:CXER1130 message='E_STORE_CLOSED: operation on a closed Store']]
+#]]
+ ]
+
+ [case id=live-032-fault-then-drained level=core grant='eval read write'
+  [tags live observe receive fault negative closed-and-drained CXER5074 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-032"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $cl [$store:close $s]]
+[= $final [?receive from=$sub]]
+  [?receive from=$sub]]
+#]]
+  [out-err [#
+cx-err:CXER5074
+#]]
+ ]
+
+ [case id=live-033-select-ready-and-timeout level=core grant='eval read write'
+  [tags live observe select readiness timeout u1-15a stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-033"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $sel1 [?select [case [from $sub $m] [got $m]] [case [timeout 0] [idle]]]]
+[= $sel2 [?select [case [from $sub $m] [got $m]] [case [timeout 0] [idle]]]]
+  ($sel1, $sel2)]
+#]]
+  [out-text [#
+([got [changes [head-set [s source=orders pos=1]] [insert pos=0 [order id=1]]]], [idle])
+#]]
+ ]
+
+ [case id=live-034-journal-source-observe level=core grant='eval read write'
+  [tags live observe receive journal per-stream-seq stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $j [$journal:open "mem://live-034" "acme"]]
+[= $q [?quote [?for [in $e [$journal:source $jrn "orders"]] [yield [ev seq=$e@seq]]]]]
+[= $sub [$live:observe $q {jrn: $j} [head-set]]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "orders"}]]
+[= $r1 [?receive from=$sub]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g" stream: "orders"}]]
+[= $r2 [?receive from=$sub]]
+  ($r1, $r2)]
+#]]
+  [out-text [#
+([changes [head-set [s source=jrn pos=1]] [insert pos=0 [ev seq=1]]], [changes [head-set [s source=jrn pos=2]] [insert pos=1 [ev seq=2]]])
+#]]
+ ]
+
+ [case id=live-035-batched-receive level=core grant='eval read write'
+  [tags live observe receive batch max deadline u1-12a stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-035"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $b [?receive from=$sub max=5]]
+[= $empty [?receive from=$sub max=5]]
+  ([n [$count $b]], $b, [empty [$count $empty]])]
+#]]
+  [out-text [#
+([n 1], ([changes [head-set [s source=orders pos=2]] [insert pos=0 [order id=1]] [insert pos=1 [order id=2]]]), [empty 0])
+#]]
+ ]
+
+ [case id=live-036-observe-below-retention-refused level=core grant='eval read write'
+  [tags live observe negative retention prune resume CXER5073 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-036"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+[= $del [$store:delete-doc $s $h1]]
+[= $pr [$store:prune $s]]
+  [$live:observe $q {orders: $s} $cur]]
+#]]
+  [out-err [#
+cx-err:CXER5073
+#]]
+ ]
+
+ [case id=live-037-quiescent-tau-exact-empty-observe level=core grant='eval read write'
+  [tags live observe receive tau quiescence exactness stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-037"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [order-by $o@id] [yield $o]]]]
+[= $sub [$live:observe $q {orders: $s} [head-set]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $r1 [?receive from=$sub]]
+[= $r2 [?receive from=$sub]]
+  ($r1, $r2)]
+#]]
+  [out-text [#
+([changes [head-set [s source=orders pos=1]] [insert pos=0 [order id=1]]], [changes [head-set [s source=orders pos=1]]])
+#]]
+ ]
+
+ [case id=live-038-quiescent-tau-exact-empty-changes-since level=core grant='eval read write'
+  [tags live changes-since tau quiescence exactness stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-038"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [order-by $o@id] [yield $o]]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $c1 [$live:changes-since $q {orders: $s} [head-set]]]
+[= $cur [?element "head-set" $c1/head-set]]
+  [$live:changes-since $q {orders: $s} $cur]]
+#]]
+  [out-text [#
+[changes [head-set [s source=orders pos=1]]]
+#]]
+ ]
+
+ [case id=live-039-observe-eval-cap-denied level=core
+  [tags live observe negative capability deny l99 CXER0271 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-039"]]
+  [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=live-040-materialize-read-example level=core grant='eval read write'
+  [tags live materialize read checkpoint fold stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-mat-src"]]
+[= $cs [$store:open "mem://live-mat-ckpt"]]
+[= $h [$store:put-doc $s [order region=west amount=100]]]
+[= $m [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [group-by $o@region] [yield [rev region=$key n=$count]]]] {orders: $s} "rev-by-region"]]
+  [$live:read $m]]
+#]]
+  [out-text [#
+[snapshot [head-set [s source=orders pos=1]] [rev region=west n=1]]
+#]]
+ ]
+
+ [case id=live-041-advance-example level=core grant='eval read write'
+  [tags live materialize advance tick stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-adv-src"]]
+[= $cs [$store:open "mem://live-adv-ckpt"]]
+[= $m [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} "orders-live"]]
+[= $h [$store:put-doc $s [order id=1]]]
+  [$live:advance $m]]
+#]]
+  [out-text [#
+[advanced applied=1 recomputed=false [head-set [s source=orders pos=1]]]
+#]]
+ ]
+
+ [case id=live-042-read-example level=core grant='eval read write'
+  [tags live materialize read snapshot at-seq stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-read-src"]]
+[= $cs [$store:open "mem://live-read-ckpt"]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $m [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} "orders"]]
+  [$live:read $m]]
+#]]
+  [out-text [#
+[snapshot [head-set [s source=orders pos=1]] [order id=1]]
+#]]
+ ]
+
+ [case id=live-043-leg3-materialize-eq-observe level=core grant='eval read write'
+  [tags live materialize observe quartet-leg3 equivalence stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-043s"]]
+[= $cs [$store:open "mem://live-043c"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $m [$live:materialize $cs $q {orders: $s} "leg3"]]
+[= $sub [$live:observe $q {orders: $s} [head-set]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $b [?receive from=$sub]]
+[= $a [$live:advance $m]]
+[= $r [$live:read $m]]
+[= $fold [?for [in $f $b/insert] [yield [$first $f/*]]]]
+[= $rows [?for [in $x $r/order] [yield $x]]]
+  [leg3 rows=[$cx:equal $rows $fold] at=[$cx:equal [?element "head-set" $r/head-set] [?element "head-set" $b/head-set]]]]
+#]]
+  [out-text [#
+[leg3 rows=true at=true]
+#]]
+ ]
+
+ [case id=live-044-sum-decrements-exactly level=core grant='eval read write'
+  [tags live materialize advance gamma retract sum invertible quartet-leg4 l130 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-044s"]]
+[= $cs [$store:open "mem://live-044c"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [= $amt $o@amt] [group-by $o@region] [yield [rev region=$key total=[$sum $group/amt] n=$count]]]]]
+[= $h1 [$store:put-doc $s [order id=1 region=east amt=10]]]
+[= $h2 [$store:put-doc $s [order id=2 region=east amt=7]]]
+[= $h3 [$store:put-doc $s [order id=3 region=west amt=5]]]
+[= $m [$live:materialize $cs $q {orders: $s} "rev"]]
+[= $del [$store:delete-doc $s $h2]]
+[= $a [$live:advance $m]]
+[= $r [$live:read $m]]
+[= $fresh [?for [in $o [$store:source $s "//order"]] [= $amt $o@amt] [group-by $o@region] [yield [rev region=$key total=[$sum $group/amt] n=$count]]]]
+[= $rows [?for [in $x $r/rev] [yield $x]]]
+  ($a, $r, [leg4 eq=[$cx:equal $rows $fresh]])]
+#]]
+  [out-text [#
+([advanced applied=1 recomputed=false [head-set [s source=orders pos=4]]], [snapshot [head-set [s source=orders pos=4]] [rev region=east total=10 n=1] [rev region=west total=5 n=1]], [leg4 eq=true])
+#]]
+ ]
+
+ [case id=live-045-max-forces-loud-recompute level=core grant='eval read write'
+  [tags live materialize advance gamma retract max loud-recompute l130 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-045s"]]
+[= $cs [$store:open "mem://live-045c"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [= $amt $o@amt] [group-by $o@region] [yield [top region=$key best=[$max $group/amt]]]]]]
+[= $h1 [$store:put-doc $s [order id=1 region=east amt=10]]]
+[= $h2 [$store:put-doc $s [order id=2 region=east amt=7]]]
+[= $m [$live:materialize $cs $q {orders: $s} "top"]]
+[= $del [$store:delete-doc $s $h1]]
+[= $a [$live:advance $m]]
+  ($a, [$live:read $m])]
+#]]
+  [out-text [#
+([advanced applied=1 recomputed=true [head-set [s source=orders pos=3]]], [snapshot [head-set [s source=orders pos=3]] [top region=east best=7]])
+#]]
+ ]
+
+ [case id=live-046-incremental-refused-at-creation level=core grant='eval read write'
+  [tags live materialize negative maintenance incremental CXER5076 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-046s"]]
+[= $cs [$store:open "mem://live-046c"]]
+  [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [order-by $o@id] [yield $o]]] {orders: $s} "sorted" {maintenance: "incremental"}]]
+#]]
+  [out-err [#
+cx-err:CXER5076
+#]]
+ ]
+
+ [case id=live-047-incremental-refused-at-advance level=core grant='eval read write'
+  [tags live materialize advance negative maintenance incremental max CXER5076 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-047s"]]
+[= $cs [$store:open "mem://live-047c"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [= $amt $o@amt] [group-by $o@region] [yield [top region=$key best=[$max $group/amt]]]]]]
+[= $h1 [$store:put-doc $s [order id=1 region=east amt=10]]]
+[= $m [$live:materialize $cs $q {orders: $s} "top47" {maintenance: "incremental"}]]
+[= $del [$store:delete-doc $s $h1]]
+  [$live:advance $m]]
+#]]
+  [out-err [#
+cx-err:CXER5076
+#]]
+ ]
+
+ [case id=live-048-corrupt-checkpoint-full-replay level=core grant='eval read write'
+  [tags live materialize read checkpoint derived-state full-replay stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-048s"]]
+[= $cs [$store:open "mem://live-048c"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $m [$live:materialize $cs $q {orders: $s} "o48"]]
+[= $ck [$store:get-alias $cs "o48"]]
+[= $del [$store:delete-doc $cs $ck]]
+[= $r [$live:read $m]]
+  ($r, [same eq=[$cx:equal [?for [in $x $r/order] [yield $x]] [?for [in $o [$store:source $s "//order"]] [yield $o]]]])]
+#]]
+  [out-text [#
+([snapshot [head-set [s source=orders pos=1]] [order id=1]], [same eq=true])
+#]]
+ ]
+
+ [case id=live-049-name-held-by-different-value level=core grant='eval read write'
+  [tags live materialize negative alias conflict CXER1114 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-049s"]]
+[= $cs [$store:open "mem://live-049c"]]
+[= $other [$store:put-doc $cs [not-a-checkpoint]]]
+[= $al [$store:set-alias $cs "held" $other]]
+  [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} "held"]]
+#]]
+  [out-err [#
+cx-err:CXER1114
+#]]
+ ]
+
+ [case id=live-050-journal-fold-and-quiescent-advance level=core grant='eval read write'
+  [tags live materialize advance journal per-stream-seq quiescent stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $j [$journal:open "mem://live-050j" "acme"]]
+[= $cs [$store:open "mem://live-050c"]]
+[= $q [?quote [?for [in $e [$journal:source $jrn "orders"]] [yield [ev seq=$e@seq]]]]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "orders"}]]
+[= $m [$live:materialize $cs $q {jrn: $j} "evs"]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g" stream: "orders"}]]
+[= $a1 [$live:advance $m]]
+[= $a2 [$live:advance $m]]
+  ($a1, $a2, [$live:read $m])]
+#]]
+  [out-text [#
+([advanced applied=1 recomputed=false [head-set [s source=jrn pos=2]]], [advanced applied=0 recomputed=false [head-set [s source=jrn pos=2]]], [snapshot [head-set [s source=jrn pos=2]] [ev seq=1] [ev seq=2]])
+#]]
+ ]
+
+ [case id=live-051-retention-pinned-by-registered-materialization level=core grant='eval read write'
+  [tags live materialize journal retain retention-cover l133 negative CXER4616 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $j [$journal:open "mem://live-051j" "acme"]]
+[= $cs [$store:open "mem://live-051c"]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [b 2] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" at-seq: 2}]]
+[= $ret1 [$journal:retain $j {keep-after-seq: 2 snapshot: $snap}]]
+[= $q [?quote [?for [in $e [$journal:source $jrn ""]] [yield [ev seq=$e@seq]]]]]
+[= $m [$live:materialize $cs $q {jrn: $j} "pin"]]
+  ($ret1, [$journal:retain $j {keep-after-seq: 2 snapshot: $snap}])]
+#]]
+  [out-text [#
+([retention boundary=2 covered-by-seq=2], [err code=cx-err:CXER4616 message="E_JOURNAL_RETENTION_UNCOVERED: a registered materialization (`pin`) pins this stream's history — the retention cover rule extends to registered materializations (live modes L133); remove the registration alias before pruning"])
+#]]
+ ]
+
+ [case id=live-052-reattach-same-fold level=core grant='eval read write'
+  [tags live materialize reattach checkpoint durable-cursor stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-052s"]]
+[= $cs [$store:open "mem://live-052c"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $m1 [$live:materialize $cs $q {orders: $s} "o52"]]
+[= $m2 [$live:materialize $cs $q {orders: $s} "o52"]]
+  [reattach name=$m2@name [?element "head-set" $m2/head-set] [$live:read $m2]]]
+#]]
+  [out-text [#
+[reattach name=o52 [head-set [s source=orders pos=1]] [snapshot [head-set [s source=orders pos=1]] [order id=1]]]
+#]]
+ ]
+
+ [case id=live-053-materialize-eval-cap-denied level=core
+  [tags live materialize negative capability deny l99 CXER0271 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-053s"]]
+[= $cs [$store:open "mem://live-053c"]]
+  [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} "denied"]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=live-054-adapter-declaration-reported level=core grant='eval read write'
+  [tags live adapter declare rung snapshot-diff exclusivity CXER5078 l134 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $j [$journal:open "mem://live-054" "acme" {declare: [adapter-stream stream="orders" rung=":snapshot-diff" writer="poll-1"]}]]
+[= $e1 [$journal:append $j [rec 1] {actor: "poll-1" authority: "adapter" stream: "orders"}]]
+[= $bad [$journal:append $j [rec 2] {actor: "someone-else" authority: "g" stream: "orders"}]]
+[= $q [?quote [?for [in $e [$journal:source $jrn "orders"]] [yield [ev seq=$e@seq]]]]]
+[= $sub [$live:observe $q {jrn: $j} [head-set]]]
+  ([seq $e1/@seq], [bad code=$bad@code], [sub rung=$sub@rung])]
+#]]
+  [out-text [#
+([seq 1], [bad code=cx-err:CXER5078], [sub rung=':snapshot-diff'])
+#]]
+ ]
+
+ [case id=live-055-rung-requirement-refused level=core grant='eval read write'
+  [tags live adapter observe negative rung wiring CXER5077 l134 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $j [$journal:open "mem://live-055" "acme" {declare: [adapter-stream stream="orders" rung=":snapshot-diff" writer="poll-1"]}]]
+[= $q [?quote [?for [in $e [$journal:source $jrn "orders"]] [yield [ev seq=$e@seq]]]]]
+  [$live:observe $q {jrn: $j} [head-set] {rung: ":complete-ordered"}]]
+#]]
+  [out-err [#
+cx-err:CXER5077
+#]]
+ ]
+
+ [case id=live-056-rung-requirement-satisfied level=core grant='eval read write'
+  [tags live adapter observe rung wiring weakest-of-set l134 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $j [$journal:open "mem://live-056" "acme" {declare: [adapter-stream stream="orders" rung=":coalesced-rescan" writer="w-1"]}]]
+[= $q [?quote [?for [in $e [$journal:source $jrn "orders"]] [yield [ev seq=$e@seq]]]]]
+[= $sub [$live:observe $q {jrn: $j} [head-set] {rung: ":snapshot-diff"}]]
+  [wired rung=$sub@rung]]
+#]]
+  [out-text [#
+[wired rung=':coalesced-rescan']
+#]]
+ ]
+
+ [case id=live-057-conflicting-redeclaration-refused level=core grant='eval read write'
+  [tags live adapter declare negative conflict handle-floor CXER5075 stream-7 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://live-057"]]
+[= $j1 [$journal:attach $s "acme" {declare: [adapter-stream stream="s" rung=":snapshot-diff" writer="w1"]}]]
+[= $j2 [$journal:attach $s "acme" {declare: [adapter-stream stream="s" rung=":snapshot-diff" writer="w1"]}]]
+  [$journal:attach $s "acme" {declare: [adapter-stream stream="s" rung=":complete-ordered" writer="w2"]}]]
+#]]
+  [out-err [#
+cx-err:CXER5075
+#]]
+ ]
+
+ [case id=live-058-declaration-bogus-rung-refused level=core grant='eval read write'
+  [tags live adapter declare negative ladder vocabulary CXER5075 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+  [$journal:open "mem://live-058" "acme" {declare: [adapter-stream stream="s" rung=":bogus" writer="w1"]}]
+#]]
+  [out-err [#
+cx-err:CXER5075
+#]]
+ ]
+
+ [case id=live-059-lowering-ladder level=core
+  [tags live adapter lower ingest ladder json foreign l134 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/live']
+([$live:lower "{\"sku\": \"A-1\", \"qty\": 2}"], [$live:lower "[order id=1]"], [$live:lower "plain text, not a record"])
+#]]
+  [out-text [#
+([json {sku: A-1, qty: 2}], [order id=1], [foreign 'plain text, not a record'])
+#]]
+ ]
+
+ [case id=live-060-poll-adapter-example level=core grant='eval read write'
+  [tags live adapter poll snapshot-diff ingest l135 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $db [$store:open "mem://live-poll-doc"]]
+[= $a [$live:adapt-poll "mem://live-poll-doc-j" "acme" "orders" $db [?quote [?for [in $r [$store:source $db2 "//order"]] [yield $r]]] "poll-1"]]
+[= $h1 [$store:put-doc $db [order id=1]]]
+  [$live:ingest $a]]
+#]]
+  [out-text [#
+[ingested from=0 at=1 n=1]
+#]]
+ ]
+
+ [case id=live-061-watch-adapter-example level=core grant='eval read write'
+  [tags live adapter watch coalesced-rescan ingest l135 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/live']
+[?let [= $a [$live:adapt-watch "mem://live-watch-doc" "acme" "files" "/tmp/live-watch-doc-dir" "watch-1"]]
+[= $w1 [$io:write-file "/tmp/live-watch-doc-dir/a.json" "{\"sku\": \"A-1\"}"]]
+  [$live:ingest $a]]
+#]]
+  [out-text [#
+[ingested rescan=true n=1]
+#]]
+ ]
+
+ [case id=live-062-poll-ticks-and-stream-content level=core grant='eval read write'
+  [tags live adapter poll ingest resume-token nats-bridge-shape stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $db [$store:open "mem://live-062-db"]]
+[= $a [$live:adapt-poll "mem://live-062-j" "acme" "orders" $db [?quote [?for [in $r [$store:source $db2 "//order"]] [yield $r]]] "poll-1"]]
+[= $h1 [$store:put-doc $db [order id=1 sku="A"]]]
+[= $h2 [$store:put-doc $db [order id=2 sku="B"]]]
+[= $t1 [$live:ingest $a]]
+[= $t2 [$live:ingest $a]]
+[= $h3 [$store:put-doc $db [order id=3 sku="C"]]]
+[= $t3 [$live:ingest $a]]
+[= $j $a/jslot]
+[= $e1 [$journal:read $j 1 "orders"]]
+  ($t1, $t2, $t3, $e1/event)]
+#]]
+  [out-text [#
+([ingested from=0 at=2 n=2], [ingested from=2 at=2 n=0], [ingested from=2 at=3 n=1], [ingested from=0 at=2 [insert pos=0 [order id=1 sku=A]] [insert pos=1 [order id=2 sku=B]]])
+#]]
+ ]
+
+ [case id=live-063-ingest-quiescent-example level=core grant='eval read write'
+  [tags live adapter poll ingest quiescent tick stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $db [$store:open "mem://live-ingest-doc"]]
+[= $a [$live:adapt-poll "mem://live-ingest-doc-j" "acme" "orders" $db [?quote [?for [in $r [$store:source $db2 "//order"]] [yield $r]]] "poll-1"]]
+[= $h1 [$store:put-doc $db [order id=1]]]
+[= $t1 [$live:ingest $a]]
+  [$live:ingest $a]]
+#]]
+  [out-text [#
+[ingested from=1 at=1 n=0]
+#]]
+ ]
+
+ [case id=live-064-egress-ack-after-barrier level=core grant='eval read write'
+  [tags live adapter egress ack barrier fabric cumulative l134 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://live-064" "acme"]]
+[= $f [$fabric:open $j]]
+[= $p1 [$fabric:publish $f "out" [notify :egress.send id=1] {actor: "u" authority: "g"}]]
+[= $p2 [$fabric:publish $f "out" [notify :egress.send id=2] {actor: "u" authority: "g"}]]
+[= $s1 [$fabric:subscribe $f "out" :egress.send {group: "egress"}]]
+[= $b1 [?receive from=$s1 max=1]]
+[= $barrier1 "2xx"]
+[= $a1 [?if [$eq $barrier1 "2xx"] [then [$fabric:ack $s1 1]] [else [no-ack]]]]
+[= $s2 [$fabric:subscribe $f "out" :egress.send {group: "egress"}]]
+[= $b2 [?receive from=$s2 max=1]]
+[= $barrier2 "timeout"]
+[= $a2 [?if [$eq $barrier2 "2xx"] [then [$fabric:ack $s2 2]] [else [no-ack]]]]
+[= $s3 [$fabric:subscribe $f "out" :egress.send {group: "egress"}]]
+[= $b3 [?receive from=$s3 max=1]]
+  ([got1 [$count $b1]], [after-ack [$count $b2]], $a2, [redelivered [$count $b3]])]
+#]]
+  [out-text [#
+([got1 1], [after-ack 1], [no-ack], [redelivered 1])
+#]]
+ ]
+
+ [case id=live-065-gamma-retract-reinsert-position level=core grant='eval read write'
+  [tags live materialize gamma group-order retract reinsert l94 quartet-leg4 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-065s"]]
+[= $cs [$store:open "mem://live-065c"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [group-by $o@region] [yield [rev region=$key n=$count]]]]]
+[= $h1 [$store:put-doc $s [order id=1 region=east]]]
+[= $h2 [$store:put-doc $s [order id=2 region=east]]]
+[= $h3 [$store:put-doc $s [order id=3 region=west]]]
+[= $m [$live:materialize $cs $q {orders: $s} "rev65"]]
+[= $del [$store:delete-doc $s $h1]]
+[= $a1 [$live:advance $m]]
+[= $h4 [$store:put-doc $s [order id=4 region=east]]]
+[= $a2 [$live:advance $m]]
+[= $r [$live:read $m]]
+[= $fresh [?for [in $o [$store:source $s "//order"]] [group-by $o@region] [yield [rev region=$key n=$count]]]]
+[= $rows [?for [in $x $r/rev] [yield $x]]]
+  ($a1, $a2, $r, [leg4 eq=[$cx:equal $rows $fresh]])]
+#]]
+  [out-text [#
+([advanced applied=1 recomputed=false [head-set [s source=orders pos=4]]], [advanced applied=1 recomputed=false [head-set [s source=orders pos=5]]], [snapshot [head-set [s source=orders pos=5]] [rev region=east n=2] [rev region=west n=1]], [leg4 eq=true])
+#]]
+ ]
+
+ [case id=live-066-burst-vs-read-coalesce-contrast level=core grant='eval read write'
+  [tags live observe materialize read no-coalesce contrast l130 stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-066s"]]
+[= $cs [$store:open "mem://live-066c"]]
+[= $q [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]]]
+[= $sub [$live:observe $q {orders: $s} [head-set]]]
+[= $m [$live:materialize $cs $q {orders: $s} "o66"]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $h2 [$store:put-doc $s [order id=2]]]
+[= $h3 [$store:put-doc $s [order id=3]]]
+[= $b [?receive from=$sub]]
+[= $adv [$live:advance $m]]
+[= $r [$live:read $m]]
+  ([frames n=[$count $b/insert]], $adv, [snapshot-rows n=[$count $r/order]])]
+#]]
+  [out-text [#
+([frames n=3], [advanced applied=3 recomputed=false [head-set [s source=orders pos=3]]], [snapshot-rows n=3])
+#]]
+ ]
+
+ [case id=live-067-m5-commerce-end-to-end level=core grant='eval read write'
+  [tags live m5 commerce end-to-end query changes-since materialize observe adapter stream-3]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $db [$store:open "mem://live-067-db"]]
+[= $cs [$store:open "mem://live-067-ckpt"]]
+[= $a [$live:adapt-poll "mem://live-067-j" "acme" "orders" $db [?quote [?for [in $r [$store:source $db2 "//order"]] [yield $r]]] "poll-1"]]
+[= $h1 [$store:put-doc $db [order id=1 region=east amt=10]]]
+[= $h2 [$store:put-doc $db [order id=2 region=west amt=5]]]
+[= $t1 [$live:ingest $a]]
+[= $rev-q [?quote [?for [in $o [$store:source $orders "//order"]] [= $amt $o@amt] [group-by $o@region] [yield [rev region=$key total=[$sum $group/amt] n=$count]]]]]
+[= $rev1 [?for [in $o [$store:source $db "//order"]] [= $amt $o@amt] [group-by $o@region] [yield [rev region=$key total=[$sum $group/amt] n=$count]]]]
+[= $c1 [$live:changes-since $rev-q {orders: $db} [head-set]]]
+[= $dash [?element "head-set" $c1/head-set]]
+[= $m [$live:materialize $cs $rev-q {orders: $db} "rev-by-region"]]
+[= $sub [$live:observe [?quote [?for [in $e [$journal:source $jrn "orders"]] [yield $e]]] {jrn: $a/jslot} [head-set]]]
+[= $seed [?receive from=$sub]]
+[= $h3 [$store:put-doc $db [order id=3 region=east amt=7]]]
+[= $t2 [$live:ingest $a]]
+[= $agent-batch [?receive from=$sub]]
+[= $agent-sees [$count $agent-batch/insert]]
+[= $c2 [$live:changes-since $rev-q {orders: $db} $dash]]
+[= $del [$store:delete-doc $db $h1]]
+[= $adv1 [$live:advance $m]]
+[= $adv2 [$live:advance $m]]
+[= $r [$live:read $m]]
+[= $fresh [?for [in $o [$store:source $db "//order"]] [= $amt $o@amt] [group-by $o@region] [yield [rev region=$key total=[$sum $group/amt] n=$count]]]]
+[= $rows [?for [in $x $r/rev] [yield $x]]]
+  ([query $rev1], [dashboard $c2], [agent rung=$sub@rung new=$agent-sees], [maintained $adv1 $adv2 eq=[$cx:equal $rows $fresh]], $r)]
+#]]
+  [out-text [#
+([query ([rev region=east total=10 n=1], [rev region=west total=5 n=1])], [dashboard [changes [head-set [s source=orders pos=3]] [regroup pos=0 [rev region=east total=17 n=2]]]], [agent rung=':snapshot-diff' new=1], [maintained eq=true [advanced applied=2 recomputed=false [head-set [s source=orders pos=4]]] [advanced applied=0 recomputed=false [head-set [s source=orders pos=4]]]], [snapshot [head-set [s source=orders pos=4]] [rev region=west total=5 n=1] [rev region=east total=7 n=1]])
+#]]
+ ]
+]

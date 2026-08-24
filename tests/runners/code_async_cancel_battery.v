@@ -27,6 +27,7 @@
 module main
 
 import code
+import platform as _
 import time
 import os
 
@@ -41,11 +42,13 @@ fn env_int(name string, dflt int) int {
 }
 
 // canonical cancellation program: synthesize a future whose body
-// would sleep 10s, cancel it immediately (before any yield-point
-// runs the sleep), await — expect CXER0260.
-const cancel_program = '[?let \$f = [?async [?sleep 10s]]
- :in [?let \$_ = [?cancel \$f]
-      :in [?await \$f]]]'
+// would sleep 10s (mock — simulated time, no wall-clock wait),
+// cancel it immediately, await — expect CXER0260.
+// (#805/audit AF-5: carried the retired pre-reshape `[?let $x = …
+// :in …]` spelling — 10,000/10,000 hard eval errors; repaired to the
+// ENFORCED program-async-004 fixture's exact program, the W6
+// gate-14/16 pattern.)
+const cancel_program = '[?let [= \$f [?async [?let [= \$_ [?sleep 10s mock]] never]]] [= \$_ [?cancel \$f]] [?await \$f]]'
 
 fn main() {
 	iterations      := env_int('GATE8_ITERATIONS', default_iterations)

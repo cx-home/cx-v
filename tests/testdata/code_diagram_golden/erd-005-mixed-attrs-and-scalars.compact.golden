@@ -1,0 +1,6 @@
+erDiagram
+  user {
+    int id "@"
+    string name "@"
+    string email
+  }

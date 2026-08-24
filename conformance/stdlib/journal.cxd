@@ -1,4 +1,4 @@
-[test-suite name=journal
+[test-suite name=journal ring=2
   [doc [#
 conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journal.md
 §3/§6/§10). Each program imports the bundled module via [?lib 'cx-stdlib/journal']
@@ -39,6 +39,44 @@ conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journa
      027-035  snapshot / snapshot-verify / fold-from (signed + unsigned + equivalence)
      036-041  retain / compact (prune-behind-snapshot + copy-forward source-intact)
      042-058  negatives / no-surface (every CXER46xx + CXER0271 denial)
+     059-071  per-stream (§2.1.1) genesis / independence / verify / fold /
+              snapshot / retain+compact
+     072-075  appointed-signer surface (S6.4, §3.7/§4.8): the unsigned
+              signer= outer hint (stamped, resolved, forged) + the opt-in
+              require-appointed check against an [authz-store] registry
+     078      sig-algo fail-closed: an unknown signature suite is
+              :unsupported-suite via the suite-registry gate, never a
+              fall-through Ed25519 attempt (#702/L36)
+     084      stripped-tag downgrade (#691 §10): sig-algo ABSENT while a
+              signature rides the snapshot is :unsupported-suite — the
+              unsigned tier is only for snapshots carrying NO signature
+     085      per-algo digest vectors (#691 §10): the four 1.0 registry
+              algos over the SAME M5 commerce order document — tagged
+              self-describing entry hashes (64/96/128/64 hex), payload=
+              stays the Tier-1 sha2-256 document address in all four
+     086-088  keep-after-time retention (#712 item 2): TS→seq boundary via
+              §4.3 ts monotonicity (was a spec'd no-op) — boundary match,
+              before-first keep-all (B=0), malformed-ts CXER4610
+     089-098  stream-7 consistency vocabulary (#679, L122-L126): the
+              declare-and-verify handle floor (accept + advert-refusal +
+              the two teaching refusals + closed-set/type-strict), the
+              always-on at-seq pin guard below a pruned floor (CXER4991,
+              replay + snapshot), the declared-:gapless vs silent-clamp
+              discriminator pair, and the head-fresh contract (F1 — the
+              stale/fresh file:// pair is journal_head_fresh_test.v)
+     099-103  stream-7 W6: the sect-3.7 tenant SET snapshot (the
+              :at-head-set cut substrate — pre-W6 a tenant snapshot over
+              named streams silently signed the empty default chain), set
+              verify naming the divergent stream, the M5 cut, the L125
+              pin resolve-through arc, and the fold-from-on-set teaching
+              refusal
+     079-080  frozen preimage pins (#724, audit C1): 079 recomputes entry
+              hashes (default + named stream) from the §4.2 entry-canonical
+              form via $cx:hash (Tier-1 document identity) — clean-room =
+              shipped, byte-exact; 080 verifies a shipped snapshot signature
+              against the §4.8 snapshot-canonical form reconstructed via
+              $format:canonical (VALUE-emission bytes, state unwrapped, no
+              trailing newline — the OTHER basis)
    #]]
 
   [# ── 001-010: open / append / read / slice / since / head ───────────── #]
@@ -54,7 +92,7 @@ conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journa
   [$journal:append $j [do :refund] {actor: "ops" authority: "d-77"}]]
 #]]
    [out-text [#
-[entry seq=1 tenant=acme actor=ops authority=d-77 ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:bdc6c60e64d8bc43a17fc1762633a915d8816ca2dffd429b45ce19dda82d6178 [event [do :refund]]]
+[entry seq=1 tenant=acme actor=ops authority=d-77 ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload='sha2-256:1c28ab1fd422c356d61afc4be98fe2ff836d21b306487a4d67a62b40fc762ec5' hash='sha2-256:902dfe8cf83616e030e70ec30429c632601d4bd29308b757049706a3afb218a4' [event [do :refund]]]
 #]]
   ]
 
@@ -71,7 +109,7 @@ conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journa
   [$journal:read $j 2]]
 #]]
    [out-text [#
-[entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash=sha256:f0d42b6c75733de803ac02bb66eecf005add595cadca2f7151f1c682ecb440d0 hash='sha256:2bcb8230b14039e30cc935fb9af79aa4047d317167b0e6edb95e674a82b7e8c2' [event [b 2]]]
+[entry seq=2 tenant=acme actor=u authority=g ts='1970-01-01T00:00:02Z' prev-hash='sha2-256:69c69761d531660401aa7275810f13828b1db1430511243efbaddc053637311d' payload=sha2-256:e74783796d0d83dfce07552c3773cc9ab4f270fbeb19ada5438a363d79b08e18 hash='sha2-256:1d4f5830f65cd9c6b37aa82309376cb3933b6ff91b7d0c7ef877d4403c9dabb0' [event [b 2]]]
 #]]
   ]
 
@@ -104,7 +142,7 @@ conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journa
   [$journal:slice $j 2 3]]
 #]]
    [out-text [#
-([entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa' [event [b]]], [entry seq=3 tenant=acme actor=u authority=g ts='epoch:00:00:03' prev-hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa' hash='sha256:6c29ae866f4b35ead2bc4de4bb388382d1c4542ec46828c568a0d63f60117c43' [event [c]]])
+([entry seq=2 tenant=acme actor=u authority=g ts='1970-01-01T00:00:02Z' prev-hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' payload=sha2-256:ca0dff2eeeb428d9b948154b48f08f4957c2aa0b9c36f31410812c2943df3b74 hash=sha2-256:d0ff5f72f597fa548dc5e52dc2e65d474e18a5fae0b440d09e2c29901ac39ac5 [event [b]]], [entry seq=3 tenant=acme actor=u authority=g ts='1970-01-01T00:00:03Z' prev-hash=sha2-256:d0ff5f72f597fa548dc5e52dc2e65d474e18a5fae0b440d09e2c29901ac39ac5 payload=sha2-256:a1f3760d1baa325a1f6dc4dd0b659aae82fac0bcbc4c86d25dc8e2651e4c9769 hash=sha2-256:aea8756847199d3ffb540efb20ebfcc5d25f1b8a9396d66d1dfd14ca4b23952d [event [c]]])
 #]]
   ]
 
@@ -137,7 +175,7 @@ conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journa
   [$journal:since $j 2]]
 #]]
    [out-text [#
-([entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa' [event [b]]])
+([entry seq=2 tenant=acme actor=u authority=g ts='1970-01-01T00:00:02Z' prev-hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' payload=sha2-256:ca0dff2eeeb428d9b948154b48f08f4957c2aa0b9c36f31410812c2943df3b74 hash=sha2-256:d0ff5f72f597fa548dc5e52dc2e65d474e18a5fae0b440d09e2c29901ac39ac5 [event [b]]])
 #]]
   ]
 
@@ -168,7 +206,7 @@ conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journa
   [$journal:head $j]]
 #]]
    [out-text [#
-[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' [event [a]]]
+[entry seq=1 tenant=acme actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload='sha2-256:24d4941e67d5965d270eaebdb9816b994311e0f2f0e79ef6bb626f362c52842e' hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' [event [a]]]
 #]]
   ]
 
@@ -185,7 +223,78 @@ conformance fixtures for cx-stdlib/journal (spec/02-inprogress/xap/stdlib_journa
   [$journal:query $j "/event/do"]]
 #]]
    [out-text [#
-([entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:fcd34ab5565c2823273d24922fe5e7b53d3ffe02fd62695a99b214d409933c30 [event [do :refund]]])
+([entry seq=1 tenant=acme actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload='sha2-256:1c28ab1fd422c356d61afc4be98fe2ff836d21b306487a4d67a62b40fc762ec5' hash=sha2-256:cf7b52e49ca5b3d13a97c4304790ab001c42130f15db55b91ce07a1bbceff7cc [event [do :refund]]])
+#]]
+  ]
+
+  [case id=journal-009a-query-predicate-filters level=core
+   [tags journal query cxpath predicate audit issue-782]
+   [meta [#
+note: the trailing predicate used to be STRIPPED before matching — the
+note: verb matched the element-name step alone, so this query answered
+note: with all THREE promos instead of the two carrying valid-from: a
+note: silent superset of what was asked. The path is now evaluated by
+note: the real engine against each hydrated entry, so a predicate means
+note: what CXPath says it means (§3.3).
+#]]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [promo valid-from='2026-01-01'] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [promo] {actor: "u" authority: "g"}]]
+[= $e3 [$journal:append $j [promo valid-from='2026-02-01'] {actor: "u" authority: "g"}]]
+  [$count [$journal:query $j "/event/promo[@valid-from]"]]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [case id=journal-009b-query-predicate-value level=core
+   [tags journal query cxpath predicate audit issue-782]
+   [meta [#
+note: a VALUE predicate narrows further — the same engine, so equality
+note: and attribute reads behave exactly as they do in an inline
+note: `$doc/…` read. One of the two dated promos matches.
+#]]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [promo valid-from='2026-01-01'] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [promo] {actor: "u" authority: "g"}]]
+[= $e3 [$journal:append $j [promo valid-from='2026-02-01'] {actor: "u" authority: "g"}]]
+  [$count [$journal:query $j "/event/promo[= $_@valid-from '2026-02-01']"]]]
+#]]
+   [out-text [#
+1
+#]]
+  ]
+
+  [case id=journal-009c-query-bad-path-refused level=core
+   [tags journal query cxpath fail-loud issue-782]
+   [meta [#
+note: a path the engine refuses is the CALLER's error, reported once for
+note: the query. Before the fix an unparseable predicate was simply cut
+note: off and the query answered anyway — the silent-narrowing half of
+note: the same class.
+#]]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [promo] {actor: "u" authority: "g"}]]
+  [$journal:query $j "/event/promo["]]
+#]]
+   [out-err [#
+cx-err:CXER4610
 #]]
   ]
 
@@ -324,7 +433,7 @@ cx-err:CXER4609
   [$journal:dry-run $j [b] {actor: "u" authority: "g"} [?fn ($a $e) [+ $a 1]] 0]]
 #]]
    [out-text [#
-[dry-run [state 2] [entry seq=2 tenant=acme actor=u authority=g ts='epoch:00:00:02' prev-hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa' [event [b]]]]
+[dry-run [state 2] [entry seq=2 tenant=acme actor=u authority=g ts='1970-01-01T00:00:02Z' prev-hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' payload=sha2-256:ca0dff2eeeb428d9b948154b48f08f4957c2aa0b9c36f31410812c2943df3b74 hash=sha2-256:d0ff5f72f597fa548dc5e52dc2e65d474e18a5fae0b440d09e2c29901ac39ac5]]
 #]]
   ]
 
@@ -341,7 +450,7 @@ cx-err:CXER4609
   [$journal:head $j]]
 #]]
    [out-text [#
-[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' [event [a]]]
+[entry seq=1 tenant=acme actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload='sha2-256:24d4941e67d5965d270eaebdb9816b994311e0f2f0e79ef6bb626f362c52842e' hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' [event [a]]]
 #]]
   ]
 
@@ -360,7 +469,7 @@ cx-err:CXER4609
   [$journal:verify $j {}]]
 #]]
    [out-text [#
-[verification valid=true checked-from=1 checked-to=2 head-hash='sha256:9cd1fca3841e0ea3f6db09fc032c901cd1f9b84a7089ebb90c82753c06ef56aa']
+[verification valid=true checked-from=1 checked-to=2 head-hash=sha2-256:d0ff5f72f597fa548dc5e52dc2e65d474e18a5fae0b440d09e2c29901ac39ac5]
 #]]
   ]
 
@@ -375,7 +484,7 @@ cx-err:CXER4609
   [$journal:verify $j {}]]
 #]]
    [out-text [#
-[verification valid=true checked-from=0 checked-to=0 head-hash=b3:GENESIS]
+[verification valid=true checked-from=0 checked-to=0 head-hash='genesis:']
 #]]
   ]
 
@@ -393,7 +502,7 @@ cx-err:CXER4609
   [$journal:verify-slice $j 2 3]]
 #]]
    [out-text [#
-[verification valid=true checked-from=2 checked-to=3 head-hash='sha256:6c29ae866f4b35ead2bc4de4bb388382d1c4542ec46828c568a0d63f60117c43']
+[verification valid=true checked-from=2 checked-to=3 head-hash=sha2-256:aea8756847199d3ffb540efb20ebfcc5d25f1b8a9396d66d1dfd14ca4b23952d]
 #]]
   ]
 
@@ -410,7 +519,7 @@ cx-err:CXER4609
   [$journal:snapshot-verify $j $bad]]
 #]]
    [out-text [#
-[snapshot-verification valid=false at-seq=1 reason=':anchor-mismatch']
+[snapshot-verification valid=false at-seq=1 reason=':algo-mismatch']
 #]]
   ]
 
@@ -428,7 +537,7 @@ cx-err:CXER4609
   [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {sign: "false"}]]
 #]]
    [out-text [#
-[snapshot tenant=acme at-seq=1 anchor-hash='sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d' hash-algo=sha256 sig-algo=none [state 1]]
+[snapshot tenant=acme at-seq=1 anchor-hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' hash-algo=sha2-256 sig-algo=none [state 1]]
 #]]
   ]
 
@@ -524,7 +633,7 @@ cx-err:CXER4609
   [$journal:verify $j {}]]
 #]]
    [out-text [#
-[verification valid=true checked-from=1 checked-to=3 head-hash='sha256:6c29ae866f4b35ead2bc4de4bb388382d1c4542ec46828c568a0d63f60117c43']
+[verification valid=true checked-from=1 checked-to=3 head-hash=sha2-256:aea8756847199d3ffb540efb20ebfcc5d25f1b8a9396d66d1dfd14ca4b23952d]
 #]]
   ]
 
@@ -545,14 +654,16 @@ cx-err:CXER4609
   [$journal:verify $seg {}]]
 #]]
    [out-text [#
-[verification valid=true checked-from=3 checked-to=3 head-hash='sha256:6c29ae866f4b35ead2bc4de4bb388382d1c4542ec46828c568a0d63f60117c43']
+[verification valid=true checked-from=3 checked-to=3 head-hash=sha2-256:aea8756847199d3ffb540efb20ebfcc5d25f1b8a9396d66d1dfd14ca4b23952d]
 #]]
   ]
 
   [# ── 042-058: negatives / no-surface (every CXER46xx + CXER0271) ─────── #]
 
   [case id=journal-042-stale-tail level=core
-   [tags journal append CXER4604 stale-tail optimistic-concurrency]
+   [; I1 row 15 (audit M21): CXER4604 RETIRED — optimistic-concurrency
+      conflicts unify on the ONE ref-conflict code, CXER1114. ]
+   [tags journal append CXER1114 stale-tail optimistic-concurrency i1]
    [in-cx [#
 [empty]
 #]]
@@ -560,10 +671,10 @@ cx-err:CXER4609
 [?lib 'cx-stdlib/journal']
 [?let [= $j [$journal:open "mem://t" "acme"]]
 [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
-  [$journal:append $j [b] {actor: "u" authority: "g" expect-prev-seq: 0}]]
+  [$journal:append $j [b] {actor: "u" authority: "g" expect-pos: 0}]]
 #]]
    [out-err [#
-cx-err:CXER4604
+cx-err:CXER1114
 #]]
   ]
 
@@ -766,7 +877,7 @@ cx-err:CXER4615
 [?lib 'cx-stdlib/journal']
 [?let [= $j [$journal:open "mem://t" "acme"]]
 [= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
-[= $forged [snapshot tenant=acme at-seq=1 anchor-hash="sha256:117af1f326b2d1ee4d4b56b66b3fa13dabfbc55045e4cc57740c7c5f026f163d" hash-algo=sha256 sig-algo=ed25519 signature="0000" verify-key="0000" [state 1]]]
+[= $forged [snapshot tenant=acme at-seq=1 anchor-hash="sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98" hash-algo=sha2-256 sig-algo=ed25519 signature="0000" verify-key="0000" [state 1]]]
   [$journal:fold-from $j $forged [?fn ($a $e) [+ $a 1]]]]
 #]]
    [out-err [#
@@ -844,7 +955,7 @@ docs; attach over a store that already holds the chain rehydrates and verifies.
   [$journal:verify $j2]]
 #]]
   [out-text [#
-[verification valid=true checked-from=1 checked-to=2 head-hash='sha256:2bcb8230b14039e30cc935fb9af79aa4047d317167b0e6edb95e674a82b7e8c2']
+[verification valid=true checked-from=1 checked-to=2 head-hash='sha2-256:1d4f5830f65cd9c6b37aa82309376cb3933b6ff91b7d0c7ef877d4403c9dabb0']
 #]]
  ]
 
@@ -869,7 +980,7 @@ read of seq 1 on the reopened handle returns the original entry.
   [$journal:read $j2 1]]
 #]]
   [out-text [#
-[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:f0d42b6c75733de803ac02bb66eecf005add595cadca2f7151f1c682ecb440d0 [event [a 1]]]
+[entry seq=1 tenant=acme actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload=sha2-256:e908d52cb2472325f8078e4e6001a0129e14ee3af98728bfcc0e733c940aba23 hash='sha2-256:69c69761d531660401aa7275810f13828b1db1430511243efbaddc053637311d' [event [a 1]]]
 #]]
  ]
 
@@ -890,7 +1001,7 @@ asserting the full value is impossible under the fake impl.
   [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
 #]]
   [out-text [#
-[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha512:47d2fbec67d2b8e588c13d5562bd19b3deea386a0b11907b69a74815dc91fb07406499c1b9a9ea953fa282d2554f7b013beee05c9d7f1e3298949d395c03fe57' [event [a 1]]]
+[err code=cx-err:CXER4607 message='E_JOURNAL_HASH_UNSUPPORTED: unknown hash-algo "sha512"']
 #]]
  ]
 
@@ -909,7 +1020,7 @@ sha256 digest of the same canonical bytes.
   [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
 #]]
   [out-text [#
-[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='b3:4a887c65757ddb7ad85fb9298ee7534a7fde46fd854577740701a8e114bac3f2' [event [a 1]]]
+[entry seq=1 tenant=acme actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload=sha2-256:e908d52cb2472325f8078e4e6001a0129e14ee3af98728bfcc0e733c940aba23 hash='blake3:3a9fb7932043445c05baad104c64574af6f1c5e0e9a8a3e031a15b400a5c16a1' [event [a 1]]]
 #]]
  ]
 
@@ -937,7 +1048,7 @@ the content/hash divergence.
   [$journal:verify $j2]]
 #]]
   [out-text [#
-[verification valid=false checked-from=1 checked-to=1 first-bad-seq=1 reason=':hash-mismatch']
+[verification valid=false checked-from=1 checked-to=1 first-bad-seq=1 reason=':genesis-invalid']
 #]]
  ]
 
@@ -1038,7 +1149,7 @@ Forge entry 1 with a non-genesis prev-hash; verify reports genesis-invalid.
   [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "principal:dana"}]]
 #]]
    [out-text [#
-[entry seq=1 tenant=acme stream=principal:dana actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:c178d1437d00735ee84e43a7d54e9ad7e2a90733440e9bde7d71b1e3496fb304 [event [a 1]]]
+[entry seq=1 tenant=acme stream=principal:dana actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload=sha2-256:e908d52cb2472325f8078e4e6001a0129e14ee3af98728bfcc0e733c940aba23 hash=sha2-256:a36dd33192764e5e8c5460973935911e182cb85fe7beb892066b8f904bd4c485 [event [a 1]]]
 #]]
   ]
 
@@ -1055,7 +1166,7 @@ Forge entry 1 with a non-genesis prev-hash; verify reports genesis-invalid.
   [$journal:read $j 1 "dana"]]
 #]]
    [out-text [#
-[entry seq=1 tenant=acme stream=dana actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash='sha256:87fb04b81c6bf94faaf297d1956f65fb748a5b151c5691c33a39ce3a921ebf2b' [event [y 1]]]
+[entry seq=1 tenant=acme stream=dana actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload='sha2-256:7caa6bb2a2d3254b3068a0e9c8896320174b5803771b8f26651ba8198e922456' hash='sha2-256:0b9c0a16194effce35beb72c7a7a9a1ef0f8913a03ab7e4d9eebde58775d15f9' [event [y 1]]]
 #]]
   ]
 
@@ -1072,7 +1183,7 @@ Forge entry 1 with a non-genesis prev-hash; verify reports genesis-invalid.
   [$journal:read $j 2 "s1"]]
 #]]
    [out-text [#
-[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='epoch:00:00:02' prev-hash=sha256:bfb30a05b39bfe6c03a52bfae36a909f38fa5ec75c7613c09840b8bafb539bfa hash=sha256:c0088c8001f6bc5a098165d54aa6df547e9e3f279ab365427595b57939e3da43 [event [x 2]]]
+[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='1970-01-01T00:00:02Z' prev-hash='sha2-256:2d583ad710b8822d3cda681a30473a513a111789c022c646ca8bf79315760eef' payload='sha2-256:3e449f544747dbeb1b696e860b79d5b1e70d785db0fcd6ae5c03e9565fc6af12' hash='sha2-256:42014eb84d05a06df80894a2f26fa1936b69c7e9f777309594c4b8163e0d2d02' [event [x 2]]]
 #]]
   ]
 
@@ -1090,12 +1201,12 @@ Forge entry 1 with a non-genesis prev-hash; verify reports genesis-invalid.
   [$journal:streams $j]]
 #]]
    [out-text [#
-('s1', 's2')
+(s1, s2)
 #]]
   ]
 
   [case id=journal-063-stream-stale-tail level=core
-   [tags journal append stream CXER4604 stale-tail optimistic-concurrency]
+   [tags journal append stream CXER1114 stale-tail optimistic-concurrency i1]
    [in-cx [#
 [empty]
 #]]
@@ -1103,10 +1214,10 @@ Forge entry 1 with a non-genesis prev-hash; verify reports genesis-invalid.
 [?lib 'cx-stdlib/journal']
 [?let [= $j [$journal:open "mem://t" "acme"]]
 [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
-  [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1" expect-prev-seq: 0}]]
+  [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1" expect-pos: 0}]]
 #]]
    [out-err [#
-cx-err:CXER4604
+cx-err:CXER1114
 #]]
   ]
 
@@ -1120,10 +1231,10 @@ cx-err:CXER4604
 [?let [= $j [$journal:open "mem://t" "acme"]]
 [= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
 [= $d [$journal:append $j [z 1] {actor: "u" authority: "g"}]]
-  [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1" expect-prev-seq: 1}]]
+  [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1" expect-pos: 1}]]
 #]]
    [out-text [#
-[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='epoch:00:00:02' prev-hash=sha256:bfb30a05b39bfe6c03a52bfae36a909f38fa5ec75c7613c09840b8bafb539bfa hash=sha256:c0088c8001f6bc5a098165d54aa6df547e9e3f279ab365427595b57939e3da43 [event [x 2]]]
+[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='1970-01-01T00:00:02Z' prev-hash='sha2-256:2d583ad710b8822d3cda681a30473a513a111789c022c646ca8bf79315760eef' payload='sha2-256:3e449f544747dbeb1b696e860b79d5b1e70d785db0fcd6ae5c03e9565fc6af12' hash='sha2-256:42014eb84d05a06df80894a2f26fa1936b69c7e9f777309594c4b8163e0d2d02' [event [x 2]]]
 #]]
   ]
 
@@ -1138,7 +1249,7 @@ cx-err:CXER4604
   [$journal:append $j [k 1] {actor: "u" authority: "g" stream: ":default"}]]
 #]]
    [out-text [#
-[entry seq=1 tenant=acme actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:ccdef679e6692bd24651ac1ff19dd15bf11bcc6e69f359b8614c76431dea5cdd [event [k 1]]]
+[entry seq=1 tenant=acme actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload=sha2-256:de23852365c6d2fc399c4e9939e4afde9ce1cccc8698ae59e393c1d2f8f5eb1a hash='sha2-256:37630587c8f2e8aca7bc684fcde3a983dc372c60467b44f8ccc6c892f4df7d03' [event [k 1]]]
 #]]
   ]
 
@@ -1160,7 +1271,7 @@ cx-err:CXER4604
   [$journal:verify $j {stream: "s1"}]]
 #]]
    [out-text [#
-[verification valid=true checked-from=1 checked-to=2 head-hash=sha256:c0088c8001f6bc5a098165d54aa6df547e9e3f279ab365427595b57939e3da43]
+[verification valid=true checked-from=1 checked-to=2 head-hash='sha2-256:42014eb84d05a06df80894a2f26fa1936b69c7e9f777309594c4b8163e0d2d02']
 #]]
   ]
 
@@ -1223,7 +1334,7 @@ cx-err:CXER4604
   [$journal:read $seg 2 "s1"]]
 #]]
    [out-text [#
-[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='epoch:00:00:02' prev-hash=sha256:bfb30a05b39bfe6c03a52bfae36a909f38fa5ec75c7613c09840b8bafb539bfa hash=sha256:c0088c8001f6bc5a098165d54aa6df547e9e3f279ab365427595b57939e3da43 [event [x 2]]]
+[entry seq=2 tenant=acme stream=s1 actor=u authority=g ts='1970-01-01T00:00:02Z' prev-hash='sha2-256:2d583ad710b8822d3cda681a30473a513a111789c022c646ca8bf79315760eef' payload='sha2-256:3e449f544747dbeb1b696e860b79d5b1e70d785db0fcd6ae5c03e9565fc6af12' hash='sha2-256:42014eb84d05a06df80894a2f26fa1936b69c7e9f777309594c4b8163e0d2d02' [event [x 2]]]
 #]]
   ]
 
@@ -1244,7 +1355,7 @@ cx-err:CXER4604
   [$journal:verify $seg {stream: "s1"}]]
 #]]
    [out-text [#
-[verification valid=true checked-from=2 checked-to=3 head-hash='sha256:5fd660607531a8a7c7949dfda2d197de33a5d572d989e82d87f97714004d8767']
+[verification valid=true checked-from=2 checked-to=3 head-hash='sha2-256:75e01820100397b039a1ab583048d4d5c742ece63e8c58be8674de785e81d93a']
 #]]
   ]
 
@@ -1265,8 +1376,2449 @@ cx-err:CXER4604
   [$journal:read $j 1 "s1"]]
 #]]
    [out-text [#
-[entry seq=1 tenant=acme stream=s1 actor=u authority=g ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:bfb30a05b39bfe6c03a52bfae36a909f38fa5ec75c7613c09840b8bafb539bfa [event [x 1]]]
+[entry seq=1 tenant=acme stream=s1 actor=u authority=g ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload='sha2-256:4daa2de7edbdebc2ace231777c3fa06156b02dfd17a7ea9e23e43eccae5e72c7' hash='sha2-256:2d583ad710b8822d3cda681a30473a513a111789c022c646ca8bf79315760eef' [event [x 1]]]
 #]]
   ]
 
+  [# ── 072-075: the appointed-signer surface (S6.4, §3.7/§4.8) ──────────── #]
+
+  [case id=journal-072-snapshot-signer-hint level=core
+   [tags journal snapshot signer appointed-signer outer-hint]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+  [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" signer: "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX"}]]
+#]]
+   [out-text [#
+[snapshot tenant=acme at-seq=1 anchor-hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' hash-algo=sha2-256 sig-algo=ed25519 signature='808b35477d98b9f25bc8363b0d7268223b8879b41fe4be183fe7ee0db6bd1bfe93331cd9ab1c5df1684baf72ee01ea4d336e5225cdea15ca8b1b059269dcc007' verify-key='8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c' signer=did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX [state 1]]
+#]]
+  ]
+
+  [case id=journal-073-snapshot-verify-appointed level=core
+   [tags journal snapshot-verify signer appointed require-appointed authz]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'org'}]]
+[= $d [$authz:delegate $az
+  [delegation d-1 [tenant org] [from [principal org-root]] [to [agent 'did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX']]
+    [capabilities [snapshot-sign]] [over '/ledger'] [assurance :t1] [signature sig-org]]]]
+[= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" signer: "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX"}]]
+  [$journal:snapshot-verify $j $snap {require-appointed: true scope: '/ledger' authz: $az}]]
+#]]
+   [out-text [#
+[snapshot-verification valid=true at-seq=1]
+#]]
+  ]
+
+  [case id=journal-074-snapshot-verify-forged-signer level=core
+   [tags journal snapshot-verify signer forged finding SAP]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" signer: "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH"}]]
+  [$journal:snapshot-verify $j $snap]]
+#]]
+   [out-text [#
+[snapshot-verification valid=false at-seq=1 reason=':signature-invalid']
+#]]
+  ]
+
+  [case id=journal-075-snapshot-verify-appointment-ungranted level=core
+   [tags journal snapshot-verify signer not-appointed deny authz]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'org'}]]
+[= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" signer: "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX"}]]
+  [$journal:snapshot-verify $j $snap {require-appointed: true scope: '/ledger' authz: $az}]]
+#]]
+   [out-text [#
+[snapshot-verification valid=false at-seq=1 reason=':not-appointed' [deny actor=did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'snapshot-sign'] [slice '/ledger'] [tenant id=org]]]
+#]]
+  ]
+
+  [# ── 076: journal-stream source reference (stream-2 L97) ──────────────── #]
+
+  [case id=journal-076-source-stream-scan level=core
+   [tags journal source stream planar l97]
+   [; [$journal:source $j STREAM] = the stream's retained committed entries
+      in seq order (since 1) — THE journal-stream source-reference form for
+      planar comprehensions (code.md 7.8, ruling L97); backs the fn-doc
+      example verbatim. Entries on OTHER streams never leak in. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "orders"}]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g" stream: "orders"}]]
+[= $e3 [$journal:append $j [b 9] {actor: "u" authority: "g"}]]
+  [$count [$journal:source $j "orders"]]]
+#]]
+   [out-text [#
+2
+#]]
+  ]
+
+  [case id=journal-077-source-as-planar-generator level=core
+   [tags journal source stream planar generator l97]
+   [; the journal-stream source form feeding a comprehension generator: the
+      entries' event payloads project through [?for]. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "orders"}]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g" stream: "orders"}]]
+[= $e3 [$journal:append $j [b 9] {actor: "u" authority: "g"}]]
+  [?for [in $e [$journal:source $j "orders"]] [yield $e/event]]]
+#]]
+   [out-text [#
+[a 1]
+[a 2]
+#]]
+  ]
+
+  [# ── 078: sig-algo fail-closed (#702/L36) ─────────────────────────────── #]
+
+  [case id=journal-078-snapshot-verify-unsupported-suite level=core gate=enforced
+   [tags journal snapshot-verify unsupported-suite fail-closed suite-registry negative]
+   [; the snapshot is byte-identical to the deterministic signed snapshot of
+      journal-029 (same journal, same entry, all-0x01 seed) EXCEPT sig-algo
+      names a registry-reserved, unimplemented suite — anchor and hash-algo
+      checks pass, then the suite gate MUST fail closed. Pre-#702 this fell
+      through to Ed25519 and reported :signature-invalid. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $bad [snapshot tenant=acme at-seq=1 anchor-hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' hash-algo=sha2-256 sig-algo=ml-dsa-65 signature='808b35477d98b9f25bc8363b0d7268223b8879b41fe4be183fe7ee0db6bd1bfe93331cd9ab1c5df1684baf72ee01ea4d336e5225cdea15ca8b1b059269dcc007' verify-key='8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c' [state 1]]]
+  [$journal:snapshot-verify $j $bad]]
+#]]
+   [out-text [#
+[snapshot-verification valid=false at-seq=1 reason=':unsupported-suite']
+#]]
+  ]
+
+  [# ── 079-080: frozen preimage pins (#724, audit C1) ───────────────────── #]
+
+  [case id=journal-079-entry-preimage-recompute level=core gate=enforced
+   [tags journal hash preimage entry-canonical tier1 identity clean-room SAP]
+   [; the §4.2 pin: recompute both entries' hashes from NOTHING but the
+      spec-stated entry-canonical form and the Tier-1 identity surface
+      ($cx:hash = the bytes `cx hash` covers). Default-stream entry omits
+      stream=; named-stream entry binds it. recomputed must equal emitted
+      byte-for-byte on BOTH lanes — the clean-room guarantee #724 demanded.
+      All fields deterministic (mem:// epoch-counter ts; payload addresses
+      are the events' own Tier-1 addresses). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/cx']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [do :refund] {actor: "ops" authority: "d-77"}]]
+[= $e2 [$journal:append $j [do :ship] {actor: "ops" authority: "d-77" stream: "orders"}]]
+[= $r1 [$cx:hash [entry-canonical seq=1 tenant=acme actor=ops authority=d-77 ts="1970-01-01T00:00:01Z" prev-hash="genesis:" payload="sha2-256:1c28ab1fd422c356d61afc4be98fe2ff836d21b306487a4d67a62b40fc762ec5"]]]
+[= $r2 [$cx:hash [entry-canonical seq=1 tenant=acme stream=orders actor=ops authority=d-77 ts="1970-01-01T00:00:01Z" prev-hash="genesis:" payload="sha2-256:107f47b0c7023b78cbe883a5156f6ccdeb2b9ef4377cbc0ca5f3a3b8a54295a5"]]]
+  [entry-preimage-pin
+    [default recomputed=$r1 emitted=$e1/@hash]
+    [named recomputed=$r2 emitted=$e2/@hash]]]
+#]]
+   [out-text [#
+[entry-preimage-pin [default recomputed='sha2-256:902dfe8cf83616e030e70ec30429c632601d4bd29308b757049706a3afb218a4' emitted='sha2-256:902dfe8cf83616e030e70ec30429c632601d4bd29308b757049706a3afb218a4'] [named recomputed='sha2-256:6ab4f136a743aaa1b237473b8a33fe03c29d6b3eeac10b61013770b4366100dd' emitted='sha2-256:6ab4f136a743aaa1b237473b8a33fe03c29d6b3eeac10b61013770b4366100dd']]
+#]]
+  ]
+
+  [case id=journal-080-snapshot-signed-preimage-form level=core gate=enforced
+   [tags journal snapshot signature preimage snapshot-canonical value-emission clean-room SAP]
+   [; the §4.8 pin: the shipped signature verifies against the preimage
+      reconstructed from the spec-stated snapshot-canonical form — the
+      folded state VALUE as the sole body child (NOT a [state] wrapper;
+      that reading verifies false, the 2026-08-10 #724 finding) and the
+      VALUE-emission byte basis ($format:canonical of the element as
+      constructed, no trailing newline) — NOT §4.2's document-identity
+      basis. Deterministic all-0x01 signing seed (journal-029). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/format']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $pre [$format:canonical [snapshot-canonical at-seq=1 anchor-hash=$snap/@anchor-hash hash-algo=$snap/@hash-algo 1]]]
+  [preimage-verifies [$crypto:ed25519-verify
+    [$bytes:from-hex $snap/@verify-key]
+    [$bytes:from-string-utf8 $pre]
+    [$bytes:from-hex $snap/@signature]]]]
+#]]
+   [out-text [#
+[preimage-verifies true]
+#]]
+  ]
+
+  [case id=journal-081-subscribe-tail-follow level=core gate=enforced
+   [tags journal subscribe tail-follow delivery u1-13a 762]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://jsub-doc" "acme"]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
+[= $sub [$journal:subscribe $j {from: 0}]]
+[= $r1 [?receive from=$sub]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g"}]]
+[= $b [?receive from=$sub max=5 deadline=0]]
+  ([first $r1/@seq], [then n=[$count $b]], [rung $sub@rung])]
+#]]
+   [out-text [#
+([first 1], [then n=1], [rung ':complete-ordered'])
+#]]
+  ]
+
+  [case id=journal-082-seq-at-position level=core gate=enforced
+   [tags journal seq-at time-index u1-14a 762]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://jseq-doc" "acme"]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g"}]]
+[= $p [$journal:seq-at $j "1970-01-01T00:00:01Z"]]
+  [at seq=$p@seq]]
+#]]
+   [out-text [#
+[at seq=1]
+#]]
+  ]
+
+  [case id=journal-083-subscribe-live-select-gap-absence level=core gate=enforced
+   [tags journal subscribe select live-tail negative CXER4610 seq-at absence 762]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://jrn-083" "acme"]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "s"}]]
+[= $live [$journal:subscribe $j {stream: "s"}]]
+[= $quiet [?receive from=$live max=3 deadline=0]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g" stream: "s"}]]
+[= $r [?receive from=$live]]
+[= $sel [?select [case [from $live $m] [got $m/@seq]] [case [timeout 0] [idle]]]]
+[= $bad [$journal:subscribe $j {from: 99}]]
+[= $none [$journal:seq-at $j "1969-01-01T00:00:00Z"]]
+  ([quiet n=[$count $quiet]], [got $r/@seq], $sel, $bad@code, [none n=[$count $none]])]
+#]]
+   [out-text [#
+([quiet n=0], [got 2], [idle], 'cx-err:CXER4610', [none n=0])
+#]]
+  ]
+
+  [# ── 084: stripped suite tag ≠ unsigned (#691 §10, the L36 downgrade) ─── #]
+
+  [case id=journal-084-snapshot-stripped-sig-algo-rejected level=core gate=enforced
+   [tags journal snapshot-verify unsupported-suite fail-closed downgrade stripped-tag negative crypto-agility]
+   [; the snapshot is journal-078's byte-for-byte EXCEPT the sig-algo attr is
+      STRIPPED while signature=/verify-key= remain — the L36 downgrade attack
+      (crypto_agility §1.4): an attacker deletes the suite tag from a signed
+      snapshot. The unsigned tier (§3.7 anchor-only, valid=true caveat
+      'unsigned') is reserved for snapshots that carry NO signature; a
+      signature whose suite tag is missing MUST fail closed as
+      :unsupported-suite, never silently downgrade to the unsigned tier. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $bad [snapshot tenant=acme at-seq=1 anchor-hash='sha2-256:83a013836d0939e47c191cd4a5c079e89fe2f1ecfee486f7da7db50fcdeb9b98' hash-algo=sha2-256 signature='808b35477d98b9f25bc8363b0d7268223b8879b41fe4be183fe7ee0db6bd1bfe93331cd9ab1c5df1684baf72ee01ea4d336e5225cdea15ca8b1b059269dcc007' verify-key='8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c' [state 1]]]
+  [$journal:snapshot-verify $j $bad]]
+#]]
+   [out-text [#
+[snapshot-verification valid=false at-seq=1 reason=':unsupported-suite']
+#]]
+  ]
+
+  [# ── 085: per-algo digest vectors over an M5 commerce document (#691 §10) ─ #]
+
+  [case id=journal-085-per-algo-vectors-commerce-doc level=core gate=enforced
+   [tags journal hash-algo per-algo vectors sha2-256 sha2-384 sha2-512 blake3 crypto-agility commerce]
+   [; the four 1.0 registry algorithms (crypto_agility §5) each hash the SAME
+      M5 commerce order document — one journal per algo (an instance fixes ONE
+      algo at creation). The entry hash= carries the chain algo's tagged
+      address (self-describing, digest length per algorithm: 64/96/128/64
+      hex); payload= stays the Tier-1 sha2-256 document address in all four
+      (document identity is canon-fixed, chain tamper-evidence is per-chain). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $order [order id=ord-1042 [customer c-77] [line-items [item sku=SKU-9 qty=2 [unit-price 19.99]]] [total 39.98]]]
+[= $j1 [$journal:open "mem://alg1" "acme" {hash-algo: "sha2-256"}]]
+[= $j2 [$journal:open "mem://alg2" "acme" {hash-algo: "sha2-384"}]]
+[= $j3 [$journal:open "mem://alg3" "acme" {hash-algo: "sha2-512"}]]
+[= $j4 [$journal:open "mem://alg4" "acme" {hash-algo: "blake3"}]]
+[= $e1 [$journal:append $j1 $order {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j2 $order {actor: "u" authority: "g"}]]
+[= $e3 [$journal:append $j3 $order {actor: "u" authority: "g"}]]
+[= $e4 [$journal:append $j4 $order {actor: "u" authority: "g"}]]
+  ($e1/@hash, $e2/@hash, $e3/@hash, $e4/@hash, [payload-fixed [$eq $e1/@payload $e4/@payload]])]
+#]]
+   [out-text [#
+('sha2-256:fb77cea67df6110b6dc0d4027e156815ff2c1324ade0699e01975ac275752784', 'sha2-384:aeaf963a023b46dfec6289ceb2b101b21e23573098c58d998d4b26a4a59a593128bc27be2c3e87490d3bd698305271aa', 'sha2-512:a082e909bf7565866be70cea3833a19427b64022cc4b0306ee0f0644aea06d27fdf5666a2ea091a4765c16ecb68ed89891c8f16f6a0dcc1c1a5bad948c09a24f', 'blake3:4fdff13e1654c29f08c747f87c78b3c5f5cdb58ac00ab2d06483460ea8215898', [payload-fixed true])
+#]]
+  ]
+
+  [# ── 086-088: keep-after-time retention (#712 item 2, bitemporal L116) ── #]
+
+  [case id=journal-086-retain-keep-after-time-boundary level=core gate=enforced
+   [tags journal retain keep-after-time retention boundary 712]
+   [; keep-after-time TS resolves the prune boundary B = the highest seq whose
+      entry ts <= TS (per-stream ts monotonicity, binary search — never a
+      scan-free no-op). The synthetic clock stamps seq N at epoch+N seconds,
+      so TS = …:00:02Z resolves B=2 exactly as keep-after-seq: 2 would. Was a
+      spec'd no-op (boundary=0 unconditionally) before the fix. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[= $e3 [$journal:append $j [c] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" at-seq: 2}]]
+  [$journal:retain $j {keep-after-time: "1970-01-01T00:00:02Z" snapshot: $snap}]]
+#]]
+   [out-text [#
+[retention boundary=2 covered-by-seq=2]
+#]]
+  ]
+
+  [case id=journal-087-retain-keep-after-time-before-first level=core gate=enforced
+   [tags journal retain keep-after-time retention boundary-zero 712]
+   [; a TS before the first entry's ts prunes nothing: B=0 — a well-formed
+      keep-all, not an error (and needs no snapshot cover since nothing is
+      eligible to prune). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" at-seq: 1}]]
+  [$journal:retain $j {keep-after-time: "1969-12-31T00:00:00Z" snapshot: $snap}]]
+#]]
+   [out-text [#
+[retention boundary=0 covered-by-seq=1]
+#]]
+  ]
+
+  [case id=journal-088-retain-keep-after-time-malformed level=core gate=enforced
+   [tags journal retain keep-after-time CXER4610 negative 712]
+   [; a keep-after-time value that is not a datetime is the CXER4610 policy
+      misuse — never silently keep-all. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101" at-seq: 1}]]
+  [$journal:retain $j {keep-after-time: "not-a-time" snapshot: $snap}]]
+#]]
+   [out-err [#
+cx-err:CXER4610
+#]]
+  ]
+
+  [# ── 089-097: the stream-7 consistency vocabulary (consistency_vocabulary.md
+        L122-L125, #679): the declare-and-verify handle floor on open/attach
+        (checked ONCE against the advertised guarantee set), the closed-set +
+        type-strict token discipline, the two teaching refusals, and the
+        always-on at-seq pin guard (CXER4991 below a retention-pruned floor —
+        never a silent fold from the seam). ────────────────────────────── #]
+
+  [case id=journal-089-consistency-floor-declared-satisfied level=core gate=enforced
+   [tags journal consistency floor declare-and-verify stream-7 679 L123]
+   [; the handle floor: declared tokens the surface advertises are accepted
+      at open, echoed on the handle (inspection answers VALUES), and the
+      handle behaves normally. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-089" "acme" {consistency: (:prefix-consistent, :monotonic-reads, :gapless)}]]
+[= $e1 [$journal:append $j [x 1] {actor: "u" authority: "g"}]]
+  [floor tokens=$j@consistency n=[$count [$journal:since $j 1]]]]
+#]]
+   [out-text [#
+[floor tokens=':prefix-consistent :monotonic-reads :gapless' n=1]
+#]]
+  ]
+
+  [case id=journal-090-consistency-floor-refused-unadvertised level=core gate=enforced
+   [tags journal consistency floor CXER4990 refusal D-C1 stream-7 679 L123]
+   [; satisfy-or-reject: a token the journal surface does not advertise
+      (:at-least-once is the durable delivery plane, not a journal read
+      guarantee) refuses the OPEN loudly, naming the failing stage, the
+      failing token, and the advertised set — the D-C1 naming shape. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?fallback [$journal:open "mem://cst-090" "acme" {consistency: (:at-least-once)}]
+  [recover-with [refused code=$err/@code stage=$err/context/stage token=$err/context/token $err/context/guarantees]]]
+#]]
+   [out-text [#
+[refused code=cx-err:CXER4990 stage=:floor token=:at-least-once [guarantees :prefix-consistent :at-seq-pinned :at-head-set :monotonic-reads :gapless :read-your-writes]]
+#]]
+  ]
+
+  [case id=journal-091-consistency-exactly-once-teaching-refusal level=core gate=enforced
+   [tags journal consistency exactly-once teaching-refusal idempotent CXER4990 stream-7 679 L122]
+   [; :exactly-once is PERMANENTLY refused and the refusal NAMES the answer:
+      declare the command [idempotent] and retry — effect-boundary dedup
+      answers the replay (stream 6). Never left to assume. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?fallback [$journal:open "mem://cst-091" "acme" {consistency: (:exactly-once)}]
+  [recover-with [refused code=$err/@code token=$err/context/token answer=$err/context/answer]]]
+#]]
+   [out-text [#
+[refused code=cx-err:CXER4990 token=:exactly-once answer='[idempotent]']
+#]]
+  ]
+
+  [case id=journal-092-consistency-serializable-teaching-refusal level=core gate=enforced
+   [tags journal consistency serializable teaching-refusal stream-10 CXER4990 stream-7 679 L122]
+   [; :serializable is refused WITH the pointer to the SHIPPED stream-10
+      escrow/saga pattern (L160 retarget): the intent is satisfiable as
+      reserve-then-confirm + [requires-at] + saga-run — without a global
+      serialization point; no surface advertises one. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?fallback [$journal:open "mem://cst-092" "acme" {consistency: (:serializable)}]
+  [recover-with [refused code=$err/@code token=$err/context/token answer=$err/context/answer]]]
+#]]
+   [out-text [#
+[refused code=cx-err:CXER4990 token=:serializable answer='the stream-10 escrow/saga pattern (reserve-then-confirm; [requires-at]; saga-run)']
+#]]
+  ]
+
+  [case id=journal-093-consistency-unknown-token-closed-set level=core gate=enforced
+   [tags journal consistency closed-set unknown-token CXER4990 stream-7 679 L122]
+   [; closure is a MUST: an unknown token (:snapshot-isolation is OUT of the
+      set entirely) is a typed error at stage vocabulary — never ignored. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?fallback [$journal:open "mem://cst-093" "acme" {consistency: (:snapshot-isolation)}]
+  [recover-with [refused code=$err/@code stage=$err/context/stage token=$err/context/token]]]
+#]]
+   [out-text [#
+[refused code=cx-err:CXER4990 stage=:vocabulary token=:snapshot-isolation]
+#]]
+  ]
+
+  [case id=journal-094-consistency-nonatom-token-type-strict level=core gate=enforced
+   [tags journal consistency type-strict atom CXER4990 stream-7 679 L122]
+   [; tokens are type-strict ATOMS: the string spelling of a valid token
+      never declares silently — refused at stage vocabulary (the token
+      child carries the offending string, visibly not an atom). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?fallback [$journal:open "mem://cst-094" "acme" {consistency: ("prefix-consistent")}]
+  [recover-with [refused code=$err/@code stage=$err/context/stage token=$err/context/token]]]
+#]]
+   [out-text [#
+[refused code=cx-err:CXER4990 stage=:vocabulary token=prefix-consistent]
+#]]
+  ]
+
+  [case id=journal-095-consistency-replay-pin-uncoverable level=core gate=enforced
+   [tags journal consistency at-seq-pinned CXER4991 pin discriminator-pair stream-7 679 L125 714]
+   [; the discriminator PAIR on one chain: the at-seq pin is satisfied on the
+      intact source (state exactly at 2), and the SAME pinned replay on the
+      compacted segment refuses CXER4991 naming requested + floor — never a
+      silent fold from the seam (the wrong-state-presented-as-right class,
+      #714). The pin is a declaration: the guard needs no declared floor. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-095" "acme"]]
+[= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[= $c [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[= $pinned [$journal:replay $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 2}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 1 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $ret [$journal:retain $j {keep-after-seq: 1 stream: "s1" snapshot: $snap}]]
+[= $seg [$journal:compact $j {retention: $ret target: "mem://cst-095-seg"}]]
+[= $r [?fallback [$journal:replay $seg [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 2}]
+  [recover-with [refused code=$err/@code requested=$err/context/requested floor=$err/context/floor]]]]
+  [pair pinned-at2=$pinned $r]]
+#]]
+   [out-text [#
+[pair pinned-at2=2 [refused code=cx-err:CXER4991 requested=2 floor=1]]
+#]]
+  ]
+
+  [case id=journal-096-consistency-snapshot-pruned-floor-uncoverable level=core gate=enforced
+   [tags journal consistency snapshot CXER4991 pin signed-wrong-state stream-7 679 L125 714]
+   [; a snapshot signs state-at-at-seq, which needs the full genesis prefix:
+      on a retention-pruned segment it refuses CXER4991 rather than SIGNING
+      a state folded from the seam. Always-on — the pin is the snapshot
+      verb-s own semantics. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-096" "acme"]]
+[= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[= $c [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 1 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $ret [$journal:retain $j {keep-after-seq: 1 stream: "s1" snapshot: $snap}]]
+[= $seg [$journal:compact $j {retention: $ret target: "mem://cst-096-seg"}]]
+[?fallback [$journal:snapshot $seg [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" sign: false}]
+  [recover-with [refused code=$err/@code floor=$err/context/floor]]]]
+#]]
+   [out-text [#
+[refused code=cx-err:CXER4991 floor=1]
+#]]
+  ]
+
+  [case id=journal-097-consistency-gapless-declared-vs-silent-pair level=core gate=enforced
+   [tags journal consistency gapless CXER4991 discriminator-pair compact-floor stream-7 679 L122 714]
+   [; the same below-floor read, twice: an UNDECLARED segment silently
+      clamps to the seam (the pre-vocabulary behavior, preserved — the
+      vocabulary never changes undeclared behavior), while a segment whose
+      compact carried the :gapless floor refuses CXER4991 naming the token.
+      A compact target is an open, so compact opts carry the floor. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-097" "acme"]]
+[= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[= $c [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 1 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $ret [$journal:retain $j {keep-after-seq: 1 stream: "s1" snapshot: $snap}]]
+[= $silent [$journal:compact $j {retention: $ret target: "mem://cst-097-a"}]]
+[= $loud [$journal:compact $j {retention: $ret target: "mem://cst-097-b" consistency: (:gapless)}]]
+[= $n [$count [$journal:since $silent 1 "s1"]]]
+[= $r [?fallback [$journal:since $loud 1 "s1"]
+  [recover-with [refused code=$err/@code token=$err/context/token]]]]
+  [pair silent-n=$n floor=$loud@consistency $r]]
+#]]
+   [out-text [#
+[pair silent-n=2 floor=':gapless' [refused code=cx-err:CXER4991 token=:gapless]]
+#]]
+  ]
+
+  [case id=journal-098-head-fresh-contract level=core gate=enforced
+   [tags journal consistency head-fresh F1 stream-7 679 714 L126]
+   [; the declared-fresh head verb (F1): head answers the CACHED view with no
+      freshness claim; head-fresh re-resolves the durable head through the
+      substrate (mem:// = the live instance) and is impure by contract. The
+      cross-process stale/fresh discriminator lives in the V test
+      journal_head_fresh_test.v (a read-only file view cannot be built
+      hermetically here). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-098" "acme"]]
+[= $a [$journal:append $j [x 1] {actor: "u" authority: "g"}]]
+[= $b [$journal:append $j [x 2] {actor: "u" authority: "g"}]]
+[= $h [$journal:head $j]]
+[= $hf [$journal:head-fresh $j]]
+  [heads cached=$h/@seq fresh=$hf/@seq]]
+#]]
+   [out-text [#
+[heads cached=2 fresh=2]
+#]]
+  ]
+
+  [# ── 099-103: stream-7 W6 — the §3.7 tenant SET snapshot (the :at-head-set
+        cut substrate) + the M5 no-cut-vs-cut pair + the pin resolve-through
+        arc (#679; consistency_vocabulary.md §9). RED evidence: pre-W6 a
+        tenant snapshot over named streams silently answered the (empty)
+        default chain — at-seq=0, genesis anchor, [state 0] — a FALSE signed
+        artifact (probed live before the fix). ───────────────────────── #]
+
+  [case id=journal-099-tenant-set-snapshot level=core gate=enforced
+   [tags journal snapshot set head-set multi-stream stream-7 679 L122]
+   [; a tenant snapshot (no stream=) over named streams records the SET of
+      stream heads + per-member folded states under ONE signature — members
+      deterministic (default chain first, then named sorted by name). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-099" "acme"]]
+[= $a [$journal:append $j [inv 1] {actor: "u" authority: "g" stream: "invoices"}]]
+[= $b [$journal:append $j [sku 1] {actor: "u" authority: "g" stream: "inventory"}]]
+[= $c [$journal:append $j [inv 2] {actor: "u" authority: "g" stream: "invoices"}]]
+  [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+#]]
+   [out-text [#
+[snapshot tenant=acme hash-algo=sha2-256 sig-algo=ed25519 signature=c3911f6e66f12813cffd76105ec0ce0144973f1a25ca06f9557e9b8b1b8443b4a6cf822c1373b93ba4ee04fdb4d5b9d0e213ce06bbef5f3a4fc0557a5dc25c04 verify-key='8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c' [h stream=inventory at-seq=1 anchor-hash='sha2-256:3a85e16bfd594cf25f2e74ea922f90c1b98cf5f6173d7d3d3ca844ef963ac2ae' [state 1]] [h stream=invoices at-seq=2 anchor-hash=sha2-256:c45ba09c25fa5ebecc1806118ad53796055b60ff00fd78383ba283a4c53aa467 [state 2]]]
+#]]
+  ]
+
+  [case id=journal-100-set-snapshot-verify-and-divergence level=core gate=enforced
+   [tags journal snapshot-verify set anchor-mismatch finding stream-7 679]
+   [; the set verify: valid=true form=set against its own chain; against a
+      DIVERGENT chain the finding names the failing STREAM — a value, never
+      an err (SAP posture). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-100" "acme"]]
+[= $a [$journal:append $j [inv 1] {actor: "u" authority: "g" stream: "invoices"}]]
+[= $b [$journal:append $j [sku 1] {actor: "u" authority: "g" stream: "inventory"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {sign: false}]]
+[= $v1 [$journal:snapshot-verify $j $snap]]
+[= $j2 [$journal:open "mem://cst-100-other" "acme"]]
+[= $x [$journal:append $j2 [other 1] {actor: "u" authority: "g" stream: "invoices"}]]
+[= $v2 [$journal:snapshot-verify $j2 $snap]]
+  [pair $v1 $v2]]
+#]]
+   [out-text [#
+[pair [snapshot-verification valid=true form=set reason=':unsigned'] [snapshot-verification valid=false form=set stream=inventory reason=':anchor-mismatch']]
+#]]
+  ]
+
+  [case id=journal-101-m5-at-head-set-cut level=core gate=enforced
+   [tags journal consistency at-head-set M5 invoice-inventory cut stream-7 679 L124]
+   [; the M5 join half of the pair: per-stream reads compose with NO cut
+      claimed (F8 — the fold/streams annotation); the CUT is :at-head-set —
+      the declared floor accepts it and the tenant set snapshot IS the
+      verifiable multi-stream READ coordinate (both heads, one instant,
+      one signature basis). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-101" "acme" {consistency: (:at-head-set, :prefix-consistent)}]]
+[= $a [$journal:append $j [invoice total=100] {actor: "u" authority: "g" stream: "invoices"}]]
+[= $b [$journal:append $j [sku n=7] {actor: "u" authority: "g" stream: "inventory"}]]
+[= $c [$journal:append $j [invoice total=40] {actor: "u" authority: "g" stream: "invoices"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {sign: false}]]
+  [cut floor=$j@consistency members=[$count $snap/h]]]
+#]]
+   [out-text [#
+[cut floor=':at-head-set :prefix-consistent' members=2]
+#]]
+  ]
+
+  [case id=journal-102-pin-resolve-through-arc level=core gate=enforced
+   [tags journal consistency at-seq-pinned resolve-through CXER4991 arc stream-7 679 L125 714]
+   [; the full L125 arc on one chain: the pinned replay below a pruned floor
+      REFUSES naming requested+floor; the caller RESOLVES through the
+      covering snapshot (fold-slice seeded by its state — state-at-3
+      reconstructs exactly); a pin BELOW the snapshot coverage cannot
+      resolve at all — the refusal is final. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-102" "acme"]]
+[= $a [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[= $b [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[= $c [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 2 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $ret [$journal:retain $j {keep-after-seq: 2 stream: "s1" snapshot: $snap}]]
+[= $seg [$journal:compact $j {retention: $ret target: "mem://cst-102-seg"}]]
+[= $r1 [?fallback [$journal:replay $seg [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 3}]
+  [recover-with [refused code=$err/@code requested=$err/context/requested floor=$err/context/floor]]]]
+[= $sst [first $snap/state]]
+[= $resolved [$journal:fold-slice $seg [?fn ($acc $e) [+ $acc 1]] $sst 3 3 "s1"]]
+[= $r2 [?fallback [$journal:replay $seg [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 1}]
+  [recover-with [refused-final code=$err/@code]]]]
+  [arc $r1 resolved=$resolved $r2]]
+#]]
+   [out-text [#
+[arc resolved=3 [refused code=cx-err:CXER4991 requested=3 floor=2] [refused-final code=cx-err:CXER4991]]
+#]]
+  ]
+
+  [case id=journal-103-fold-from-set-refusal level=core gate=enforced
+   [tags journal fold-from set CXER4610 teaching-refusal stream-7 679]
+   [; fold-from consumes a single-stream snapshot; a set member carries its
+      own state and position — the refusal teaches the fold-slice
+      consumption path instead of guessing a merge. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://cst-103" "acme"]]
+[= $a [$journal:append $j [inv 1] {actor: "u" authority: "g" stream: "invoices"}]]
+[= $b [$journal:append $j [sku 1] {actor: "u" authority: "g" stream: "inventory"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {sign: false}]]
+  [$journal:fold-from $j $snap [?fn ($acc $e) [+ $acc 1]]]]
+#]]
+   [out-err [#
+cx-err:CXER4610
+#]]
+  ]
+
+  [case id=journal-104-coherence-clean level=core gate=enforced
+   [tags journal coherence valid-time supersedes stream-8 680 L117]
+   [; stream 8 (bitemporal L117): a well-formed chain — a VT-bearing
+      assertion plus a correction whose [supersedes] names a REAL entry
+      address — reports zero coherence findings. verify stays syntactic;
+      coherence is the semantic linter over the reserved payload
+      vocabulary. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-104" "acme"]]
+[= $e1 [$journal:append $j [price sku="A-100" amount=19.99 valid-from="2026-08-01"] {actor: "u" authority: "g" stream: "prices"}]]
+[= $e2 [$journal:append $j [price sku="A-100" amount=17.99 valid-from="2026-08-01" [supersedes hash=$e1/@hash relation=:correction]] {actor: "u" authority: "g" stream: "prices"}]]
+  [$journal:coherence $j {}]]
+#]]
+   [out-text [#
+[coherence tenant=acme checked=2 findings=0]
+#]]
+  ]
+
+  [case id=journal-105-coherence-dangling-supersedes level=core gate=enforced
+   [tags journal coherence supersedes dangling finding stream-8 680 L117]
+   [; a [supersedes] naming an address that is NOT any retained entry's
+      hash (and no stream has a pruned floor) is a definite dangling
+      linkage — a FINDING from the coherence verb, never a chain break
+      (verify would still pass). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-105" "acme"]]
+[= $e1 [$journal:append $j [price amount=10 [supersedes hash="sha2-256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff" relation=:correction]] {actor: "u" authority: "g"}]]
+  [$journal:coherence $j {}]]
+#]]
+   [out-text [#
+[coherence tenant=acme checked=1 findings=1 [finding kind=':dangling-supersedes' seq=1 hash='sha2-256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff']]
+#]]
+  ]
+
+  [case id=journal-106-coherence-unverifiable-below-retention level=core gate=enforced
+   [tags journal coherence supersedes retention compaction finding stream-8 680 L117]
+   [; a [supersedes] whose target is not among the RETAINED entries of a
+      journal with a pruned floor may lawfully live in pruned history —
+      the honest finding is :supersedes-unverifiable, never a false
+      :dangling-supersedes claim. Probed on a real compacted segment. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-106" "acme"]]
+[= $e1 [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[= $e2 [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[= $e3 [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 2 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $ret [$journal:retain $j {keep-after-seq: 2 stream: "s1" snapshot: $snap}]]
+[= $seg [$journal:compact $j {retention: $ret target: "mem://bt-106-seg"}]]
+[= $e4 [$journal:append $seg [fix 1 [supersedes hash=$e1/@hash relation=:correction]] {actor: "u" authority: "g" stream: "s1"}]]
+  [$journal:coherence $seg {stream: "s1"}]]
+#]]
+   [out-text [#
+[coherence tenant=acme stream=s1 checked=2 findings=1 [finding kind=':supersedes-unverifiable' stream=s1 seq=4 hash='sha2-256:2d583ad710b8822d3cda681a30473a513a111789c022c646ca8bf79315760eef']]
+#]]
+  ]
+
+  [case id=journal-107-coherence-vocab-invalid level=core gate=enforced
+   [tags journal coherence valid-time vocabulary finding stream-8 680 L115 L117]
+   [; the reserved vocabulary is checked semantically: a non-temporal
+      valid-from carrier; an empty half-open interval (from not before
+      to); a string-spelled relation (type-strict — the taxonomy is an
+      ATOM vocabulary); a [supersedes] with no hash=. One finding per
+      defect; a malformed [supersedes] is never also resolved for
+      linkage. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-107" "acme"]]
+[= $e1 [$journal:append $j [f a=1 valid-from="not-a-date"] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [f b=1 valid-from="2026-08-05" valid-to="2026-08-01"] {actor: "u" authority: "g"}]]
+[= $e3 [$journal:append $j [f c=1 [supersedes hash="sha2-256:0011" relation="correction"]] {actor: "u" authority: "g"}]]
+[= $e4 [$journal:append $j [f d=1 [supersedes relation=:amendment]] {actor: "u" authority: "g"}]]
+  [$journal:coherence $j {}]]
+#]]
+   [out-text [#
+[coherence tenant=acme checked=4 findings=4 [finding kind=':temporal-vocab-invalid' seq=1 reason='valid-from is not a date/datetime'] [finding kind=':temporal-vocab-invalid' seq=2 reason='valid-from must be before valid-to (half-open [from, to))'] [finding kind=':temporal-vocab-invalid' seq=3 reason='relation must be the atom :correction or :amendment'] [finding kind=':temporal-vocab-invalid' seq=4 reason='supersedes missing hash=']]
+#]]
+  ]
+
+  [case id=journal-108-m5-four-quadrants level=core gate=enforced
+   [tags journal bitemporal valid-at at-seq four-quadrants restatement m5 stream-8 680 L118]
+   [; the M5 price-correction story on the four-quadrant table (L118):
+      seq=1 asserts 19.99 valid-from Aug 1; seq=2 corrects to 17.99 over
+      the same extent. q1 now/now (raw fold); q2 at-seq/now (raw TX cut);
+      q3 now/valid-at (the projection: the correction drops seq=1 across
+      its whole extent); q4 at-seq/valid-at — THE bitemporal query ("what
+      did we know at position 1 about Aug 3"). q4 vs q3 IS the
+      restatement delta the auditor asks for. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-108" "acme"]]
+[= $e1 [$journal:append $j [price sku="A-100" amount=19.99 valid-from="2026-08-01"] {actor: "u" authority: "g" stream: "prices"}]]
+[= $e2 [$journal:append $j [price sku="A-100" amount=17.99 valid-from="2026-08-01" [supersedes hash=$e1/@hash relation=:correction]] {actor: "u" authority: "g" stream: "prices"}]]
+[= $f [?fn ($acc $e) [$string $e/event/price/@amount]]]
+[= $q1 [$journal:fold $j $f "none" "prices"]]
+[= $q2 [$journal:fold $j $f "none" "prices" {at-seq: 1}]]
+[= $q3 [$journal:fold $j $f "none" "prices" {valid-at: "2026-08-03"}]]
+[= $q4 [$journal:fold $j $f "none" "prices" {at-seq: 1 valid-at: "2026-08-03"}]]
+  [quadrants q1=$q1 q2=$q2 q3=$q3 q4=$q4]]
+#]]
+   [out-text [#
+[quadrants q1='17.99' q2='19.99' q3='17.99' q4='19.99']
+#]]
+  ]
+
+  [case id=journal-109-taxonomy-fold-discriminator level=core gate=enforced
+   [tags journal bitemporal taxonomy correction amendment assertion stream-8 680 L117 L118]
+   [; the three relations FOLD DIFFERENTLY (L117) — same instants, same
+      shapes, different taxonomy, different answers. Amendment: the prior
+      fact was right then — it survives before the amender's valid-from
+      (may=5) and is clamped out after (jul count=1). Correction: the
+      prior fact was WRONG — dropped across its whole extent (may=none).
+      Assertion: nothing superseded — both facts COEXIST at jul
+      (count=2). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $f [?fn ($acc $e) [$string $e/event/rate/@v]]]
+[= $ja [$journal:open "mem://bt-109a" "acme"]]
+[= $a1 [$journal:append $ja [rate v=5 valid-from="2026-01-01"] {actor: "u" authority: "g"}]]
+[= $a2 [$journal:append $ja [rate v=7 valid-from="2026-06-01" [supersedes hash=$a1/@hash relation=:amendment]] {actor: "u" authority: "g"}]]
+[= $jc [$journal:open "mem://bt-109c" "acme"]]
+[= $c1 [$journal:append $jc [rate v=5 valid-from="2026-01-01"] {actor: "u" authority: "g"}]]
+[= $c2 [$journal:append $jc [rate v=7 valid-from="2026-06-01" [supersedes hash=$c1/@hash relation=:correction]] {actor: "u" authority: "g"}]]
+[= $js [$journal:open "mem://bt-109s" "acme"]]
+[= $s1 [$journal:append $js [rate v=5 valid-from="2026-01-01"] {actor: "u" authority: "g"}]]
+[= $s2 [$journal:append $js [rate v=7 valid-from="2026-06-01"] {actor: "u" authority: "g"}]]
+[= $amend-may [$journal:fold $ja $f "none" "" {valid-at: "2026-05-15"}]]
+[= $amend-jul-n [$count [$journal:temporal-slice [$journal:since $ja 1] {valid-at: "2026-07-15"}]]]
+[= $correct-may [$journal:fold $jc $f "none" "" {valid-at: "2026-05-15"}]]
+[= $assert-jul-n [$count [$journal:temporal-slice [$journal:since $js 1] {valid-at: "2026-07-15"}]]]
+  [taxonomy amend-may=$amend-may amend-jul-n=$amend-jul-n correct-may=$correct-may assert-jul-n=$assert-jul-n]]
+#]]
+   [out-text [#
+[taxonomy amend-may='5' amend-jul-n=1 correct-may=none assert-jul-n=2]
+#]]
+  ]
+
+  [case id=journal-110-half-open-boundary level=core gate=enforced
+   [tags journal bitemporal temporal-slice half-open boundary stream-8 680 L115 L118]
+   [; the half-open from-inclusive/to-exclusive convention at the
+      boundary instants: a fact valid Aug 1 up-to-but-not-including
+      Aug 5 is IN at valid-from exactly, IN the day before the end,
+      OUT at valid-to exactly (no boundary double-count), OUT before
+      valid-from. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-110" "acme"]]
+[= $e1 [$journal:append $j [promo pct=10 valid-from="2026-08-01" valid-to="2026-08-05"] {actor: "u" authority: "g"}]]
+[= $es [$journal:since $j 1]]
+  [boundary at-from=[$count [$journal:temporal-slice $es {valid-at: "2026-08-01"}]] inside=[$count [$journal:temporal-slice $es {valid-at: "2026-08-04"}]] at-to=[$count [$journal:temporal-slice $es {valid-at: "2026-08-05"}]] before=[$count [$journal:temporal-slice $es {valid-at: "2026-07-31"}]]]]
+#]]
+   [out-text [#
+[boundary at-from=1 inside=1 at-to=0 before=0]
+#]]
+  ]
+
+  [case id=journal-111-open-ended-validity level=core gate=enforced
+   [tags journal bitemporal temporal-slice open-end absent stream-8 680 L115]
+   [; an open end is the ABSENT attribute (never null): from-only is
+      valid from `from` forever; to-only is valid until `to` from the
+      beginning; a payload with NO valid-time vocabulary is valid
+      always. Probed before/inside/after the named bounds. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-111" "acme"]]
+[= $e1 [$journal:append $j [a from-only=1 valid-from="2026-06-01"] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [b to-only=1 valid-to="2026-06-01"] {actor: "u" authority: "g"}]]
+[= $e3 [$journal:append $j [c plain=1] {actor: "u" authority: "g"}]]
+[= $es [$journal:since $j 1]]
+  [open early=[$count [$journal:temporal-slice $es {valid-at: "2026-01-15"}]] late=[$count [$journal:temporal-slice $es {valid-at: "2026-12-15"}]]]]
+#]]
+   [out-text [#
+[open early=2 late=2]
+#]]
+  ]
+
+  [case id=journal-112-projection-refusals level=core gate=enforced
+   [tags journal bitemporal CXER4618 CXER4610 refusal stream-8 680 L118]
+   [; the ENGAGED projection refuses loudly, never silently skips: a
+      malformed valid-from carrier in the chain is CXER4618 (the chain's
+      vocabulary, not the caller's args); an :amendment whose own entry
+      lacks valid-from has an undefined close point — CXER4618; a
+      malformed opts.valid-at is the caller's arg — CXER4610. The same
+      chain folds fine while the projection is NOT engaged (raw=2). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-112" "acme"]]
+[= $e1 [$journal:append $j [f a=1 valid-from="not-a-date"] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [f b=1] {actor: "u" authority: "g"}]]
+[= $cnt [?fn ($acc $e) [+ $acc 1]]]
+[= $raw [$journal:fold $j $cnt 0]]
+[= $r1 [?fallback [$journal:fold $j $cnt 0 "" {valid-at: "2026-08-03"}]
+  [recover-with [refused a=$err/@code]]]]
+[= $ja [$journal:open "mem://bt-112a" "acme"]]
+[= $a1 [$journal:append $ja [g x=1 valid-from="2026-01-01"] {actor: "u" authority: "g"}]]
+[= $a2 [$journal:append $ja [g x=2 [supersedes hash=$a1/@hash relation=:amendment]] {actor: "u" authority: "g"}]]
+[= $r2 [?fallback [$journal:fold $ja $cnt 0 "" {valid-at: "2026-08-03"}]
+  [recover-with [refused b=$err/@code]]]]
+[= $r3 [?fallback [$journal:fold $j $cnt 0 "" {valid-at: "garbage"}]
+  [recover-with [refused c=$err/@code]]]]
+  [refusals raw=$raw $r1 $r2 $r3]]
+#]]
+   [out-text [#
+[refusals raw=2 [refused a=cx-err:CXER4618] [refused b=cx-err:CXER4618] [refused c=cx-err:CXER4610]]
+#]]
+  ]
+
+  [case id=journal-113-fold-at-seq-pin-guard level=core gate=enforced
+   [tags journal bitemporal fold at-seq-pinned CXER4991 stream-7 stream-8 680 L118 L125]
+   [; fold's new at-seq opt is a PIN — the stream-7 always-on guard
+      (L125) rides it exactly as on replay: a pinned fold below a pruned
+      floor refuses CXER4991 naming requested+floor instead of silently
+      folding a wrong state from the compaction seam. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-113" "acme"]]
+[= $e1 [$journal:append $j [x 1] {actor: "u" authority: "g" stream: "s1"}]]
+[= $e2 [$journal:append $j [x 2] {actor: "u" authority: "g" stream: "s1"}]]
+[= $e3 [$journal:append $j [x 3] {actor: "u" authority: "g" stream: "s1"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {stream: "s1" at-seq: 2 signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $ret [$journal:retain $j {keep-after-seq: 2 stream: "s1" snapshot: $snap}]]
+[= $seg [$journal:compact $j {retention: $ret target: "mem://bt-113-seg"}]]
+[= $r [?fallback [$journal:fold $seg [?fn ($acc $e) [+ $acc 1]] 0 "s1" {at-seq: 2}]
+  [recover-with [refused code=$err/@code requested=$err/context/requested floor=$err/context/floor]]]]
+  $r]
+#]]
+   [out-text [#
+[refused code=cx-err:CXER4991 requested=2 floor=2]
+#]]
+  ]
+
+  [case id=journal-114-interval-verbs level=core gate=enforced
+   [tags journal bitemporal overlaps contains-instant half-open stream-8 680 L118]
+   [; the interval verbs land WITH the vocabulary (L118) as journal
+      MODULE verbs — the sect-6.5 core builtin tables are CLOSED and
+      identity-bearing (stream 5 hashes them into the builtin-set id).
+      Half-open adjacency (a's valid-to equal to c's valid-from) does
+      NOT overlap — the no-double-count discriminator; absent ends are
+      unbounded; contains-instant is from-inclusive to-exclusive. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $a [promo pct=10 valid-from="2026-08-01" valid-to="2026-08-05"]]
+[= $b [promo pct=20 valid-from="2026-08-04"]]
+[= $c [promo pct=30 valid-from="2026-08-05" valid-to="2026-08-09"]]
+  [intervals ab=[$journal:overlaps $a $b] ac=[$journal:overlaps $a $c] open=[$journal:overlaps $b $c] in=[$journal:contains-instant $a "2026-08-01"] out=[$journal:contains-instant $a "2026-08-05"]]]
+#]]
+   [out-text [#
+[intervals ab=true ac=false open=true in=true out=false]
+#]]
+  ]
+
+  [case id=journal-115-cxpath-over-vocabulary level=core gate=enforced
+   [tags journal bitemporal cxpath predicate vocabulary stream-8 680 L118 782]
+   [; L118's no-grammar-change claim PROVEN, not assumed: CXPath
+      predicate filtering over the reserved vocabulary works on
+      materialized entries as-is — attr-presence, negated presence,
+      and the prefix-operator comparison form all filter correctly.
+      NOTE: the query VERB's predicate handling is #782 (it strips
+      trailing predicates — a pre-existing name-step subset), so this
+      case probes paths over the read surfaces, not query. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-115" "acme"]]
+[= $e1 [$journal:append $j [promo pct=10 valid-from="2026-08-01" valid-to="2026-08-05"] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [promo pct=20 valid-from="2026-09-01"] {actor: "u" authority: "g"}]]
+[= $e3 [$journal:append $j [promo pct=30] {actor: "u" authority: "g"}]]
+[= $es [$journal:since $j 1]]
+  [paths with-vt=[$count $es/event/promo[@valid-from]] without=[$count $es/event/promo[@!valid-from]] from-sep=[$count $es/event/promo[= $_@valid-from "2026-09-01"]]]]
+#]]
+   [out-text [#
+[paths with-vt=2 without=1 from-sep=1]
+#]]
+  ]
+
+  [case id=journal-116-redaction-visibility level=core gate=enforced
+   [tags journal bitemporal erasure redaction shred visibility stream-8 680 L119]
+   [; the L119 honest-reporting posture end-to-end on a REAL shred
+      (store delete of the payload doc by its detached address): the
+      engaged projection PASSES the shredded entry THROUGH visibly
+      (projected=2 — filtering it would silently under-report a
+      redaction); coherence counts it (erased=1, checked=1); and the
+      chain still VERIFIES (the hash covers the address, not the
+      payload bytes — the erasure mandate). Stream 20 (#692) inherits
+      this as its binding input. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://bt-116"]]
+[= $j [$journal:attach $s "acme"]]
+[= $e1 [$journal:append $j [fact a=1 valid-from="2026-01-01"] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [fact b=2 valid-from="2026-01-01"] {actor: "u" authority: "g"}]]
+[= $del [$store:delete-doc $s $e1/@payload]]
+[= $es [$journal:since $j 1]]
+[= $n [$count [$journal:temporal-slice $es {valid-at: "2026-06-01"}]]]
+[= $coh [$journal:coherence $j {}]]
+[= $v [$journal:verify $j {}]]
+  [redaction deleted=$del projected=$n erased=$coh/@erased checked=$coh/@checked chain=$v/@valid]]
+#]]
+   [out-text [#
+[redaction deleted=true projected=2 erased=1 checked=1 chain=true]
+#]]
+  ]
+
+  [case id=journal-117-offline-replica-seed level=core gate=enforced
+   [tags journal bitemporal replica valid-time assertion stream-8 stream-9 680 681 L115 L118]
+   [; the offline-replica seed (stream 9's consumer made concrete): a
+      replica syncs LATE — the January fact arrives at TX seq=2, AFTER
+      the March fact. VT precedes TX and the axes never fuse: the
+      valid-time read finds the January fact regardless of arrival
+      order (known-now=1, v=5, its TX coordinate is 2), while the
+      bitemporal cut at seq=1 honestly answers that the fact was NOT
+      yet known (known-at-seq-1=0 — "what did we know when"). A late
+      arrival is an :assertion (nothing superseded), never a
+      correction; ts stays monotonic with seq (TX order IS arrival
+      order). A stream-9 sync must preserve exactly this divergence. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-117" "acme"]]
+[= $e1 [$journal:append $j [reading site="buoy-7" v=3 valid-from="2026-03-01" valid-to="2026-03-02"] {actor: "replica-a" authority: "g"}]]
+[= $e2 [$journal:append $j [reading site="buoy-7" v=5 valid-from="2026-01-01" valid-to="2026-01-02"] {actor: "replica-b" authority: "g"}]]
+[= $es [$journal:since $j 1]]
+[= $jan [$journal:temporal-slice $es {valid-at: "2026-01-01T12:00:00Z"}]]
+  [replica-seed known-now=[$count $jan] v=$jan/event/reading/@v tx-of-jan-fact=[$sum $jan/@seq] known-at-seq-1=[$count [$journal:temporal-slice $es {at-seq: 1 valid-at: "2026-01-01T12:00:00Z"}]]]]
+#]]
+   [out-text [#
+[replica-seed known-now=1 v=5 tx-of-jan-fact=2 known-at-seq-1=0]
+#]]
+  ]
+
+  [case id=journal-118-upcaster-seam level=core gate=enforced
+   [tags journal upcast schema evolution stream-21 693 L146]
+   [; the upcaster seam (stream 21): a caller-supplied PURE chain is an
+      entry-to-entry projection composed at the same pre-fold stage as
+      the bitemporal read. The v1 order declares its payload schema by
+      content address; the chain rewrites it to the v2 vocabulary
+      (total becomes subtotal+tax) and leaves v2 entries alone. The
+      fold under the chain sees v2 uniformly (97+90=187); the raw fold
+      is untouched (only the appended v2 entry carries subtotal); the
+      pure upcast verb is the temporal-slice twin over materialized
+      entries. The chain returns an entry keeping seq= and hash= — the
+      envelope is the journal's; the output supplies the payload. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-118" "acme"]]
+[= $e1 [$journal:append $j [order id="A-1" total=107 schema="sha2-256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"] {actor: "svc" authority: "g"}]]
+[= $e2 [$journal:append $j [order id="A-2" subtotal=90 tax=10 schema="sha2-256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"] {actor: "svc" authority: "g"}]]
+[= $up [?fn ($e)
+  [?if [= $e/event/order/@schema "sha2-256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"]
+    [then [entry seq=$e@seq hash=$e@hash
+      [event [order id=$e/event/order/@id subtotal=[- $e/event/order/@total 10] tax=10 schema="sha2-256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"]]]]
+    [else $e]]]]
+  [upcast v2-subtotals=[$journal:fold $j [?fn ($a $e) [+ $a $e/event/order/@subtotal]] 0 "" {upcast: $up}] raw-v2-only=[$journal:fold $j [?fn ($a $e) [+ $a [$sum $e/event/order/@subtotal]]] 0] pure-count=[$count [$journal:upcast [$journal:since $j 1] $up]]]]
+#]]
+   [out-text [#
+[upcast v2-subtotals=187 raw-v2-only=90 pure-count=2]
+#]]
+  ]
+
+  [case id=journal-119-upcast-before-vt level=core gate=enforced
+   [tags journal upcast valid-time ordering stream-21 693 L146]
+   [; the ruled composition order — upcast THEN the valid-time
+      projection: v1 readings predate the reserved vocabulary and carry
+      a bare when= date; the upcaster SYNTHESIZES valid-from from it.
+      With the chain engaged, the valid-at read keeps only the February
+      reading, v=3; without it the entries carry no vocabulary and are
+      valid always, so the same read sums both, 8 — the order is
+      observable, not stylistic. A replay pinned at-seq uses TODAY'S
+      chain: the past-state read is a function of entries, chain, fn,
+      and init — never of a date. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-119" "acme"]]
+[= $e1 [$journal:append $j [reading site="b7" v=3 when="2026-02-01"] {actor: "svc" authority: "g"}]]
+[= $e2 [$journal:append $j [reading site="b7" v=5 when="2026-06-01"] {actor: "svc" authority: "g"}]]
+[= $up [?fn ($e)
+  [entry seq=$e@seq hash=$e@hash
+    [event [reading site=$e/event/reading/@site v=$e/event/reading/@v valid-from=$e/event/reading/@when]]]]]
+  [order-pin upcast-then-vt=[$journal:fold $j [?fn ($a $e) [+ $a $e/event/reading/@v]] 0 "" {upcast: $up valid-at: "2026-03-01T00:00:00Z"}] vt-alone=[$journal:fold $j [?fn ($a $e) [+ $a $e/event/reading/@v]] 0 "" {valid-at: "2026-03-01T00:00:00Z"}] replay-pin=[$journal:replay $j [?fn ($a $e) [+ $a $e/event/reading/@v]] 0 {upcast: $up at-seq: 1}]]]
+#]]
+   [out-text [#
+[order-pin upcast-then-vt=3 vt-alone=8 replay-pin=3]
+#]]
+  ]
+
+  [case id=journal-120-upcast-refusals level=core gate=enforced
+   [tags journal upcast refusal errors stream-21 693 L151]
+   [; the loud seam refusals — never absence, never a skip: an entry no
+      upcaster covers is CXER4641 at fold time, naming seq, hash, and
+      the declared schema; a chain that rewrites the identity pair
+      seq= or hash= refuses CXER4642 — the envelope is the journal's;
+      a chain that drops the event payload refuses CXER4642 — an
+      upcaster never shreds. Refusals surface on the failure channel
+      and recover as values. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-120" "acme"]]
+[= $e1 [$journal:append $j [order id="A-1" total=107 schema="sha2-256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"] {actor: "svc" authority: "g"}]]
+[= $e2 [$journal:append $j [legacy blob="x" schema="sha2-256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"] {actor: "svc" authority: "g"}]]
+[= $narrow [?fn ($e)
+  [?if [= $e/event/order/@schema "sha2-256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"]
+    [then $e]
+    [else [err code="upcaster-gap" message="no upcaster for this payload"]]]]]
+[= $renumber [?fn ($e) [entry seq=99 hash=$e@hash [event [x]]]]]
+[= $drop [?fn ($e) [entry seq=$e@seq hash=$e@hash [note]]]]
+[= $count-fn [?fn ($a $e) [+ $a 1]]]
+  [refusals [uncovered [?fallback [$journal:fold $j $count-fn 0 "" {upcast: $narrow}] [recover-with [context] [code $err@code]]]]
+            [renumbered [?fallback [$journal:fold $j $count-fn 0 "" {upcast: $renumber}] [recover-with [context] [code $err@code]]]]
+            [dropped [?fallback [$journal:fold $j $count-fn 0 "" {upcast: $drop}] [recover-with [context] [code $err@code]]]]]]
+#]]
+   [out-text [#
+[refusals [uncovered [code 'cx-err:CXER4641']] [renumbered [code 'cx-err:CXER4642']] [dropped [code 'cx-err:CXER4642']]]
+#]]
+  ]
+
+  [case id=journal-121-upcast-coverage-preflight level=core gate=enforced
+   [tags journal upcast coverage coherence preflight shred stream-21 693 L151 L119]
+   [; the coverage pre-flight — would this fold cover all N entries? —
+      is a coherence question: given the chain, coherence dry-applies
+      it and reports each refusal as an :uncovered-entry FINDING with
+      the declared schema made visible, converting a mid-replay abort
+      into a pre-execution diagnostic; the fold itself stays loud. A
+      lawfully shredded entry cannot be judged and PASSES THROUGH the
+      seam without chain application — visible in erased=, counted by
+      the engaged fold — so after shredding the one uncovered payload
+      the pre-flight is clean and the fold covers all three. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://se-121"]]
+[= $j [$journal:attach $s "acme"]]
+[= $e1 [$journal:append $j [order id="A-1" total=10 schema="sha2-256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"] {actor: "svc" authority: "g"}]]
+[= $e2 [$journal:append $j [legacy blob="x" schema="sha2-256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"] {actor: "svc" authority: "g"}]]
+[= $e3 [$journal:append $j [order id="A-3" total=20 schema="sha2-256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"] {actor: "svc" authority: "g"}]]
+[= $narrow [?fn ($e)
+  [?if [= $e/event/order/@schema "sha2-256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"]
+    [then $e]
+    [else [err code="upcaster-gap" message="no upcaster for this payload"]]]]]
+[= $pre [$journal:coherence $j {upcast: $narrow}]]
+[= $del [$store:delete-doc $s $e2/@payload]]
+[= $post [$journal:coherence $j {upcast: $narrow}]]
+[= $covered [$journal:fold $j [?fn ($a $e) [+ $a 1]] 0 "" {upcast: $narrow}]]
+  [preflight [pre $pre] [post-shred deleted=$del findings=$post/@findings erased=$post/@erased folded-count=$covered]]]
+#]]
+   [out-text [#
+[preflight [pre [coherence tenant=acme checked=3 findings=1 [finding kind=':uncovered-entry' seq=2 hash=sha2-256:fe457b98c0e03312ccfb9e8a690b1cab0a4b716c4675e08f60cedcfcab83f379 schema=sha2-256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3 reason='no upcaster for this payload']]] [post-shred deleted=true findings=0 erased=1 folded-count=3]]
+#]]
+  ]
+
+  [case id=journal-122-fold-id-snapshot level=core gate=enforced
+   [tags journal snapshot fold-id upcast equivalence stream-21 693 716 L147]
+   [; fold determinism is the QUADRUPLE — entries, chain, fn, init — and
+      a snapshot CARRIES its fold identity (a computation address built
+      from fn, chain, and env via cx:hash) INSIDE the signed preimage:
+      the reserved slot from the I1 epoch is filled, the signature
+      verifies over it, and no new signing epoch exists. The former
+      equivalence fixture compared fold-from and fold under the SAME fn
+      and was blind to a vocabulary change; it becomes
+      conditional-and-checkable: fold-from with the MATCHING declared
+      identity and the chain over the tail equals the full fold under
+      the chain (30 = 30). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-122" "acme"]]
+[= $e1 [$journal:append $j [n v=1] {actor: "u" authority: "g"}]]
+[= $up [?fn ($e) [entry seq=$e@seq hash=$e@hash [event [n v=[* $e/event/n/@v 10]]]]]]
+[= $fn1 [?fn ($a $e) [+ $a $e/event/n/@v]]]
+[= $fid [$cx:hash [computation [fn "sha2-256:f1f1"] [chain "sha2-256:c1c1"] [env [$cx:env]]]]]
+[= $key "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a [* $e/event/n/@v 10]]] 0 {signing-key: $key fold-id: $fid}]]
+[= $sv [$journal:snapshot-verify $j $snap {}]]
+[= $e2 [$journal:append $j [n v=2] {actor: "u" authority: "g"}]]
+[= $fast [$journal:fold-from $j $snap $fn1 {fold-id: $fid upcast: $up}]]
+[= $full [$journal:fold $j $fn1 0 "" {upcast: $up}]]
+  [fold-id carried=[$count $snap/@fold-id] signed-valid=$sv/@valid fast=$fast full=$full eq=[= $fast $full]]]
+#]]
+   [out-text [#
+[fold-id carried=1 signed-valid=true fast=30 full=30 eq=true]
+#]]
+  ]
+
+  [case id=journal-123-fold-id-mismatch level=core gate=enforced
+   [tags journal fold-id CXER4640 refusal stream-21 693 716 L147]
+   [; the loud typed mismatch: fold-from with a DECLARED current fold
+      refuses CXER4640 when the snapshot carries a different identity —
+      and equally when it carries NONE (an identity-less snapshot is
+      frozen output of some unstated fold; silently-stale state is the
+      exact shape this closes). Undeclared keeps the shipped path: the
+      check is conditional on the caller's declaration. A tenant SET
+      snapshot refuses the fold-id opt outright — its preimage reserves
+      no slot, and carrying one would be a second signing epoch. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-123" "acme"]]
+[= $e1 [$journal:append $j [n v=1] {actor: "u" authority: "g"}]]
+[= $fn1 [?fn ($a $e) [+ $a $e/event/n/@v]]]
+[= $fid1 [$cx:hash [computation [fn "sha2-256:f1f1"] [env [$cx:env]]]]]
+[= $carrying [$journal:snapshot $j $fn1 0 {sign: "false" fold-id: $fid1}]]
+[= $bare [$journal:snapshot $j $fn1 0 {sign: "false"}]]
+[= $mismatch [?fallback [$journal:fold-from $j $carrying $fn1 {fold-id: "sha2-256:other"}] [recover-with [context] [code $err@code]]]]
+[= $no-id [?fallback [$journal:fold-from $j $bare $fn1 {fold-id: $fid1}] [recover-with [context] [code $err@code]]]]
+[= $undeclared [$journal:fold-from $j $carrying $fn1]]
+[= $es [$journal:append $j [n v=9] {actor: "u" authority: "g" stream: "s1"}]]
+[= $set-ref [?fallback [$journal:snapshot $j $fn1 0 {sign: "false" fold-id: $fid1}] [recover-with [context] [code $err@code]]]]
+  [refusals [mismatch $mismatch] [no-id $no-id] undeclared=$undeclared [set-ref $set-ref]]]
+#]]
+   [out-text [#
+[refusals undeclared=1 [mismatch [code 'cx-err:CXER4640']] [no-id [code 'cx-err:CXER4640']] [set-ref [code 'cx-err:CXER4610']]]
+#]]
+  ]
+
+  [case id=journal-124-cover-current-fold level=core gate=enforced
+   [tags journal retention cover fold-id CXER4616 stream-21 693 716 L147]
+   [; the retention cover rule reads covered-under-the-CURRENT-fold: a
+      signed v1-fold cover satisfies the shipped cover test yet would
+      permit pruning a prefix the v2 fold can no longer interpret — the
+      data-loss path the evidence sweep found. A caller declaring its
+      current fold makes the reading binding: the v1 cover refuses
+      CXER4616 with the re-snapshot teaching; re-snapshotting under the
+      current fold then prunes; an undeclared retain keeps the shipped
+      behavior byte-identically. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-124" "acme"]]
+[= $e1 [$journal:append $j [n v=1] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [n v=2] {actor: "u" authority: "g"}]]
+[= $fn1 [?fn ($a $e) [+ $a $e/event/n/@v]]]
+[= $key "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]
+[= $fid1 [$cx:hash [computation [fn "sha2-256:f1f1"] [env [$cx:env]]]]]
+[= $fid2 [$cx:hash [computation [fn "sha2-256:f2f2"] [chain "sha2-256:c2c2"] [env [$cx:env]]]]]
+[= $v1-cover [$journal:snapshot $j $fn1 0 {signing-key: $key fold-id: $fid1}]]
+[= $refused [?fallback [$journal:retain $j {keep-after-seq: 1 fold-id: $fid2 snapshot: $v1-cover}] [recover-with [context] [code $err@code]]]]
+[= $v2-cover [$journal:snapshot $j $fn1 0 {signing-key: $key fold-id: $fid2}]]
+[= $pruned [$journal:retain $j {keep-after-seq: 1 fold-id: $fid2 snapshot: $v2-cover}]]
+[= $legacy [$journal:retain $j {keep-after-seq: 1 snapshot: $v1-cover}]]
+  [cover-rule [refused $refused] pruned=$pruned/@boundary legacy=$legacy/@boundary]]
+#]]
+   [out-text [#
+[cover-rule pruned=1 legacy=1 [refused [code 'cx-err:CXER4616']]]
+#]]
+  ]
+
+  [case id=journal-125-migration-fourth-relation level=core gate=enforced
+   [tags journal migration migrated-from discriminator valid-time stream-21 693 L148]
+   [; migration is the representational FOURTH relation — it never
+      appears in the correction taxonomy and never alters valid time
+      (the fact did not change; the vocabulary did). The discriminator
+      on one chain: an entry whose payload carries a migrated-from link
+      to entry 1 leaves the valid-at read UNCHANGED (both visible,
+      after-mig=2) and coherence raises no linkage finding (a Lane-2
+      claim, not chain linkage); the same shape as a supersedes
+      :correction DROPS its target across its whole extent (entry 1
+      gone, entries 2 and 3 remain — after-corr=2 of 3). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-125" "acme"]]
+[= $e1 [$journal:append $j [price amount=10 valid-from="2026-01-01"] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [price amount-cents=1000 valid-from="2026-01-01" [migrated-from hash=$e1/@hash]] {actor: "u" authority: "g"}]]
+[= $after-mig [$count [$journal:temporal-slice [$journal:since $j 1] {valid-at: "2026-06-01"}]]]
+[= $coh [$journal:coherence $j {}]]
+[= $e3 [$journal:append $j [price amount=11 valid-from="2026-01-01" [supersedes hash=$e1/@hash relation=:correction]] {actor: "u" authority: "g"}]]
+[= $after-corr [$count [$journal:temporal-slice [$journal:since $j 1] {valid-at: "2026-06-01"}]]]
+  [probe after-mig=$after-mig coh-findings=$coh/@findings after-corr=$after-corr]]
+#]]
+   [out-text [#
+[probe after-mig=2 coh-findings=0 after-corr=2]
+#]]
+  ]
+
+  [case id=journal-126-lineage-path-load level=core gate=enforced
+   [tags journal lineage schema-lineage unique-path ambiguous stream-21 693 L149]
+   [; the lineage load: schema-lineage claims are Lane-2 VALUES relating
+      schema content addresses (never version strings) with a closed
+      relation set and an upcaster slot. lineage-path validates the
+      WHOLE graph fail-closed at load — a duplicate edge, a cycle, or
+      any pair of endpoints admitting two paths refuses CXER4643 (an
+      ambiguous graph must never silently pick a chain) — then returns
+      the claims along the UNIQUE path in composition order (v1 to v3 =
+      2 hops, :additive then :split). No path between the asked
+      endpoints is the loud CXER4644 — the pre-execution twin of the
+      seam's uncovered-entry refusal, and lineage is DIRECTED:
+      downgrade direction is not covered by an upgrade edge. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $v1 "sha2-256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"]
+[= $v2 "sha2-256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"]
+[= $v3 "sha2-256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"]
+[= $c12 [schema-lineage [from $v1] [to $v2] [relation :additive] [upcaster "sha2-256:u12u12"]]]
+[= $c23 [schema-lineage [from $v2] [to $v3] [relation :split] [upcaster "sha2-256:u23u23"]]]
+[= $c13 [schema-lineage [from $v1] [to $v3] [relation :additive] [upcaster "sha2-256:u13u13"]]]
+[= $path [$journal:lineage-path ($c12, $c23) $v1 $v3]]
+[= $hops [$count $path]]
+[= $ambig [?fallback [$journal:lineage-path ($c12, $c23, $c13) $v1 $v3] [recover-with [context] [code $err@code]]]]
+[= $gap [?fallback [$journal:lineage-path ($c12,) $v2 $v1] [recover-with [context] [code $err@code]]]]
+  [probe hops=$hops [rels $path/relation] [ambig $ambig] [gap $gap]]]
+#]]
+   [out-text [#
+[probe hops=2 [rels ([relation :additive], [relation :split])] [ambig [code 'cx-err:CXER4643']] [gap [code 'cx-err:CXER4644']]]
+#]]
+  ]
+
+  [case id=journal-127-subject-nonce-coordinate level=core gate=enforced
+   [tags journal erasure subject nonce CXER4619]
+   [; ── stream 20 (erasure_compliance §3): a subject-bearing payload's nonce
+      must not be derivable from journal coordinates — byte-equality with any
+      coordinate (here: the tenant) refuses CXER4619, never a warning. The
+      presence/length legs of the rule live at the store put (store-subject
+      fixtures); only the append site knows the coordinates.]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://acme-sn" "acme"]]
+  [$journal:append $j [profile subject="did:ex:dana" nonce="acme" [name "Dana"]] {actor: "ops" authority: "d-77"}]]
+#]]
+   [out-err [#
+cx-err:CXER4619
+#]]
+  ]
+
+  [case id=journal-128-legal-holds level=core gate=enforced
+   [tags journal erasure legal-hold CXER4620]
+   [; ── stream 20 (erasure_compliance §8): a legal hold = a SIGNED Lane-2
+      [legal-hold] claim journaled to the reserved per-tenant hold-stream
+      (cx:legal-hold); it binds from its journaled position onward. Write-time
+      enforcement: the reserved stream records ONLY well-formed signed claims
+      (entries are immutable — a malformed hold would poison the fail-closed
+      load forever), so the unsigned placement refuses CXER4620. The load
+      returns the stream head (the position the erase precondition pins) +
+      each binding hold; the signature covers the claim's strict canonical
+      text with the [sig] child removed (deterministic ed25519 — RFC 8032
+      vector-1 keys).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?lib 'cx-stdlib/cx']
+[?let
+[= $priv [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+[= $pub "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]
+[= $j [$journal:open "mem://holds" "acme"]]
+[= $c1 [legal-hold [subject "did:ex:dana"] [signer "did:ex:counsel"] [at "2026-08-12"]]]
+[= $s1 [$bytes:to-hex [$crypto:ed25519-sign $priv [$bytes:from-string-utf8 [$cx:canonical [$cx:serialize $c1]]]]]]
+[= $e1 [$journal:append $j [legal-hold [subject "did:ex:dana"] [signer "did:ex:counsel"] [at "2026-08-12"] [sig alg=:ed25519 value=$s1 key=$pub]] {actor: "counsel" authority: "h-1" stream: "cx:legal-hold"}]]
+[= $c2 [legal-hold [hash "sha2-256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] [signer "did:ex:counsel"] [at "2026-08-12"]]]
+[= $s2 [$bytes:to-hex [$crypto:ed25519-sign $priv [$bytes:from-string-utf8 [$cx:canonical [$cx:serialize $c2]]]]]]
+[= $e2 [$journal:append $j [legal-hold [hash "sha2-256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] [signer "did:ex:counsel"] [at "2026-08-12"] [sig alg=:ed25519 value=$s2 key=$pub]] {actor: "counsel" authority: "h-1" stream: "cx:legal-hold"}]]
+[= $refused [?fallback [$journal:append $j [legal-hold [subject "did:ex:eve"] [signer "did:ex:counsel"] [at "2026-08-12"]] {actor: "counsel" authority: "h-1" stream: "cx:legal-hold"}] [recover-with [context] [code $err@code]]]]
+  [probe [all [$journal:legal-holds $j]] [dana [$journal:legal-holds $j {subject: "did:ex:dana"}]] [refused $refused]]]
+#]]
+   [out-text [#
+[probe [all [holds stream=cx:legal-hold head=2 count=2 [hold seq=1 subject=did:ex:dana signer=did:ex:counsel at='2026-08-12'] [hold seq=2 hash=sha2-256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa signer=did:ex:counsel at='2026-08-12']]] [dana [holds stream=cx:legal-hold head=2 count=1 [hold seq=1 subject=did:ex:dana signer=did:ex:counsel at='2026-08-12']]] [refused [code 'cx-err:CXER4620']]]
+#]]
+  ]
+
+  [case id=journal-129-erase-subject level=core gate=enforced
+   [tags journal erasure erase-subject shred CXER4621 CXER4622 CXER4640]
+   [; ── stream 20 (erasure_compliance §7/§8): the recorded erase-subject
+      command. An RTBF request journals as an [erase-subject] record on the
+      reserved per-tenant cx:erasure stream (attributed — actor+authority),
+      and only then executes (KMS destroy strictly post-commit, the
+      forward-only pivot). Hold-beats-shred: a signed legal hold binding the
+      subject refuses CXER4621 ATOMICALLY — the shred-generation does not
+      advance, so no snapshot goes stale and no re-snapshot is forced. The
+      committed record is the durable dedup record (M31: the request id is
+      the opaque token; the eval-layer derived key would be subject-derivable
+      — the digest oracle): a resubmission answers [deduped <the recorded
+      report>] and re-runs only the idempotent walk. A committed shred
+      advances the tenant shred-generation — the ENV-quadrant input callers
+      bind into their fold identity, so a pre-shred snapshot's fold-id goes
+      stale and fold-from refuses CXER4640 (re-snapshot is forced with no new
+      invalidation machinery). Direct appends to the reserved stream refuse
+      CXER4622 (a hand-authored erasure record would forge the M29 evidence
+      basis). The §9.1-shaped report stays balanced: docs = erased +
+      already-erased (zero-doc here — mem:// has no key custody, so no
+      subject-sealed docs can exist; the custody-deep walk is V-tested).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?lib 'cx-stdlib/cx']
+[?let
+[= $priv [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+[= $pub "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]
+[= $j [$journal:open "mem://erase" "acme"]]
+[= $e0 [$journal:append $j [order id="o-1" total=42] {actor: "svc" authority: "ing-1" stream: "orders"}]]
+[= $c1 [legal-hold [subject "did:ex:eve"] [signer "did:ex:counsel"] [at "2026-08-12"]]]
+[= $s1 [$bytes:to-hex [$crypto:ed25519-sign $priv [$bytes:from-string-utf8 [$cx:canonical [$cx:serialize $c1]]]]]]
+[= $e1 [$journal:append $j [legal-hold [subject "did:ex:eve"] [signer "did:ex:counsel"] [at "2026-08-12"] [sig alg=:ed25519 value=$s1 key=$pub]] {actor: "counsel" authority: "h-1" stream: "cx:legal-hold"}]]
+[= $held [?fallback [$journal:erase-subject $j "did:ex:eve" {actor: "dpo" authority: "rtbf-9"} {request: "shred-fx-eve"}] [recover-with [context] [code $err@code]]]]
+[= $g0 [$journal:shred-generation $j]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) $acc] 0 {stream: "orders" sign: "false" fold-id: "fold:demo-g0"}]]
+[= $r1 [$journal:erase-subject $j "did:ex:dana" {actor: "dpo" authority: "rtbf-9"} {request: "shred-fx-dana"}]]
+[= $g1 [$journal:shred-generation $j]]
+[= $r2 [$journal:erase-subject $j "did:ex:dana" {actor: "dpo" authority: "rtbf-9"} {request: "shred-fx-dana"}]]
+[= $stale [?fallback [$journal:fold-from $j $snap [?fn ($acc $e) $acc] {fold-id: "fold:demo-g1"}] [recover-with [context] [code $err@code]]]]
+[= $forged [?fallback [$journal:append $j [erase-subject [subject "did:ex:mallory"]] {actor: "m" authority: "m" stream: "cx:erasure"}] [recover-with [context] [code $err@code]]]]
+  [probe [held $held] [gen0 $g0] [gen1 $g1] [first $r1] [replay $r2] [stale $stale] [forged $forged]]]
+#]]
+   [out-text [#
+[probe [held [code 'cx-err:CXER4621']] [gen0 0] [gen1 1] [first [shred-report subject=did:ex:dana request=shred-fx-dana docs=0 erased=0 already-erased=0 subject-keys=0 derived=0 checkpoints=0 dedup-records=0 stores=1 disposed=0 generation=1 holds-head=1]] [replay [deduped [shred-report subject=did:ex:dana request=shred-fx-dana docs=0 erased=0 already-erased=0 subject-keys=0 derived=0 checkpoints=0 dedup-records=0 stores=1 disposed=0 generation=1 holds-head=1]]] [stale [code 'cx-err:CXER4640']] [forged [code 'cx-err:CXER4622']]]
+#]]
+  ]
+
+  [case id=journal-130-shred-generation level=core gate=enforced
+   [tags journal erasure shred-generation]
+   [; ── stream 20 (erasure_compliance §7): the tenant shred-generation — the
+      ENV-quadrant input callers bind into their fold identity. 0 before any
+      committed erase; each committed erase-subject advances it atomically
+      with its record (a refused one never does — journal-129 pins that).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://gen" "acme"]]
+[= $g0 [$journal:shred-generation $j]]
+[= $r [$journal:erase-subject $j "did:ex:dana" {actor: "dpo" authority: "rtbf-9"} {request: "shred-g-1"}]]
+  [probe [before $g0] [after [$journal:shred-generation $j]]]]
+#]]
+   [out-text [#
+[probe [before 0] [after 1]]
+#]]
+  ]
+
+  [case id=journal-131-erase-purges-dedup-records level=core gate=enforced
+   [tags journal erasure erase-subject idempotent dedup stream-6]
+   [; ── stream 20 × stream 6 (erasure_compliance §7, audit M31): shred reach
+      beats the retention window for every dedup record EXCEPT the
+      erase-subject command's own journaled record. An [idempotent] command
+      whose recorded outcome references the subject loses its dedup record at
+      the erase — the visible count rides the report (dedup-records=1) — so a
+      later identical invocation RE-EXECUTES (execs=2), the §7-accepted
+      consequence: strictly better than retaining subject-referencing
+      outcomes.]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?def notify impure [effects] [idempotent] ($who) [?let [= $c [?test-counter name='erase-dedup' op=inc]] $who]]
+[?let
+[= $j [$journal:open "mem://erase-dedup" "acme"]]
+[= $a [$notify "did:ex:dana"]]
+[= $b [$notify "did:ex:dana"]]
+[= $r [$journal:erase-subject $j "did:ex:dana" {actor: "dpo" authority: "rtbf-9"} {request: "shred-dd-1"}]]
+[= $c2 [$notify "did:ex:dana"]]
+  [probe [first $a] [second $b] [after-erase $c2] [purged $r@dedup-records] [execs [?test-counter name='erase-dedup' op=read]]]]
+#]]
+   [out-text [#
+[probe [first 'did:ex:dana'] [second [deduped 'did:ex:dana']] [after-erase 'did:ex:dana'] [purged 1] [execs 2]]
+#]]
+  ]
+
+  [case id=journal-132-verify-reconciliation level=core gate=enforced
+   [tags journal erasure verify reconciliation redacted unattributed stream-20 692 L186 M29]
+   [; ── the §3.6 verify reconciliation axis (erasure_compliance §6, audit
+      M29): the chain verdict stays SYNTACTIC — valid=true with a payload
+      gone (the hash covers the address, the L184 erasure mandate) — but
+      every payload-missing entry MUST reconcile against an ATTRIBUTED
+      erasure record (a covering journaled shred-request, or the address's
+      own [erased] tombstone). A payload destroyed with NEITHER — here a
+      raw store delete, exactly what unlawful destruction or key loss
+      looks like — is NEVER silently counted among the redactions: the
+      report goes LOUD with unattributed-missing=1 (redacted=0 and
+      payloads-verified=1 complete the balanced account). A clean chain
+      reports the classic shape — the axis attrs appear only when the
+      accounting engaged (the L119 present-when-non-zero posture).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let [= $s [$store:open "mem://vr-132"]]
+[= $j [$journal:attach $s "acme"]]
+[= $e1 [$journal:append $j [fact a=1] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [fact b=2] {actor: "u" authority: "g"}]]
+[= $clean [$journal:verify $j {}]]
+[= $del [$store:delete-doc $s $e1/@payload]]
+  [probe [clean $clean] [after-destroy [$journal:verify $j {}]]]]
+#]]
+   [out-text [#
+[probe [clean [verification valid=true checked-from=1 checked-to=2 head-hash='sha2-256:178f4d723bb322b1ce188bbe13cb5a6af86ac85e0fa6dfd3412d4ed51b253257']] [after-destroy [verification valid=true checked-from=1 checked-to=2 head-hash='sha2-256:178f4d723bb322b1ce188bbe13cb5a6af86ac85e0fa6dfd3412d4ed51b253257' redacted=0 payloads-verified=1 unattributed-missing=1]]]
+#]]
+  ]
+
+  [case id=journal-133-ingest-stream level=core gate=enforced
+   [tags journal sync ingest replica stream-9 681 L173 CXER5050 CXER5052]
+   [; ── stream 9 (distributed_store §2, L173): replica-local stream
+      ingestion — the journal half of sync. A replica's named stream joins
+      the destination tenant as a DISJOINT AGGREGATE: entries re-land
+      BYTE-IDENTICAL (the entry hash survives — the two head hashes probe
+      equal across stores; the destination chain verifies unchanged), and
+      no sequencer is consulted (tenant state is the caller's
+      order-independent composition of per-stream folds). Re-ingest is
+      idempotent (ingested=0 — nothing new); a later source append
+      re-ingests as a clean prefix extension (only the tail lands). A
+      stream key the destination already holds with a DIFFERENT chain
+      refuses CXER5050 (a replica stream is a new aggregate, never a merge
+      into an origin stream — the §2 re-append grounds); the default key
+      and reserved cx:* streams refuse CXER5052 (an origin's own stream
+      and the hold/erasure evidence streams are never ingest targets —
+      shred records reach replicas on the feed, stream 20's handoff).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let
+[= $sa [$store:open "mem://s9-rep"]]
+[= $ja [$journal:attach $sa "acme"]]
+[= $e1 [$journal:append $ja [order id="o-1"] {actor: "clerk" authority: "tab-1" stream: "order:r1"}]]
+[= $e2 [$journal:append $ja [order-line id="o-1" sku="x"] {actor: "clerk" authority: "tab-1" stream: "order:r1"}]]
+[= $sb [$store:open "mem://s9-origin"]]
+[= $jb [$journal:attach $sb "acme"]]
+[= $e0 [$journal:append $jb [origin-fact a=1] {actor: "svc" authority: "g"}]]
+[= $r1 [$journal:ingest-stream $jb $ja "order:r1"]]
+[= $r2 [$journal:ingest-stream $jb $ja "order:r1"]]
+[= $v [$journal:verify $jb {stream: "order:r1"}]]
+[= $e3 [$journal:append $ja [order-close id="o-1"] {actor: "clerk" authority: "tab-1" stream: "order:r1"}]]
+[= $r3 [$journal:ingest-stream $jb $ja "order:r1"]]
+[= $ha [$journal:head $ja "order:r1"]]
+[= $hb [$journal:head $jb "order:r1"]]
+[= $res [?fallback [$journal:ingest-stream $jb $ja "cx:erasure"] [recover-with [context] [code $err@code]]]]
+[= $x1 [$journal:append $jb [rogue] {actor: "x" authority: "y" stream: "order:r2"}]]
+[= $x2 [$journal:append $ja [real] {actor: "clerk" authority: "tab-1" stream: "order:r2"}]]
+[= $div [?fallback [$journal:ingest-stream $jb $ja "order:r2"] [recover-with [context] [code $err@code]]]]
+  [probe [first $r1] [replay $r2] [verify $v] [tail $r3] [head-a $ha/@hash] [head-b $hb/@hash] [reserved $res] [divergent $div]]]
+#]]
+   [out-text [#
+[probe [first [ingest-report stream=order:r1 entries=2 ingested=2 already-present=0 head=2 hash='sha2-256:5ba2f8da382bc68298b496299225e48c4a93ddb227512669324ec25b578f8c71']] [replay [ingest-report stream=order:r1 entries=2 ingested=0 already-present=2 head=2 hash='sha2-256:5ba2f8da382bc68298b496299225e48c4a93ddb227512669324ec25b578f8c71']] [verify [verification valid=true checked-from=1 checked-to=2 head-hash='sha2-256:5ba2f8da382bc68298b496299225e48c4a93ddb227512669324ec25b578f8c71']] [tail [ingest-report stream=order:r1 entries=3 ingested=1 already-present=2 head=3 hash='sha2-256:42d713eb7091fe473fa9c5be03422675c69e4b9db150bb727add638f6fd75174']] [head-a 'sha2-256:42d713eb7091fe473fa9c5be03422675c69e4b9db150bb727add638f6fd75174'] [head-b 'sha2-256:42d713eb7091fe473fa9c5be03422675c69e4b9db150bb727add638f6fd75174'] [reserved [code 'cx-err:CXER5052']] [divergent [code 'cx-err:CXER5050']]]
+#]]
+  ]
+
+  [case id=journal-134-seed-signed-headset level=core gate=enforced
+   [tags journal sync seed snapshot signed head-set stream-9 681 L176]
+   [; ── stream 9 (distributed_store §1/§5): the SEED round-trip — "the
+      seed is a query at a SIGNED head-set". The origin's tenant SET
+      snapshot (signed; per-stream [h stream= at-seq= anchor-hash=]
+      children) is the replica's integrity anchor: snapshot-verify proves
+      the signature covers the head-set, the replica ingests each named
+      stream, and its OWN heads land byte-identical to the signed anchors
+      — the seed verifies end to end with no trust in the transport.]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let
+[= $so [$store:open "mem://seed-origin"]]
+[= $jo [$journal:attach $so "acme"]]
+[= $e1 [$journal:append $jo [order id="o-1"] {actor: "clerk" authority: "t1" stream: "order:s1"}]]
+[= $e2 [$journal:append $jo [order id="o-2"] {actor: "clerk" authority: "t1" stream: "order:s2"}]]
+[= $snap [$journal:snapshot $jo [?fn ($a $e) $a] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $v [$journal:snapshot-verify $jo $snap]]
+[= $sr [$store:open "mem://seed-rep"]]
+[= $jr [$journal:attach $sr "acme"]]
+[= $i1 [$journal:ingest-stream $jr $jo "order:s1"]]
+[= $i2 [$journal:ingest-stream $jr $jo "order:s2"]]
+[= $h1 [$journal:head $jr "order:s1"]]
+[= $h2 [$journal:head $jr "order:s2"]]
+  [probe [verified $v] [i1 $i1] [i2 $i2] [h1 $h1/@hash] [h2 $h2/@hash]]]
+#]]
+   [out-text [#
+[probe [verified [snapshot-verification valid=true form=set]] [i1 [ingest-report stream=order:s1 entries=1 ingested=1 already-present=0 head=1 hash='sha2-256:827546b88d37da338b97498619b4dcf9cf63c5b99aca4b5b159d26abd1aa7a2b']] [i2 [ingest-report stream=order:s2 entries=1 ingested=1 already-present=0 head=1 hash=sha2-256:bdfaff160286b957a9fa8e34f7b59cba0aef3370a70d4940c435d30b84edeea9]] [h1 'sha2-256:827546b88d37da338b97498619b4dcf9cf63c5b99aca4b5b159d26abd1aa7a2b'] [h2 'sha2-256:bdfaff160286b957a9fa8e34f7b59cba0aef3370a70d4940c435d30b84edeea9']]
+#]]
+  ]
+
+  [case id=journal-135-seed-tampered-anchor level=core gate=enforced
+   [tags journal sync seed snapshot tamper CXER4615 stream-9 681]
+   [; ── the seed's negative twin (the §7 corpus row): an anchor that
+      diverges from the chain must never seed — fold-from a snapshot whose
+      anchor-hash does not match the recorded entry refuses
+      CXER4615 E_JOURNAL_SNAPSHOT_SEQ_MISMATCH loud; the genuine
+      snapshot folds forward cleanly.]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let
+[= $j [$journal:open "mem://seed-neg" "acme"]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g"}]]
+[= $good [$journal:fold-from $j $snap [?fn ($a $e) [+ $a 1]]]]
+[= $bad [snapshot tenant=acme at-seq=1 anchor-hash="sha2-256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff" hash-algo=sha2-256 sig-algo=none [state 1]]]
+[= $refused [?fallback [$journal:fold-from $j $bad [?fn ($a $e) [+ $a 1]]] [recover-with [context] [code $err@code]]]]
+  [probe [good $good] [refused $refused]]]
+#]]
+   [out-text [#
+[probe [good 2] [refused [code 'cx-err:CXER4615']]]
+#]]
+  ]
+
+  [case id=journal-136-replica-registration-retention level=core gate=enforced
+   [tags journal sync replica registration retention CXER4616 stream-9 681 L177]
+   [; ── stream 9 (distributed_store §5, L177 — register-or-refuse): a
+      replica MAY register at the origin, buying the retention hold under
+      the extended cover rule (the stream-3 materialization-registration
+      pattern, same consultation at retain): a prune boundary ABOVE a
+      registered replica's synced cursor refuses CXER4616 loud — advance
+      the registration (a later sync) or deregister before pruning. The
+      registration is an upsert (re-register advances the cursor); the
+      alternative is client-anchored (no origin state; a cursor below the
+      compacted floor gets the loud re-seed refusals the shipped
+      machinery gives).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let
+[= $s [$store:open "mem://reg-136"]]
+[= $j [$journal:attach $s "acme"]]
+[= $e1 [$journal:append $j [f 1] {actor: "u" authority: "g" stream: "s1"}]]
+[= $e2 [$journal:append $j [f 2] {actor: "u" authority: "g" stream: "s1"}]]
+[= $reg [$journal:register-replica $j "tab-1" {stream: "s1" seq: 1}]]
+[= $snap [$journal:snapshot $j [?fn ($a $e) $a] 0 {stream: "s1" signing-key: "0101010101010101010101010101010101010101010101010101010101010101"}]]
+[= $ref [?fallback [$journal:retain $j {stream: "s1" keep-after-seq: 2 snapshot: $snap}] [recover-with [context] [code $err@code]]]]
+[= $reg2 [$journal:register-replica $j "tab-1" {stream: "s1" seq: 2}]]
+[= $ok [$journal:retain $j {stream: "s1" keep-after-seq: 2 snapshot: $snap}]]
+[= $dereg [$journal:deregister-replica $j "tab-1" {stream: "s1"}]]
+  [probe [registered $reg] [refused $ref] [advanced $reg2] [retained $ok] [dereg $dereg]]]
+#]]
+   [out-text [#
+[probe [registered [replica-registration id=tab-1 stream=s1 seq=1]] [refused [code 'cx-err:CXER4616']] [advanced [replica-registration id=tab-1 stream=s1 seq=2]] [retained [retention boundary=2 covered-by-seq=2 stream=s1]] [dereg [deregistered id=tab-1 existed=true]]]
+#]]
+  ]
+
+  [case id=journal-137-apply-erasures level=core gate=enforced
+   [tags journal sync erasure replica shred stream-9 stream-20 681 692 CXER4621]
+   [; ── stream 9 × stream 20 (the §6 joint requirement): the shred-reach
+      worker. A shred propagates as JOURNAL DATA — the origin's reserved
+      cx:erasure records — and apply-erasures executes the REPLICA'S OWN
+      erase-subject per record under the SAME (subject, request-token)
+      key: the replica journals its own attributed record and emits its
+      own balanced report; replay answers [deduped …] per record
+      (idempotent — fleet convergence is the collection of per-replica
+      reports, never an origin-side assumption). A record refused by a
+      LOCAL legal hold is a LOUD [held] child (hold-beats-shred holds at
+      every replica): held= > 0 means the fleet has NOT converged.]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?lib 'cx-stdlib/cx']
+[?let
+[= $so [$store:open "mem://ae-origin"]]
+[= $jo [$journal:attach $so "acme"]]
+[= $e0 [$journal:append $jo [order id="o-1"] {actor: "svc" authority: "g" stream: "orders"}]]
+[= $r1 [$journal:erase-subject $jo "did:ex:dana" {actor: "dpo" authority: "rtbf-9"} {request: "shred-ae-1"}]]
+[= $r2 [$journal:erase-subject $jo "did:ex:carol" {actor: "dpo" authority: "rtbf-9"} {request: "shred-ae-2"}]]
+[= $sr [$store:open "mem://ae-rep"]]
+[= $jr [$journal:attach $sr "acme"]]
+[= $a1 [$journal:apply-erasures $jr $jo]]
+[= $a2 [$journal:apply-erasures $jr $jo]]
+[= $priv [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+[= $pub "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]
+[= $c1 [legal-hold [subject "did:ex:eve"] [signer "did:ex:counsel"] [at "2026-08-12"]]]
+[= $s1 [$bytes:to-hex [$crypto:ed25519-sign $priv [$bytes:from-string-utf8 [$cx:canonical [$cx:serialize $c1]]]]]]
+[= $h1 [$journal:append $jr [legal-hold [subject "did:ex:eve"] [signer "did:ex:counsel"] [at "2026-08-12"] [sig alg=:ed25519 value=$s1 key=$pub]] {actor: "counsel" authority: "h-1" stream: "cx:legal-hold"}]]
+[= $r3 [$journal:erase-subject $jo "did:ex:eve" {actor: "dpo" authority: "rtbf-9"} {request: "shred-ae-3"}]]
+[= $a3 [$journal:apply-erasures $jr $jo]]
+  [probe [first $a1] [replay $a2] [with-held $a3]]]
+#]]
+   [out-text [#
+[probe [first [erasure-sync records=2 applied=2 deduped=0 [shred-report subject=did:ex:dana request=shred-ae-1 docs=0 erased=0 already-erased=0 subject-keys=0 derived=0 checkpoints=0 dedup-records=0 stores=1 disposed=0 generation=1 holds-head=0] [shred-report subject=did:ex:carol request=shred-ae-2 docs=0 erased=0 already-erased=0 subject-keys=0 derived=0 checkpoints=0 dedup-records=0 stores=1 disposed=0 generation=2 holds-head=0]]] [replay [erasure-sync records=2 applied=0 deduped=2 [deduped [shred-report subject=did:ex:dana request=shred-ae-1 docs=0 erased=0 already-erased=0 subject-keys=0 derived=0 checkpoints=0 dedup-records=0 stores=1 disposed=0 generation=1 holds-head=0]] [deduped [shred-report subject=did:ex:carol request=shred-ae-2 docs=0 erased=0 already-erased=0 subject-keys=0 derived=0 checkpoints=0 dedup-records=0 stores=1 disposed=0 generation=2 holds-head=0]]]] [with-held [erasure-sync records=3 applied=0 deduped=2 held=1 [deduped [shred-report subject=did:ex:dana request=shred-ae-1 docs=0 erased=0 already-erased=0 subject-keys=0 derived=0 checkpoints=0 dedup-records=0 stores=1 disposed=0 generation=1 holds-head=0]] [deduped [shred-report subject=did:ex:carol request=shred-ae-2 docs=0 erased=0 already-erased=0 subject-keys=0 derived=0 checkpoints=0 dedup-records=0 stores=1 disposed=0 generation=2 holds-head=0]] [held subject=did:ex:eve request=shred-ae-3 code=cx-err:CXER4621]]]]
+#]]
+  ]
+  [case id=journal-138-m5-offline-sync-end-to-end level=core gate=enforced
+   [tags journal store sync m5 end-to-end bitemporal replica stream-9 stream-8 681 L173 L176]
+   [; ── the §1 worked example, end to end (the M5 clerk + disconnected
+      tablet): SEED — the tablet pulls the hq store (ok=true; the E3 docs
+      feed sees every landed doc). OFFLINE — the clerk appends to a
+      REPLICA-LOCAL stream with valid-from IN THE PAYLOAD, and both sides
+      move the same branch. SYNC — the replica-local stream ingests into
+      the origin BYTE-IDENTICAL (both chains verify valid=true: the
+      origin holds the tablet's stream, the tablet holds the origin's);
+      the diverged branch comes back as a conflict (pull-report
+      ok=false), the resolution re-enters as the input table (ok=true,
+      the merged target lands). READ — the temporal read at valid-at
+      finds the clerk's offline note (VT precedes TX — the honest
+      picture) and the entry's attribution survives ingest verbatim
+      (actor=clerk). Journal state is NEVER blind-reconciled: the
+      cx-journal/* namespaces are excluded from the alias walk — journal
+      streams sync ONLY via chain-verified ingest (the defect this
+      fixture found).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/cx']
+[?let
+[= $so [$store:open "mem://m5-hq"]]
+[= $jo [$journal:attach $so "acme"]]
+[= $e0 [$journal:append $jo [order-placed order="o-77" total=100] {actor: "svc" authority: "ing" stream: "order:o-77"}]]
+[= $d1 [$store:put-doc $so [order [id 77]]]]
+[= $x1 [$store:set-alias $so "o-77/head" $d1]]
+[= $sr [$store:open "mem://m5-tab"]]
+[= $jr [$journal:attach $sr "acme"]]
+[= $seed [$store:pull $sr $so]]
+[= $i0 [$journal:ingest-stream $jr $jo "order:o-77"]]
+[= $e1 [$journal:append $jr [order-note order="o-77" valid-from="2026-08-01T00:00:00Z" [text "rush - clerk offline"]] {actor: "clerk" authority: "tab-1" stream: "order:o-77:tab1"}]]
+[= $d4 [$store:put-doc $sr [order [id 77] [note "tab edit"]]]]
+[= $x4 [$store:set-alias $sr "o-77/head" $d4]]
+[= $d2 [$store:put-doc $so [order [id 77] [line "hq edit"]]]]
+[= $x2 [$store:set-alias $so "o-77/head" $d2]]
+[= $s1 [$journal:ingest-stream $jo $jr "order:o-77:tab1"]]
+[= $rep [$store:pull-report $sr $so]]
+[= $dm [$store:put-doc $sr [order [id 77] [line "hq edit"] [note "tab edit"]]]]
+[= $r2 [$store:pull-report $sr $so {resolutions: [resolve ref="o-77/head" target=$dm]}]]
+[= $es [$journal:since $jo 1 "order:o-77:tab1"]]
+[= $aug [$journal:temporal-slice $es {valid-at: "2026-08-02T00:00:00Z"}]]
+[= $vo [$journal:verify $jo {stream: "order:o-77:tab1"}]]
+[= $vr [$journal:verify $jr {stream: "order:o-77"}]]
+[= $ent [$journal:read $jo 1 "order:o-77:tab1"]]
+  [probe [seed-ok $seed/@ok] [conflicted $rep/@ok] [resolved $r2/@ok] [vt-known [$count $aug]] [vt-actor $ent/@actor] [origin-chain $vo/@valid] [replica-chain $vr/@valid] [target [$cx:equal [$store:get-alias $sr "o-77/head"] $dm]]]]
+#]]
+   [out-text [#
+[probe [seed-ok true] [conflicted false] [resolved true] [vt-known 1] [vt-actor 'clerk'] [origin-chain true] [replica-chain true] [target true]]
+#]]
+  ]
+
+  [case id=journal-139-saga-run level=core gate=enforced
+   [tags journal coordination saga runner stream-10 682 L157]
+   [; ── stream 10 (cross_stream_coordination §2, L157): the saga is an
+      ORDINARY JOURNALED VALUE in its home stream — (saga-id, steps[],
+      per-step status, authority basis) — and the Ring-2 runner drives
+      command steps in order, journaling every transition as a new
+      [saga] record (current state = the LAST record with that id). The
+      journaled record IS the durable step-dedup: re-running a completed
+      saga answers [deduped <the recorded value>] and re-executes
+      NOTHING (redelivery ⇒ one effect, no new dedup machinery — the
+      erase-subject precedent). The home-stream chain stays green: saga
+      state never enters any other stream's fold (the replay rule — the
+      M5 checkout's three aggregates each replay in isolation).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?def release-inventory impure [effects] ($sku='' $qty=1) [released sku=$sku]]
+[?def reserve-inventory impure [effects] [compensates release-inventory] ($sku='' $qty=1) [reserved sku=$sku qty=$qty]]
+[?def void-authorization impure [effects] ($acct='' $amount=0) [voided acct=$acct]]
+[?def authorize-payment impure [effects] [compensates void-authorization] ($acct='' $amount=0) [authorized acct=$acct amount=$amount]]
+[?def place-order impure [effects] ($order='') [placed order=$order]]
+[?let
+[= $s [$store:open "mem://saga-1"]]
+[= $j [$journal:attach $s "acme"]]
+[= $def [saga-def id="cs-1"
+  [step name="reserve-inventory" [fn $reserve-inventory] [args {sku: "88" qty: 1}]]
+  [step name="authorize-payment" [fn $authorize-payment] [args {acct: "pay:acme" amount: 100}]]
+  [step name="place-order" pivot=true [fn $place-order] [args {order: "o-5521"}]]]]
+[= $r1 [$journal:saga-run $j $def {stream: "order:o-5521" actor: "agent-1" authority: "checkout"}]]
+[= $r2 [$journal:saga-run $j $def {stream: "order:o-5521" actor: "agent-1" authority: "checkout"}]]
+[= $st [$journal:saga-status $j "cs-1" {stream: "order:o-5521"}]]
+[= $v [$journal:verify $j {stream: "order:o-5521"}]]
+  [probe [run $r1] [replay $r2] [status $st/@status] [chain $v/@valid]]]
+#]]
+   [out-text [#
+[probe [run [saga id=cs-1 status=:done [step name=reserve-inventory status=:done] [step name=authorize-payment status=:done] [step name=place-order status=:done pivot=true]]] [replay [deduped [saga id=cs-1 status=:done [step name=reserve-inventory status=:done] [step name=authorize-payment status=:done] [step name=place-order status=:done pivot=true]]]] [status :done] [chain true]]
+#]]
+  ]
+
+  [case id=journal-140-saga-compensation-triple level=core gate=enforced
+   [tags journal coordination saga compensation pivot resume stream-10 682 L156 L157]
+   [; ── the compensation triple (cross_stream_coordination §2/§6): a
+      PRE-PIVOT failure compensates the completed steps in REVERSE via
+      each command's [compensates] pairing — the saga lands :compensated
+      with the failed step visible; a POST-PIVOT failure is forward-only
+      (compensation is definitionally unavailable past the irreversible
+      point): the saga lands :incomplete with the count VISIBLE, and a
+      resume re-attempts ONLY the incomplete tail (resumed=2 — the two
+      :done steps never re-execute; redelivery ⇒ one effect). The home
+      chain stays green throughout.]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?def release-inventory impure [effects] ($sku='' $qty=1) [?let [= $c [?test-counter name='comp-order' op=inc]] [released sku=$sku order=$c]]]
+[?def reserve-inventory impure [effects] [compensates release-inventory] ($sku='' $qty=1) [reserved sku=$sku]]
+[?def void-authorization impure [effects] ($acct='' $amount=0) [?let [= $c [?test-counter name='comp-order' op=inc]] [voided acct=$acct order=$c]]]
+[?def authorize-payment impure [effects] [compensates void-authorization] ($acct='' $amount=0) [authorized acct=$acct]]
+[?def flaky-order impure [effects] ($order='') [?test-always-err]]
+[?def place-order impure [effects] ($order='') [placed order=$order]]
+[?def notify impure [effects] ($order='') [?test-err-then-ok err-count=1 ok-value=[notified]]]
+[?let
+[= $s [$store:open "mem://saga-w3b"]]
+[= $j [$journal:attach $s "acme"]]
+[= $def1 [saga-def id="cs-fail"
+  [step name="reserve-inventory" [fn $reserve-inventory] [args {sku: "88"}]]
+  [step name="authorize-payment" [fn $authorize-payment] [args {acct: "pay:acme"}]]
+  [step name="flaky-order" pivot=true [fn $flaky-order] [args {order: "o-1"}]]]]
+[= $r1 [$journal:saga-run $j $def1 {stream: "order:o-1" actor: "a" authority: "b"}]]
+[= $void-order [$journal:saga-status $j "cs-fail" {stream: "order:o-1"}]]
+[= $def3 [saga-def id="cs-fwd"
+  [step name="reserve-inventory" [fn $reserve-inventory] [args {sku: "88"}]]
+  [step name="place-order" pivot=true [fn $place-order] [args {order: "o-4"}]]
+  [step name="notify" [fn $notify] [args {order: "o-4"}]]]]
+[= $r3 [$journal:saga-run $j $def3 {stream: "order:o-4" actor: "a" authority: "b"}]]
+[= $r4 [$journal:saga-run $j $def3 {stream: "order:o-4" actor: "a" authority: "b"}]]
+[= $v [$journal:verify $j {stream: "order:o-4"}]]
+  [probe [compensated $r1] [incomplete $r3] [resumed $r4] [chain $v/@valid]]]
+#]]
+   [out-text [#
+[probe [compensated [saga id=cs-fail status=:compensated [step name=reserve-inventory status=:compensated] [step name=authorize-payment status=:compensated] [step name=flaky-order status=:failed pivot=true]]] [incomplete [saga id=cs-fwd status=:incomplete incomplete=1 [step name=reserve-inventory status=:done] [step name=place-order status=:done pivot=true] [step name=notify status=:failed]]] [resumed [saga id=cs-fwd status=:done resumed=2 [step name=reserve-inventory status=:done] [step name=place-order status=:done pivot=true] [step name=notify status=:done]]] [chain true]]
+#]]
+  ]
+
+  [case id=journal-141-saga-uncompensatable level=core gate=enforced
+   [tags journal coordination saga conflict uncompensatable stream-10 682 L159]
+   [; ── the unresolvable-compensation case (§4): a compensator that
+      FAILS yields the ONE conflict value — [conflict subject=<saga/step>
+      kind=:uncompensatable policy=:manual-resolution] carrying the
+      locator-triple [compensates stream= seq= hash=] link to the :done
+      transition it could not reverse plus the failing err as [ours] —
+      inspectable data, never an opaque failure; the terminal record
+      dedups. A saga whose PRE-PIVOT step lacks a [compensates] pairing
+      refuses BEFORE anything runs (fail-closed, never a mid-saga
+      surprise).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?def release-inventory impure [effects] ($sku='' $qty=1) [?let [= $c [?test-counter name='comp-order' op=inc]] [released sku=$sku at=$c]]]
+[?def reserve-inventory impure [effects] [compensates release-inventory] ($sku='' $qty=1) [reserved sku=$sku]]
+[?def void-authorization impure [effects] ($acct='' $amount=0) [?let [= $c [?test-counter name='comp-order' op=inc]] [voided acct=$acct at=$c]]]
+[?def authorize-payment impure [effects] [compensates void-authorization] ($acct='' $amount=0) [authorized acct=$acct]]
+[?def flaky-order impure [effects] ($order='') [?test-always-err]]
+[?def broken-comp impure [effects] ($x='') [?test-always-err]]
+[?def step-with-broken-comp impure [effects] [compensates broken-comp] ($x='') [okd x=$x]]
+[?def place-order impure [effects] ($order='') [placed order=$order]]
+[?let
+[= $s [$store:open "mem://saga-w3"]]
+[= $j [$journal:attach $s "acme"]]
+[= $def1 [saga-def id="cs-fail"
+  [step name="reserve-inventory" [fn $reserve-inventory] [args {sku: "88"}]]
+  [step name="authorize-payment" [fn $authorize-payment] [args {acct: "pay:acme"}]]
+  [step name="flaky-order" pivot=true [fn $flaky-order] [args {order: "o-1"}]]]]
+[= $r1 [$journal:saga-run $j $def1 {stream: "order:o-1" actor: "a" authority: "b"}]]
+[= $rerun [$journal:saga-run $j $def1 {stream: "order:o-1" actor: "a" authority: "b"}]]
+[= $first-comp [?test-counter name='comp-order' op=read]]
+[= $def2 [saga-def id="cs-unc"
+  [step name="step-with-broken-comp" [fn $step-with-broken-comp] [args {x: "1"}]]
+  [step name="flaky-order" pivot=true [fn $flaky-order] [args {order: "o-2"}]]]]
+[= $r2 [$journal:saga-run $j $def2 {stream: "order:o-2" actor: "a" authority: "b"}]]
+[= $missing [?fallback [$journal:saga-run $j [saga-def id="cs-bad" [step name="flaky-order" [fn $flaky-order] [args {}]] [step name="place-order" pivot=true [fn $place-order] [args {}]]] {stream: "order:o-3" actor: "a" authority: "b"}] [recover-with [context] [code $err@code]]]]
+  [probe [compensated $r1] [rerun $rerun] [uncomp $r2] [precheck $missing]]]
+#]]
+   [out-text [#
+[probe [compensated [saga id=cs-fail status=:compensated [step name=reserve-inventory status=:compensated] [step name=authorize-payment status=:compensated] [step name=flaky-order status=:failed pivot=true]]] [rerun [deduped [saga id=cs-fail status=:compensated [step name=reserve-inventory status=:compensated] [step name=authorize-payment status=:compensated] [step name=flaky-order status=:failed pivot=true]]]] [uncomp [conflict subject='cs-unc/step-with-broken-comp' kind=:uncompensatable policy=:manual-resolution [compensates stream=order:o-2 seq=2 hash='sha2-256:292e416fe29fb655bbfcc8ad8208f6af4fc89067cea27eb9a02d05e7fe94fcc4'] [ours [err code=test-failure message='test failure']]]] [precheck [code 'cx-err:CXER4610']]]
+#]]
+  ]
+
+  [case id=journal-142-saga-replay-isolation-anti-2pc level=core gate=enforced
+   [tags journal coordination saga replay-isolation anti-2pc CXER4611 stream-10 682 L155 L157]
+   [; ── the replay rule + the anti-2PC negative (cross_stream_coordination
+      §1/§2/§6): after a saga touching three aggregates, EVERY stream's
+      chain verifies in isolation and per-stream folds see only their own
+      entries (tenant state = the caller's order-independent composition —
+      no global order exists to reconstruct). The 2PC-shaped move — a fold
+      reducer READING another stream (the B1 coordinator read) — refuses
+      CXER4611 E_JOURNAL_FOLD_IMPURE loud: Ring-2 verbs classify impure
+      through the registration seam (the guard this fixture found
+      slipping — an unclassified callee defaulted to pure and DEADLOCKED
+      on the pack mutex instead of refusing; #788 tracks the remaining
+      packs' lists).]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?def release-inventory impure [effects] ($sku='') [released sku=$sku]]
+[?def reserve-inventory impure [effects] [compensates release-inventory] ($sku='') [reserved sku=$sku]]
+[?def void-authorization impure [effects] ($acct='') [voided acct=$acct]]
+[?def authorize-payment impure [effects] [compensates void-authorization] ($acct='') [authorized acct=$acct]]
+[?def place-order impure [effects] ($order='') [placed order=$order]]
+[?def rsv impure [effects] ($j) [$journal:append $j [inv-reserved sku="88"] {actor: "svc" authority: "inv" stream: "sku:88"}]]
+[?let
+[= $s [$store:open "mem://iso-142"]]
+[= $j [$journal:attach $s "acme"]]
+[= $w1 [$journal:append $j [inv-reserved sku="88"] {actor: "svc" authority: "inv" stream: "sku:88"}]]
+[= $w2 [$journal:append $j [pay-authorized acct="pay:acme"] {actor: "svc" authority: "pay" stream: "pay:acme"}]]
+[= $def [saga-def id="cs-iso"
+  [step name="reserve-inventory" [fn $reserve-inventory] [args {sku: "88"}]]
+  [step name="authorize-payment" [fn $authorize-payment] [args {acct: "pay:acme"}]]
+  [step name="place-order" pivot=true [fn $place-order] [args {order: "o-5521"}]]]]
+[= $r [$journal:saga-run $j $def {stream: "order:o-5521" actor: "agent-1" authority: "checkout"}]]
+[= $v1 [$journal:verify $j {stream: "sku:88"}]]
+[= $v2 [$journal:verify $j {stream: "pay:acme"}]]
+[= $v3 [$journal:verify $j {stream: "order:o-5521"}]]
+[= $f1 [$journal:fold $j [?fn ($a $e) [+ $a 1]] 0 "sku:88"]]
+[= $f2 [$journal:fold $j [?fn ($a $e) [+ $a 1]] 0 "pay:acme"]]
+[= $bad [?fallback [$journal:fold $j [?fn ($acc $e) [?let [= $peek [$journal:read $j 1 "sku:88"]] [+ $acc 1]]] 0 "order:o-5521"] [recover-with [context] [code $err@code]]]]
+  [probe [saga $r/@status] [chains ($v1/@valid, $v2/@valid, $v3/@valid)] [isolated-folds ($f1, $f2)] [fold-reads-another-stream $bad]]]
+#]]
+   [out-text [#
+[probe [saga :done] [chains (true, true, true)] [isolated-folds (1, 1)] [fold-reads-another-stream [code 'cx-err:CXER4611']]]
+#]]
+  ]
+
+  [case id=journal-143-m5-restatement-delta-pair level=core gate=enforced
+   [tags journal bitemporal restatement delta four-quadrants m5 stream-14 686 stream-8 680 L118]
+   [; the s8→s14 handoff family, headline row: the restatement delta IS
+      q4-vs-q3 disagreement — the auditor's question made a value. The
+      corrected story restates ('19.99' then, '17.99' now); the
+      uncorrected CONTROL journal shows q3 == q4 (no restatement) — the
+      delta is a property of correction, never of the quadrant machinery. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://bt-x1" "acme"]]
+[= $e1 [$journal:append $j [price sku="A-100" amount=19.99 valid-from="2026-08-01"] {actor: "u" authority: "g" stream: "prices"}]]
+[= $e2 [$journal:append $j [price sku="A-100" amount=17.99 valid-from="2026-08-01" [supersedes hash=$e1/@hash relation=:correction]] {actor: "u" authority: "g" stream: "prices"}]]
+[= $f [?fn ($acc $e) [$string $e/event/price/@amount]]]
+[= $q3 [$journal:fold $j $f "none" "prices" {valid-at: "2026-08-03"}]]
+[= $q4 [$journal:fold $j $f "none" "prices" {at-seq: 1 valid-at: "2026-08-03"}]]
+[= $delta [?if [= $q3 $q4] [then [no-restatement]] [else [restated then=$q4 now=$q3]]]]
+[= $jb [$journal:open "mem://bt-x1b" "acme"]]
+[= $b1 [$journal:append $jb [price sku="B-1" amount=5.00 valid-from="2026-08-01"] {actor: "u" authority: "g" stream: "prices"}]]
+[= $c3 [$journal:fold $jb $f "none" "prices" {valid-at: "2026-08-03"}]]
+[= $c4 [$journal:fold $jb $f "none" "prices" {at-seq: 1 valid-at: "2026-08-03"}]]
+[= $control [?if [= $c3 $c4] [then [no-restatement]] [else [restated then=$c4 now=$c3]]]]
+  [pair [corrected $delta] [control $control]]]
+#]]
+   [out-text [#
+[pair [corrected [restated then='19.99' now='17.99']] [control [no-restatement]]]
+#]]
+  ]
+
+  [case id=journal-144-m5-amendment-four-quadrants level=core gate=enforced
+   [tags journal bitemporal amendment four-quadrants taxonomy m5 stream-14 686 stream-8 680 L117 L118]
+   [; the taxonomy × quadrant cross (s8→s14 family): an :amendment says
+      the prior fact WAS right then — so q3/q4 answers depend on the
+      asked instant (may keeps 5, jul sees 7 now); and the at-seq=1 cut
+      never sees the amender at all (q4-jul='5' — what we knew at
+      position 1 about July). Contrast journal-143's :correction, which
+      drops the prior fact across its whole extent. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $f [?fn ($acc $e) [$string $e/event/rate/@v]]]
+[= $j [$journal:open "mem://bt-x2" "acme"]]
+[= $a1 [$journal:append $j [rate v=5 valid-from="2026-01-01"] {actor: "u" authority: "g" stream: "r"}]]
+[= $a2 [$journal:append $j [rate v=7 valid-from="2026-06-01" [supersedes hash=$a1/@hash relation=:amendment]] {actor: "u" authority: "g" stream: "r"}]]
+[= $q1 [$journal:fold $j $f "none" "r"]]
+[= $q2 [$journal:fold $j $f "none" "r" {at-seq: 1}]]
+[= $q3may [$journal:fold $j $f "none" "r" {valid-at: "2026-05-01"}]]
+[= $q3jul [$journal:fold $j $f "none" "r" {valid-at: "2026-07-01"}]]
+[= $q4may [$journal:fold $j $f "none" "r" {at-seq: 1 valid-at: "2026-05-01"}]]
+[= $q4jul [$journal:fold $j $f "none" "r" {at-seq: 1 valid-at: "2026-07-01"}]]
+  [amendment q1=$q1 q2=$q2 q3-may=$q3may q3-jul=$q3jul q4-may=$q4may q4-jul=$q4jul]]
+#]]
+   [out-text [#
+[amendment q1='7' q2='5' q3-may='5' q3-jul='7' q4-may='5' q4-jul='5']
+#]]
+  ]
+
+  [case id=journal-145-m5-assertion-four-quadrants level=core gate=enforced
+   [tags journal bitemporal assertion four-quadrants coexistence m5 stream-14 686 stream-8 680 L117 L118]
+   [; plain assertions supersede nothing — both facts COEXIST on the
+      VT axis (q1/q3 count 2) and the TX cut sees exactly what existed
+      at position 1 (q2/q4 count 1). The taxonomy discriminator's third
+      leg, crossed with the quadrant table. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $cnt [?fn ($acc $e) [+ [?else $acc 0] 1]]]
+[= $j [$journal:open "mem://bt-x3" "acme"]]
+[= $a1 [$journal:append $j [rate v=5 valid-from="2026-01-01"] {actor: "u" authority: "g" stream: "r"}]]
+[= $a2 [$journal:append $j [rate v=7 valid-from="2026-06-01"] {actor: "u" authority: "g" stream: "r"}]]
+[= $q1 [$journal:fold $j $cnt 0 "r"]]
+[= $q2 [$journal:fold $j $cnt 0 "r" {at-seq: 1}]]
+[= $q3 [$journal:fold $j $cnt 0 "r" {valid-at: "2026-07-01"}]]
+[= $q4 [$journal:fold $j $cnt 0 "r" {at-seq: 1 valid-at: "2026-07-01"}]]
+  [assertion q1=$q1 q2=$q2 q3=$q3 q4=$q4]]
+#]]
+   [out-text [#
+[assertion q1=2 q2=1 q3=2 q4=1]
+#]]
+  ]
+
+  [case id=journal-146-m5-correction-chain-depth-two level=core gate=enforced
+   [tags journal bitemporal correction chain supersedes m5 stream-14 686 stream-8 680 L117 L118]
+   [; a correction OF a correction: the current view (q3) sees the
+      deepest fact; each TX cut sees exactly what was believed at that
+      position (at-1 the original, at-2 the first correction) — the
+      supersedes linkage replays belief-by-position, never collapsing
+      the chain. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $f [?fn ($acc $e) [$string $e/event/price/@amount]]]
+[= $j [$journal:open "mem://bt-x4" "acme"]]
+[= $e1 [$journal:append $j [price sku="A" amount=19.99 valid-from="2026-08-01"] {actor: "u" authority: "g" stream: "p"}]]
+[= $e2 [$journal:append $j [price sku="A" amount=17.99 valid-from="2026-08-01" [supersedes hash=$e1/@hash relation=:correction]] {actor: "u" authority: "g" stream: "p"}]]
+[= $e3 [$journal:append $j [price sku="A" amount=16.49 valid-from="2026-08-01" [supersedes hash=$e2/@hash relation=:correction]] {actor: "u" authority: "g" stream: "p"}]]
+[= $q3 [$journal:fold $j $f "none" "p" {valid-at: "2026-08-03"}]]
+[= $q4-at1 [$journal:fold $j $f "none" "p" {at-seq: 1 valid-at: "2026-08-03"}]]
+[= $q4-at2 [$journal:fold $j $f "none" "p" {at-seq: 2 valid-at: "2026-08-03"}]]
+  [chain q3=$q3 q4-at1=$q4-at1 q4-at2=$q4-at2]]
+#]]
+   [out-text [#
+[chain q3='16.49' q4-at1='19.99' q4-at2='17.99']
+#]]
+  ]
+
+  [case id=journal-147-m5-fold-replay-parity-quadrant-four level=core gate=enforced
+   [tags journal bitemporal replay fold parity four-quadrants m5 stream-14 686 stream-8 680 L118]
+   [; the projection seam composes BEFORE the reducer for BOTH read
+      verbs: fold and replay under the same {at-seq, valid-at} agree —
+      replay's last accumulator IS the fold (the L118 seam is one seam,
+      not per-verb). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $f [?fn ($acc $e) [$string $e/event/price/@amount]]]
+[= $j [$journal:open "mem://bt-x5" "acme"]]
+[= $e1 [$journal:append $j [price sku="A" amount=19.99 valid-from="2026-08-01"] {actor: "u" authority: "g" stream: "p"}]]
+[= $e2 [$journal:append $j [price sku="A" amount=17.99 valid-from="2026-08-01" [supersedes hash=$e1/@hash relation=:correction]] {actor: "u" authority: "g" stream: "p"}]]
+[= $fold4 [$journal:fold $j $f "none" "p" {at-seq: 1 valid-at: "2026-08-03"}]]
+[= $rep4 [$journal:replay $j $f "none" {stream: "p", at-seq: 1, valid-at: "2026-08-03"}]]
+  [parity fold=$fold4 replay-last=[$string [$last $rep4]] agree=[$eq $fold4 [$string [$last $rep4]]]]]
+#]]
+   [out-text [#
+[parity fold='19.99' replay-last='19.99' agree=true]
+#]]
+  ]
+
+  [case id=journal-148-m5-split-as-computation level=core gate=enforced
+   [tags journal upcast split computation flat-map m5 stream-14 686 stream-21 693 L148]
+   [; the SPLIT family (schema_event_evolution §8): a 1→2 split is a PURE
+      COMPUTATION over materialized entries (flat-map), never a seam
+      operation — 2 order-lines become 4 events partitioning cleanly
+      (amounts 80, qtys 3). The fold seam stays 1→1 by design
+      (journal-149 pins its refusal). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/fp']
+[?let [= $j [$journal:open "mem://se-sp2" "acme"]]
+[= $e1 [$journal:append $j [order-line id="A-1" qty=2 amount=50] {actor: "svc" authority: "g"}]]
+[= $e2 [$journal:append $j [order-line id="A-2" qty=1 amount=30] {actor: "svc" authority: "g"}]]
+[= $split [?fn ($e)
+  ([entry seq=$e@seq hash=$e@hash [event [order id=$e/event/order-line/@id amount=$e/event/order-line/@amount]]],
+   [entry seq=$e@seq hash=$e@hash [event [quantity id=$e/event/order-line/@id qty=$e/event/order-line/@qty]]])]]
+[= $out [$fp:flat-map [$journal:since $j 1] $split]]
+  [split n=[$count $out]
+         amounts=[$sum [?for [in $e $out] [yield [$sum $e/event/order/@amount]]]]
+         qtys=[$sum [?for [in $e $out] [yield [$sum $e/event/quantity/@qty]]]]]]
+#]]
+   [out-text [#
+[split n=4 amounts=80 qtys=3]
+#]]
+  ]
+
+  [case id=journal-149-m5-seam-is-one-to-one level=core gate=enforced
+   [tags journal upcast split seam refusal CXER4642 m5 stream-14 686 stream-21 693]
+   [; the pre-fold seam is entry→entry BY DESIGN: a chain returning a
+      SEQUENCE (a 1→N split) refuses CXER4642 loudly — splits are
+      computations (journal-148), and the fold's entry basis never
+      silently multiplies. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-sp1" "acme"]]
+[= $e1 [$journal:append $j [order-line id="A-1" qty=2 amount=50] {actor: "svc" authority: "g"}]]
+[= $split [?fn ($e)
+  ([entry seq=$e@seq hash=$e@hash [event [order id=$e/event/order-line/@id amount=$e/event/order-line/@amount]]],
+   [entry seq=$e@seq hash=$e@hash [event [quantity id=$e/event/order-line/@id qty=$e/event/order-line/@qty]]])]]
+  [$journal:upcast [$journal:since $j 1] $split]]
+#]]
+   [out-err [#
+cx-err:CXER4642
+#]]
+  ]
+
+  [case id=journal-150-m5-impure-split-refused level=core gate=enforced
+   [tags journal upcast split impure purity CXER4611 m5 stream-14 686 stream-21 693 L148]
+   [; the L148 lane rule: an IMPURE migration is refused AS COMPUTATION
+      (the chain must be deterministic — CXER4611 at the purity check,
+      before any effect fires) and is rerouted as a COMMAND (the
+      [effects]-bearing def lane, pinned by the cmd- family). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/time']
+[?let [= $j [$journal:open "mem://se-imp" "acme"]]
+[= $e1 [$journal:append $j [order-line id="A-1" amount=50] {actor: "svc" authority: "g"}]]
+[= $impure [?fn ($e) [entry seq=$e@seq hash=$e@hash [event [order id=$e/event/order-line/@id at=[$time:now]]]]]]
+  [$journal:upcast [$journal:since $j 1] $impure]]
+#]]
+   [out-err [#
+cx-err:CXER4611
+#]]
+  ]
+
+  [case id=journal-151-m5-split-totality-residue-loud level=core gate=enforced
+   [tags journal upcast totality residue CXER4641 m5 stream-14 686 stream-21 693]
+   [; totality residue: a chain that cannot map ONE entry surfaces a
+      LOUD per-entry err (CXER4641, naming seq/hash and carrying the
+      chain's own message) — never a silent skip, never a partial
+      output. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://se-res" "acme"]]
+[= $e1 [$journal:append $j [order-line id="A-1" amount=50] {actor: "svc" authority: "g"}]]
+[= $e2 [$journal:append $j [order-line id="A-2" amount=30] {actor: "svc" authority: "g"}]]
+[= $residue [?fn ($e) [?if [= $e@seq 1] [then [err code=cx-err:CXER4642 message="unmappable order-line A-1"]] [else $e]]]]
+  [$journal:upcast [$journal:since $j 1] $residue]]
+#]]
+   [out-err [#
+cx-err:CXER4641
+#]]
+  ]
+
+  [case id=journal-152-m5-ten-k-parallel-sequential-parity level=core gate=enforced
+   [tags journal upcast scale parallel sequential parity m5 stream-14 686 stream-21 693]
+   [; the 10k-replay witness: a 10,000-entry stream folded under the
+      upcast seam (sequential) agrees with a [par 4] map of the SAME
+      pure chain over the materialized entries — parallel upcast ≡
+      sequential (purity makes the schedule invisible); the closed-form
+      sum pins both. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/fp']
+[?let [= $j [$journal:open "mem://se-10k" "acme"]]
+[= $w [?for [in $i [$range 1 10000]] [yield [$journal:append $j [tick n=$i] {actor: "svc" authority: "g"}]]]]
+[= $up [?fn ($e) [entry seq=$e@seq hash=$e@hash [event [tock n=$e/event/tick/@n]]]]]
+[= $seq-fold [$journal:fold $j [?fn ($a $e) [+ $a $e/event/tock/@n]] 0 "" {upcast: $up}]]
+[= $entries [$journal:since $j 1]]
+[= $par-sum [$sum [?for [par 4] [in $e $entries] [yield [?let [= $u [$up $e]] $u/event/tock/@n]]]]]
+  [ten-k n=[$count $entries] seq-fold=$seq-fold par-sum=$par-sum agree=[$eq $seq-fold $par-sum]]]
+#]]
+   [out-text [#
+[ten-k n=10000 seq-fold=50005000 par-sum=50005000 agree=true]
+#]]
+  ]
+
+  [case id=journal-153-m5-quadrants-over-ingested-stream level=core gate=enforced
+   [tags journal sync ingest bitemporal four-quadrants m5 stream-14 686 stream-9 681 stream-8 680 L118 L173]
+   [; the s9×s8 cross: the four-quadrant table holds UNCHANGED over an
+      INGESTED replica stream — VT rides the payload through ingest
+      byte-identically and the TX cut respects the ingested positions,
+      so the quadrant answers at the origin equal journal-108's
+      origin-native shape exactly. Sync never bends time. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?let
+[= $sr [$store:open "mem://q-tab"]]
+[= $jr [$journal:attach $sr "acme"]]
+[= $r1 [$journal:append $jr [price sku="A" amount=19.99 valid-from="2026-08-01"] {actor: "clerk" authority: "g" stream: "tab:prices"}]]
+[= $r2 [$journal:append $jr [price sku="A" amount=17.99 valid-from="2026-08-01" [supersedes hash=$r1/@hash relation=:correction]] {actor: "clerk" authority: "g" stream: "tab:prices"}]]
+[= $so [$store:open "mem://q-hq"]]
+[= $jo [$journal:attach $so "acme"]]
+[= $ing [$journal:ingest-stream $jo $jr "tab:prices"]]
+[= $f [?fn ($acc $e) [$string $e/event/price/@amount]]]
+[= $q1 [$journal:fold $jo $f "none" "tab:prices"]]
+[= $q2 [$journal:fold $jo $f "none" "tab:prices" {at-seq: 1}]]
+[= $q3 [$journal:fold $jo $f "none" "tab:prices" {valid-at: "2026-08-03"}]]
+[= $q4 [$journal:fold $jo $f "none" "tab:prices" {at-seq: 1 valid-at: "2026-08-03"}]]
+  [ingested-quadrants ingested=$ing/@ingested q1=$q1 q2=$q2 q3=$q3 q4=$q4]]
+#]]
+   [out-text [#
+[ingested-quadrants ingested=2 q1='17.99' q2='19.99' q3='17.99' q4='19.99']
+#]]
+  ]
+
+  [case id=journal-154-resnapshot-under-current-fold level=core gate=enforced
+   [tags journal snapshot resnapshot fold-id maintenance sea-1 L147]
+   [; RULED: SEA-1 (§3.7): resnapshot re-derives a checkpoint at its OWN
+      at-seq under the CURRENT fold quadruple, stamping opts.fold-id and
+      keeping the anchor (same position on the same chain). This is the
+      fn-doc example — the L147 "re-snapshot under the current fold"
+      discipline as one verb call. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://rsnap" "acme"]]
+[= $e1 [$journal:append $j [a] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [b] {actor: "u" authority: "g"}]]
+[= $old [$journal:snapshot $j [?fn ($a $e) [+ $a 1]] 0 {sign: "false" at-seq: 1}]]
+[= $new [$journal:resnapshot $j [?fn ($a $e) [+ $a 1]] 0 $old {sign: "false" fold-id: "computes-as:sha2-256:v2v2"}]]
+  [rederived at=$new@at-seq fold=$new@fold-id same-anchor=[= $old@anchor-hash $new@anchor-hash]]]
+#]]
+   [out-text [#
+[rederived at=1 fold=computes-as:sha2-256:v2v2 same-anchor=true]
+#]]
+  ]
+
+  [case id=journal-155-derived-chain-at-the-seam level=core gate=enforced
+   [tags journal upcast derived-chain schema-lineage lossless sea-1 sea-1b sea-1g L146 L149]
+   [; RULED: SEA-1g (§3.9 derived-chain form): a [schema-lineage] claim
+      carrying [derived] rules IS an upcast chain — applied natively,
+      losslessly (the undeclared note= attr rides through untouched),
+      with the SEA-1b discriminator: the OLD address rewrites (default
+      materialized + schema restamped), the NEW address passes, a
+      schema-less entry passes, and an address UNKNOWN to the chain is
+      the loud CXER4641 — never a silent pass. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let
+[= $claim [schema-lineage
+  [from 'sha2-256:aaaa'] [to 'sha2-256:bbbb'] [relation :additive]
+  [upcaster upcast-a-b]
+  [derived root=order [set-default attr=channel value='web' vtype=string]]]]
+[= $j [$journal:open "mem://sea-derived" "acme"]]
+[= $e1 [$journal:append $j [order id="A-1" total=107 note='legacy' schema="sha2-256:aaaa"] {actor: "svc" authority: "g"}]]
+[= $e2 [$journal:append $j [order id="A-2" total=90 channel='phone' schema="sha2-256:bbbb"] {actor: "svc" authority: "g"}]]
+[= $e3 [$journal:append $j [order id="A-3" total=5] {actor: "svc" authority: "g"}]]
+[= $with-chan [?fn ($a $e) [?if [$present $e/event/order/@channel] [then [+ $a 1]] [else $a]]]]
+[= $up [$journal:upcast [$journal:since $j 1] $claim]]
+[= $j2 [$journal:open "mem://sea-derived-3rd" "acme"]]
+[= $x1 [$journal:append $j2 [order id="X" schema="sha2-256:cccc"] {actor: "u" authority: "g"}]]
+[= $third [?fallback [$journal:fold $j2 $with-chan 0 "" {upcast: $claim}] [recover-with [context] [code $err@code]]]]
+[= $bare [schema-lineage [from 'sha2-256:aaaa'] [to 'sha2-256:bbbb'] [relation :additive] [upcaster u1]]]
+[= $noderived [?fallback [$journal:fold $j2 $with-chan 0 "" {upcast: $bare}] [recover-with [context] [code $err@code]]]]
+  [derived-chain chan-count=[$journal:fold $j $with-chan 0 "" {upcast: $claim}]
+                 raw-chan-count=[$journal:fold $j $with-chan 0]
+                 note-kept=[$string [$nth $up 1]/event/order/@note]
+                 restamped=[$string [$nth $up 1]/event/order/@schema]
+                 injected=[$string [$nth $up 1]/event/order/@channel]
+                 passthrough-undeclared=[$present [$nth $up 3]/event/order/@schema]
+                 [third $third] [no-derived-rules $noderived]]]
+#]]
+   [out-text [#
+[derived-chain chan-count=2 raw-chan-count=1 note-kept=legacy restamped=sha2-256:bbbb injected=web passthrough-undeclared=false [third [code 'cx-err:CXER4641']] [no-derived-rules [code 'cx-err:CXER4610']]]
+#]]
+  ]
+
+  [case id=journal-156-resnapshot-identity-preservation level=core gate=enforced
+   [tags journal snapshot resnapshot upcast identity equivalence refusal sea-1 sea-1f L147]
+   [; RULED: SEA-1 (§3.7): the re-derived checkpoint preserves fold
+      identity — fold-from over it under the current (chain-engaged)
+      fold equals the full fold under the chain; resnapshot is
+      idempotent on a matching fold-id (SEA-1f); a resnapshot without a
+      declared fold-id refuses CXER4610 (nothing to stamp); and the
+      re-derivation itself runs UNDER the chain (snapshot opts.upcast),
+      so the frozen state speaks the current vocabulary. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let
+[= $claim [schema-lineage
+  [from 'sha2-256:aaaa'] [to 'sha2-256:bbbb'] [relation :additive]
+  [upcaster upcast-a-b]
+  [derived root=order [set-default attr=qty value=1 vtype=int]]]]
+[= $j [$journal:open "mem://sea-resnap-id" "acme"]]
+[= $e1 [$journal:append $j [order id="A" qty=4 schema="sha2-256:bbbb"] {actor: "u" authority: "g"}]]
+[= $e2 [$journal:append $j [order id="B" schema="sha2-256:aaaa"] {actor: "u" authority: "g"}]]
+[= $e3 [$journal:append $j [order id="C" qty=2 schema="sha2-256:bbbb"] {actor: "u" authority: "g"}]]
+[= $sum-qty [?fn ($a $e) [+ $a $e/event/order/@qty]]]
+[= $old [$journal:snapshot $j $sum-qty 0 {sign: "false" at-seq: 2 upcast: $claim}]]
+[= $fid "computes-as:sha2-256:current"]
+[= $new [$journal:resnapshot $j $sum-qty 0 $old {sign: "false" fold-id: $fid upcast: $claim}]]
+[= $fast [$journal:fold-from $j $new $sum-qty {fold-id: $fid upcast: $claim}]]
+[= $full [$journal:fold $j $sum-qty 0 "" {upcast: $claim}]]
+[= $again [$journal:resnapshot $j $sum-qty 0 $new {sign: "false" fold-id: $fid upcast: $claim}]]
+[= $noid [?fallback [$journal:resnapshot $j $sum-qty 0 $old {sign: "false"}] [recover-with [context] [code $err@code]]]]
+  [resnap-identity fast=$fast full=$full equal=[= $fast $full]
+                   stamped=$new@fold-id idempotent=[= $new $again]
+                   [no-fold-id $noid]]]
+#]]
+   [out-text [#
+[resnap-identity fast=7 full=7 equal=true stamped=computes-as:sha2-256:current idempotent=true [no-fold-id [code 'cx-err:CXER4610']]]
+#]]
+  ]
 ]

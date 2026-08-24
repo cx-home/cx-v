@@ -92,6 +92,17 @@ fn (p &Parser) tok_peek_kind() CxTokenKind {
 			}
 			return .quote_run
 		}
+		`r` {
+			// I1 L58 (stream 13): `r` GLUED to a triple quote opens a RAW
+			// triple-quoted string in data mode too (one token grammar,
+			// same rule as the program lexer). A bare `r` — or `r` before
+			// anything but a triple quote — stays an ordinary lexeme run.
+			if p.pos + 3 < p.src.len && (p.src[p.pos + 1] == `'` || p.src[p.pos + 1] == `"`)
+				&& p.src[p.pos + 2] == p.src[p.pos + 1] && p.src[p.pos + 3] == p.src[p.pos + 1] {
+				return .triple_span
+			}
+			return .value_run
+		}
 		`:` {
 			if p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:` {
 				return .double_colon

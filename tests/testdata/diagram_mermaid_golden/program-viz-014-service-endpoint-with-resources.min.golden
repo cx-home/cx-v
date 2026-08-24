@@ -1,0 +1,3 @@
+%%cx:Wz9odHRwLXNlcnZpY2Ugb249aHR0cCBwb3J0PTgwODAgbmFtZT0idml6LXN2YyIKICAgW3Jlc291cmNlIFtnZXQgIi9oZWxsbyJdIFtyZXNwb25zZSBzdGF0dXM9MjAwIGJvZHk9IndvcmxkIl1dCiAgIFtyZXNvdXJjZSBbcG9zdCAiL2VjaG8iXSBbcmVzcG9uc2Ugc3RhdHVzPTIwMCBbYm9keSAkcmVxdWVzdC9ib2R5XV1dXQ==%%
+sequenceDiagram
+    Note over Caller: [?http-service]

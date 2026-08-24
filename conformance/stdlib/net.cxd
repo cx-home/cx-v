@@ -1,4 +1,4 @@
-[test-suite name=net
+[test-suite name=net ring=2
   [doc [#
 conformance fixtures for cx-stdlib/net (spec/02-inprogress/stdlib_net.md §10).
 

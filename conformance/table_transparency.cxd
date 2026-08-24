@@ -1,0 +1,578 @@
+[test-suite name=table-transparency ring=0
+  [doc [#
+# CX Conformance — §9 representation-transparency pair family
+# (runtime_representation.md L92; stream 17 W7; the M5 ledger substrate).
+#
+# THE CONTRACT (L86): representation is transparent — the same table as
+# (a) CX text, (b) 0x60 data-bin, (c) 0x63 chunked, (d) Arrow round-trip
+# renders identical out-cx, projects identical out-json, and hashes
+# identical out-hash. The [repr-pair] section drives lanes (b)+(c) in
+# conformance_run.v against the SAME expected sections the direct lane
+# (a) uses; lane (d) rides data_bin_arrow_run.v over the same sections
+# (it needs libcx_arrow at build time). The chunked lane additionally
+# witnesses `from_chunked` NEVER-SERIALIZED: re-encoding the
+# chunked-decoded value on the plain lane is byte-identical to the
+# direct plain encode (provenance is not a value property).
+#
+# GATE MODEL: default enforced. The #807 render-parity family (I5
+# audit AF-2 classes c/d/e + the 0x81 declared-kind drop) rode here as
+# gate=advisory pins until the remainder landed under the packet §10
+# arc-2/arc-3 rulings (2026-08-14): declared-name carriage (the 0x82
+# col-spec annotation), datetime-offset transport carriage, and the
+# f16/f32 exactness refusal (arc-3 — the shortest-round-trip renderer
+# was REJECTED as approximation-masking). The advisory→enforced flip
+# is EXECUTED: every case in this suite is enforced.
+#
+# Lane (d) rides [repr-pair-arrow] on the cases whose column types the
+# Arrow bridge maps today (int/string/float/bool/date/datetime/bytes +
+# nullable via validity bitmaps; the named-table root rides
+# ArrowSchema.name both directions since W7). The u*/f16/f32 widths of
+# ttp-002 are NOT in the bridge's format map yet — an honest bridge
+# limitation, named here rather than silently skipped.
+#
+# Decode vectors (ttp-020…): [in-data-bin-hex] + [out-cx] with no
+# expected error pin the DECODER against hand-blessed §3.10.x bytes,
+# independent of the encoder (clean-room witnesses). The corrupt
+# dictionary-index vector is the 0x62 negative. The 0x62
+# [out-data-bin-plain-hex] pin on ttp-004 is the dictionary encoder's
+# engagement witness (atoms dictionary-encode BY CONSTRUCTION — that
+# seam cannot go quietly dead while the byte pin holds).
+#
+# The secret-column force-node negative of §9 lives V-side where
+# secrets exist as runtime values: the W3b store-columnar promotion
+# negative (vcx/platform) + the cx-035 stdlib refusal row — data
+# documents have no secret literal to spell here.
+#
+# Row-iteration vs column-iteration over one input and the EV-PULL
+# effect-count probes over table sources are EVAL-lane rows and live in
+# code.cxd (the d22 family + rule=EV-PULL corpus query), same input
+# shape as ttp-001.
+#]]
+
+ [case id=ttp-001-core-pair level=core
+  [tags table transparency repr-pair pair-family l92 689]
+  [meta [#
+chunk_at: 2
+#]]
+  [in-cx [#
+[t [table[id::int name score::float active::bool]]
+  1 alice 1.5e0 true
+  2 bob 2.5e0 false
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [repr-pair-arrow [#
+1
+#]]
+  [out-cx [#
+[t [table[id::int name score::float active::bool]]
+  1 alice 1.5e0 true
+  2 bob 2.5e0 false
+]
+#]]
+  [out-json [#
+{
+  "t": [
+    {
+      "id": 1,
+      "name": "alice",
+      "score": 1.5e0,
+      "active": true
+    },
+    {
+      "id": 2,
+      "name": "bob",
+      "score": 2.5e0,
+      "active": false
+    }
+  ]
+}
+#]]
+  [out-hash [#
+sha2-256:290a32c35eb862c90bb0dc0e7da2383bb70e88f055cc286670506069326aa0ff
+#]]
+ ]
+
+ [case id=ttp-002-width-lattice-pair level=core
+  [tags table transparency repr-pair widths unsigned f32 l89]
+  [meta [#
+chunk_at: 2
+#]]
+  [in-cx [#
+[t [table[a::u16 b::u64 c::i8 d::u8 e::f32]]
+  65535 9223372036854775807 -128 255 1.5e0
+  0 0 127 0 -2.0e0
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[a::u16 b::u64 c::i8 d::u8 e::f32]]
+  65535 9223372036854775807 -128 255 1.5e0
+  0 0 127 0 -2.0e0
+]
+#]]
+  [out-hash [#
+sha2-256:76514e6e2a3cde7b6c918297ef265c476bccaf92f9184ef917458a9117752137
+#]]
+ ]
+
+ [case id=ttp-003-decimal-bigint-pair level=core
+  [tags table transparency repr-pair decimal bigint l89]
+  [meta [#
+chunk_at: 2
+#]]
+  [in-cx [#
+[t [table[p::decimal q::bigint]]
+  19.99 123456789012345678901
+  8.50 7
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[p::decimal q::bigint]]
+  '19.99' '123456789012345678901'
+  '8.50' '7'
+]
+#]]
+  [out-hash [#
+sha2-256:632f9b18631a82bec48481c23373b6e8b4ca9788b148f8c7012c4ab49dc4cfa5
+#]]
+ ]
+
+ [case id=ttp-004-atom-dictionary-pair level=core
+  [tags table transparency repr-pair dictionary atom 0x62 l89 engagement-witness]
+  [meta [#
+chunk_at: 2
+note: the [out-data-bin-plain-hex] byte pin IS the 0x62 engagement
+note: witness — atom columns dictionary-encode BY CONSTRUCTION. The
+note: canonical TEXT lane renders atom cells :ok since #794 landed
+note: (the #795 batch, RULED 790-1a era) — the wire bytes were always
+note: transparent to it (dict values carry the bare names).
+#]]
+  [in-cx [#
+[t [table[status::atom]]
+  :ok
+  :err
+  :ok
+  :ok
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[status::atom]]
+  :ok
+  :err
+  :ok
+  :ok
+]
+#]]
+  [out-hash [#
+sha2-256:708ddade839b53a504dc24ce990245a1b5321e611cca714cbccd385c69b4a8a1
+#]]
+  [out-data-bin-plain-hex [#
+43 58 43 6f 6c 01 01 40 00 00 00 00   # CXCol header
+50 01 30 01 74                        # map{1} key 't'
+62 01                                 # 0x62 dict-table, 1 col
+30 06 73 74 61 74 75 73 70            # col 'status', code 0x70 atom
+04                                    # 4 rows
+01                                    # col 0: dict flag 0x01
+02 30 02 6f 6b 30 03 65 72 72         # 2 distinct: 'ok', 'err'
+00 01 00 00                           # row indexes
+#]]
+ ]
+
+ [case id=ttp-005-string-dictionary-savings-pair level=core
+  [tags table transparency repr-pair dictionary string l89]
+  [meta [#
+chunk_at: 2
+#]]
+  [in-cx [#
+[t [table[region]]
+  west-coast-region-1
+  west-coast-region-1
+  west-coast-region-1
+  west-coast-region-1
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[region]]
+  west-coast-region-1
+  west-coast-region-1
+  west-coast-region-1
+  west-coast-region-1
+]
+#]]
+  [out-hash [#
+sha2-256:7306f0a21603cc1f4a709c9ed8a1df926b21b2c9061df85b5694d1d3f2c0855e
+#]]
+ ]
+
+ [case id=ttp-006-nullable-int-pair level=core
+  [tags table transparency repr-pair nullable 0x80 l89 807]
+  [meta [#
+chunk_at: 2
+note: pre-W7 the 0x60 decode never refined a nullable column's type
+note: from the §3.10.5 inner code (n::int decoded as bare n — the
+note: lanes disagreed with each other AND with the direct render).
+#]]
+  [in-cx [#
+[t [table[n::int]]
+  1
+  null
+  3
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [repr-pair-arrow [#
+1
+#]]
+  [out-cx [#
+[t [table[n::int]]
+  1
+  null
+  3
+]
+#]]
+  [out-json [#
+{
+  "t": [
+    {
+      "n": 1
+    },
+    {
+      "n": null
+    },
+    {
+      "n": 3
+    }
+  ]
+}
+#]]
+  [out-hash [#
+sha2-256:1919fbed49b7dc8a9801ce2b74f0ff2b4fd5e2d7f1815d6b54c6246c56d226b7
+#]]
+ ]
+
+ [case id=ttp-007-nullable-u16-width-kept-pair level=core
+  [tags table transparency repr-pair nullable unsigned 0x80 l89 807]
+  [meta [#
+chunk_at: 2
+note: pre-W7 the 0x60 nullable wrapper derived its inner code from the
+note: CELL VALUES (u16 widened to int64 on the wire — silent widening,
+note: the ruled Q4a 'never' class) instead of the declared width.
+#]]
+  [in-cx [#
+[t [table[u::u16]]
+  7
+  null
+  65535
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[u::u16]]
+  7
+  null
+  65535
+]
+#]]
+  [out-hash [#
+sha2-256:e568236ffffc1c8d4eade13eb84a911970e9a943f237d7c9705019b0eeac3b8e
+#]]
+ ]
+
+ [case id=ttp-008-all-null-declared-int-pair level=core
+  [tags table transparency repr-pair nullable all-null l89 807 af2-b]
+  [meta [#
+chunk_at: 2
+note: I5 audit AF-2 class (b): pre-W7 an all-null n::int column erased
+note: to bare n on 0x60 (the value-derived inner fell to string with
+note: zero non-null cells) while 0x63 kept n::int — the binary lanes
+note: disagreed with each other.
+#]]
+  [in-cx [#
+[t [table[n::int]]
+  null
+  null
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[n::int]]
+  null
+  null
+]
+#]]
+  [out-hash [#
+sha2-256:2e15a86b8f473131780320c557f326f449cbaf54579932f66629124d0eacc4ab
+#]]
+ ]
+
+ [case id=ttp-009-header-alias-drift-pair level=core
+  [tags table transparency repr-pair 807 af2-c]
+  [meta [#
+chunk_at: 2
+note: #807 class (c), ENFORCED since the remainder landing (arc-2,
+note: packet §10, 2026-08-14): the 0x82 col-spec annotation carries
+note: the DECLARED spelling when it differs from the code's default
+note: render — v::f64 never drifts to v::float, s::string never drops
+note: to bare s. Text canonicalization of aliases was REJECTED (it
+note: would move every ::f64 document's Tier-1 address and erase the
+note: declared-width vocabulary).
+#]]
+  [in-cx [#
+[t [table[v::f64 s::string]]
+  1.5e0 x
+  2.5e0 y
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[v::f64 s::string]]
+  1.5e0 x
+  2.5e0 y
+]
+#]]
+  [out-hash [#
+sha2-256:1e8c6aaff7d425b2835b8e1d5c727fadf2030a563ef02a160175fb32a11fdc59
+#]]
+ ]
+
+ [case id=ttp-010-datetime-offset-render-pair level=core
+  [tags table transparency repr-pair datetime offset 807 af2-d]
+  [meta [#
+chunk_at: 2
+note: #807 class (d), ENFORCED since the remainder landing (arc-2,
+note: packet §10, 2026-08-14): the §3.6.1 wire form's offset_minutes
+note: field now rides the TRANSPORT (unix_nanos stays UTC-normalized)
+note: so the +02:00 render survives both binary lanes; the Tier-1
+note: hash agreed all along (STRICT canonical normalizes, and strict
+note: canonicalization runs through text). ch-007 re-pinned as
+note: ch-007-chunked-datetime-offset-rides-transport.
+#]]
+  [in-cx [#
+[t [table[w::datetime]]
+  2026-01-01T23:00:00+02:00
+  2026-01-02T00:00:00Z
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[w::datetime]]
+  '2026-01-01T23:00:00+02:00'
+  '2026-01-02T00:00:00Z'
+]
+#]]
+  [out-hash [#
+sha2-256:43cb061ac46a6fd03762957e638a7f1d0b3b6a3785a8328cc8e4cbfe9c03b79e
+#]]
+ ]
+
+ [case id=ttp-011-datetime-utc-pair level=core
+  [tags table transparency repr-pair datetime]
+  [meta [#
+chunk_at: 2
+note: the GREEN datetime control row — UTC-spelled cells are already
+note: render-parity across every lane (only the offset RENDER of
+note: ttp-010 is the class-d divergence).
+#]]
+  [in-cx [#
+[t [table[w::datetime]]
+  2026-01-02T00:00:00Z
+  2026-03-05T12:30:45Z
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [repr-pair-arrow [#
+1
+#]]
+  [out-cx [#
+[t [table[w::datetime]]
+  '2026-01-02T00:00:00Z'
+  '2026-03-05T12:30:45Z'
+]
+#]]
+  [out-hash [#
+sha2-256:af3b3ba1668d0f11d8759818c160bb449f2164d00832ba2f192d08437f0cf0d0
+#]]
+ ]
+
+ [case id=ttp-012-f16-exact-pair level=core
+  [tags table transparency repr-pair f16 807 af2-e]
+  [meta [#
+chunk_at: 2
+note: #807 class (e), RE-PINNED to the arc-3 ruling (packet §10,
+note: 2026-08-14): a cell that does not round-trip exactly through
+note: the declared reduced width REFUSES loudly at encode (never
+note: silently approximated — the shortest-round-trip renderer was
+note: REJECTED: it masks the approximation behind the original
+note: spelling). The refusal is pinned in the width-refusal V family
+note: (codecs_formats_umbrella_test.v) beside the Q4a integer
+note: contracts; THIS case pins the green half — exactly-representable
+note: f16 cells are render-parity across every lane
+note: (9.99755859375e-2 IS the f16 value nearest 0.1).
+#]]
+  [in-cx [#
+[t [table[h::f16]]
+  9.99755859375e-2
+  1.5e0
+]
+#]]
+  [repr-pair [#
+1
+#]]
+  [out-cx [#
+[t [table[h::f16]]
+  9.99755859375e-2
+  1.5e0
+]
+#]]
+  [out-hash [#
+sha2-256:988fdfe1272ac919aa07f5ce717a105d304b862d4da7f1b95ffb24d74abe88fa
+#]]
+ ]
+
+ [case id=ttp-013-mixed-collection-cell-pair level=core
+  [tags table transparency repr-pair mixed 0x81 807 af2-c]
+  [meta [#
+note: plain lane only — the strict 0x63 lane REFUSES collection cells
+note: BY DESIGN (route through 0x60). ENFORCED since the remainder
+note: landing (arc-2, packet §10, 2026-08-14): the 0x82 declared-name
+note: annotation rides the 0x81 escape too, so m::int keeps its
+note: declared kind (the honest totality escape keeps the VALUES
+note: exact — json projection agrees).
+#]]
+  [in-cx [#
+[t [table[m::int]]
+  1
+  ['a', 'b']
+  3
+]
+#]]
+  [repr-pair [#
+plain
+#]]
+  [out-cx [#
+[t [table[m::int]]
+  1
+  ['a', 'b']
+  3
+]
+#]]
+  [out-hash [#
+sha2-256:ed4ffcf48c8542b47394262e50412381c01393b2eb556f87c5c74b0a39f7769e
+#]]
+ ]
+
+ [case id=ttp-020-decode-vector-nullable-int level=core
+  [tags table transparency decode-vector nullable 0x80 l89]
+  [meta [#
+note: §3.10.5 decode vector — 0x80 wrapper, inner 0x13 int64, bitmap
+note: 0x02 (row 1 null), packed non-nulls (1, 3). The rendered column
+note: type REFINES from the inner code (n::int, never bare n).
+#]]
+  [in-data-bin-hex [#
+43 58 43 6f 6c 01 01 40 00 00 00 00      # CXCol header
+50 01 30 01 74                           # map{1} key 't'
+60 01 30 01 6e 80                        # 0x60, col 'n' code 0x80
+03                                       # 3 rows
+13                                       # inner code int64
+02                                       # null bitmap: row 1
+01 00 00 00 00 00 00 00                  # 1
+03 00 00 00 00 00 00 00                  # 3
+#]]
+  [out-cx [#
+[t [table[n::int]]
+  1
+  null
+  3
+]
+#]]
+ ]
+
+ [case id=ttp-021-decode-vector-dictionary-atom level=core
+  [tags table transparency decode-vector dictionary atom 0x62 l89]
+  [in-data-bin-hex [#
+43 58 43 6f 6c 01 01 40 00 00 00 00      # CXCol header
+50 01 30 01 74                           # map{1} key 't'
+62 01 30 06 73 74 61 74 75 73 70         # 0x62, col 'status' atom
+04 01                                    # 4 rows; dict flag
+02 30 02 6f 6b 30 03 65 72 72            # 2 distinct: 'ok', 'err'
+00 01 00 00                              # row indexes
+#]]
+  [out-cx [#
+[t [table[status::atom]]
+  :ok
+  :err
+  :ok
+  :ok
+]
+#]]
+ ]
+
+ [case id=ttp-022-decode-vector-mixed level=core
+  [tags table transparency decode-vector mixed 0x81 l89]
+  [meta [#
+note: §3.10.6 vector — 0x81 per-row tagged; the bytes carry no
+note: declared-type name, so the honest render is the untyped column.
+#]]
+  [in-data-bin-hex [#
+43 58 43 6f 6c 01 01 40 00 00 00 00      # CXCol header
+50 01 30 01 74                           # map{1} key 't'
+60 01 30 01 6d 81                        # 0x60, col 'm' code 0x81
+03                                       # 3 rows
+10 01                                    # int8 1
+40 02 30 01 61 30 01 62                  # array['a','b']
+10 03                                    # int8 3
+#]]
+  [out-cx [#
+[t [table[m]]
+  1
+  ['a', 'b']
+  3
+]
+#]]
+ ]
+
+ [case id=ttp-023-corrupt-dictionary-index-refuses level=core
+  [tags table transparency decode-vector dictionary negative 0x62 engagement-witness]
+  [meta [#
+note: the 0x62 NEGATIVE engagement witness — a row index at or past
+note: the distinct count refuses loudly, never reads out of range.
+#]]
+  [in-data-bin-hex [#
+43 58 43 6f 6c 01 01 40 00 00 00 00      # CXCol header
+50 01 30 01 74                           # map{1} key 't'
+62 01 30 06 73 74 61 74 75 73 70         # 0x62, col 'status' atom
+04 01                                    # 4 rows; dict flag
+02 30 02 6f 6b 30 03 65 72 72            # 2 distinct: 'ok', 'err'
+00 01 00 05                              # LAST index 5 >= 2 distinct
+#]]
+  [expected-decode-error [#
+dictionary index 5 out of range (2 distinct)
+#]]
+ ]
+]

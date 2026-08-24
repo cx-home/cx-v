@@ -253,3 +253,79 @@ fn test_real_socket_default_headers() {
 	_, head2 := curl_with('-I http://127.0.0.1:${port}/missing')
 	assert head2.contains('Cross-Origin-Opener-Policy: same-origin'), head2
 }
+
+// ── #838 — the request BODY on the real-socket lane ───────────────────────
+//
+// `dispatch_request` had `raw_body` in scope and `invoke_handler` passed
+// `?cx.Node(none)` into `build_request_node`, so `$request/body` was absent
+// for every request served over a real socket. code.md §10.3.3 states the
+// request shape normatively and says `body` holds the parsed body when
+// `consumes=` permits; the default `consumes` is `*/*`.
+//
+// THIS TEST HAS TO DRIVE A REAL SOCKET, and that is the whole reason the
+// defect survived. The conformance fixtures (`conformance/code.cxd`,
+// program-svc-002-post-happy-path and friends) exercise the IN-PROCESS lane
+// through `[?test-service-client]`, which passes `opts.payload` as the body —
+// that lane was always correct. Only the listener path dropped it, and
+// nothing covered the listener path with a body-bearing request. A fixture
+// cannot close this gap, so the test lives here with the other listener
+// tests. It was confirmed red against the pre-fix binary.
+//
+// The handler echoes `$request/body` STRAIGHT into the response rather than
+// through `[$cx:canonical]`. That is deliberate: `$cx:canonical` takes CX
+// SOURCE and returns its canonical form, so handing it a form-encoded payload
+// makes it parse `customer=Ada&qty=3` as an anonymous element with an
+// attribute and the test ends up asserting against the renderer instead of
+// against the body. Echoing the bytes tests exactly what this issue is about.
+//
+// Both directions are asserted, because the fix has two halves:
+//   POST with a body -> the handler reads the bytes, exactly
+//   GET with no body -> `body` stays ABSENT, not the empty string. The
+//     in-process lane passes `none` for no payload, so forwarding `''` as a
+//     scalar would have introduced a fresh divergence between the two lanes
+//     while fixing the old one.
+fn test_real_socket_post_body_reaches_handler() {
+	if !curl_available() {
+		eprintln('SKIP: curl not available')
+		return
+	}
+	tmp := os.temp_dir()
+	port := pick_port()
+	prog := write_tmpfile(tmp, 'svc-body-${port}.cx', '
+[?http-service
+   [name "test-real-body"]
+   [on http]
+   [port ${port}]
+   [block true]
+   [bind-host "127.0.0.1"]
+   [resource [POST "/echo"]
+     [response status=200 [body \$request/body]]]
+   [resource [GET "/echo"]
+     [response status=200 [body \$request/body]]]]
+')
+	defer {
+		os.rm(prog) or {}
+	}
+	pid := spawn_service(prog, port)
+	defer {
+		kill_pid(pid)
+	}
+
+	// POST with a form-encoded payload — the bytes must arrive verbatim.
+	c1, got1 := curl_with('-X POST -H \'Content-Type: application/x-www-form-urlencoded\' --data \'customer=Ada&qty=3\' http://127.0.0.1:${port}/echo')
+	assert c1 == 0, 'curl failed for the POST'
+	assert got1 == 'customer=Ada&qty=3',
+		'#838: the POST body did not reach the handler intact — got [${got1}]'
+
+	// A payload carrying a space and a quote, so a fix that mangled the bytes
+	// could not pass on a substring match.
+	c2, got2 := curl_with('-X POST --data \'note=a"b c\' http://127.0.0.1:${port}/echo')
+	assert c2 == 0, 'curl failed for the quote-bearing POST'
+	assert got2 == 'note=a"b c', 'quote-bearing body was altered — got [${got2}]'
+
+	// GET with no body — absence stays absence, matching the in-process lane.
+	c3, got3 := curl_with('http://127.0.0.1:${port}/echo')
+	assert c3 == 0, 'curl failed for the GET'
+	assert got3 == '',
+		'#838: an empty body must stay ABSENT to match the in-process lane, got [${got3}]'
+}

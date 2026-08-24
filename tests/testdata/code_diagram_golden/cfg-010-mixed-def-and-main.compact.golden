@@ -1,0 +1,21 @@
+flowchart TD
+  subgraph classify
+    cs[/"def classify"/]
+    ce([exit])
+  cm{"match $age"}
+  ct1["'teen'"]
+  cm -- "13" --> ct1
+  ct1 --> ce
+  ct2["'adult'"]
+  cm -- "else" --> ct2
+  ct2 --> ce
+  cs --> cm
+  end
+  start([entry])
+  done([exit])
+  lh{{"for $u :in <lit>"}}
+  lb["[classify $u]"]
+  lb --> lh
+  lh -- "binds $u" --> lb
+  start --> lh
+  lh --> done

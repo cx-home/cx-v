@@ -1,0 +1,1753 @@
+# cx-x/ux-tui — THE TERMINAL RENDERER: semantic tree → a painted surface
+# (#787 W5).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): bundled + gated
+# in-tree but EXEMPT from the frozen-`std` byte-compatible-reimpl stability
+# promise.
+#
+# Normative source: spec/03-approved/xap/ux.md (graduated 2026-08-20, UX-1;
+# owner-RULED 2026-08-17 as design/787/787-phase0-spec.md).
+#
+# ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+#
+# P0-20 (R5) claims the semantic element set is renderable by a non-browser
+# renderer. Until this module, that claim rested on nothing: there was one
+# renderer, it was HTML, and its private concepts had leaked into the
+# vocabulary. A claim of renderer-neutrality with one renderer is untestable
+# by construction — the vocabulary is trivially adequate for the only thing
+# that ever consumed it.
+#
+# So this is a SECOND, REAL renderer, and it is deliberately as unlike a
+# browser as a renderer gets: a fixed grid of cells, no CSS, no DOM, no
+# out-of-band swap engine, no pointer, one font, and colour expressed as SGR
+# parameters rather than as tokens in a stylesheet. Anything the vocabulary
+# assumed about a browser shows up here as something that cannot be painted.
+#
+# WHAT IT IS NOT: a text dump. The only terminal client in the tree before
+# this one (`spec/03-approved/xap/demos/d3-guestbook-web/tui.cx`) clears the
+# screen and `write-line`s the server's `application/cx` view tree verbatim.
+# That is a viewer, not a renderer — it proves the wire, not the vocabulary.
+# The bar here is lazygit-class (owner, 2026-08-17): a full-screen panelled
+# surface with a focus ring, inline editing, live repaint, and a footer
+# keymap. The mechanics live here; the runnable shell that drives them is
+# `spec/03-approved/xap/demos/oriel/tui.cx`.
+#
+# ── THE SPLIT INSIDE THIS MODULE ────────────────────────────────────────────
+#
+#   lower    semantic tree → a `[t:…]` TERMINAL TREE (pure, no escape codes)
+#   paint    terminal tree → lines of text (pure; SGR only when colour is on)
+#   focus    the focus ring over the terminal tree, in document order
+#
+# The terminal tree is what makes the equivalence assertion possible at all:
+# `content-of-tui` reads it back to the same `[c:…]` normal form the web
+# renderer reads its HTML tree back to, so "one semantic tree, two renderings,
+# they agree on content and structure" is a fixture and not a sentence.
+#
+# ── CAPABILITY / PURITY ─────────────────────────────────────────────────────
+#
+# Everything here is PURE — it produces strings. Reading keys and writing to
+# the tty is the shell's job, over `cx-x/term` (raw mode, decoded keys,
+# `select` over keystrokes ∪ stream fds ∪ a timer) and `cx-stdlib/io`. That
+# separation is what lets the painter be fixture-tested with no tty at all,
+# which is the same reason `term.md` keeps its key decoder pure.
+
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-stdlib/strings' :as strings]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/re' :as re]
+
+# ── §1 The terminal theme — tones, realized as SGR ──────────────────────────
+#
+# The semantic vocabulary names TONES (`ok`, `warn`, `danger`, `info`,
+# `neutral`); what a tone looks like is the renderer's business. The web
+# renderer resolves them through CSS custom properties; this one resolves them
+# through a token document of the same shape whose values are SGR parameter
+# strings.
+#
+# Token values are validated for the same reason CSS token values are
+# (P0-33): an SGR parameter string is tenant data reaching a control sequence,
+# which is an injection surface exactly like a stylesheet — a token carrying
+# `0m<ESC>]0;…` would retitle the operator's window. Digits and semicolons
+# only, and nothing else can terminate the sequence.
+[?def token-value-safe scope=public pure [returns bool] ($v::string)
+  [$re:matches [$re:compile "^[0-9;]+$"] $v]]
+
+[?def theme-refusals scope=public pure [returns any] ($theme::element)
+  [?for [in $t $theme//token]
+    [where [not [$token-value-safe [$string $t@value]]]]
+    [yield [ux-refusal code=ux-bad-token-value token=[$string $t@name]]]]]
+
+# base-theme — the pack's default terminal theme. Every visual decision in
+# this renderer is one of these tokens; nothing below hard-codes a colour.
+[?def base-theme scope=public pure [returns element] ()
+  [ux:term-theme
+    [token name=heading      value="1;38;5;231"]
+    [token name=muted        value="38;5;245"]
+    [token name=accent       value="38;5;39"]
+    [token name=border       value="38;5;240"]
+    [token name=focus        value="7"]
+    [token name=required     value="38;5;203"]
+    [token name=tone-ok      value="38;5;114"]
+    [token name=tone-warn    value="38;5;179"]
+    [token name=tone-danger  value="38;5;203"]
+    [token name=tone-info    value="38;5;39"]
+    [token name=tone-neutral value="38;5;245"]]]
+
+[?def token-of pure [returns string] ($theme::any $name::string)
+  [?let [= $t [?for [in $x $theme//token] [where [= [$string $x@name] $name]] [yield [$string $x@value]]]]
+    [?if [$exists $t] [then [$first $t]] [else "0"]]]]
+
+# esc — the ESC byte. CX string literals cannot encode it, so it comes from
+# bytes, exactly as the D3 demo's clear-screen does.
+[?def esc scope=public pure [returns string] ()
+  [$bytes:to-string-latin1 [$bytes:from-hex "1b"]]]
+
+[?def sgr scope=public pure [returns string] ($code::string)
+  [$concat [$esc] "[" $code "m"]]
+
+[?def sgr-reset scope=public pure [returns string] () [$concat [$esc] "[0m"]]
+
+# style — wrap a string in one theme token's SGR, or leave it alone when
+# colour is off (a pipe, a golden fixture, a `--no-color` run).
+[?def style scope=public pure [returns string] ($s::string $theme::any $token::string $color::bool)
+  [?if $color
+    [then [$concat [$sgr [$token-of $theme $token]] $s [$sgr-reset]]]
+    [else $s]]]
+
+# vis-len — the VISIBLE width of a string: its length with SGR sequences
+# removed. Every pad and every box border measures with this, because padding
+# by raw length would count escape bytes as columns and shear every table the
+# moment colour is on. (Codepoints, not grapheme clusters: a CJK-wide or
+# combining-mark corpus would need a width table, and inventing a partial one
+# here would be worse than stating the limit.)
+[?def vis-len scope=public pure [returns int] ($s::string)
+  [$string-length [$re:replace [$re:compile "\\[[0-9;]*m"] $s ""]]]
+
+[?def pad-vis scope=public pure [returns string] ($s::string $w::int)
+  [?let [= $n [- $w [$vis-len $s]]]
+    [?if [> $n 0] [then [$concat $s [$strings:repeat " " $n]]] [else $s]]]]
+
+# ── §2 Lowering: semantic element → the terminal tree ───────────────────────
+#
+# The terminal tree carries STRUCTURE and CONTENT, never escape codes and
+# never geometry — width is a paint-time input, so one lowering paints at any
+# terminal size and a resize repaints without re-projecting.
+#
+# Focus ids are minted here because focus is a property of the rendering, not
+# of the semantic tree: the same tree has a focus ring in a terminal and none
+# in a browser (where the platform owns tab order). They are the SAME
+# derivations the web renderer uses for its DOM ids and control ids, so the
+# two renderings agree on what a thing is called even though only one of them
+# needs the name.
+
+[; A sequence child lowers to a SEQUENCE, never to a wrapper element. The
+     web renderer does the same, and the symmetry is load-bearing: a `[t:seq]`
+     wrapper would be a structural node the semantic tree never had, and the
+     content readback would then report every projected collection as
+     structurally unequal to its hand-authored twin. ]
+[?def lower scope=public pure [returns any] ($el::any $ctx::map $opts::map)
+  [?if [$ux:seq-child $el]
+    [then [?for [in $m $el] [yield [$lower $m $ctx $opts]]]]
+    [else [$lower-el $el $ctx $opts]]]]
+
+# value-of — the EDITED value of a control, or the tree's own. A terminal
+# shell owns its input buffer (a browser's DOM owns the browser's), so the
+# overlay is a render input rather than a rewrite of the semantic tree: the
+# tree stays the server's, and what the operator has typed but not yet
+# submitted stays the client's. `[$ux:seq-child]`-safe by construction — the
+# overlay is a flat sequence of `[val name=… text=…]`.
+[?def value-of scope=public pure [returns string] ($opts::map $name::string $dflt::string)
+  [?let [= $hits [?for [in $v [?else $opts.values ()]]
+                   [where [= [$string $v@name] $name]]
+                   [yield [$string $v@text]]]]
+    [?if [$exists $hits] [then [$first $hits]] [else $dflt]]]]
+
+[?def lower-el pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let [= $n [$name $el]] [= $ctx2 [$ux:descend $el $ctx]]
+    [?match $n
+      [case "ux:region"   [$lower-region $el $ctx2 $opts]]
+      [case "ux:card"     [t:card    [$kids $el $ctx2 $opts]]]
+      [case "ux:heading"  [t:heading [?attr "level" [$ux:level-of $el]] [$leaf $el $ctx2 $opts]]]
+      [case "ux:text"     [t:para    [$leaf $el $ctx2 $opts]]]
+      [case "ux:field"    [t:field   [?attr "label" [$ux:str-or $el@label ""]] [$leaf $el $ctx2 $opts]]]
+      [case "ux:badge"    [t:badge   [?attr "tone" [$ux:str-or $el@tone "neutral"]] [$leaf $el $ctx2 $opts]]]
+      [case "ux:list"     [t:list    [$kids $el $ctx2 $opts]]]
+      [case "ux:item"     [t:item    [$leaf $el $ctx2 $opts]]]
+      [case "ux:table"    [t:table   [$kids $el $ctx2 $opts]]]
+      [case "ux:columns"  [t:head    [$kids $el $ctx2 $opts]]]
+      [case "ux:column"   [t:col     [$leaf $el $ctx2 $opts]]]
+      [case "ux:rows"     [t:body    [$kids $el $ctx2 $opts]]]
+      [case "ux:row"      [$lower-row $el $ctx2 $opts]]
+      [case "ux:cell"     [t:cell    [$leaf $el $ctx2 $opts]]]
+      [case "ux:nav"      [t:nav     [$kids $el $ctx2 $opts]]]
+      [case "ux:nav-item" [t:navitem [?attr "href" [$ux:str-or $el@href ""]]
+                                     [?attr "focus" [$concat "nav:" [$ux:str-or $el@href ""]]]
+                                     [$ux:label-of $el]]]
+      [; the label comes from `label-of`, not from `[$string $el]`. A link whose
+         text rides a `label=` attribute rendered EMPTY here and correctly on
+         the web, which the content normal form caught the moment a link had a
+         label — every link in W1..W7 carried its text as a body. ]
+      [case "ux:link"     [t:link    [?attr "href" [$ux:str-or $el@href ""]]
+                                     [?attr "focus" [$concat "link:" [$ux:str-or $el@href ""]]]
+                                     [$ux:label-of $el]]]
+      [; W10: an action carries the PARAMS of the item it sits on (P0-56), and
+         the focus id carries them too — twenty product cards each offer an
+         "Add to basket" and the ring has to tell them apart. It also carries
+         `confirm-href`, because a destructive act confirms by URL on both
+         faces and a terminal has no dialog to simulate. ]
+      [; confirm/available/reason ride PRESENCE-CONDITIONALLY since W15 — the
+         readback has to tell "not declared" from "declared empty" (the H5
+         blemish), and only the lowering knows which it was. An unavailable
+         action KEEPS its focus stop: P0-99's terminal face is a stop that
+         does not activate and announces the reason, not a gap in the ring
+         (P0-58's geometry argument — the ring must not change shape with
+         stock). ]
+      [case "ux:action"   [t:action  [?attr "verb" [$ux:str-or $el@verb ""]]
+                                     [?attr "affects" [$ux:str-or $el@affects ""]]
+                                     [?attr [?if [$exists $el@confirm] [then "confirm"] [else ()]]
+                                            [$ux:str-or $el@confirm ""]]
+                                     [?attr [?if [$exists $el@available] [then "available"] [else ()]]
+                                            [$ux:str-or $el@available "true"]]
+                                     [?attr [?if [$exists $el@reason] [then "reason"] [else ()]]
+                                            [$ux:str-or $el@reason ""]]
+                                     [?attr "href" [$ux:str-or $el@confirm-href ""]]
+                                     [?attr "focus" [$concat "act:" [$ux:str-or $el@verb ""]
+                                                             ":" [$quantity-key $el]]]
+                                     [?attr "label" [$ux:label-of $el]]
+                                     [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:form"     [$lower-form $el $ctx2 $opts]]
+      [case "ux:input"    [$lower-input $el $ctx2 $opts]]
+      [case "ux:hidden"   [t:hidden  [?attr "name" [$ux:str-or $el@name ""]]
+                                     [?attr "value" [$ux:str-or $el@value ""]]]]
+      [case "ux:submit"   [t:submit  [?attr "focus" [$concat "sub:" [?else $ctx2.form "ux"]]] [$ux:label-of $el]]]
+      [case "ux:error"    [t:error   [$kids $el $ctx2 $opts]]]
+      [case "ux:notice"   [t:notice  [?attr "tone" [$ux:str-or $el@tone "info"]]
+                                     [$kids $el $ctx2 $opts]]]
+      [case "ux:select"   [$lower-select $el $ctx2 $opts]]
+      [case "ux:option"   [t:option [?attr "value" [$ux:str-or $el@value ""]] [$ux:label-of $el]]]
+      [case "ux:group"    [t:group  [?attr "name" [$ux:str-or $el@name ""]]
+                                    [?attr "label" [$ux:str-or $el@label [$ux:label-of-name [$ux:str-or $el@name ""]]]]
+                                    [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:filter"   [$lower-filter $el $ctx2 $opts]]
+
+      [; ── the W10 members ──────────────────────────────────────────────────
+         PARITY IS THE RULING, not a compliance chore. W6 and W7 both shipped
+         web-only and the terminal face still could not choose a product; every
+         member below lands in both faces in the same wave, and the fixtures
+         assert they agree.
+
+         Each member's terminal form is a NATIVE one, not a simulation of the
+         browser's. A depiction becomes a framed, toned block with its own
+         description inside it — which is what a terminal has instead of an
+         image, and why k9s is a legitimate quality bar and a screenshot is
+         not. A grid becomes measured card columns. A dropdown does not become
+         an ASCII dropdown; it never did. ]
+      [case "ux:media"      [t:media [?attr "src" [$ux:str-or $el@src ""]]
+                                     [?attr "alt" [$ux:str-or $el@alt ""]]
+                                     [?attr "kind" [$ux:str-or $el@kind "illustration"]]
+                                     [?attr "tone" [$ux:str-or $el@tone "neutral"]]]]
+      [case "ux:grid"       [t:grid  [?attr "density" [$ux:str-or $el@density "comfortable"]]
+                                     [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:param"      [t:param [?attr "name" [$ux:str-or $el@name ""]]
+                                     [?attr "value" [$ux:str-or $el@value ""]]]]
+      [case "ux:steps"      [t:steps [?attr "name" [$ux:str-or $el@name ""]]
+                                     [?attr "current" [$ux:str-or $el@current ""]]
+                                     [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:step"       [t:step  [?attr "name" [$ux:str-or $el@name ""]]
+                                     [?attr "state" [$ux:str-or $el@state "ahead"]]
+                                     [?attr "href" [$ux:str-or $el@href ""]]
+                                     [?attr [?if [= [$ux:str-or $el@state "ahead"] "done"] [then "focus"] [else ()]]
+                                            [$concat "step:" [$ux:str-or $el@name ""]]]
+                                     [$ux:str-or $el@label [$ux:label-of-name [$ux:str-or $el@name ""]]]]]
+      [case "ux:quantity"    [$lower-quantity $el $ctx2 $opts]]
+      [case "ux:breadcrumb" [t:crumbs [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:crumb"      [t:crumb [?attr "href" [$ux:str-or $el@href ""]]
+                                     [?attr "current" [$ux:str-or $el@current "false"]]
+                                     [?attr [?if [= [$ux:str-or $el@current "false"] "true"] [then ()] [else "focus"]]
+                                            [$concat "crumb:" [$ux:str-or $el@href ""]]]
+                                     [$ux:str-or $el@label ""]]]
+      [case "ux:pager"      [t:pager [?attr "page" [$ux:str-or $el@page "1"]]
+                                     [?attr "pages" [$ux:str-or $el@pages ""]]
+                                     [?attr "total" [$ux:str-or $el@total ""]]
+                                     [?attr "prev-href" [$ux:str-or $el@prev-href ""]]
+                                     [?attr "next-href" [$ux:str-or $el@next-href ""]]
+                                     [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:page-link"  [t:page  [?attr "n" [$ux:str-or $el@n ""]]
+                                     [?attr "href" [$ux:str-or $el@href ""]]
+                                     [?attr "current" [$ux:str-or $el@current "false"]]
+                                     [?attr "focus" [$concat "page:" [$ux:str-or $el@href ""]]]]]
+      [case "ux:facet"      [t:facet [?attr "name" [$ux:str-or $el@name ""]]
+                                     [?attr "label" [$ux:str-or $el@label [$ux:label-of-name [$ux:str-or $el@name ""]]]]
+                                     [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:facet-value" [t:facetval [?attr "value" [$ux:str-or $el@value ""]]
+                                     [?attr "count" [$ux:str-or $el@count ""]]
+                                     [?attr "href" [$ux:str-or $el@href ""]]
+                                     [?attr "selected" [$ux:str-or $el@selected "false"]]
+                                     [?attr "focus" [$concat "facet:" [$ux:str-or $el@href ""]]]
+                                     [$ux:str-or $el@label [$ux:str-or $el@value ""]]]]
+      [case "ux:sort"       [t:sort  [?attr "name" [$ux:str-or $el@name ""]]
+                                     [?attr "label" [$ux:str-or $el@label [$ux:label-of-name [$ux:str-or $el@name ""]]]]
+                                     [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:sort-option" [t:sortopt [?attr "value" [$ux:str-or $el@value ""]]
+                                     [?attr "href" [$ux:str-or $el@href ""]]
+                                     [?attr "selected" [$ux:str-or $el@selected "false"]]
+                                     [?attr "focus" [$concat "sort:" [$ux:str-or $el@href ""]]]
+                                     [$ux:str-or $el@label [$ux:str-or $el@value ""]]]]
+      [case "ux:aside"      [$lower-aside $el $ctx2 $opts]]
+      [case "ux:status"     [t:status [?attr "tone" [$ux:str-or $el@tone "info"]]
+                                      [$leaf $el $ctx2 $opts]]]
+      [; P0-101: a named group of peer blocks. The children lower under the
+         panel's OWN context step (`ux:child-ctx` steps a panel by name, as a
+         group) so the focus ids and addresses below it agree with the web
+         face's and with the minted set. ]
+      [case "ux:panel"      [t:panel [?attr "name" [$ux:str-or $el@name ""]]
+                                     [?attr "label" [$ux:str-or $el@label [$ux:label-of-name [$ux:str-or $el@name ""]]]]
+                                     [?splice [$kids $el [$ux:child-ctx $el $ctx] $opts]]]]
+      [else ()]]]]
+
+# lower-quantity — the terminal's quantity control. ONE focus stop rather than
+# three: `-`/`+` (and `<`/`>`) step the focused value, which is what a keyboard
+# has instead of two adjacent buttons. The bounds ride along so the shell can
+# say "already at 1" rather than silently doing nothing, which is P0-58's
+# geometry argument in the form a terminal has.
+[?def lower-quantity pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let
+    [= $n [$ux:str-or $el@name ""]]
+    [; the edit overlay applies to FIELD MODE only (W23 letter (i)): a
+       verb-carrying quantity is SERVER state — every step posted — and
+       reading a client edit into it would show a number the server does not
+       have, which is the staleness P0-82 exists to refuse. ]
+    [t:quantity [?attr "name" $n]
+               [?attr "label" [$ux:str-or $el@label [$ux:label-of-name $n]]]
+               [?attr "verb" [$ux:str-or $el@verb ""]]
+               [?attr "value" [?if [= [$ux:str-or $el@verb ""] ""]
+                                [then [$value-of $opts $n [$ux:str-or $el@value "1"]]]
+                                [else [$ux:str-or $el@value "1"]]]]
+               [?attr "min" [$ux:str-or $el@min "0"]]
+               [?attr "max" [$ux:str-or $el@max ""]]
+               [?attr "step" [$ux:str-or $el@step "1"]]
+               [?attr "affects" [$ux:str-or $el@affects ""]]
+               [?attr "focus" [$concat "qty:" $n ":" [$quantity-key $el]]]
+      [?splice [$kids $el $ctx $opts]]]]]
+
+[; two quantitys on one page are two DIFFERENT quantities, and both are named
+   `qty`. The focus id therefore carries the params too — which for a basket
+   line is the SKU, so the ring distinguishes the pan from the kettle. ]
+[?def quantity-key pure [returns string] ($el::any)
+  [$reduce [?for [in $p $el/ux:param] [yield [$ux:str-or $p@value ""]]]
+    [?fn ($a $b) [?if [= $a ""] [then $b] [else [$concat $a "." $b]]]] ""]]
+
+# lower-aside — a side pane, which is what a terminal has instead of a
+# slide-in. Not a modal on either face: the primary panel stays painted and
+# stays reachable, and `esc` activates the dismiss href.
+[?def lower-aside pure [returns any] ($el::any $ctx::map $opts::map)
+  [t:aside [?attr "label" [$ux:str-or $el@label ""]]
+           [?attr "open" [$ux:str-or $el@open "false"]]
+           [?attr "dismiss-href" [$ux:str-or $el@dismiss-href ""]]
+           [?attr [?if [= [$ux:str-or $el@open "false"] "true"] [then "focus"] [else ()]]
+                  [$concat "dismiss:" [$ux:str-or $el@dismiss-href ""]]]
+    [?splice [$kids $el $ctx $opts]]]]
+
+[?def kids pure [returns any] ($el::any $ctx::map $opts::map)
+  [?for [in $k $el/*] [yield [$lower $k $ctx $opts]]]]
+
+[; the SAME `[$ux:formatted]` the web renderer calls. Money is a locale
+   decision, not a renderer decision. ]
+[?def leaf pure [returns any] ($el::any $ctx::map $opts::map)
+  [?if [$exists $el/*] [then [$kids $el $ctx $opts]] [else [$ux:formatted $el [$string $el]]]]]
+
+# lower-region — a region is a panel. `live=` is carried through as a fact
+# about the panel, not as a transport: the shell reads the SAME render-context
+# binding the web renderer reads and opens the SAME stream with the http
+# client, then repaints. One declaration, two transports, neither spelled in
+# the tree.
+[?def lower-region pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let
+    [= $feature [$string $el@feature]]
+    [= $path    [$ux:str-or $el@path "/"]]
+    [= $inner   [$ux:ctx-at {route: [?else $ctx.route "/"], feature: $feature,
+                             path: $path, bind: [?else $ctx.bind ()]} $path]]
+    [t:region [?attr "feature" $feature] [?attr "path" $path]
+              [?attr [?if [$exists $el@live] [then "live"] [else ()]] [$ux:str-or $el@live ""]]
+              [?attr "id" [$ux:frag-id [$ux:ctx-frag $inner]]]
+      [?for [in $k $el/*] [yield [$lower $k $inner $opts]]]]]]
+
+# lower-row — a row is focusable when it can be drilled into, which is when it
+# carries exactly one link (the key column's, projected by `cell-of`). That is
+# the k9s/lazygit affordance: move to a row, press Enter, go in — and it needs
+# no new vocabulary, because the link was already there for the browser.
+[?def lower-row pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let
+    [= $step [$ux:row-step [?else $ctx.path "/"] [?if [$exists $el@key] [then [$string $el@key]] [else ()]]]]
+    [= $inner [?if [$exists $step] [then [$ux:ctx-at $ctx $step]] [else $ctx]]]
+    [= $hrefs [?for [in $a $el//ux:link] [yield [$ux:str-or $a@href ""]]]]
+    [t:trow
+      [?attr "key" [$ux:str-or $el@key ""]]
+      [?attr [?if [$exists $step] [then "focus"] [else ()]]
+             [?if [$exists $step] [then [$concat "row:" [$ux:frag-id [$ux:ctx-frag $inner]]]] [else ""]]]
+      [?attr [?if [$exists $hrefs] [then "href"] [else ()]]
+             [?if [$exists $hrefs] [then [$first $hrefs]] [else ""]]]
+      [?for [in $k $el/*] [yield [$lower $k $inner $opts]]]]]]
+
+[?def lower-form pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let
+    [= $verb [$string $el@verb]]
+    [= $path [$ux:path-step [?else $ctx.path "/"] $verb]]
+    [= $fid  [$ux:frag-id [$ux:frag [?else $ctx.route "/"] [?else $ctx.feature ""] $path]]]
+    [= $fctx {route: [?else $ctx.route "/"], feature: [?else $ctx.feature ""],
+              path: $path, bind: [?else $ctx.bind ()], form: $fid}]
+    [t:form [?attr "verb" $verb] [?attr "id" $fid]
+            [?attr "affects" [$ux:str-or $el@affects ""]]
+      [?for [in $k $el/*] [yield [$lower $k $fctx $opts]]]]]]
+
+# lower-input — the control id is `<form id>-<name>`, byte-identical to the
+# web renderer's `for`/`id` pair. Two renderers naming the same control the
+# same way is not a coincidence to be maintained: it is what lets one shell
+# post a form the other rendered.
+#
+# `kind=` is the DECLARED CX TYPE. This renderer maps it to an editor
+# (numeric, boolean toggle, date, text), and the mapping is deliberately NOT
+# the web's: `money` gets a text editor here for the carrier reason the web
+# renderer gives, but `bool` gets a `[x]` toggle rather than a checkbox
+# widget. Divergence is the point — `kind` states the type, never the widget.
+[?def lower-input pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let
+    [= $n   [$string $el@name]]
+    [= $cid [$concat [?else $ctx.form "ux"] "-" $n]]
+    [t:input [?attr "name" $n]
+             [?attr "label" [$ux:str-or $el@label [$ux:label-of-name $n]]]
+             [?attr "editor" [$editor-kind-of [$ux:str-or $el@kind "string"]]]
+             [?attr "required" [$ux:str-or $el@required "false"]]
+             [?attr "value" [$value-of $opts $n [$ux:str-or $el@value ""]]]
+             [?attr "help" [$ux:str-or $el@help ""]]
+             [?attr "error" [$ux:str-or $el@error ""]]
+             [?attr "focus" [$concat "in:" $cid]]]]]
+
+# lower-select -- a choice from a known set. The terminal renderer shows the
+# CHOSEN option's label and cycles through them, which is what a select is
+# without a pointer: `enter` opens nothing, it advances. A dropdown is a mouse
+# affordance; the underlying semantic — one of these, exactly — is not.
+[?def lower-select pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let
+    [= $n   [$ux:str-or $el@name ""]]
+    [= $cid [$concat [?else $ctx.form "ux"] "-" $n]]
+    [= $cur [$value-of $opts $n [$ux:str-or $el@value ""]]]
+    [t:select [?attr "name" $n]
+              [?attr "label" [$ux:str-or $el@label [$ux:label-of-name $n]]]
+              [?attr "value" $cur]
+              [?attr "required" [$ux:str-or $el@required "false"]]
+              [?attr "help" [$ux:str-or $el@help ""]]
+              [?attr "error" [$ux:str-or $el@error ""]]
+              [?attr "focus" [$concat "sel:" $cid]]
+      [?splice [$kids $el $ctx $opts]]]]]
+
+[?def lower-filter pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let
+    [= $n   [$string $el@name]]
+    [= $cid [$concat [?else $ctx.form "ux"] "-filter-" $n]]
+    [t:filter [?attr "name" $n]
+              [?attr "label" [$ux:str-or $el@label [$ux:label-of-name $n]]]
+              [?attr "affects" [$ux:str-or $el@affects ""]]
+              [?attr "route" [$ux:str-or $el@route ""]]
+              [?attr "value" [$value-of $opts $n [$ux:str-or $el@value ""]]]
+              [?attr "focus" [$concat "flt:" $cid]]]]]
+
+# editor-kind-of — the declared CX kind → this renderer's editor. `money`,
+# `decimal` and `bigint` ride STRING carriers, so they get the text editor: a
+# numeric editor here would be as wrong as an HTML number input there, for the
+# same reason.
+[?def editor-kind-of scope=public pure [returns string] ($kind::string)
+  [?match $kind
+    [case "int"      "number"]
+    [case "float"    "number"]
+    [case "number"   "number"]
+    [case "bool"     "toggle"]
+    [case "date"     "text"]
+    [case "datetime" "text"]
+    [case "instant"  "text"]
+    [case "time"     "text"]
+    [else "text"]]]
+
+# ── §3 The focus ring ───────────────────────────────────────────────────────
+#
+# Document order, which is the only order that is derivable rather than
+# designed. A browser gets this from the platform; a terminal has to build it,
+# and building it from the tree rather than from a hand-written list is what
+# keeps it correct when the projection changes.
+
+[?def focusables scope=public pure [returns any] ($t::any)
+  [?let [= $c [$focus-tree $t ""]] $c//t:focus]]
+
+[; Each focusable carries the PANEL it sits in, so a shell can offer
+   panel-level movement as well as control-level. Without it the ring is flat,
+   and a table with twenty rows puts twenty stops between the operator and the
+   form underneath it — which is what makes a keyboard surface feel
+   unnavigable however good each individual stop is. lazygit's answer is two
+   scales of movement, and this is the data that makes the coarse one
+   possible. The panel's own heading names it, because that is what the
+   operator sees. ]
+[?def focus-tree pure [returns any] ($t::any $card::string)
+  [?if [$ux:seq-child $t]
+    [then [t:focuses [?splice [?for [in $m $t] [yield [$focus-tree $m $card]]]]]]
+    [else
+      [?let
+        [= $c2 [?if [= [$name $t] "t:card"] [then [$card-label $t $card]] [else $card]]]
+        [t:focuses
+          [?splice [?if [$exists $t@focus]
+            [then ([t:focus id=[$string $t@focus] kind=[$name $t]
+                            name=[$ux:str-or $t@name ""]
+                            verb=[$ux:str-or $t@verb ""]
+                            href=[$ux:str-or $t@href ""]
+                            card=$c2])]
+            [else ()]]]
+          [?splice [?for [in $k $t/*] [yield [$focus-tree $k $c2]]]]]]]]]
+
+[; the panel's name as the operator sees it: its own heading, or the first one
+   any control inside it carries (a form titles itself from its verb summary) ]
+[?def card-label pure [returns string] ($t::any $dflt::string)
+  [?let [= $h $t//t:heading]
+    [?if [$ux:found $h] [then [$string [$first $h]]] [else $dflt]]]]
+
+# panel-stops — the ring positions that begin a new panel. The coarse movement
+# scale: `n`/`p` step through these while tab still steps through everything.
+[?def panel-stops scope=public pure [returns any] ($t::any)
+  [?let
+    [= $fs [$focusables $t]]
+    [= $c [t:stops
+            [?splice [?for [in $i [$range 1 [$count $fs]]]
+                       [= $this [$nth $fs $i]]
+                       [= $prev [$nth $fs [?if [> $i 1] [then [- $i 1]] [else 1]]]]
+                       [where [or [= $i 1] [not [= [$string $this@card] [$string $prev@card]]]]]
+                       [yield [t:stop [?attr "i" [$string $i]] [?attr "card" [$string $this@card]]]]]]]]
+    [$ux:child-elements $c "t:stop"]]]
+
+# focus-at — the focusable at a 1-based ring position, wrapping. A ring that
+# wraps is what makes Tab usable without a mouse; a ring that clamps strands
+# the last control.
+[?def focus-at scope=public pure [returns any] ($t::any $i::int)
+  [?let [= $fs [$focusables $t]] [= $n [$count $fs]]
+    [?if [= $n 0]
+      [then ()]
+      [else [$nth $fs [+ [$mod [- $i 1] $n] 1]]]]]]
+
+[; `[/ a b]` is NOT integer division in CX — `[/ -1 3]` is -0.333… — so the
+   quotient is truncated explicitly. Without it the ring index arrives at
+   `[$nth]` as a float and the refusal names the wrong argument entirely. ]
+[?def mod pure [returns int] ($a::int $n::int)
+  [?let [= $q [$cast [/ $a $n] :int]]
+    [= $r [- $a [* $n $q]]]
+    [?if [< $r 0] [then [+ $r $n]] [else $r]]]]
+
+# form-inputs — every input under the form whose id is $fid: what a submit
+# collects. Hidden fields ride along, which is how the CSRF token reaches the
+# post from the same tree the browser posts it from.
+[?def form-inputs scope=public pure [returns any] ($t::any $fid::string)
+  [?let
+    [= $fs [?for [in $f $t//t:form] [where [= [$string $f@id] $fid]] [yield $f]]]
+    [?if [$exists $fs]
+      [then [?let
+              [= $frm [$first $fs]]
+              [= $c [t:fields
+                      [?for [in $i $frm//t:input]
+                        [yield [t:fld name=[$string $i@name] value=[$string $i@value]]]]
+                      [?for [in $h $frm//t:hidden]
+                        [yield [t:fld name=[$string $h@name] value=[$string $h@value]]]]
+                      [; a FIELD-MODE quantity (no verb, W23 letter (i)) is a
+                         field of this form; the rendered value already carries
+                         the shell's local steps through the edit overlay. ]
+                      [?for [in $q $frm//t:quantity]
+                        [where [= [$ux:str-or $q@verb ""] ""]]
+                        [yield [t:fld name=[$string $q@name] value=[$string $q@value]]]]]]
+              $c//t:fld]]
+      [else ()]]]]
+
+# ── §4 Painting: the terminal tree → lines ──────────────────────────────────
+#
+# Every painter returns a `[t:lines [l v=…] …]` CARRIER, so nesting flattens
+# through the descendant axis instead of through a hand-rolled fold — the same
+# discipline the core uses for refusals. Width is a parameter all the way
+# down, so a resize is a repaint and never a re-projection.
+
+[?def lines-of scope=public pure [returns any] ($t::any $opts::map)
+  [?let [= $c [$paint $t $opts [?else $opts.width 80]]]
+    [?for [in $x $c//l] [yield [$string $x@v]]]]]
+
+# render — THE entry point: a semantic tree and a fragment context become the
+# painted block. The SHARED semantic gate runs first — the same
+# `[$ux:refusals-of]` the web renderer runs — so a tree one renderer accepts
+# and the other rejects cannot exist.
+[?def render scope=public pure [returns any] ($el::any $ctx::map $opts::map)
+  [?let
+    [; the SAME three gates the web renderer runs, in the same order — the
+       shared semantic gate, the feed bindings, and the address collisions.
+       All three live in `cx-x/ux`, so a tree one renderer accepts and the
+       other rejects cannot exist. The collision check in particular used to
+       be web-private, which left this renderer minting a focus ring from ids
+       it never checked for duplicates. ]
+    [; ONE address walk feeds both address gates (W24, ruling 3a) — same
+       staging, same refusal order, half the fragment hashing. ]
+    [= $pairs [$ux:address-pairs $el $ctx]]
+    [= $bad [$ux:joined [$ux:refusals-of $el]
+              [$ux:joined [$ux:err-refusals $el]
+                [$ux:joined [$ux:binding-refusals $el [?else $ctx.bind ()]]
+                  [$ux:joined [$ux:collisions-with $pairs]
+                              [$ux:dangling-affects-with $el $ctx $pairs]]]]]]
+    [?if [$exists $bad]
+      [then [err code=ux-refused $bad]]
+      [else
+        [?let
+          [= $low  [$lower $el $ctx $opts]]
+          [= $lerr [$ux:err-refusals $low]]
+          [?if [$exists $lerr]
+            [then [err code=ux-refused $lerr]]
+            [else [$join-lines [$lines-of $low $opts]]]]]]]]]
+
+[?def join-lines scope=public pure [returns string] ($ls::any)
+  [$reduce $ls [?fn ($acc $x) [?if [= $acc ""] [then $x] [else [$concat $acc "\n" $x]]]] ""]]
+
+[?def theme-of pure [returns any] ($opts::map) [?else $opts.theme [$base-theme]]]
+[?def color-of pure [returns bool] ($opts::map) [?else $opts.color false]]
+[?def focus-of pure [returns string] ($opts::map) [$ux:str-or [?else $opts.focus ()] ""]]
+
+# focused — is this element the one the ring is on?
+[?def focused pure [returns bool] ($t::any $opts::map)
+  [and [$exists $t@focus] [= [$string $t@focus] [$focus-of $opts]]]]
+
+# mark — the focus indication. Reverse video plus a caret, because reverse
+# video alone is invisible on a terminal with colour off, and a caret alone is
+# easy to lose in a dense table. Two signals, one of which survives every
+# terminal.
+[?def mark pure [returns string] ($s::string $t::any $opts::map)
+  [?if [$focused $t $opts]
+    [then [$style [$concat "▸ " $s] [$theme-of $opts] "focus" [$color-of $opts]]]
+    [else [$concat "  " $s]]]]
+
+[?def paint pure [returns any] ($t::any $opts::map $w::int)
+  [?if [$ux:seq-child $t]
+    [then [t:lines [?for [in $m $t] [yield [$paint $m $opts $w]]]]]
+    [else [$paint-el $t $opts $w]]]]
+
+[?def paint-el pure [returns any] ($t::any $opts::map $w::int)
+  [?match [$name $t]
+    [case "t:region"  [$paint-kids $t $opts $w]]
+    [case "t:card"    [$paint-card $t $opts $w]]
+    [case "t:heading" [$paint-heading $t $opts $w]]
+    [case "t:para"    [$paint-para $t $opts $w]]
+    [case "t:field"   [$paint-field $t $opts $w]]
+    [case "t:badge"   [t:lines [l v=[$badge-text $t $opts]]]]
+    [; A LIST OF PEERS THAT CARRY FIELDS IS A TABLE TOO. The bullet form is
+       right for a list of sentences and wrong for a list of THINGS — a basket
+       line inlined its name, its price and its total into one run and dropped
+       the quantity control off the end of it. Same rule as the grid, same
+       painter, decided by whether the items have declared values. ]
+    [case "t:list"    [?if [$tabular $t]
+                        [then [$paint-grid $t $opts $w]]
+                        [else [$paint-kids $t $opts $w]]]]
+    [case "t:item"    [t:lines [l v=[$concat "  • " [$inline $t $opts]]]]]
+    [case "t:table"   [$paint-table $t $opts $w]]
+    [case "t:nav"     [$paint-nav $t $opts $w]]
+    [case "t:link"    [t:lines [l v=[$mark [$style [$inline-text $t] [$theme-of $opts] "accent" [$color-of $opts]] $t $opts]]]]
+    [; an unavailable act keeps its place and its label and SAYS WHY, inline —
+       the status line announces on focus, but a customer scanning the page
+       must not need to focus every control to learn which ones work (P0-99). ]
+    [case "t:action"  [?if [= [$ux:str-or $t@available "true"] "false"]
+                        [then [t:lines [l v=[$mark [$concat "[ " [$ux:str-or $t@label ""] " ]  — "
+                                                            [$ux:str-or $t@reason ""]] $t $opts]]]]
+                        [else [t:lines [l v=[$mark [$concat "[ " [$ux:str-or $t@label ""] " ]"] $t $opts]]]]]]
+    [case "t:form"    [$paint-form $t $opts $w]]
+    [case "t:input"   [$paint-input $t $opts $w]]
+    [case "t:select"  [$paint-select $t $opts $w]]
+    [case "t:group"   [$paint-group $t $opts $w]]
+    [case "t:option"  [t:lines]]
+    [case "t:filter"  [$paint-filter $t $opts $w]]
+    [case "t:submit"  [t:lines [l v=[$mark [$concat "[ " [$inline-text $t] " ]"] $t $opts]]]]
+    [case "t:error"   [$paint-error $t $opts $w]]
+    [case "t:notice"  [$paint-notice $t $opts $w]]
+    [case "t:hidden"  [t:lines]]
+
+    [; ── W10 ───────────────────────────────────────────────────────────── ]
+    [case "t:media"   [$paint-media $t $opts $w]]
+    [case "t:grid"    [$paint-grid $t $opts $w]]
+    [case "t:param"   [t:lines]]
+    [case "t:steps"   [$paint-steps $t $opts $w]]
+    [case "t:step"    [t:lines]]
+    [case "t:quantity" [$paint-quantity $t $opts $w]]
+    [case "t:crumbs"  [$paint-crumbs $t $opts $w]]
+    [case "t:crumb"   [t:lines]]
+    [case "t:pager"   [$paint-pager $t $opts $w]]
+    [case "t:page"    [t:lines]]
+    [case "t:facet"   [$paint-facet $t $opts $w]]
+    [case "t:facetval" [t:lines]]
+    [case "t:sort"    [$paint-sort $t $opts $w]]
+    [case "t:sortopt" [t:lines]]
+    [case "t:aside"   [$paint-aside $t $opts $w]]
+    [case "t:status"  [$paint-status $t $opts $w]]
+    [case "t:panel"   [$paint-panel $t $opts $w]]
+    [else [t:lines]]]]
+
+# ── §3.5 painting the W10 members ───────────────────────────────────────────
+
+# paint-media — A TERMINAL HAS NO IMAGE, AND THE ANSWER IS NOT "[image]".
+# What a terminal has is a shape, a tone and a caption, so a depiction becomes
+# a framed block filled in the product's own tone with its description inside
+# it. That is the depiction's MEANING rendered — the thing a reader who cannot
+# see the picture gets on the web too, out of the same `alt` — rather than an
+# apology for not being a browser. P0-54's second admission test is exactly
+# this: a member one renderer can only render as the literal word "[image]" is
+# a member that renderer cannot honour.
+[?def paint-media pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b   [$theme-of $opts]]
+    [= $c   [$color-of $opts]]
+    [= $tn  [$ux:str-or $t@tone "neutral"]]
+    [= $iw  [- $w 4]]
+    [= $alt [$ux:str-or $t@alt ""]]
+    [= $txt [$wrap $alt $iw]]
+    [= $fill [$style [$strings:repeat "░" $iw] $b [$concat "tone-" $tn] $c]]
+    [t:lines
+      [l v=[$style [$concat "┌" [$strings:repeat "─" [- $w 2]] "┐"] $b "border" $c]]
+      [l v=[$concat [$style "│ " $b "border" $c] $fill [$style " │" $b "border" $c]]]
+      [?for [in $ln $txt]
+        [yield [l v=[$concat [$style "│ " $b "border" $c] [$pad-vis $ln $iw] [$style " │" $b "border" $c]]]]]
+      [l v=[$style [$concat "└" [$strings:repeat "─" [- $w 2]] "┘"] $b "border" $c]]]]]
+
+# paint-grid — A GRID IS A LIST OF PEERS, AND A TERMINAL'S ANSWER IS A LIST.
+#
+# THIS WAS CARD COLUMNS AND CARD COLUMNS WERE MIMICRY. `[ux:grid]` means "these
+# are peers, compared as WHOLES" (P0-55) — it does not mean "boxes side by
+# side". A browser answers that semantic with cards because a browser has
+# two-dimensional space and images; a terminal has ROWS and ALIGNED COLUMNS,
+# and its honest answer to twenty-four peers carrying the same declared fields
+# is one line each with the fields in columns. That is the same move `ux:media`
+# already makes when it becomes a framed block instead of a picture, and the
+# same move R5 exists to license.
+#
+# Three cards to a screen was the symptom. The cause was rendering a browser's
+# answer in a terminal, where it costs eight lines per item to say what one
+# line says better.
+#
+# The columns are DERIVED from the items themselves: every card declares the
+# same fields (they came from one projection of one noun), so the field labels
+# are the header and each card contributes one row. Nothing here is told what a
+# product is.
+[?def paint-grid pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [; THE ITEMS, NOT THE SEQUENCE THEY ARRIVED IN. A `[?splice]`d collection
+       comes through as ONE sequence child, so `/*` counts it as a single item
+       and paints the first row only — the second product simply was not there.
+       The descendant axis asks for the items by name and does not care how
+       they were carried. ]
+    [= $cards [?let [= $cs $t//t:card]
+                [?if [$ux:found $cs] [then $cs] [else $t//t:item]]]]
+    [?if [$ux:absent $cards]
+      [then [t:lines]]
+      [else
+        [?let
+          [= $cols  [$grid-columns [$first $cards]]]
+          [= $rows  [?for [in $c $cards] [yield [$grid-row-cells $c $cols]]]]
+          [= $heads [?for [in $c $cols] [yield $c]]]
+          [= $ws    [$grid-widths $heads $rows $w]]
+          [; the first column is the item's NAME and needs a header of its own —
+             without one every field label sits one column left of its values,
+             which reads as a table with the wrong headings rather than as a
+             missing one. ]
+          [= $hrow  [?let [= $b [gh [g [?attr "v" "Name"]]
+                                    [?splice [?for [in $c $cols] [yield [g [?attr "v" $c]]]]]]]
+                      [?for [in $x $b/*] [yield [$ux:str-or $x@v ""]]]]]
+          [t:lines
+            [l v=[$style [$concat "  " [$grid-text $hrow $ws]] [$theme-of $opts] "muted" [$color-of $opts]]]
+            [l v=[$style [$concat "  " [$grid-rule $ws]] [$theme-of $opts] "border" [$color-of $opts]]]
+            [?for [in $i [$range 1 [$count $cards]]]
+              [= $c [$nth $cards $i]]
+              [yield [l v=[$mark [$grid-text [$nth $rows $i] $ws] [$grid-focus $c] $opts]]]]]]]]]]
+
+[?def tabular pure [returns bool] ($t::any)
+  [?let [= $fs $t//t:field] [$ux:found $fs]]]
+
+[; the ROW is focusable, not the controls inside it — a list selects a line.
+   The card's own first focusable stands in for the item, which is the same
+   identity the shell's item model uses, so the ring and the paint agree. ]
+[?def grid-focus pure [returns any] ($c::any)
+  [?let [= $fs [?for [in $e $c//t:link] [yield $e]]]
+    [?if [$ux:absent $fs] [then [t:x]] [else [$first $fs]]]]]
+
+[; the column NAMES: every field the first card declares, in its order. A card
+   is a projection of one noun, so its siblings carry the same fields. ]
+[?def grid-columns pure [returns any] ($c::any)
+  [?let [= $box [gc [?for [in $f $c//t:field] [yield [g [?attr "v" [$ux:str-or $f@label ""]]]]]
+                    [?for [in $q $c//t:quantity] [yield [g [?attr "v" [$ux:str-or $q@label "Qty"]]]]]]]
+    [$distinct [?for [in $x $box//g] [yield [$ux:str-or $x@v ""]]]]]]
+
+[; the row: the item's NAME first — a list is unreadable without one — then the
+   value of each declared field. ]
+[?def grid-row-cells pure [returns any] ($c::any $cols::any)
+  [?let
+    [= $name [$grid-name $c]]
+    [= $box [gr [g [?attr "v" $name]]
+                [?splice [?for [in $lab $cols]
+                           [yield [g [?attr "v" [$grid-field $c $lab]]]]]]]]
+    [?for [in $x $box/*] [yield [$ux:str-or $x@v ""]]]]]
+
+[; the item's name: its heading, or its first link when it has none — a basket
+   line names itself with a link, a product card with a heading, and both are
+   "what this row is". ]
+[?def grid-name pure [returns string] ($c::any)
+  [?let [= $hs [?for [in $h $c//t:heading] [yield $h]]]
+    [?if [$ux:found $hs]
+      [then [?let [= $h0 [$first $hs]] [$strings:trim [$inline $h0 {color: false}]]]]
+      [else [?let [= $ls [?for [in $l $c//t:link] [yield $l]]]
+              [?if [$ux:found $ls]
+                [then [?let [= $l0 [$first $ls]] [$strings:trim [$inline $l0 {color: false}]]]]
+                [else ""]]]]]]]
+
+[?def grid-field pure [returns string] ($c::any $label::string)
+  [?let [= $hits [?for [in $f $c//t:field]
+                   [where [= [$ux:str-or $f@label ""] $label]] [yield $f]]]
+    [?if [$ux:found $hits]
+      [then [?let [= $f0 [$first $hits]] [$strings:trim [$inline $f0 {color: false}]]]]
+      [else [?let [= $qs [?for [in $q $c//t:quantity]
+                           [where [= [$ux:str-or $q@label "Qty"] $label]] [yield $q]]]
+              [?if [$ux:found $qs]
+                [then [?let [= $q0 [$first $qs]]
+                        [$concat "- " [$ux:str-or $q0@value "1"] " +"]]]
+                [else ""]]]]]]]
+
+[; widths: the item name takes what it MEASURES, capped, so a long product
+   name truncates rather than pushing the price off the screen — and what the
+   name does NOT use is SLACK, which goes to the field column that truncates
+   hardest (W23 T2: Delivery ended in "…" on every row while Name padded ten
+   columns of air). ]
+[?def grid-widths pure [returns any] ($heads::any $rows::any $w::int)
+  [?let
+    [= $n [+ 1 [$count $heads]]]
+    [= $fw [?for [in $i [$range 2 $n]] [yield [$grid-col-width $heads $rows $i]]]]
+    [= $used [$reduce $fw [?fn ($a $b) [+ $a $b]] 0]]
+    [= $gaps [* 2 [- $n 1]]]
+    [= $left [- [- $w 4] [+ $used $gaps]]]
+    [= $room [?if [< $left 16] [then 16] [else [?if [> $left 44] [then 44] [else $left]]]]]
+    [= $nat  [$grid-name-natural $rows]]
+    [= $name [?if [> $room $nat] [then [?if [< $nat 16] [then 16] [else $nat]]] [else $room]]]
+    [= $fw2  [$grid-give-slack $heads $rows $fw [- $room $name]]]
+    [= $box [gw [g [?attr "v" [$string $name]]]
+                [?splice [?for [in $x $fw2] [yield [g [?attr "v" [$string $x]]]]]]]]
+    [?for [in $x $box/*] [yield [$cast [$ux:str-or $x@v "8"] :int]]]]]
+
+[; the widest a column's content actually runs, uncapped — the measure the
+   slack hand-off compares against the granted (capped) width. ]
+[?def grid-col-natural pure [returns int] ($heads::any $rows::any $i::int)
+  [?let
+    [= $box [gw [g [?attr "n" [$string [$string-length [$nth $heads [- $i 1]]]]]]
+                [?splice [?for [in $r $rows]
+                           [yield [g [?attr "n" [$string [$string-length [$nth $r $i]]]]]]]]]]
+    [$max [?for [in $x $box/*] [yield [$cast [$ux:str-or $x@n "0"] :int]]]]]]
+
+[?def grid-name-natural pure [returns int] ($rows::any)
+  [?let [= $box [gw [g [?attr "n" "4"]]
+                    [?splice [?for [in $r $rows]
+                               [yield [g [?attr "n" [$string [$string-length [$nth $r 1]]]]]]]]]]
+    [$max [?for [in $x $box/*] [yield [$cast [$ux:str-or $x@n "0"] :int]]]]]]
+
+[; slack goes to ONE column — the one with the deepest deficit between what it
+   measures and what it was granted — and only as much as it measures. ]
+[?def grid-give-slack pure [returns any] ($heads::any $rows::any $fw::any $slack::int)
+  [?if [= [$count $fw] 0]
+    [then $fw]
+    [else
+      [?let
+        [= $n [$count $fw]]
+        [= $defs [?for [in $i [$range 1 $n]]
+                   [yield [- [$grid-col-natural $heads $rows [+ $i 1]] [$nth $fw $i]]]]]
+        [= $best [$max $defs]]
+        [= $give [$min-int $best $slack]]
+        [?if [<= $give 0]
+          [then $fw]
+          [else [?let [= $j [$grid-first-index $defs $best]]
+                  [?for [in $i [$range 1 $n]]
+                    [yield [?if [= $i $j]
+                             [then [+ [$nth $fw $i] $give]]
+                             [else [$nth $fw $i]]]]]]]]]]]]
+
+[?def grid-first-index pure [returns int] ($xs::any $v::int)
+  [$reduce [?for [in $i [$range 1 [$count $xs]]] [yield $i]]
+    [?fn ($acc $i) [?if [> $acc 0]
+                     [then $acc]
+                     [else [?if [= [$nth $xs $i] $v] [then $i] [else 0]]]]] 0]]
+
+[?def grid-col-width pure [returns int] ($heads::any $rows::any $i::int)
+  [?let
+    [= $box [gw [g [?attr "n" [$string [$string-length [$nth $heads [- $i 1]]]]]]
+                [?splice [?for [in $r $rows]
+                           [yield [g [?attr "n" [$string [$string-length [$nth $r $i]]]]]]]]]]
+    [= $m [$max [?for [in $x $box/*] [yield [$cast [$ux:str-or $x@n "0"] :int]]]]]
+    [?if [> $m 22] [then 22] [else $m]]]]
+
+[?def grid-text pure [returns string] ($cells::any $ws::any)
+  [$reduce [?for [in $i [$range 1 [$count $ws]]]
+             [yield [$pad-vis [$grid-clip [?if [<= $i [$count $cells]] [then [$nth $cells $i]] [else ""]]
+                                          [$nth $ws $i]]
+                              [$nth $ws $i]]]]
+    [?fn ($a $b) [?if [= $a ""] [then $b] [else [$concat $a "  " $b]]]] ""]]
+
+[?def grid-clip pure [returns string] ($s::string $w::int)
+  [?if [<= [$string-length $s] $w]
+    [then $s]
+    [else [$concat [$strings:slice $s 0 [- $w 1]] "…"]]]]
+
+[?def grid-rule pure [returns string] ($ws::any)
+  [$reduce [?for [in $x $ws] [yield [$strings:repeat "─" [$cast $x :int]]]]
+    [?fn ($a $b) [?if [= $a ""] [then $b] [else [$concat $a "──" $b]]]] ""]]
+
+# paint-steps — one header line. `Address ✓ › Shipping ✓ › REVIEW › Confirm`,
+# with the current step marked by weight rather than by colour alone.
+[?def paint-steps pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b [$theme-of $opts]] [= $c [$color-of $opts]]
+    [t:lines
+      [l v=[$reduce
+             [?for [in $st $t/t:step]
+               [yield [$mark [$step-text $st $b $c] $st $opts]]]
+             [?fn ($a $x) [?if [= $a ""] [then $x] [else [$concat $a " › " $x]]]] ""]]
+      [l v=""]]]]
+
+[?def step-text pure [returns string] ($st::any $b::any $c::bool)
+  [?let [= $s [$ux:str-or $st@state "ahead"]]
+    [?match $s
+      [case "done"    [$style [$concat [$string $st] " ✓"] $b "accent" $c]]
+      [case "current" [$style [$strings:upper [$string $st]] $b "focus" $c]]
+      [else [$style [$string $st] $b "muted" $c]]]]]
+
+# paint-quantity — ONE focus stop and two keys, which is what a keyboard has
+# instead of two adjacent buttons. At a bound the affordance is DIMMED rather
+# than removed, so the line does not change width under the ring — the same
+# argument the web renderer's `disabled` makes (P0-58).
+[?def paint-quantity pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b [$theme-of $opts]] [= $c [$color-of $opts]]
+    [= $v  [$cast [$ux:str-or $t@value "1"] :int]]
+    [= $lo [$cast [$ux:str-or $t@min "0"] :int]]
+    [= $hi [$cast [$ux:str-or $t@max "999"] :int]]
+    [= $dec [?if [<= $v $lo] [then [$style "−" $b "muted" $c]] [else "−"]]]
+    [= $inc [?if [>= $v $hi] [then [$style "+" $b "muted" $c]] [else "+"]]]
+    [t:lines
+      [l v=[$mark [$concat [$pad-vis [$concat [$ux:str-or $t@label ""] "  "] 12]
+                           "[ " $dec "  " [$strings:pad-start [$string $v] 3 " "] "  " $inc " ]"]
+                  $t $opts]]]]]
+
+[?def paint-crumbs pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b [$theme-of $opts]] [= $c [$color-of $opts]]
+    [t:lines
+      [l v=[$reduce
+             [?for [in $cr $t/t:crumb]
+               [yield [$mark [?if [= [$ux:str-or $cr@current "false"] "true"]
+                               [then [$string $cr]]
+                               [else [$style [$string $cr] $b "accent" $c]]]
+                             $cr $opts]]]
+             [?fn ($a $x) [?if [= $a ""] [then $x] [else [$concat $a " / " $x]]]] ""]]
+      [l v=""]]]]
+
+# paint-pager — the window, and the honest count. A pager that cannot state a
+# total says nothing rather than guessing (P0-60).
+[?def paint-pager pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b [$theme-of $opts]] [= $c [$color-of $opts]]
+    [= $pages [$reduce
+                [?for [in $pg $t/t:page]
+                  [yield [$mark [?if [= [$ux:str-or $pg@current "false"] "true"]
+                                  [then [$style [$concat "[" [$ux:str-or $pg@n ""] "]"] $b "focus" $c]]
+                                  [else [$ux:str-or $pg@n ""]]]
+                                $pg $opts]]]
+                [?fn ($a $x) [?if [= $a ""] [then $x] [else [$concat $a " " $x]]]] ""]]
+    [= $cnt [?if [= [$ux:str-or $t@total ""] ""]
+              [then [$concat "Page " [$ux:str-or $t@page "1"] " of " [$ux:str-or $t@pages "1"]]]
+              [else [$concat "Page " [$ux:str-or $t@page "1"] " of " [$ux:str-or $t@pages "1"]
+                             " — " [$ux:str-or $t@total ""] " items"]]]]
+    [t:lines
+      [l v=""]
+      [l v=[$concat $pages "   " [$style $cnt $b "muted" $c]]]]]]
+
+# paint-facet — the label, then the values with their counts right-aligned.
+# THE COUNTS ARE THE MEMBER (P0-61): a facet without them is a filter with a
+# menu, and this renderer showing them is the same claim the web one makes.
+[?def paint-facet pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b [$theme-of $opts]] [= $c [$color-of $opts]]
+    [t:lines
+      [l v=[$style [$strings:upper [$ux:str-or $t@label ""]] $b "muted" $c]]
+      [?for [in $fv $t/t:facetval]
+        [yield [l v=[$mark [$facet-line $fv [- $w 4] $b $c] $fv $opts]]]]
+      [l v=""]]]]
+
+[?def facet-line pure [returns string] ($fv::any $w::int $b::any $c::bool)
+  [?let
+    [= $on  [= [$ux:str-or $fv@selected "false"] "true"]]
+    [= $tick [?if $on [then [$style "✓ " $b "accent" $c]] [else "  "]]]
+    [= $cnt [$ux:str-or $fv@count ""]]
+    [= $lab [$string $fv]]
+    [$concat $tick [$pad-vis $lab [- $w [+ 4 [$string-length $cnt]]]] " "
+             [$style $cnt $b "muted" $c]]]]
+
+[?def paint-sort pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b [$theme-of $opts]] [= $c [$color-of $opts]]
+    [t:lines
+      [l v=[$concat [$style [$concat [$ux:str-or $t@label ""] ":  "] $b "muted" $c]
+             [$reduce
+               [?for [in $so $t/t:sortopt]
+                 [yield [$mark [?if [= [$ux:str-or $so@selected "false"] "true"]
+                                 [then [$style [$string $so] $b "focus" $c]]
+                                 [else [$string $so]]]
+                               $so $opts]]]
+               [?fn ($a $x) [?if [= $a ""] [then $x] [else [$concat $a "  " $x]]]] ""]]]
+      [l v=""]]]]
+
+# titled-top — a box's top edge with the title riding it, RULED TO THE CORNER:
+# `┌─ Narrow ──────┐`. The dash resumes after the title (W23 T1 — a title run
+# that stops on spaces reads unfinished next to the fully-ruled plain boxes),
+# and the line is exactly $w cells, which the space-padded form was not (it
+# came up one short). A title too long to fit keeps the padded form, clipped.
+[?def titled-top pure [returns string] ($head::string $w::int)
+  [?let [= $fill [- [- $w 5] [$vis-len $head]]]
+    [?if [> $fill 0]
+      [then [$concat "┌─ " $head " " [$strings:repeat "─" $fill] "┐"]]
+      [else [$concat "┌─ " [$pad-vis $head [- $w 4]] "┐"]]]]]
+
+# paint-aside — a side pane. Painted where the surface placed it; the shell
+# gives it its own column when the window is wide enough, which is the
+# terminal's form of a slide-in and not a simulation of one.
+[?def paint-aside pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b [$theme-of $opts]] [= $c [$color-of $opts]]
+    [= $iw [- $w 4]]
+    [= $inner [$flat [t:lines [?for [in $k $t/*] [yield [$paint $k $opts $iw]]]]]]
+    [= $head [$concat [$ux:str-or $t@label ""]
+               [?if [= [$ux:str-or $t@open "false"] "true"] [then "   esc to close"] [else ""]]]]
+    [t:lines
+      [l v=[$style [$titled-top $head $w] $b "border" $c]]
+      [?for [in $ln $inner]
+        [yield [l v=[$concat [$style "│ " $b "border" $c] [$pad-vis $ln $iw] [$style " │" $b "border" $c]]]]]
+      [l v=[$style [$concat "└" [$strings:repeat "─" [- $w 2]] "┘"] $b "border" $c]]]]]
+
+# paint-panel — P0-101's terminal face: a framed box per panel, titled by its
+# label, in document order. The title rides the top border (the aside's shape)
+# because a group's name is chrome around its members, not a member itself.
+[?def paint-panel pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $b [$theme-of $opts]] [= $c [$color-of $opts]]
+    [= $iw [- $w 4]]
+    [= $inner [$flat [t:lines [?for [in $k $t/*] [yield [$paint $k $opts $iw]]]]]]
+    [t:lines
+      [l v=[$style [$titled-top [$ux:str-or $t@label ""] $w] $b "border" $c]]
+      [?for [in $ln $inner]
+        [yield [l v=[$concat [$style "│ " $b "border" $c] [$pad-vis $ln $iw] [$style " │" $b "border" $c]]]]]
+      [l v=[$style [$concat "└" [$strings:repeat "─" [- $w 2]] "┘"] $b "border" $c]]]]]
+
+# paint-status — the status LINE, which is what a terminal has instead of a
+# live region. The shell already owns one; a status placed in the tree paints
+# in place as well, so an announcement is never only in a place the reader has
+# to go looking for.
+[?def paint-status pure [returns any] ($t::any $opts::map $w::int)
+  [?let [= $txt [$inline $t $opts]]
+    [?if [= $txt ""]
+      [then [t:lines]]
+      [else [t:lines [l v=[$style [$concat "  " $txt] [$theme-of $opts]
+                            [$concat "tone-" [$ux:str-or $t@tone "info"]] [$color-of $opts]]]]]]]]
+
+[?def paint-kids pure [returns any] ($t::any $opts::map $w::int)
+  [t:lines [?for [in $k $t/*] [yield [$paint $k $opts $w]]]]]
+
+[?def flat pure [returns any] ($c::any)
+  [?for [in $x $c//l] [yield [$string $x@v]]]]
+
+# paint-card — the panel box. lazygit's shape: a light border, one blank of
+# padding, contents inside.
+[; A card whose children are ALL cards is a structural wrapper, not a panel,
+   and framing it costs two lines and four columns to say nothing — a page
+   grouping three panels used to draw a box around the box around each one.
+   The first attempt at this rule asked whether the card had a heading, which
+   got the form card wrong: its heading sits inside the `[ux:form]`, so a real
+   panel came out unframed while its siblings were framed. What actually
+   distinguishes a wrapper is that it contributes no content of its own. ]
+[?def wrapper pure [returns bool] ($t::any)
+  [?let [= $kids [$card-kids $t]]
+    [and [> [$count $kids] 0]
+         [= [$count $kids] [$count [?for [in $k $kids] [where [= [$string $k] "t:card"]] [yield $k]]]]]]]
+
+[; the element children's NAMES, seeing through the sequence children a
+   projection produces ]
+[?def card-kids pure [returns any] ($t::any)
+  [?let [= $c [t:ns [?splice [?for [in $k $t/*] [yield [$kid-names $k]]]]]]
+    [?for [in $x [$ux:child-elements $c "t:n"]] [yield [$string $x@v]]]]]
+
+[?def kid-names pure [returns any] ($k::any)
+  [?if [$ux:seq-child $k]
+    [then [t:ns [?splice [?for [in $m $k] [yield [$kid-names $m]]]]]]
+    [else [t:ns [t:n [?attr "v" [$name $k]]]]]]]
+
+[?def paint-card pure [returns any] ($t::any $opts::map $w::int)
+  [?let [= $o2 [$with-label-width $t $opts]]
+    [?if [$wrapper $t]
+      [then [$paint-kids $t $o2 $w]]
+      [else [$paint-boxed $t $o2 $w]]]]]
+
+[?def paint-boxed pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $iw [- $w 4]]
+    [= $inner [$flat [t:lines [?for [in $k $t/*] [yield [$paint $k $opts $iw]]]]]]
+    [= $b [$theme-of $opts]]
+    [t:lines
+      [l v=[$style [$concat "┌" [$strings:repeat "─" [- $w 2]] "┐"] $b "border" [$color-of $opts]]]
+      [?for [in $ln $inner]
+        [yield [l v=[$concat [$style "│ " $b "border" [$color-of $opts]]
+                             [$pad-vis $ln $iw]
+                             [$style " │" $b "border" [$color-of $opts]]]]]]
+      [l v=[$style [$concat "└" [$strings:repeat "─" [- $w 2]] "┘"] $b "border" [$color-of $opts]]]]]]
+
+[; A heading used to cost TWO lines — the text, then a rule as wide as it. In a
+   panelled surface the panel's own border already says "this is a section", so
+   the rule was decoration paid for in vertical space, which is the scarcest
+   thing a terminal has. The heading token carries the weight instead. ]
+[?def paint-heading pure [returns any] ($t::any $opts::map $w::int)
+  [t:lines [l v=[$style [$inline $t $opts] [$theme-of $opts] "heading" [$color-of $opts]]]]]
+
+[?def min-int pure [returns int] ($a::int $b::int) [?if [< $a $b] [then $a] [else $b]]]
+
+# paint-para — wrapped text. A terminal has a hard right edge and no reflow
+# engine, so wrapping is the renderer's job; the vocabulary never said how
+# wide anything is.
+[?def paint-para pure [returns any] ($t::any $opts::map $w::int)
+  [t:lines [?for [in $ln [$wrap [$inline $t $opts] $w]] [yield [l v=$ln]]]]]
+
+[?def wrap scope=public pure [returns any] ($s::string $w::int)
+  [?let [= $c [$wrap-carry [$strings:split-whitespace $s] $w]] [$flat $c]]]
+
+[?def wrap-carry pure [returns any] ($words::any $w::int)
+  [?let
+    [= $folded [$reduce $words
+                 [?fn ($acc $word)
+                   [?if [= [?else $acc.cur ""] ""]
+                     [then {done: [?else $acc.done ()], cur: $word}]
+                     [else
+                       [?if [<= [+ [+ [$string-length [?else $acc.cur ""]] 1] [$string-length $word]] $w]
+                         [then {done: [?else $acc.done ()], cur: [$concat [?else $acc.cur ""] " " $word]}]
+                         [else {done: [$push-line [?else $acc.done ()] [?else $acc.cur ""]], cur: $word}]]]]]
+                 {done: (), cur: ""}]]
+    [t:lines
+      [?for [in $x [?else $folded.done ()]] [yield [l v=[$string $x@v]]]]
+      [?if [= [?else $folded.cur ""] ""] [then ()] [else ([l v=[?else $folded.cur ""]])]]]]]
+
+[?def push-line pure [returns any] ($done::any $line::string)
+  [?let [= $c [t:lines [?for [in $x $done] [yield [l v=[$string $x@v]]]] [l v=$line]]]
+    $c//l]]
+
+# paint-field — `label  value`, the label column padded to a stable width so a
+# stack of fields reads as a table rather than as ragged prose. That ragged
+# edge was a W3 finding on the web side; here it is the renderer's to fix,
+# which is the correct place for it.
+[?def paint-field pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [; measured, not fixed: a fixed 16 pads "Id" out by fourteen columns. The
+       width comes from the widest label among the field's siblings, which is
+       the same rule the table columns already use. ]
+    [= $lw [?else $opts.label-width 14]]
+    [= $lbl [$style [$pad-vis [$ux:str-or $t@label ""] $lw] [$theme-of $opts] "muted" [$color-of $opts]]]
+    [= $val [$inline $t $opts]]
+    [?if [$has-block $t]
+      [then [t:lines
+              [l v=$lbl]
+              [?for [in $k $t/*] [yield [$paint $k $opts [- $w 2]]]]]]
+      [else [t:lines [l v=[$concat $lbl " " $val]]]]]]]
+
+# A field whose value is a nested TABLE (the W3 nested case) cannot be an
+# inline run; it becomes a block under its label.
+[?def has-block pure [returns bool] ($t::any)
+  [$exists [?for [in $k $t/*] [where [$block-kind [$name $k]]] [yield $k]]]]
+
+[?def block-kind pure [returns bool] ($n::string)
+  [$ux:has-str ("t:table", "t:list", "t:card", "t:form", "t:region") $n]]
+
+[?def badge-text pure [returns string] ($t::any $opts::map)
+  [$style [$concat "‹" [$inline-text $t] "›"] [$theme-of $opts]
+          [$concat "tone-" [$ux:str-or $t@tone "neutral"]] [$color-of $opts]]]
+
+# inline — an element's content as ONE line: the terminal analogue of inline
+# flow. Nested block content is handled by the caller; this is for leaves and
+# for runs of badges and links.
+[?def inline scope=public pure [returns string] ($t::any $opts::map)
+  [?if [$exists $t/*]
+    [then [$reduce [?for [in $k $t/*] [yield [$inline-one $k $opts]]]
+            [?fn ($acc $x) [?if [= $acc ""] [then $x] [else [$concat $acc " " $x]]]] ""]]
+    [else [$string $t]]]]
+
+[?def inline-one pure [returns string] ($t::any $opts::map)
+  [?if [$ux:seq-child $t]
+    [then [$reduce [?for [in $m $t] [yield [$inline-one $m $opts]]]
+            [?fn ($acc $x) [?if [= $acc ""] [then $x] [else [$concat $acc " " $x]]]] ""]]
+    [else
+      [?match [$name $t]
+        [case "t:badge" [$badge-text $t $opts]]
+        [; A NESTED FOCUSABLE MUST STILL SHOW THE RING. This case styled the
+           link and did not `mark` it — so a link inside a heading, which is
+           how EVERY product card and EVERY department card is built, was
+           painted with no focus indication at all. The ring was on it, Enter
+           would have followed it, and the screen said nothing. That is most of
+           the store's navigation, invisible.
+
+           The standalone `t:link` case in `paint-el` marks correctly, which is
+           why this survived: the W1 order book put its links in table cells
+           and its cards had no links in headings. The store put a link in
+           every heading it has. ]
+        [case "t:link"  [$mark [$style [$inline-text $t] [$theme-of $opts] "accent" [$color-of $opts]]
+                               $t $opts]]
+        [else [$inline $t $opts]]]]]]
+
+[?def inline-text pure [returns string] ($t::any) [$string $t]]
+
+# ── the table: measured columns ─────────────────────────────────────────────
+#
+# Terminal tables are the place a renderer either earns its keep or does not.
+# Widths are MEASURED from the content — header and every cell — because a
+# projection has no idea what its data looks like and a fixed width would
+# either truncate or waste. k9s does the same thing, and it is the reason its
+# resource lists read at a glance.
+
+[?def paint-table pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $head  [$ux:first-child $t "t:head"]]
+    [= $body  [$ux:first-child $t "t:body"]]
+    [= $heads [?for [in $c [$ux:child-elements $head "t:col"]] [yield [$inline $c $opts]]]]
+    [= $rows  [$ux:child-elements $body "t:trow"]]
+    [= $n     [$count $heads]]
+    [= $ws    [?for [in $i [$range 1 $n]] [yield [$col-width $heads $rows $i]]]]
+    [t:lines
+      [?if [= $n 0] [then ()] [else ([l v=[$head-line $heads $ws $opts]])]]
+      [?if [= $n 0] [then ()] [else ([l v=[$rule-line $ws $opts]])]]
+      [?for [in $r $rows] [yield [$paint-trow $r $ws $n $opts $w]]]]]]
+
+# col-width — the widest of the header and every scalar cell in that column,
+# capped so one pathological value cannot push every other column off-screen.
+[?def col-width pure [returns int] ($heads::any $rows::any $i::int)
+  [?let
+    [= $c [t:ws [w n=[$string-length [$nth $heads $i]]]
+                [?for [in $r $rows]
+                  [yield [w n=[$string-length [$scalar-cell $r $i $opts-none]]]]]]]
+    [= $m [$max [?for [in $x $c//w] [yield [$cast $x@n :int]]]]]
+    [?if [> $m 40] [then 40] [else $m]]]]
+
+[?def opts-none pure [returns map] () {color: false}]
+
+# scalar-cell — the i-th cell's text when it is a scalar. A cell holding a
+# nested table has no width of its own: it paints as an indented block under
+# the row (below), which is this renderer's answer to the repeated-header
+# problem W3 measured on the web side. A terminal has vertical room and no
+# cell borders, so indentation says "belongs to the row above" for free.
+[?def scalar-cell pure [returns string] ($r::any $i::int $opts::map)
+  [?let [= $cs [$ux:child-elements $r "t:cell"]]
+    [?if [<= $i [$count $cs]]
+      [then [?let [= $c [$nth $cs $i]]
+              [?if [$has-block $c] [then ""] [else [$inline $c $opts]]]]]
+      [else ""]]]]
+
+[?def head-line pure [returns string] ($heads::any $ws::any $opts::map)
+  [$style [$concat "  " [$row-text $heads $ws]] [$theme-of $opts] "muted" [$color-of $opts]]]
+
+[?def rule-line pure [returns string] ($ws::any $opts::map)
+  [$style [$concat "  " [$reduce [?for [in $x $ws] [yield [$strings:repeat "─" [$cast $x :int]]]]
+                          [?fn ($acc $s) [?if [= $acc ""] [then $s] [else [$concat $acc "──" $s]]]] ""]]
+          [$theme-of $opts] "border" [$color-of $opts]]]
+
+[?def row-text pure [returns string] ($cells::any $ws::any)
+  [?let [= $n [$count $ws]]
+    [$reduce [?for [in $i [$range 1 $n]]
+               [yield [$pad-vis [?if [<= $i [$count $cells]] [then [$string [$nth $cells $i]]] [else ""]]
+                                [$cast [$nth $ws $i] :int]]]]
+      [?fn ($acc $s) [?if [= $acc ""] [then $s] [else [$concat $acc "  " $s]]]] ""]]]
+
+[?def paint-trow pure [returns any] ($r::any $ws::any $n::int $opts::map $w::int)
+  [?let
+    [= $cells [?for [in $i [$range 1 $n]] [yield [$scalar-cell $r $i $opts]]]]
+    [= $line  [$mark [$row-text $cells $ws] $r $opts]]
+    [= $blocks [?for [in $c [$ux:child-elements $r "t:cell"]] [where [$has-block $c]] [yield $c]]]
+    [t:lines
+      [l v=$line]
+      [?for [in $b $blocks] [yield [$indent [$paint-kids $b $opts [- $w 6]] 6]]]]]]
+
+# indent — shift a painted block right. Nested collections hang under their
+# row rather than inside a cell, so a nested table keeps ONE header instead of
+# repeating it per containing cell.
+[?def indent pure [returns any] ($c::any $n::int)
+  [t:lines [?for [in $ln [$flat $c]] [yield [l v=[$concat [$strings:repeat " " $n] $ln]]]]]]
+
+[?def paint-nav pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $items [?for [in $i $t//t:navitem] [yield [$nav-text $i $opts]]]]
+    [t:lines
+      [l v=[$reduce $items [?fn ($acc $s) [?if [= $acc ""] [then $s] [else [$concat $acc " " $s]]]] ""]]]]]
+
+[?def nav-text pure [returns string] ($i::any $opts::map)
+  [?if [$focused $i $opts]
+    [then [$style [$concat " " [$inline-text $i] " "] [$theme-of $opts] "focus" [$color-of $opts]]]
+    [else [$style [$concat " " [$inline-text $i] " "] [$theme-of $opts] "accent" [$color-of $opts]]]]]
+
+[; measured-label-width — the widest label among the container's OWN labelled
+   children, which is the alignment context a reader actually sees. The
+   paint-field comment promised this ("measured, not fixed") and the code
+   never did it: everything fell back to a fixed 14, so any label past
+   thirteen columns pushed its value out of the shared column and the run
+   read as a staircase — one of the ten owner-found defects (R3's list).
+   Floored at the old default so short forms keep their look; capped so one
+   long label cannot eat the row (the cap truncates via pad, same as a
+   panel border clips). Inputs and selects spend one column on the required
+   marker, so their labels measure one wider. ]
+[?def measured-label-width pure [returns int] ($t::any)
+  [?let
+    [= $box [t:lwbox
+              [?splice [?for [in $e [$ux:child-elements $t "t:field"]]
+                         [yield [t:lw [?attr "n" [$string [$vis-len [$ux:str-or $e@label ""]]]]]]]]
+              [?splice [?for [in $e [$ux:child-elements $t "t:input"]]
+                         [yield [t:lw [?attr "n" [$string [+ 1 [$vis-len [$ux:str-or $e@label ""]]]]]]]]]
+              [?splice [?for [in $e [$ux:child-elements $t "t:select"]]
+                         [yield [t:lw [?attr "n" [$string [+ 1 [$vis-len [$ux:str-or $e@label ""]]]]]]]]]
+              [?splice [?for [in $e [$ux:child-elements $t "t:quantity"]]
+                         [yield [t:lw [?attr "n" [$string [+ 1 [$vis-len [$ux:str-or $e@label ""]]]]]]]]]
+            ]]
+    [= $ns [?for [in $x $box/*] [yield [$cast [$string $x@n] :int]]]]
+    [= $mx [?else [$max $ns] 14]]
+    [?if [< $mx 14] [then 14] [else [?if [> $mx 28] [then 28] [else $mx]]]]]]
+
+[?def with-label-width pure [returns map] ($t::any $opts::map)
+  [$cx:merge $opts {label-width: [$measured-label-width $t]}]]
+
+[?def paint-form pure [returns any] ($t::any $opts::map $w::int)
+  [$paint-kids $t [$with-label-width $t $opts] $w]]
+
+# paint-input — `Label  [value            ]`, with the required marker in its
+# own token and the help text under the control in muted.
+[?def paint-input pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $lw [?else $opts.label-width 14]]
+    [= $req [?if [= [$ux:str-or $t@required "false"] "true"]
+              [then [$style "*" [$theme-of $opts] "required" [$color-of $opts]]]
+              [else " "]]]
+    [= $lbl [$concat [$pad-vis [$ux:str-or $t@label ""] [- $lw 1]] $req]]
+    [= $bw  [$min-int 40 [- $w [+ $lw 6]]]]
+    [; a toggle IS its own control — `[x]` in a box would read as a box
+       containing a checkbox, which is one widget too many. ]
+    [= $box [?if [= [$ux:str-or $t@editor "text"] "toggle"]
+              [then [$editor-text $t]]
+              [else [$concat "[" [$pad-vis [$editor-text $t] $bw] "]"]]]]
+    [; Help was a second line under EVERY field, so a four-field form cost eight
+       lines to show four inputs. It is guidance for the control you are
+       filling in, so it appears for the focused one and stays out of the way
+       otherwise — the same trade a status bar makes. ]
+    [; an ERROR is not guidance and does not wait for focus: it is the reason
+       the form came back, and hiding it until the operator happens to land on
+       the field is how a refusal becomes a mystery. ]
+    [= $err  [$ux:str-or $t@error ""]]
+    [= $help [?if [= $err ""]
+               [then [?if [$focused $t $opts] [then [$ux:str-or $t@help ""]] [else ""]]]
+               [else $err]]]
+    [t:lines
+      [l v=[$mark [$concat [$style $lbl [$theme-of $opts] "muted" [$color-of $opts]] " " $box] $t $opts]]
+      [?if [= $help ""]
+        [then ()]
+        [else ([l v=[$concat [$strings:repeat " " [+ $lw 3]]
+                             [$style $help [$theme-of $opts]
+                                     [?if [= $err ""] [then "muted"] [else "tone-danger"]]
+                                     [$color-of $opts]]]])]]]]]
+
+# editor-text — what the editor shows. A `toggle` shows its state rather than
+# its literal, because "true" is a value and `[x]` is a control.
+[?def editor-text pure [returns string] ($t::any)
+  [?let [= $v [$ux:str-or $t@value ""]]
+    [?if [= [$ux:str-or $t@editor "text"] "toggle"]
+      [then [?if [= $v "true"] [then "[x]"] [else "[ ]"]]]
+      [else $v]]]]
+
+# paint-select -- the chosen option's LABEL, not its value: a select exists so
+# the operator picks a name and the form submits a key.
+[?def paint-select pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $lw [?else $opts.label-width 14]]
+    [= $req [?if [= [$ux:str-or $t@required "false"] "true"]
+              [then [$style "*" [$theme-of $opts] "required" [$color-of $opts]]]
+              [else " "]]]
+    [= $lbl [$concat [$pad-vis [$ux:str-or $t@label ""] [- $lw 1]] $req]]
+    [= $cur [$ux:str-or $t@value ""]]
+    [= $hits [?for [in $o [$ux:child-elements $t "t:option"]]
+               [where [= [$ux:str-or $o@value ""] $cur]] [yield [$string $o]]]]
+    [= $shown [?if [$ux:found $hits] [then [$first $hits]] [else "— choose —"]]]
+    [= $bw  [$min-int 40 [- $w [+ $lw 6]]]]
+    [t:lines
+      [l v=[$mark [$concat [$style $lbl [$theme-of $opts] "muted" [$color-of $opts]]
+                           " ‹ " [$pad-vis [$string $shown] [- $bw 4]] " ›"] $t $opts]]]]]
+
+[?def paint-group pure [returns any] ($t::any $opts::map $w::int)
+  [?let [= $th [$theme-of $opts]]
+    [= $o2 [$with-label-width $t $opts]]
+    [t:lines
+      [l v=[$style [$ux:str-or $t@label ""] $th "muted" [$color-of $opts]]]
+      [?splice [?for [in $k $t/*] [yield [$paint $k $o2 $w]]]]]]]
+
+[?def paint-filter pure [returns any] ($t::any $opts::map $w::int)
+  [?let
+    [= $lw [?else $opts.label-width 14]]
+    [= $lbl [$style [$pad-vis [$ux:str-or $t@label ""] $lw] [$theme-of $opts] "muted" [$color-of $opts]]]
+    [= $bw  [$min-int 40 [- $w [+ $lw 6]]]]
+    [; the same bracket well every editable control paints — the stray " /"
+       this used to interpose read as a value that was never typed (W23 T3). ]
+    [t:lines
+      [l v=[$mark [$concat $lbl " [" [$pad-vis [$ux:str-or $t@value ""] $bw] "]"] $t $opts]]]]]
+
+# A notice takes the same shape as an error and a different tone token — the
+# gutter mark carries the meaning where colour cannot (a pipe, a no-colour
+# terminal), which is the same reason a badge's tone is a token and not a
+# colour at the call site.
+[?def paint-notice pure [returns any] ($t::any $opts::map $w::int)
+  [t:lines
+    [?for [in $ln [$flat [$paint-kids $t $opts [- $w 2]]]]
+      [yield [l v=[$style [$concat [?match [$ux:str-or $t@tone "info"]
+                                     [case "ok" "\u2713 "] [case "warn" "! "] [else "\u00b7 "]]
+                                   $ln]
+                          [$theme-of $opts]
+                          [$concat "tone-" [$ux:str-or $t@tone "info"]]
+                          [$color-of $opts]]]]]]]
+
+[?def paint-error pure [returns any] ($t::any $opts::map $w::int)
+  [t:lines
+    [?for [in $ln [$flat [$paint-kids $t $opts [- $w 2]]]]
+      [yield [l v=[$style [$concat "! " $ln] [$theme-of $opts] "tone-danger" [$color-of $opts]]]]]]]
+
+# ── §5 The content readback — the equivalence subject, from the terminal ────
+#
+# The TERMINAL side of the three-way agreement. It reads the terminal tree —
+# the thing this renderer actually paints — back to `[$ux:content-of]`'s
+# normal form, so a fixture can assert semantic == web == terminal on
+# canonical bytes.
+#
+# The same two exclusions apply as on the web side, for the same reason:
+# `kind=` is a declared CX type that each renderer maps to its own editor
+# (`number` here, `number` there, but `bool` → toggle here and checkbox
+# there), and asserting on it would assert that two renderers make the same
+# widget choice.
+
+[?def content-of-tui scope=public pure [returns any] ($t::any)
+  [?if [$ux:seq-child $t]
+    [then [c:seq [$content-tui-flat $t]]]
+    [else [$content-tui-el $t]]]]
+
+[; The same sequence-flattening the core and the web renderer do, for the same
+   reason — see `ux:content-flat`. ]
+[?def content-tui-flat pure [returns any] ($s::any)
+  [?let [= $c [c:ks [?for [in $m $s] [yield [$content-tui-wrap $m]]]]]
+    [?for [in $w $c//c:k] [yield [$first $w/*]]]]]
+
+[?def content-tui-wrap pure [returns any] ($k::any)
+  [?if [$ux:seq-child $k]
+    [then [c:ks [?for [in $m $k] [yield [$content-tui-wrap $m]]]]]
+    [else [c:k [$content-tui-el $k]]]]]
+
+[?def content-tui-el pure [returns any] ($t::any)
+  [?match [$name $t]
+    [case "t:region"  [c:region  [?splice [$content-tui-kids $t]]]]
+    [case "t:card"    [c:card    [?splice [$content-tui-kids $t]]]]
+    [case "t:heading" [c:heading [?attr "level" [$ux:str-or $t@level "2"]] [?splice [$content-tui-leaf $t]]]]
+    [case "t:para"    [c:text    [?splice [$content-tui-leaf $t]]]]
+    [case "t:field"   [c:field   [?attr "label" [$ux:str-or $t@label ""]] [?splice [$content-tui-leaf $t]]]]
+    [case "t:badge"   [c:badge   [?attr "tone" [$ux:str-or $t@tone "neutral"]] [?splice [$content-tui-leaf $t]]]]
+    [case "t:list"    [c:list    [?splice [$content-tui-kids $t]]]]
+    [case "t:item"    [c:item    [?splice [$content-tui-leaf $t]]]]
+    [case "t:table"   [c:table   [?splice [$content-tui-kids $t]]]]
+    [case "t:head"    [c:columns [?splice [$content-tui-kids $t]]]]
+    [case "t:col"     [c:column  [?splice [$content-tui-leaf $t]]]]
+    [case "t:body"    [c:rows    [?splice [$content-tui-kids $t]]]]
+    [case "t:trow"    [c:row     [?attr "key" [$ux:str-or $t@key ""]] [?splice [$content-tui-kids $t]]]]
+    [case "t:cell"    [c:cell    [?splice [$content-tui-leaf $t]]]]
+    [case "t:nav"     [c:nav     [?splice [$content-tui-kids $t]]]]
+    [case "t:navitem" [c:nav-item [?attr "href" [$ux:str-or $t@href ""]] [$string $t]]]
+    [case "t:link"    [c:link    [?attr "href" [$ux:str-or $t@href ""]] [$string $t]]]
+    [; mirrors the core's W15 entry exactly: verb only on a direct act,
+       confirm presence-boolean, available/reason verbatim when declared. ]
+    [case "t:action"  [c:action  [?attr [?if [$exists $t@confirm] [then ()] [else "verb"]]
+                                        [$ux:str-or $t@verb ""]]
+                                 [?attr "label" [$ux:str-or $t@label ""]]
+                                 [?attr [?if [$exists $t@confirm] [then "confirm"] [else ()]] "true"]
+                                 [?attr [?if [$exists $t@available] [then "available"] [else ()]]
+                                        [$ux:str-or $t@available "true"]]
+                                 [?attr [?if [$exists $t@reason] [then "reason"] [else ()]]
+                                        [$ux:str-or $t@reason ""]]
+                                 [?splice [$content-tui-kids $t]]]]
+    [case "t:form"    [c:form    [?attr "verb" [$ux:str-or $t@verb ""]] [?splice [$content-tui-kids $t]]]]
+    [case "t:input"   [c:input   [?attr "name" [$ux:str-or $t@name ""]]
+                                 [?attr "label" [$ux:str-or $t@label ""]]
+                                 [?attr "required" [$ux:str-or $t@required "false"]]
+                                 [?attr "error" [$ux:str-or $t@error ""]]
+                                 [$ux:str-or $t@value ""]]]
+    [case "t:hidden"  [c:hidden  [?attr "name" [$ux:str-or $t@name ""]] [$ux:str-or $t@value ""]]]
+    [case "t:submit"  [c:submit  [$string $t]]]
+    [case "t:error"   [c:error   [?splice [$content-tui-kids $t]]]]
+    [case "t:notice"  [c:notice  [?attr "tone" [$ux:str-or $t@tone "info"]]
+                                 [?splice [$content-tui-kids $t]]]]
+    [case "t:select"  [c:select  [?attr "name" [$ux:str-or $t@name ""]]
+                                 [?attr "label" [$ux:str-or $t@label ""]]
+                                 [?attr "required" [$ux:str-or $t@required "false"]]
+                                 [?attr "error" [$ux:str-or $t@error ""]]
+                                 [?attr "value" [$ux:str-or $t@value ""]]
+                                 [?splice [$content-tui-kids $t]]]]
+    [case "t:option"  [c:option  [?attr "value" [$ux:str-or $t@value ""]] [$string $t]]]
+    [case "t:group"   [c:group   [?attr "name" [$ux:str-or $t@name ""]]
+                                 [?attr "label" [$ux:str-or $t@label ""]]
+                                 [?splice [$content-tui-kids $t]]]]
+    [case "t:filter"  [c:filter  [?attr "name" [$ux:str-or $t@name ""]]
+                                 [?attr "label" [$ux:str-or $t@label ""]]
+                                 [?attr "route" [$ux:str-or $t@route ""]]
+                                 [$ux:str-or $t@value ""]]]
+    
+    [; ── W10's members read back here. A member the fixture cannot see is a
+       member R5's equivalence claim does not cover — the fixture passes by not
+       looking. That was a W7 finding and the parity ruling forbids repeating
+       it, so every member added this wave has a readback on both faces. ]
+    [case "t:media"    [c:media   [?attr "src" [$ux:str-or $t@src ""]]
+                                  [?attr "alt" [$ux:str-or $t@alt ""]]]]
+    [case "t:grid"     [c:grid    [?splice [$content-tui-kids $t]]]]
+    [case "t:param"    [c:param   [?attr "name" [$ux:str-or $t@name ""]]
+                                  [?attr "value" [$ux:str-or $t@value ""]]]]
+    [case "t:steps"    [c:steps   [?attr "name" [$ux:str-or $t@name ""]]
+                                  [?attr "current" [$ux:str-or $t@current ""]]
+                                  [?splice [$content-tui-kids $t]]]]
+    [case "t:step"     [c:step    [?attr "name" [$ux:str-or $t@name ""]]
+                                  [?attr "state" [$ux:str-or $t@state "ahead"]]
+                                  [?attr "href" [$ux:str-or $t@href ""]]
+                                  [$string $t]]]
+    [; `value` joined the normal form in W15 (core face); the R2 checkout
+       composite found this readback still dropping it. ]
+    [case "t:quantity"  [c:quantity [?attr "name" [$ux:str-or $t@name ""]]
+                                  [?attr "label" [$ux:str-or $t@label ""]]
+                                  [?attr "verb" [$ux:str-or $t@verb ""]]
+                                  [?attr "value" [$ux:str-or $t@value ""]]
+                                  [?attr "min" [$ux:str-or $t@min "0"]]
+                                  [?attr "max" [$ux:str-or $t@max ""]]
+                                  [?splice [$content-tui-kids $t]]]]
+    [case "t:crumbs"   [c:breadcrumb [?splice [$content-tui-kids $t]]]]
+    [case "t:crumb"    [c:crumb   [?attr "href" [$ux:str-or $t@href ""]]
+                                  [?attr "current" [$ux:str-or $t@current "false"]]
+                                  [$string $t]]]
+    [case "t:pager"    [c:pager   [?attr "page" [$ux:str-or $t@page "1"]]
+                                  [?attr "pages" [$ux:str-or $t@pages ""]]
+                                  [?attr "total" [$ux:str-or $t@total ""]]
+                                  [?attr "prev-href" [$ux:str-or $t@prev-href ""]]
+                                  [?attr "next-href" [$ux:str-or $t@next-href ""]]
+                                  [?splice [$content-tui-kids $t]]]]
+    [case "t:page"     [c:page-link [?attr "n" [$ux:str-or $t@n ""]]
+                                    [?attr "href" [$ux:str-or $t@href ""]]
+                                    [?attr "current" [$ux:str-or $t@current "false"]]]]
+    [case "t:facet"    [c:facet   [?attr "name" [$ux:str-or $t@name ""]]
+                                  [?attr "label" [$ux:str-or $t@label ""]]
+                                  [?splice [$content-tui-kids $t]]]]
+    [case "t:facetval" [c:facet-value [?attr "value" [$ux:str-or $t@value ""]]
+                                      [?attr "count" [$ux:str-or $t@count ""]]
+                                      [?attr "href" [$ux:str-or $t@href ""]]
+                                      [?attr "selected" [$ux:str-or $t@selected "false"]]
+                                      [$string $t]]]
+    [case "t:sort"     [c:sort    [?attr "name" [$ux:str-or $t@name ""]]
+                                  [?attr "label" [$ux:str-or $t@label ""]]
+                                  [?splice [$content-tui-kids $t]]]]
+    [case "t:sortopt"  [c:sort-option [?attr "value" [$ux:str-or $t@value ""]]
+                                      [?attr "href" [$ux:str-or $t@href ""]]
+                                      [?attr "selected" [$ux:str-or $t@selected "false"]]
+                                      [$string $t]]]
+    [; P0-101 — same attribute order as the core and the web readback. ]
+    [case "t:panel"    [c:panel   [?attr "name" [$ux:str-or $t@name ""]]
+                                  [?attr "label" [$ux:str-or $t@label ""]]
+                                  [?splice [$content-tui-kids $t]]]]
+    [case "t:aside"    [c:aside   [?attr "label" [$ux:str-or $t@label ""]]
+                                  [?attr "open" [$ux:str-or $t@open "false"]]
+                                  [?attr "dismiss-href" [$ux:str-or $t@dismiss-href ""]]
+                                  [?splice [$content-tui-kids $t]]]]
+    [case "t:status"   [c:status  [?attr "tone" [$ux:str-or $t@tone "info"]]
+                                  [?splice [$content-tui-leaf $t]]]]
+    [else [c:unknown]]]]
+
+[?def content-tui-kids pure [returns any] ($t::any)
+  [$content-tui-flat $t/*]]
+
+[?def content-tui-leaf pure [returns any] ($t::any)
+  [?if [$exists $t/*] [then [$content-tui-kids $t]] [else [$string $t]]]]
+
+[?def content-repr-tui scope=public pure [returns string] ($el::any $ctx::map)
+  [$cx:canonical [$content-of-tui [$lower $el $ctx {}]]]]
+
+# ── §6 The shell's helpers — screen control, pure ───────────────────────────
+#
+# The escape sequences a full-screen client needs. They are here rather than
+# in the shell because they are part of what "render to a terminal" means, and
+# because `term.md` §5 rules them out of `cx-x/term` (input only).
+
+[?def alt-screen-on  scope=public pure [returns string] () [$concat [$esc] "[?1049h" [$esc] "[?25l"]]
+[?def alt-screen-off scope=public pure [returns string] () [$concat [$esc] "[?25h" [$esc] "[?1049l"]]
+[?def clear-home     scope=public pure [returns string] () [$concat [$esc] "[2J" [$esc] "[H"]]
+
+# status-bar — the footer keymap. lazygit's most-copied idea and the cheapest
+# usability win a terminal surface has: the bindings are on screen, so nothing
+# has to be memorized or documented elsewhere.
+[; THE BAR FITS THE WINDOW. It was padded and never clipped, so at 110
+   columns a twelve-entry keymap painted 128 — straight past the window edge
+   — and no string assertion could see it (register L6; found by the W18
+   keystroke harness on its first run, asserting frame width at a size).
+   Clipping the TEXT would cut the tail off "q quit", which is the one hint
+   a stuck reader needs most; instead whole entries are shed from just
+   before the end until the bar fits, so what remains is always complete
+   and the quit hint always survives. ]
+[?def status-bar scope=public pure [returns string] ($keys::any $w::int $opts::map)
+  [$style [$pad-vis [$bar-text [$fit-keys $keys $w]] $w]
+          [$theme-of $opts] "focus" [$color-of $opts]]]
+
+[?def bar-text pure [returns string] ($keys::any)
+  [$reduce [?for [in $k $keys]
+             [yield [$concat " " [$string $k@key] " " [$string $k@does]]]]
+    [?fn ($acc $s) [?if [= $acc ""] [then $s] [else [$concat $acc "  │" $s]]]] ""]]
+
+[?def fit-keys pure [returns any] ($keys::any $w::int)
+  [?let [= $n [$count $keys]]
+    [?if [or [<= $n 1] [<= [$vis-len [$bar-text $keys]] $w]]
+      [then $keys]
+      [else [$fit-keys [?for [in $i [$range 1 $n]]
+                         [where [not [= $i [- $n 1]]]]
+                         [yield [$nth $keys $i]]]
+                       $w]]]]]
+
+# ── docs ────────────────────────────────────────────────────────────────────
+[module-doc name=ux-tui
+  [scope """The TERMINAL RENDERER of the UX projection (EXPERIMENTAL x/ tier;
+   #787 W5): the second of two peers over `cx-x/ux`'s semantic vocabulary, and
+   the reason R5's renderer-agnostic claim is testable rather than asserted.
+   It lowers a semantic tree to a terminal tree, paints that to lines at a
+   given width with measured table columns, wrapped text, box-drawn panels and
+   SGR tones from a token document validated exactly as the CSS one is, and
+   derives a document-order focus ring so a keyboard shell can move, edit and
+   submit. Deliberately unlike a browser — a fixed cell grid, no CSS, no DOM,
+   no out-of-band swap engine, no pointer — so anything the vocabulary
+   silently assumed about a browser fails here rather than passing unnoticed.
+   Painting is pure: reading keys and writing the tty belong to the shell,
+   over `cx-x/term`. `content-of-tui` reads the terminal tree back to the
+   common content normal form the web renderer also targets."""]]
+
+[fn-doc name=render scope=public purity=pure
+  [sig """($el::any $ctx::map $opts::map) -> string | [err …]"""]
+  [summary """Paint one semantic tree as a terminal block, or refuse with one [err …] — running the SHARED semantic gate first, so a tree this renderer accepts and the web renderer rejects cannot exist."""]
+  [param-doc name=el """The semantic element tree."""]
+  [param-doc name=ctx """The fragment context map {route, feature, path, bind}."""]
+  [param-doc name=opts """{width, theme, color, focus} — geometry and styling are paint-time inputs, so a resize repaints without re-projecting."""]]
+[fn-doc name=lines-of scope=public purity=pure
+  [sig """($t::any $opts::map) -> [sequence string]"""]
+  [summary """Paint a terminal tree to its lines — what the shell writes into a region of the screen."""]
+  [param-doc name=t """The terminal tree from lower."""]
+  [param-doc name=opts """{width, theme, color, focus}."""]]
+[fn-doc name=lower scope=public purity=pure
+  [sig """($el::any $ctx::map $opts::map) -> any"""]
+  [summary """Lower a semantic tree to the terminal tree — structure and content, no escape codes and no geometry."""]
+  [param-doc name=el """The semantic element tree."""]
+  [param-doc name=ctx """The fragment context map."""]
+  [param-doc name=opts """{values} — the shell's edit overlay, a render input rather than a rewrite of the tree: the tree stays the server's, and what the operator has typed but not yet submitted stays the client's."""]]
+[fn-doc name=value-of scope=public purity=pure
+  [sig """($opts::map $name::string $dflt::string) -> string"""]
+  [summary """A control's edited value from the shell's overlay, or the tree's own."""]
+  [param-doc name=opts """{values: a sequence of [val name=… text=…]}."""]
+  [param-doc name=name """The control name."""]
+  [param-doc name=dflt """The value the tree carries."""]]
+[fn-doc name=panel-stops scope=public purity=pure
+  [sig """($t::any) -> [sequence element]"""]
+  [summary """The ring positions that begin a new panel — the coarse movement scale. A flat ring puts every table row between the operator and the form below it, which is what makes a keyboard surface feel unnavigable however good each stop is."""]
+  [param-doc name=t """The terminal tree."""]]
+[fn-doc name=focusables scope=public purity=pure
+  [sig """($t::any) -> [sequence element]"""]
+  [summary """The focus ring in document order — derived from the tree rather than hand-listed, so it stays correct when the projection changes."""]
+  [param-doc name=t """The terminal tree."""]]
+[fn-doc name=focus-at scope=public purity=pure
+  [sig """($t::any $i::int) -> element | ()"""]
+  [summary """The focusable at a 1-based ring position, WRAPPING — a ring that clamps strands the last control."""]
+  [param-doc name=t """The terminal tree."""]
+  [param-doc name=i """The ring position."""]]
+[fn-doc name=form-inputs scope=public purity=pure
+  [sig """($t::any $fid::string) -> [sequence element]"""]
+  [summary """Every input and hidden field under one form — what a submit collects, including the CSRF token, from the same tree the browser posts."""]
+  [param-doc name=t """The terminal tree."""]
+  [param-doc name=fid """The form's derived id."""]]
+[fn-doc name=base-theme scope=public purity=pure
+  [sig """() -> element"""]
+  [summary """The pack's default terminal theme: one token per visual decision, values as SGR parameter strings."""]]
+[fn-doc name=token-value-safe scope=public purity=pure
+  [sig """($v::string) -> bool"""]
+  [summary """Is a terminal token value safe — digits and semicolons only? An SGR parameter is tenant data reaching a control sequence, an injection surface exactly like a stylesheet."""]
+  [param-doc name=v """The token value."""]]
+[fn-doc name=theme-refusals scope=public purity=pure
+  [sig """($theme::element) -> [sequence element]"""]
+  [summary """Every unsafe token value in one terminal theme document."""]
+  [param-doc name=theme """A [ux:term-theme …] token document."""]]
+[fn-doc name=editor-kind-of scope=public purity=pure
+  [sig """($kind::string) -> string"""]
+  [summary """Map a declared CX kind to this renderer's editor. Deliberately NOT the web mapping — kind states the type, never the widget — though money and decimal stay text for the same carrier reason."""]
+  [param-doc name=kind """The CX kind name."""]]
+[fn-doc name=vis-len scope=public purity=pure
+  [sig """($s::string) -> int"""]
+  [summary """A string's VISIBLE width, with SGR sequences removed — every pad and border measures with this, because raw length counts escape bytes as columns and shears every table once colour is on."""]
+  [param-doc name=s """The possibly-styled string."""]]
+[fn-doc name=pad-vis scope=public purity=pure
+  [sig """($s::string $w::int) -> string"""]
+  [summary """Pad a possibly-styled string to a visible width."""]
+  [param-doc name=s """The string."""]
+  [param-doc name=w """The target visible width."""]]
+[fn-doc name=wrap scope=public purity=pure
+  [sig """($s::string $w::int) -> [sequence string]"""]
+  [summary """Word-wrap text to a width — a terminal has a hard right edge and no reflow engine, and the vocabulary never said how wide anything is."""]
+  [param-doc name=s """The text."""]
+  [param-doc name=w """The width."""]]
+[fn-doc name=inline scope=public purity=pure
+  [sig """($t::any $opts::map) -> string"""]
+  [summary """An element's content as one line — the terminal analogue of inline flow, for leaves and runs of badges and links."""]
+  [param-doc name=t """The terminal element."""]
+  [param-doc name=opts """{theme, color}."""]]
+[fn-doc name=content-of-tui scope=public purity=pure
+  [sig """($t::any) -> element"""]
+  [summary """Read the terminal tree back to the common content normal form — the TERMINAL side of the three-way equivalence assertion."""]
+  [param-doc name=t """The terminal tree."""]]
+[fn-doc name=content-repr-tui scope=public purity=pure
+  [sig """($el::any $ctx::map) -> string"""]
+  [summary """The canonical bytes the terminal rendering contributes to the equivalence assertion."""]
+  [param-doc name=el """The semantic element tree."""]
+  [param-doc name=ctx """The fragment context map."""]]
+[fn-doc name=alt-screen-on scope=public purity=pure
+  [sig """() -> string"""]
+  [summary """Enter the alternate screen buffer and hide the cursor — a full-screen surface must not scroll the user's scrollback away."""]]
+[fn-doc name=alt-screen-off scope=public purity=pure
+  [sig """() -> string"""]
+  [summary """Restore the cursor and leave the alternate screen, putting the terminal back exactly as it was found."""]]
+[fn-doc name=clear-home scope=public purity=pure
+  [sig """() -> string"""]
+  [summary """Clear the screen and home the cursor — the start of every repaint."""]]
+[fn-doc name=status-bar scope=public purity=pure
+  [sig """($keys::any $w::int $opts::map) -> string"""]
+  [summary """The footer keymap: bindings on screen, so nothing has to be memorized or documented elsewhere."""]
+  [param-doc name=keys """A sequence of [key key=… does=…] bindings."""]
+  [param-doc name=w """The terminal width."""]
+  [param-doc name=opts """{theme, color}."""]]
+[fn-doc name=sgr scope=public purity=pure
+  [sig """($code::string) -> string"""]
+  [summary """One SGR control sequence from its parameter string."""]
+  [param-doc name=code """The SGR parameters."""]]
+[fn-doc name=esc scope=public purity=pure
+  [sig """() -> string"""]
+  [summary """The ESC byte — CX string literals cannot encode it, so it comes from bytes."""]]
+[fn-doc name=sgr-reset scope=public purity=pure
+  [sig """() -> string"""]
+  [summary """The SGR reset sequence."""]]
+[fn-doc name=style scope=public purity=pure
+  [sig """($s::string $theme::any $token::string $color::bool) -> string"""]
+  [summary """Wrap a string in one theme token's SGR, or leave it alone when colour is off."""]
+  [param-doc name=s """The string."""]
+  [param-doc name=theme """The terminal theme document."""]
+  [param-doc name=token """The token name."""]
+  [param-doc name=color """Whether colour is on."""]]
+[fn-doc name=join-lines scope=public purity=pure
+  [sig """($ls::any) -> string"""]
+  [summary """Join a sequence of rendered lines with newlines into one screen string — a pure, total reduction; the empty sequence yields the empty string."""]]

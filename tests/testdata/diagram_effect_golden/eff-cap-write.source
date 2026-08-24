@@ -1,0 +1,1 @@
+[$io:write-file "/tmp/out" "x"]

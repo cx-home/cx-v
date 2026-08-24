@@ -1,0 +1,2 @@
+[?lib './helper.cx' as=h]
+[$h:go 1]

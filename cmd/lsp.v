@@ -370,8 +370,8 @@ fn publish_diagnostics(uri string, mut state LspState) {
 	// "wrap the body in [?bulkhead] for bounded concurrency" hint no longer
 	// applies; `[?bulkhead]` is demoted to an experimental resilience primitive.)
 	// CXLS006 advisory when a [?for] / [?for-array]
-	// [?for-map] generator source is an open-end range (`1 to *`) with no
-	// `:take` / `:takewhile` terminator. Forcing the iterator at eval
+	// [?for-map] generator source is an open-end range (`[$range N *]`) with no
+	// `[take]` / `[take-while]` terminator. Forcing the iterator at eval
 	// time raises CXER0100; the advisory surfaces this statically so the
 	// editor flags it before run. See vcx/cmd/lsp_infinite_diagnostics.v.
 	for d in infinite_diagnostics(source) {
@@ -556,8 +556,8 @@ fn semantic_tokens_legend() json2.Any {
 	token_types := [
 		json2.Any('namespace'),    // 0  — module prefix (cx:, log:, fn:, …)
 		json2.Any('keyword'),      // 1  — directive name (if, for, fn, let, …)
-		json2.Any('variable'),     // 2  — bound names (?let x, ?for x)
-		json2.Any('parameter'),    // 3  — slot labels (:let, :where, :return)
+		json2.Any('variable'),     // 2  — bound names ([= $x …], [in $x …])
+		json2.Any('parameter'),    // 3  — labeled slot names (`:caps`, `:policy`, …)
 		json2.Any('property'),     // 4  — attribute names
 		json2.Any('string'),       // 5  — quoted string values
 		json2.Any('number'),       // 6  — numeric scalars

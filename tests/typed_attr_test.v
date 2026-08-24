@@ -57,8 +57,11 @@ fn test_typed_attr_value_coercion() {
 	// `::int`/`::u16` coerce to i64; `::decimal`/`::bigint`/`::atom` keep the
 	// string payload; `::string` stays a raw string even over a numeric form.
 	assert canon('[e n::i32=42]') == '[e n::i32=42]'
-	assert canon('[e d::decimal=1.50]') == '[e d::decimal=1.50]'
-	assert canon('[e big::bigint=99999999999999999999]') == '[e big::bigint=99999999999999999999]'
+	assert canon('[e d::decimal=1.50]') == '[e d=1.50]' // I1 2b: fixed-point IS decimal — annotation redundant
+	// I1 L45: over-i64 bigint drops the annotation (the bare image
+	// auto-promotes to bigint, [L20]); a ≤ i64 bigint keeps it.
+	assert canon('[e big::bigint=99999999999999999999]') == '[e big=99999999999999999999]'
+	assert canon('[e small::bigint=42]') == '[e small::bigint=42]'
 	assert canon('[e k::atom=urgent]') == '[e k=:urgent]' // atom canonicalises to the sigil
 	assert canon("[e code::string=007]") == "[e code='007']"
 }
@@ -108,7 +111,7 @@ fn test_xml_import_autotypes() {
 
 fn test_xml_import_applies_sidecar() {
 	got := xml_to_cx('<event count="5" score="1.5" tag="urgent" host="db-1" cx:attr-types="count=u16 score=decimal tag=atom"/>')
-	assert got == '[event count::u16=5 score::decimal=1.5 tag=:urgent host=db-1]', got
+	assert got == '[event count::u16=5 score=1.5 tag=:urgent host=db-1]', got // I1 2b: bare 1.5 re-types decimal
 }
 
 fn test_xml_import_pins_string() {

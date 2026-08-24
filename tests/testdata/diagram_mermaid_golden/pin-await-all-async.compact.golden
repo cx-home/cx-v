@@ -1,0 +1,15 @@
+%%cx:Wz9hd2FpdC1hbGwgKFs/YXN5bmMgYm9keT1bc3RlcC1hXV0sIFs/YXN5bmMgYm9keT1bc3RlcC1iXV0pXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3{"[?await-all]"}
+    n4[["[?async] future"]]
+    n5["[step-a]"]
+    n4 -- "spawn" --> n5
+    n4 --> n3
+    n6[["[?async] future"]]
+    n7["[step-b]"]
+    n6 -- "spawn" --> n7
+    n6 --> n3
+    n1 --> n3
+    n3 --> n2

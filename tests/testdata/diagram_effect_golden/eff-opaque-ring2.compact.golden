@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  unk_1[/"Ring-2 pack verb — charge registered at runtime: journal:read"/]
+  any{{"any granted capability"}}
+  prog ==> unk_1
+  unk_1 ==> any

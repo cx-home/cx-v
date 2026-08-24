@@ -1,4 +1,4 @@
-[test-suite name=http
+[test-suite name=http ring=2
   [doc [#
 conformance fixtures for cx-stdlib/http (spec/02-inprogress/stdlib_http.md §10).
 
@@ -61,7 +61,7 @@ conformance fixtures for cx-stdlib/http (spec/02-inprogress/stdlib_http.md §10)
 
  [; §3.4 introspection — status / ok (PURE, response-only) ]
 
- [case id=http-001-status-200 level=core
+ [case id=http-001-status-200 level=core ring=1
   [tags http status pure]
   [in-cx [#
 [empty]
@@ -75,7 +75,7 @@ conformance fixtures for cx-stdlib/http (spec/02-inprogress/stdlib_http.md §10)
 #]]
  ]
 
- [case id=http-002-status-404-is-a-value level=core
+ [case id=http-002-status-404-is-a-value level=core ring=1
   [tags http status non-2xx value pure]
   [in-cx [#
 [empty]
@@ -89,7 +89,7 @@ conformance fixtures for cx-stdlib/http (spec/02-inprogress/stdlib_http.md §10)
 #]]
  ]
 
- [case id=http-003-ok-200-true level=core
+ [case id=http-003-ok-200-true level=core ring=1
   [tags http ok pure]
   [in-cx [#
 [empty]
@@ -103,7 +103,7 @@ true
 #]]
  ]
 
- [case id=http-004-ok-404-false level=core
+ [case id=http-004-ok-404-false level=core ring=1
   [tags http ok pure]
   [in-cx [#
 [empty]
@@ -117,7 +117,7 @@ false
 #]]
  ]
 
- [case id=http-005-status-on-request-arg-invalid level=core
+ [case id=http-005-status-on-request-arg-invalid level=core ring=1
   [tags http status CXER4539 error pure]
   [in-cx [#
 [empty]
@@ -133,7 +133,7 @@ cx-err:CXER4539
 
  [; §3.4 header / headers / headers-named (PURE, case-insensitive) ]
 
- [case id=http-006-header-case-insensitive level=core
+ [case id=http-006-header-case-insensitive level=core ring=1
   [tags http header case-insensitive pure]
   [in-cx [#
 [empty]
@@ -147,7 +147,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-007-header-on-request level=core
+ [case id=http-007-header-on-request level=core ring=1
   [tags http header request pure]
   [in-cx [#
 [empty]
@@ -161,7 +161,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-008-header-first-of-duplicates level=core
+ [case id=http-008-header-first-of-duplicates level=core ring=1
   [tags http header duplicate pure]
   [in-cx [#
 [empty]
@@ -175,7 +175,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-009-header-absent-is-empty-nodeset level=core
+ [case id=http-009-header-absent-is-empty-nodeset level=core ring=1
   [tags http header absence empty-nodeset pure]
   [in-cx [#
 [empty]
@@ -189,7 +189,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-010-header-present-empty-value level=core
+ [case id=http-010-header-present-empty-value level=core ring=1
   [tags http header present-empty pure]
   [in-cx [#
 [empty]
@@ -203,7 +203,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-011-path-value-present-empty level=core
+ [case id=http-011-path-value-present-empty level=core ring=1
   [tags http header path present-empty pure]
   [in-cx [#
 [empty]
@@ -217,7 +217,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-012-path-value-absent-is-empty level=core
+ [case id=http-012-path-value-absent-is-empty level=core ring=1
   [tags http header path absence pure]
   [in-cx [#
 [empty]
@@ -231,7 +231,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-013-headers-sequence-receive-order level=core
+ [case id=http-013-headers-sequence-receive-order level=core ring=1
   [tags http headers sequence pure]
   [in-cx [#
 [empty]
@@ -245,7 +245,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-014-headers-empty-no-block level=core
+ [case id=http-014-headers-empty-no-block level=core ring=1
   [tags http headers empty pure]
   [in-cx [#
 [empty]
@@ -259,7 +259,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-015-headers-named-all-duplicates level=core
+ [case id=http-015-headers-named-all-duplicates level=core ring=1
   [tags http headers-named duplicate pure]
   [in-cx [#
 [empty]
@@ -273,7 +273,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-016-headers-named-absent-empty level=core
+ [case id=http-016-headers-named-absent-empty level=core ring=1
   [tags http headers-named absence pure]
   [in-cx [#
 [empty]
@@ -289,7 +289,7 @@ cx-err:CXER4539
 
  [; §3.4 / §2.5 body presence + accessors (PURE, total) ]
 
- [case id=http-017-has-body-true level=core
+ [case id=http-017-has-body-true level=core ring=1
   [tags http has-body pure]
   [in-cx [#
 [empty]
@@ -303,7 +303,7 @@ true
 #]]
  ]
 
- [case id=http-018-has-body-false-bodyless level=core
+ [case id=http-018-has-body-false-bodyless level=core ring=1
   [tags http has-body bodyless pure]
   [in-cx [#
 [empty]
@@ -317,7 +317,7 @@ false
 #]]
  ]
 
- [case id=http-019-has-body-on-request level=core
+ [case id=http-019-has-body-on-request level=core ring=1
   [tags http has-body request pure]
   [in-cx [#
 [empty]
@@ -331,7 +331,7 @@ true
 #]]
  ]
 
- [case id=http-020-body-bytes-content level=core
+ [case id=http-020-body-bytes-content level=core ring=1
   [tags http body-bytes pure]
   [in-cx [#
 [empty]
@@ -345,7 +345,7 @@ true
 #]]
  ]
 
- [case id=http-021-body-bytes-empty-no-body level=core
+ [case id=http-021-body-bytes-empty-no-body level=core ring=1
   [tags http body-bytes empty pure]
   [in-cx [#
 [empty]
@@ -359,7 +359,7 @@ true
 #]]
  ]
 
- [case id=http-022-body-bytes-wire-equals-body-bytes level=core
+ [case id=http-022-body-bytes-wire-equals-body-bytes level=core ring=1
   [tags http body-bytes-wire pure]
   [in-cx [#
 [empty]
@@ -373,7 +373,7 @@ true
 #]]
  ]
 
- [case id=http-023-body-text-utf8-default level=core
+ [case id=http-023-body-text-utf8-default level=core ring=1
   [tags http body-text utf8 pure]
   [in-cx [#
 [empty]
@@ -387,7 +387,7 @@ true
 #]]
  ]
 
- [case id=http-024-body-text-latin1 level=core
+ [case id=http-024-body-text-latin1 level=core ring=1
   [tags http body-text latin-1 charset pure]
   [in-cx [#
 [empty]
@@ -401,7 +401,7 @@ true
 #]]
  ]
 
- [case id=http-025-body-text-unsupported-charset level=core
+ [case id=http-025-body-text-unsupported-charset level=core ring=1
   [tags http body-text CXER4532 charset error pure]
   [in-cx [#
 [empty]
@@ -417,7 +417,7 @@ cx-err:CXER4532
 
  [; §3.1 client construction (PURE bookkeeping — no net at construction) ]
 
- [case id=http-026-client-default level=core
+ [case id=http-026-client-default level=core ring=1
   [tags http client pure]
   [in-cx [#
 [empty]
@@ -431,7 +431,7 @@ cx-err:CXER4532
 #]]
  ]
 
- [case id=http-027-client-defaulted-opts level=core
+ [case id=http-027-client-defaulted-opts level=core ring=1
   [tags http client opts-default pure]
   [in-cx [#
 [empty]
@@ -445,7 +445,7 @@ cx-err:CXER4532
 #]]
  ]
 
- [case id=http-028-close-idempotent-null level=core
+ [case id=http-028-close-idempotent-null level=core ring=1
   [tags http close idempotent pure]
   [in-cx [#
 [empty]
@@ -461,7 +461,7 @@ null
 
  [; §3.2 one-shot verbs — GATED on net → CXER0271 under the empty set ]
 
- [case id=http-029-get-cap-denied level=core
+ [case id=http-029-get-cap-denied level=core ring=1
   [tags http get capability CXER0271]
   [in-cx [#
 [empty]
@@ -475,7 +475,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-030-post-cap-denied level=core
+ [case id=http-030-post-cap-denied level=core ring=1
   [tags http post capability CXER0271]
   [in-cx [#
 [empty]
@@ -489,7 +489,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-031-put-cap-denied level=core
+ [case id=http-031-put-cap-denied level=core ring=1
   [tags http put capability CXER0271]
   [in-cx [#
 [empty]
@@ -503,7 +503,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-032-del-cap-denied level=core
+ [case id=http-032-del-cap-denied level=core ring=1
   [tags http del capability CXER0271]
   [in-cx [#
 [empty]
@@ -517,7 +517,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-033-patch-cap-denied level=core
+ [case id=http-033-patch-cap-denied level=core ring=1
   [tags http patch capability CXER0271]
   [in-cx [#
 [empty]
@@ -531,7 +531,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-034-head-cap-denied level=core
+ [case id=http-034-head-cap-denied level=core ring=1
   [tags http head capability CXER0271]
   [in-cx [#
 [empty]
@@ -545,7 +545,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-035-options-cap-denied level=core
+ [case id=http-035-options-cap-denied level=core ring=1
   [tags http options capability CXER0271]
   [in-cx [#
 [empty]
@@ -559,7 +559,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-036-request-generic-cap-denied level=core
+ [case id=http-036-request-generic-cap-denied level=core ring=1
   [tags http request capability CXER0271]
   [in-cx [#
 [empty]
@@ -575,7 +575,7 @@ cx-err:CXER0271
 
  [; §2.6 / §7 ❌ — scheme dispatch: only http(s); other → CXER4525 (PURE) ]
 
- [case id=http-037-ftp-scheme-url-invalid level=core
+ [case id=http-037-ftp-scheme-url-invalid level=core ring=1
   [tags http get CXER4525 scheme error]
   [in-cx [#
 [empty]
@@ -589,7 +589,7 @@ cx-err:CXER4525
 #]]
  ]
 
- [case id=http-038-ws-scheme-url-invalid level=core
+ [case id=http-038-ws-scheme-url-invalid level=core ring=1
   [tags http get CXER4525 scheme error]
   [in-cx [#
 [empty]
@@ -605,7 +605,7 @@ cx-err:CXER4525
 
  [; §3.2 generic-verb arg validation (PURE, ahead of cap) ]
 
- [case id=http-039-request-connect-arg-invalid level=core
+ [case id=http-039-request-connect-arg-invalid level=core ring=1
   [tags http request CONNECT CXER4539 error]
   [in-cx [#
 [empty]
@@ -619,7 +619,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-040-request-bad-method-arg-invalid level=core
+ [case id=http-040-request-bad-method-arg-invalid level=core ring=1
   [tags http request method CXER4539 error]
   [in-cx [#
 [empty]
@@ -635,7 +635,7 @@ cx-err:CXER4539
 
  [; §3.3 send — client-form [request] (url=) through a pooled client ]
 
- [case id=http-041-send-cap-denied level=core
+ [case id=http-041-send-cap-denied level=core ring=1
   [tags http send capability CXER0271]
   [in-cx [#
 [empty]
@@ -649,7 +649,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-042-send-relative-no-base-url level=core
+ [case id=http-042-send-relative-no-base-url level=core ring=1
   [tags http send CXER4525 url error]
   [in-cx [#
 [empty]
@@ -663,7 +663,7 @@ cx-err:CXER4525
 #]]
  ]
 
- [case id=http-043-send-path-on-client-request level=core
+ [case id=http-043-send-path-on-client-request level=core ring=1
   [tags http send CXER4539 url-path error]
   [in-cx [#
 [empty]
@@ -677,7 +677,7 @@ cx-err:CXER4539
 #]]
  ]
 
- [case id=http-044-send-missing-url level=core
+ [case id=http-044-send-missing-url level=core ring=1
   [tags http send CXER4539 url error]
   [in-cx [#
 [empty]
@@ -877,7 +877,7 @@ true
 #]]
  ]
 
- [case id=http-066-sse-source-open-false level=core gate=enforced
+ [case id=http-066-sse-source-open-false level=core gate=enforced ring=1
   [tags http sse source-open pure]
   [in-cx [#
 [empty]
@@ -891,7 +891,10 @@ false
 #]]
  ]
 
- [case id=http-067-last-event-id-present level=core gate=enforced
+ [case id=http-067-last-event-id-present level=core gate=enforced ring=1
+  [; ring=1 like http-066: last-event-id is a PURE accessor over the CLIENT
+     [sse-source] handle — part of the ring-1 http-client pack (I3 seam H);
+     the I0 C8 per-case repair tagged 066 but missed the 067/068 pair. ]
   [tags http sse last-event-id pure]
   [in-cx [#
 [empty]
@@ -905,7 +908,8 @@ false
 #]]
  ]
 
- [case id=http-068-last-event-id-absent level=core gate=enforced
+ [case id=http-068-last-event-id-absent level=core gate=enforced ring=1
+  [; ring=1 — see the http-067 note. ]
   [tags http sse last-event-id absence]
   [in-cx [#
 [empty]
@@ -961,7 +965,7 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=http-072-sse-connect-denied level=core gate=enforced
+ [case id=http-072-sse-connect-denied level=core gate=enforced ring=1
   [tags http sse-connect CXER0271 net-denial]
   [in-cx [#
 [empty]
@@ -1003,7 +1007,7 @@ cx-err:CXER4539
     4544 + stream-open/source-open/last-event-id) remain below, and one denial
     case keeps the sse-events name covered. ]
 
- [case id=http-073-sse-events-denied level=core gate=enforced
+ [case id=http-073-sse-events-denied level=core gate=enforced ring=1
   [tags http sse-events CXER0271 net-denial]
   [in-cx [#
 [empty]

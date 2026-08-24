@@ -77,7 +77,7 @@ pub fn error_hooks_reset() {
 // err is unchanged and keeps flowing exactly as if the hook were absent.
 // Reentrancy guard: an observe FN that itself raises/constructs an err does
 // NOT re-fire hooks (hook-fault isolation); an observe failure is discarded.
-fn fire_raise_observe(err_val cx.Node) {
+pub fn fire_raise_observe(err_val cx.Node) {
 	mut st := error_hook_state()
 	if st.frames.len == 0 || st.firing {
 		return

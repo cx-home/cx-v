@@ -1,4 +1,4 @@
-[test-suite name=bus
+[test-suite name=bus ring=2
   [doc [#
 conformance fixtures for cx-stdlib/bus (spec/02-inprogress/xap/stdlib_bus.md
 §6/§10). In-process publish/subscribe with synchronous, deterministic,
@@ -434,7 +434,15 @@ false
   [?with-open [$bus:bus] $b
     [?with-open [$bus:on $b :save [?fn ($m) [$store:put-doc $st [doc x=1]]]] $s
       [?let [= $d [$bus:emit $b [do :save]]]
-        [$store:exists $st 'a4a2dc818fa04391655363de78c057c0c4d0971fba0046477e2b8072c3f7f20b']]]]]
+        [; the probe key is the Tier-1 tagged address of the handler's doc
+           ('[doc x=1]' canonical + trailing newline). The original bare-hex
+           spelling went VACUOUS at the I1 address cutover (bare keys match
+           nothing in a tagged-key table) and the epoch re-bless adopted the
+           inverted 'false' — restored to the case's authored intent: bus
+           dispatch is synchronous and the handler's store effect flows
+           through (#691 §10 surfaced the inversion when the store started
+           REFUSING bare hex). ]
+        [$store:exists $st 'sha2-256:e5e0db0b387fbc7f12a6621229d8ed8c7c888e2fa0845354ef7c7433a4084e37']]]]]
 #]]
   [out-text [#
 true
@@ -474,6 +482,13 @@ true
 
  [case id=bus-029-collect-aggregates-faults level=core gate=enforced
   [tags bus emit on-fault collect faults]
+  [; #848 — the wrapped err carries its CAUSE'S MESSAGE, not just the code.
+     This case previously expected `returned err: cx-err:CXER4665` alone,
+     which pinned the defect: `!` reported the code and DISCARDED the
+     message, so the one fact that makes a refusal actionable was dropped
+     exactly where the spec prescribes `!` as the way to guard a fallible
+     binding (§6.2). The wrapping is the operator's contribution, not a
+     replacement for what it wrapped. ]
   [in-cx [# [empty] #]]
   [in-code [#
 [?lib 'cx-stdlib/bus']
@@ -482,7 +497,7 @@ true
     [?let [= $d [$bus:emit $b [do :t] {on-fault: :collect}]] $d/faults]]]
 #]]
   [out-text [#
-[err code=cx-err:CXER0001 message='call "bus:emit!" returned err: cx-err:CXER4665']
+[err code=cx-err:CXER0001 message='call "bus:emit!" returned err: cx-err:CXER4665: E_BUS_ASYNC_UNSUPPORTED: emit has no async mode (N-BUS-1)']
 #]]
  ]
 
@@ -613,7 +628,7 @@ order (§4.1).
       [$map $d/fired/subscription [?fn ($x) $x@id]]]]]]]
 #]]
   [out-text [#
-('s-1', 's-3', 's-2')
+(s-1, s-3, s-2)
 #]]
  ]
 ]

@@ -1,4 +1,4 @@
-[test-suite name=prof
+[test-suite name=prof ring=1
   [doc [#
 conformance fixtures for cx-stdlib/prof (spec/std-lib/prof.md §6).
 
@@ -99,7 +99,7 @@ cx-err:CXER0271
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[$prof:time-fn "work" [?fn () 42] {clock="cpu"}]
+[$prof:time-fn "work" [?fn () 42] opts={clock: "cpu"}]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -127,7 +127,7 @@ cx-err:CXER0271
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[$prof:trace "request" {request-id="abc"}]
+[$prof:trace "request" {request-id: "abc"}]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -229,7 +229,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[$prof:histogram-observe "prof-013-lat" 8.1]
+[$prof:histogram-observe "prof-013-lat" 8.1e0]
 #]]
   [out-text [#
 null
@@ -243,7 +243,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[?let [= $a [$prof:histogram-observe "prof-014-lat" 1.0]] [= $b [$prof:histogram-observe "prof-014-lat" 2.0]] [= $c [$prof:histogram-observe "prof-014-lat" 3.0]] [= $s [$prof:histogram-stats "prof-014-lat"]]
+[?let [= $a [$prof:histogram-observe "prof-014-lat" 1.0e0]] [= $b [$prof:histogram-observe "prof-014-lat" 2.0e0]] [= $c [$prof:histogram-observe "prof-014-lat" 3.0e0]] [= $s [$prof:histogram-stats "prof-014-lat"]]
   $s@count]
 #]]
   [out-text [#
@@ -272,7 +272,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[?let [= $_ [$prof:histogram-observe "prof-016-lat" 5.0]]
+[?let [= $_ [$prof:histogram-observe "prof-016-lat" 5.0e0]]
   [$prof:histogram-reset "prof-016-lat"]]
 #]]
   [out-text [#
@@ -287,7 +287,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[?let [= $a [$prof:histogram-observe "prof-017-lat" 5.0]] [= $b [$prof:histogram-observe "prof-017-lat" 6.0]] [= $c [$prof:histogram-reset "prof-017-lat"]] [= $s [$prof:histogram-stats "prof-017-lat"]]
+[?let [= $a [$prof:histogram-observe "prof-017-lat" 5.0e0]] [= $b [$prof:histogram-observe "prof-017-lat" 6.0e0]] [= $c [$prof:histogram-reset "prof-017-lat"]] [= $s [$prof:histogram-stats "prof-017-lat"]]
   $s@count]
 #]]
   [out-text [#
@@ -307,7 +307,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[$prof:histogram-observe "prof-018-lat" [/ 1.0 0.0]]
+[$prof:histogram-observe "prof-018-lat" [/ 1.0e0 0.0e0]]
 #]]
   [out-err [#
 cx-err:CXER2103
@@ -379,7 +379,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[$prof:prof-configure {trace-sink="carrier-pigeon"}]
+[$prof:prof-configure {trace-sink: "carrier-pigeon"}]
 #]]
   [out-err [#
 cx-err:CXER2100
@@ -408,7 +408,7 @@ null
 #]]
   [in-code [#
 [?lib 'cx-stdlib/prof']
-[?let [= $_ [$prof:prof-configure {trace-sink="file" trace-file-path="/nonexistent-dir-xyz/trace.jsonl"}]]
+[?let [= $_ [$prof:prof-configure {trace-sink: "file", trace-file-path: "/nonexistent-dir-xyz/trace.jsonl"}]]
   [$prof:trace-flush]]
 #]]
   [out-err [#

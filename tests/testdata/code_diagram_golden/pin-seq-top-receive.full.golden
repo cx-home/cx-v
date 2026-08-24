@@ -1,0 +1,6 @@
+sequenceDiagram
+  participant INPUT
+  participant ch
+  participant OUTPUT
+  participant main
+  ch -->> main : msg

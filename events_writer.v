@@ -498,7 +498,7 @@ fn is_known_scalar_type(dt string) bool {
 	return match dt {
 		'int', 'i8', 'i16', 'i32', 'i64',
 		'u8', 'u16', 'u32', 'u64',
-		'float', 'f32', 'f64', 'decimal', 'f16',
+		'float', 'f32', 'f64', 'decimal', 'bigint', 'f16',
 		'bool', 'null', 'string', 's',
 		'date', 'datetime', 'bytes' { true }
 		else { false }
@@ -913,8 +913,11 @@ fn (mut w CxEventsWriter) json_emit_scalar(data_type ?string, value string) ! {
 	w.json_write_sibling_comma()!
 	dt := data_type or { 'string' }
 	val_json := match dt {
-		'int', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64' { value }
-		'float', 'f32', 'f64', 'decimal', 'f16' { value }
+		'int', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64', 'bigint' { value }
+		// I1 stream 11 (defect B): decimal rides a QUOTED string in JSON
+		// lanes — precision-preserving, exactly like the batch emitter.
+		'float', 'f32', 'f64', 'f16' { value }
+		'decimal' { json_str(value) }
 		'bool' { value }
 		'null' { 'null' }
 		else { json_str(value) }
@@ -1073,8 +1076,13 @@ fn (mut w CxEventsWriter) yaml_emit_scalar(data_type ?string, value string) ! {
 	key_ind  := item_ind + '  '
 	dt := data_type or { 'string' }
 	val_yaml := match dt {
-		'int', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64' { value }
-		'float', 'f32', 'f64', 'decimal', 'f16' { value }
+		'int', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16', 'u32', 'u64', 'bigint' { value }
+		'float', 'f32', 'f64', 'f16' { value }
+		// I1 stream 11 (defect B, #703): decimal rides the batch emitter's
+		// tagged form in the YAML lane — a bare 1.10 reads back as a lossy
+		// float in every YAML parser (the dataType field alone does not
+		// stop the scalar from being float-typed by consumers).
+		'decimal' { '!!cx:decimal "${value}"' }
 		'bool' { value }
 		'null' { 'null' }
 		else { yaml_quote(value) }

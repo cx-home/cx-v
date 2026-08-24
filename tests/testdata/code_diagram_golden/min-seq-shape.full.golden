@@ -1,0 +1,11 @@
+sequenceDiagram
+  participant INPUT
+  participant producer
+  participant consumer
+  participant OUTPUT
+  activate producer
+  Note over producer : [ok]
+  deactivate producer
+  activate consumer
+  Note over consumer : [ok]
+  deactivate consumer

@@ -10,9 +10,11 @@
  *
  * See spec/abi.md §1.6 for the public contract. */
 
-/* Use the subdirectory header to bypass V's `<gc.h>` wrapper (which
- * references V-only types like `u64` and isn't legal C on its own). */
-#include <gc/gc.h>
+/* The top-level `<gc.h>` wrapper is legal standalone C since the fork
+ * fix for vlang/v#27179 (GC_word, no V-only types) — the old
+ * subdirectory-path workaround (#755) is retired; this include is the
+ * live witness that plain-C shims can use the wrapper directly. */
+#include <gc.h>
 
 #include "gc_thread_shim.h"
 

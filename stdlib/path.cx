@@ -47,7 +47,7 @@
   [sig """($p::string) -> [sequence string]"""]
   [summary """Split a path into its component segments, in order."""]
   [example [code """[?lib 'cx-stdlib/path']
-[$path:parts "/a/b/c.txt"]"""] [expect """('a', 'b', 'c.txt')"""]]]
+[$path:parts "/a/b/c.txt"]"""] [expect """(a, b, 'c.txt')"""]]]
 
 [; §3.2 composition ]
 [?def join      scope=public pure [returns string] (*$parts::string)    [$path-join $parts]]

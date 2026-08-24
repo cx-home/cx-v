@@ -814,9 +814,11 @@ fn envelope_child_ll(n Node, mut out []JsonVal) {
 			out << sem_element_envelope(n)
 		}
 		TextNode {
-			if n.value.trim_space().len > 0 {
-				out << JsonVal(n.value)
-			}
+			// I1 W-6 + companion (owner-ruled): every string is a value and
+			// crosses the wire — empty AND whitespace-only included. XML
+			// layout whitespace no longer reaches the tree (stripped at
+			// import), so there is nothing left to filter here.
+			out << JsonVal(n.value)
 		}
 		ScalarNode {
 			out << scalar_native(n) // typed kinds ride JsonTyped → carrier / tag
@@ -873,16 +875,29 @@ fn node_value_ll(n Node) JsonVal {
 fn map_node_ll(n MapNode) JsonVal {
 	mut obj := map[string]JsonVal{}
 	mut ktypes := map[string]JsonVal{}
+	mut decls := map[string]JsonVal{}
 	for entry in n.entries {
 		kstr := scalar_value_str(entry.key_value)
 		key := lossless_escape_key(kstr)
 		if entry.key_type != .string_type {
 			ktypes[key] = JsonVal(scalar_type_name(entry.key_type))
 		}
+		// RULED: MSS-4 (#917): a declaration-only entry keeps its slot as
+		// JSON null (order preserved) and records its kind in the `cx:decl`
+		// sidecar — the sidecar is what distinguishes declared-ABSENT from
+		// a genuine null value on the way back.
+		if entry.decl_kind != '' {
+			decls[key] = JsonVal(entry.decl_kind)
+			obj[key] = JsonVal(JsonNull{})
+			continue
+		}
 		obj[key] = node_value_ll(entry.value)
 	}
 	if ktypes.len > 0 {
 		obj['cx:key-type'] = JsonVal(ktypes)
+	}
+	if decls.len > 0 {
+		obj['cx:decl'] = JsonVal(decls)
 	}
 	return JsonVal(obj)
 }

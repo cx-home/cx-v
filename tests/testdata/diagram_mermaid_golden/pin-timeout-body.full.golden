@@ -1,0 +1,9 @@
+%%cx:Wz90aW1lb3V0IDUwMG1zIGJvZHk9W3dvcmstaXRlbV1d%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?timeout] 500ms"]]
+    n4["[work-item]"]
+    n3 -- ":body" --> n4
+    n1 --> n4
+    n4 --> n2

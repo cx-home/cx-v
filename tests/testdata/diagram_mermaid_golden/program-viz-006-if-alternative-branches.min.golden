@@ -1,0 +1,9 @@
+%%cx:Wz9pZiBbPiAkeCAwXSBbdGhlbiBbcG9zICR4XV0gW2Vsc2UgW25lZyAkeF1dXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3{"if [> …]"}
+    n4["[?if] result"]
+    n3 -- "false" --> n4
+    n1 --> n4
+    n4 --> n2

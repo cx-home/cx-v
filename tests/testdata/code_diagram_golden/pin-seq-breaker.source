@@ -1,0 +1,1 @@
+[?worker name="w" body=[?circuit-breaker threshold=5 body=[?send "m" to=$ch]]]

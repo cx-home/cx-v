@@ -37,6 +37,30 @@ pub:
 // — it is capability-neutral by construction because a path read touches no
 // effect point.
 pub fn select_path(doc_src string, path_src string) !SelectResult {
+	body := select_path_body(path_src)!
+	doc_node := parse_input_doc(doc_src) or {
+		return EvalError{
+			code:    'cx-err:CXER0100'
+			message: 'parse input: ${err.msg()}'
+		}
+	}
+	return select_path_eval(doc_node, body)!
+}
+
+// select_path_on_node is select_path for a doc that is ALREADY a node —
+// the caller holds the materialized tree and has nothing to re-parse.
+// Same parse, same validation, same evaluator, so a query surface built
+// on it cannot drift from `cx select` or from an inline `$doc/…` read;
+// only the door differs. Used by the journal query verb, which filters
+// hydrated entries against a caller-supplied CXPath (#782).
+pub fn select_path_on_node(doc cx.Node, path_src string) !SelectResult {
+	body := select_path_body(path_src)!
+	return select_path_eval(doc, body)!
+}
+
+// select_path_body parses and validates a CXPath value expression,
+// shared by both doors.
+fn select_path_body(path_src string) !cx.ProgramNode {
 	if path_src.trim_space().len == 0 {
 		return EvalError{
 			code:    'cx-err:CXER0100'
@@ -64,12 +88,10 @@ pub fn select_path(doc_src string, path_src string) !SelectResult {
 			message: 'PATH must be a CXPath path expression (\$doc/…, /… or //…), got: ${path_src}'
 		}
 	}
-	doc_node := parse_input_doc(doc_src) or {
-		return EvalError{
-			code:    'cx-err:CXER0100'
-			message: 'parse input: ${err.msg()}'
-		}
-	}
+	return body
+}
+
+fn select_path_eval(doc_node cx.Node, body cx.ProgramNode) !SelectResult {
 	mut env := new_env()
 	env.bindings['doc'] = doc_node
 	env.bindings['input'] = doc_node

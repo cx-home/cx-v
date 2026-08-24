@@ -1,7 +1,7 @@
-[test-suite name=llm
+[test-suite name=llm ring=1
   [doc [#
 Conformance fixtures for cx-x/llm — the minimal LLM provider, the first Runnable
-(spec/02-working/agentic_positioning.md D2/S10). NB cx-x/llm is an EXPERIMENTAL
+(spec/03-approved/x/llm.md; #6 D2/S10). NB cx-x/llm is an EXPERIMENTAL
 x/-TIER module (D3): bundled + gated but exempt from the frozen-std stability
 promise. Programs name the tier explicitly via [?lib 'cx-x/llm'].
 

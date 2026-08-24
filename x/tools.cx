@@ -1,0 +1,206 @@
+# cx-x/tools — the agent-tool projection: command defs → tool descriptors
+# (EXPERIMENTAL x/ tier; stream 18, #690, letters L138–L146).
+#
+# ⚠ x/-TIER MODULE (spec/03-approved/std-lib/README.md D3): bundled + gated
+# in-tree but EXEMPT from the frozen-`std` byte-compatible-reimpl stability
+# promise (semver-breaking allowed until it proves out). Spec: authored at
+# the stream's W5 pass (G15 spec-all-five).
+#
+# ONE tool-descriptor model, derived from command definitions at list time —
+# no materialized manifest (L141). This module is the PURE projection; the
+# protocol adapters (MCP tools/list, A2A skills) consume the SAME descriptors
+# and each rules what it drops. Descriptor annotations are HINTS — a courtesy
+# for the client's UI; enforcement is at the CX effect point (CXER0271) and
+# at the boundary (propose mode + PEP), independent of anything the client
+# believes (the one-way lossy-downward rule, L142).
+#
+# ONE call over the module source text — [$cx:ast $source] (modules/cx.md
+# §2.2, L146) — carries BOTH halves:
+#   defs — structured (name / params kind+type+default / effects /
+#          requires / idempotent / returns / purity / verbatim def source).
+#   docs — the top-level plain-element spans VERBATIM; each parses cleanly
+#          as DATA on its own ([fn-doc] blocks pair by name; a whole-module
+#          data parse chokes on program-bearing def bodies — the W5 finding).
+# A command = a def whose [effects] clause is PRESENT (zero-item included) —
+# clause presence is THE discriminator (stream 6). A command def without a
+# [fn-doc][summary] fails the WHOLE projection loudly (L143): the result is
+# one [err …] value naming every undocumented command, never a partial list.
+
+[?lib 'cx-stdlib/json' :as json]
+[?lib 'cx-stdlib/fp' :as fp]
+[?lib 'cx-stdlib/hash' :as hash]
+[?lib 'cx-stdlib/bytes' :as bytes]
+
+# ── scalar kind → JSON-Schema fragment ─────────────────────────────────────
+# The stream-16 carrier conventions (schema_export.v): exact numerics and
+# temporals ride string carriers, matching the lossless JSON envelope.
+[?def type-schema-of scope=public pure [returns map] ($kind::string)
+  [?match $kind
+    [case "string"   {type: 'string'}]
+    [case "atom"     {type: 'string'}]
+    [case "int"      {type: 'integer'}]
+    [case "float"    {type: 'number'}]
+    [case "number"   {type: 'number'}]
+    [case "bool"     {type: 'boolean'}]
+    [case "date"     {type: 'string', format: 'date'}]
+    [case "datetime" {type: 'string', format: 'date-time'}]
+    [case "time"     {type: 'string', format: 'time'}]
+    [case "duration" {type: 'string', format: 'duration'}]
+    [case "bytes"    {type: 'string', contentEncoding: 'base64'}]
+    [case "decimal"  {type: 'string'}]
+    [case "bigint"   {type: 'string'}]
+    [case "map"      {type: 'object'}]
+    [case "array"    {type: 'array'}]
+    [case "sequence" {type: 'array'}]
+    [case "element"  {type: 'object'}]
+    [else {}]]]
+
+# read-only-cap — is one declared capability inside the read-only set
+# ({read, env, clock} — the L142 readOnlyHint rule)?
+[?def read-only-cap pure [returns bool] ($cap::string)
+  [?match $cap
+    [case "read"  true]
+    [case "env"   true]
+    [case "clock" true]
+    [else false]]]
+
+# param-doc-of — the [param-doc name=$pname] body text for one param of one
+# def's [fn-doc] block, or () when absent.
+[?def param-doc-of pure [returns any] ($fd::any $pname::string)
+  [?for [in $pd $fd//param-doc] [yield
+    [?if [= $pd@name $pname] [then [$text $pd]] [else ()]]]]]
+
+# param-schema-of — one param map (AST lane) + its optional [param-doc]
+# description → the JSON-Schema property fragment.
+[?def param-schema-of pure [returns map] ($p::map $fd::any)
+  [?let
+    [= $frag [$type-schema-of [?else $p.type "any"]]]
+    [= $desc [$param-doc-of $fd $p.name]]
+    [?if [$exists $desc]
+      [then [$cx:merge $frag {description: [$string $desc]}]]
+      [else $frag]]]]
+
+# input-schema-of — the command's params (AST lane) → one JSON-Schema object:
+# properties per param (typed via the carrier conventions, described via
+# [param-doc]); required = the non-defaulted POSITIONALS (L142); a rest param
+# opens additionalProperties, otherwise the object is closed (a command's
+# args-map binds the parameter list — the cx:propose basis).
+[?def input-schema-of pure [returns map] ($d::map $fd::any)
+  [?let
+    [= $params [?else $d.params []]]
+    [= $named-params [$filter $params [?fn ($q) [not [= $q.kind "rest"]]]]]
+    [= $props [?for-map [in $p $named-params] [yield-map $p.name [$param-schema-of $p $fd]]]]
+    [= $req [$fp:map
+              [$filter $params [?fn ($q) [and [= $q.kind "positional"]
+                                              [not [$exists [?else $q.default ()]]]]]]
+              [?fn ($q) $q.name]]]
+    [= $has-rest [$fp:fold $params false [?fn ($acc $p) [or $acc [= $p.kind "rest"]]]]]
+    [$cx:merge
+      {type: 'object', properties: $props, required: $req}
+      {additionalProperties: $has-rest}]]]
+
+# output-schema-of — [returns T] through the carrier mapping; a def with no
+# [returns] projects the open schema {}.
+[?def output-schema-of pure [returns map] ($d::map)
+  [?if [$exists [?else $d.returns ()]]
+    [then [$type-schema-of $d.returns]]
+    [else {}]]]
+
+# fn-docs-of — the module's [fn-doc] elements from the AST docs lane:
+# each docs entry is a VERBATIM top-level plain-element span (cx:ast §2.2)
+# that parses cleanly as DATA on its own — a whole-module data parse
+# chokes on program-bearing def bodies (the W5 finding), so the spans
+# lane is THE doc lane.
+[?def fn-docs-of pure [returns any] ($ast::map)
+  [?for [in $s [?else $ast.docs []]]
+    [= $el [$cx:parse $s]]
+    [where [= [$name $el] "fn-doc"]]
+    [yield $el]]]
+
+# fn-doc-of — the [fn-doc] element for one def name, or ().
+[?def fn-doc-of pure [returns any] ($fn-docs::any $name::string)
+  [?for [in $fd $fn-docs] [yield
+    [?if [= $fd@name $name] [then $fd] [else ()]]]]]
+
+# schema-id-of — the content address of one descriptor schema: sha2-256 of
+# its JSON emission (the adapter-visible bytes — what MCP/A2A wires carry),
+# so schema drift is hash-detectable at the protocol surface (L142's stated
+# purpose). NOT [$cx:hash] of the CX map: the canonical lane is #810-blocked
+# for singleton sequences in map values, and the JSON bytes are the form
+# clients actually see.
+[?def schema-id-of pure [returns string] ($schema::map)
+  [$concat "sha2-256:" [$hash:sha256-hex [$bytes:from-string-utf8 [$json:emit $schema]]]]]
+
+# descriptor-of — ONE command def (AST lane map) + its [fn-doc] → the tool
+# descriptor element. The caller has already enforced summary presence.
+[?def descriptor-of pure [returns element] ($d::map $fd::any)
+  [?let
+    [= $caps [$fp:map [?else $d.effects []] [?fn ($e) $e.cap]]]
+    [= $read-only [$fp:fold $caps true [?fn ($acc $c) [and $acc [$read-only-cap $c]]]]]
+    [= $idem [?else $d.idempotent false]]
+    [= $open-world [$fp:fold $caps false [?fn ($acc $c) [or $acc [= $c "net"]]]]]
+    [= $in-schema [$input-schema-of $d $fd]]
+    [= $out-schema [$output-schema-of $d]]
+    [tool name=$d.name
+      [description [$string $fd/summary]]
+      [input-schema $in-schema]
+      [output-schema $out-schema]
+      [annotations read-only=$read-only idempotent=$idem
+                   destructive=[not $read-only] open-world=$open-world]
+      [meta
+        [source [$cx:hash $d.source]]
+        [code [$cx:computation-id $d.source]]
+        [input-schema-id [$schema-id-of $in-schema]]
+        [output-schema-id [$schema-id-of $out-schema]]
+        [?if [$exists [?else $d.returns ()]]
+          [then [returns-type $d.returns]]
+          [else ()]]
+        [requires [?for [in $r [?else $d.requires []]] [yield [cap $r]]]]]]]]
+
+# descriptors-of — THE projection: module source text → the sequence of tool
+# descriptors for its commands, derived at call (list) time. Fail-loud (L143):
+# any command def lacking a [fn-doc][summary] refuses the WHOLE projection
+# with one [err [missing-summary def=…]…] value.
+[?def descriptors-of scope=public pure [returns any] ($source::string)
+  [?let [= $raw [$cx:ast $source]]
+    [?match $raw
+      [case [err @code=$c] $raw]
+      [else
+        [?let
+          [= $ast [$json:parse $raw]]
+          [= $fn-docs [$fn-docs-of $ast]]
+          [= $defs [?else $ast.defs []]]
+          [= $commands [$filter $defs [?fn ($d)
+              [?match $d [case {effects: $e} true] [else false]]]]]
+          [= $undocumented [$filter $commands [?fn ($d)
+              [?let [= $fd [$fn-doc-of $fn-docs $d.name]]
+                [not [$exists $fd/summary]]]]]]
+          [?if [$exists $undocumented]
+            [then [err code=missing-summary
+                    [?for [in $u $undocumented] [yield [missing-summary def=$u.name]]]]]
+            [else [?for [in $d $commands] [yield
+                    [$descriptor-of $d [$fn-doc-of $fn-docs $d.name]]]]]]]]]]]
+
+# ── docs ────────────────────────────────────────────────────────────────────
+[module-doc name=tools
+  [scope """The agent-tool projection (EXPERIMENTAL x/ tier; stream 18): ONE
+   tool-descriptor model derived from command definitions ([effects]-bearing
+   [?def]s — clause presence is the discriminator) at list time, no
+   materialized manifest. Two lanes over the same module source: [$cx:ast]
+   for the structured defs (params, effects, requires, idempotent, returns,
+   Tier-1 def text), [$cx:parse] for the [fn-doc] blocks ([summary] required
+   for projectability — fail-loud; [param-doc] → per-property descriptions).
+   Descriptors carry name, description, inputSchema/outputSchema (stream-16
+   carrier conventions), the L142 hint set (read-only / idempotent /
+   destructive / open-world), and [meta] with the Tier-1 source address, the
+   Tier-2 code address, schema content hashes, and cap: requirements. The
+   MCP and A2A adapters consume these descriptors; annotations are HINTS —
+   enforcement stays at the effect point and the propose boundary."""]]
+[fn-doc name=type-schema-of scope=public purity=pure
+  [sig """($kind::string) -> map"""]
+  [summary """Map one scalar/collection kind name to its JSON-Schema fragment (stream-16 carrier conventions: decimal/bigint/temporals/bytes ride string carriers)."""]
+  [param-doc name=kind """The CX kind name as spelled in a param annotation or [returns] clause (e.g. string, int, decimal, map, element)."""]]
+[fn-doc name=descriptors-of scope=public purity=pure
+  [sig """($source::string) -> [sequence element] | [err …]"""]
+  [summary """Project a module's command defs to tool descriptors — the ONE descriptor model both protocol adapters consume. Fail-loud: a command def without a [fn-doc][summary] refuses the whole projection with one [err [missing-summary def=…]…] value."""]
+  [param-doc name=source """The module source text (the same bytes the module loader reads); descriptors derive from it at call time."""]]

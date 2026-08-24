@@ -1,4 +1,4 @@
-[test-suite name=extended
+[test-suite name=extended ring=0
   [doc [#
 # CX Conformance — Extended Tests
 # Version: 1.0 — 2026-04-19
@@ -62,16 +62,7 @@
 [price 3.14]
 #]]
   [out-ast [#
-{
-  "type": "Document",
-  "elements": [
-    {
-      "type": "Element",
-      "name": "price",
-      "items": [{"type": "Scalar", "dataType": "float", "value": 3.14}]
-    }
-  ]
-}
+{"type":"Document","elements":[{"type":"Element","name":"price","items":[{"type":"Scalar","dataType":"decimal","value":"3.14"}]}]}
 #]]
   [out-xml [#
 <price>3.14</price>
@@ -482,6 +473,55 @@
 #]]
  ]
 
+ # #933: bytes in COLLECTION positions (map key, collection item) carry the
+ # `::bytes` ascription in canonical form — no bytes image auto-types to
+ # bytes, so a bare emit re-parsed as an INT (hex) or string (base64) and
+ # canonical was not a fixpoint (canonical.md §2.11.1: a key "whose kind
+ # would not follow from its bare image carries its ascription").
+ [case id=016e-bytes-map-key-ascribed level=extended
+  [tags map key bytes hex ascription fixpoint issue-933]
+  [in-cx [#
+[cfg {0x2a::bytes: on}]
+#]]
+  [out-cx [#
+[cfg {0x2a::bytes: on}]
+#]]
+ ]
+
+ [case id=016f-bytes-collection-item-ascribed level=extended
+  [tags sequence item bytes hex ascription fixpoint issue-933]
+  [in-cx [#
+[sig (0x2a::bytes, ok)]
+#]]
+  [out-cx [#
+[sig (0x2a::bytes, ok)]
+#]]
+ ]
+
+ [; #934 (MSS-3 item 5 parity): a quoted value followed by a glued `::`
+    REFUSES in array and sequence slots exactly as in map-value position —
+    the old slot path silently split `['x'::int]` into a nested two-item
+    sequence (string + ascription-as-text) at rc=0. ]
+ [case id=016j-array-quoted-ascription-refuses level=extended
+  [tags array item quoted ascription error issue-934]
+  [in-cx [#
+[e ['x'::int]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=016k-sequence-quoted-ascription-refuses level=extended
+  [tags sequence item quoted ascription error issue-934]
+  [in-cx [#
+[e ('x'::int, 1)]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
  [case id=016d-attr-bytes-short-hex level=extended
   [tags attribute bytes hex explicit issue-457]
   [in-cx [#
@@ -511,7 +551,7 @@
     The D3 typed attribute `name::T=value` is one production shared by the
     DATA and PROGRAM readings (the program element literal gained it in
     #466). The value is coercion-CHECKED (M-ERR-2/D-H): malformed →
-    CXER0109, out-of-range sized int → CXERLEX-RANGE, array annotation →
+    CXER0290, out-of-range sized int → CXERLEX-RANGE, array annotation →
     CXER0100 (attributes are scalar-only, D2). ]
 
  [case id=016e-attr-int-hex-coerce level=extended
@@ -547,7 +587,7 @@
  ]
 
  [case id=016g-attr-decimal-hex-err level=extended
-  [tags attribute decimal hex error CXER0109 explicit issue-466]
+  [tags attribute decimal hex error CXER0290 explicit issue-466]
   [; OWNER RULING (#466 item 3): a hex token under ::decimal REJECTS
      loudly — decimal is a base-10 value type; hex there is a mistake
      (M-ERR-2 fail-loud). Supersedes the former verbatim-'0x2a' pin. ]
@@ -555,19 +595,19 @@
 [e n::decimal=0x2a]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
  [case id=016h-attr-bigint-hex-err level=extended
-  [tags attribute bigint hex error CXER0109 explicit issue-466]
-  [; Same #466-item-3 ruling as 016g: hex under ::bigint is CXER0109 in
+  [tags attribute bigint hex error CXER0290 explicit issue-466]
+  [; Same #466-item-3 ruling as 016g: hex under ::bigint is CXER0290 in
      both readings — bigint is a base-10 value type. ]
   [in-cx [#
 [e n::bigint=0x2a]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
@@ -589,19 +629,19 @@ cx-err:CXER0109
 [e n::decimal=1_000.50]
 #]]
   [out-cx [#
-[e n::decimal=1000.50]
+[e n=1000.50]
 #]]
  ]
 
  [case id=016k-attr-int-malformed-err level=extended
-  [tags attribute int error CXER0109 explicit issue-466]
+  [tags attribute int error CXER0290 explicit issue-466]
   [; Pre-#466 the data reading silently coerced `abc` to 0 under an
      explicit ::int — the exact silent-zero class M-ERR-2 forbids. ]
   [in-cx [#
 [e n::int=abc]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
@@ -628,7 +668,7 @@ cx-err:CXER0100
  ]
 
  [case id=016n-attr-atom-invalid-name-err level=extended
-  [tags attribute atom error CXER0109 explicit issue-466]
+  [tags attribute atom error CXER0290 explicit issue-466]
   [; ::atom demands a denotable atom name (lexicon [L40]); `0x2a` fails
      loud instead of minting an atom whose render `:0x2a` cannot
      re-parse (#466 item 2). ]
@@ -636,7 +676,7 @@ cx-err:CXER0100
 [e n::atom=0x2a]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
@@ -654,12 +694,12 @@ cx-err:CXER0109
  ]
 
  [case id=016p-body-atom-number-err level=extended
-  [tags scalar atom error CXER0109 explicit issue-466]
+  [tags scalar atom error CXER0290 explicit issue-466]
   [in-cx [#
 [x::atom 42]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
@@ -852,37 +892,7 @@ cx-err:CXER0109
 ]
 #]]
   [out-ast [#
-{
-  "type": "Document",
-  "elements": [
-    {
-      "type": "Element",
-      "name": "person",
-      "items": [
-        {
-          "type": "Element",
-          "name": "name",
-          "items": [{"type": "Text", "value": "Alice"}]
-        },
-        {
-          "type": "Element",
-          "name": "age",
-          "items": [{"type": "Scalar", "dataType": "int", "value": 30}]
-        },
-        {
-          "type": "Element",
-          "name": "active",
-          "items": [{"type": "Scalar", "dataType": "bool", "value": true}]
-        },
-        {
-          "type": "Element",
-          "name": "score",
-          "items": [{"type": "Scalar", "dataType": "float", "value": 9.5}]
-        }
-      ]
-    }
-  ]
-}
+{"type":"Document","elements":[{"type":"Element","name":"person","items":[{"type":"Element","name":"name","items":[{"type":"Text","value":"Alice"}]},{"type":"Element","name":"age","items":[{"type":"Scalar","dataType":"int","value":30}]},{"type":"Element","name":"active","items":[{"type":"Scalar","dataType":"bool","value":true}]},{"type":"Element","name":"score","items":[{"type":"Scalar","dataType":"decimal","value":"9.5"}]}]}]}
 #]]
   [out-xml [#
 <person>
@@ -1037,21 +1047,7 @@ cx-err:CXER0109
 [data::[] 1 2.5 3]
 #]]
   [out-ast [#
-{
-  "type": "Document",
-  "elements": [
-    {
-      "type": "Element",
-      "name": "data",
-      "dataType": "[]",
-      "items": [
-        {"type": "Scalar", "dataType": "int", "value": 1},
-        {"type": "Scalar", "dataType": "float", "value": 2.5},
-        {"type": "Scalar", "dataType": "int", "value": 3}
-      ]
-    }
-  ]
-}
+{"type":"Document","elements":[{"type":"Element","name":"data","dataType":"[]","items":[{"type":"Scalar","dataType":"int","value":1},{"type":"Scalar","dataType":"decimal","value":"2.5"},{"type":"Scalar","dataType":"int","value":3}]}]}
 #]]
   [out-cx [#
 [data::[] 1 2.5 3]
@@ -1133,10 +1129,10 @@ cx-err:CXER0109
 }
 #]]
   [out-xml [#
-<scores cx:type="float[]"><cx:item>1.1</cx:item><cx:item>2.2</cx:item><cx:item>3.3</cx:item></scores>
+<scores cx:type="float[]"><cx:item>1.1e0</cx:item><cx:item>2.2e0</cx:item><cx:item>3.3e0</cx:item></scores>
 #]]
   [out-cx [#
-[scores::float[] 1.1 2.2 3.3]
+[scores::float[] 1.1e0 2.2e0 3.3e0]
 #]]
  ]
 
@@ -1191,8 +1187,7 @@ cx-err:CXER0109
 }
 #]]
   [out-cx [#
-[desc 'hello
-world']
+[desc 'hello\nworld']
 #]]
   [out-xml [#
 <desc>hello
@@ -1355,8 +1350,7 @@ world''']
 {"type":"Document","elements":[{"type":"Element","name":"message","attrs":[{"name":"body","value":"hello\nworld"}]}]}
 #]]
   [out-cx [#
-[message body='''hello
-world''']
+[message body='hello\nworld']
 #]]
  ]
 
@@ -1482,6 +1476,115 @@ any number of text stages in a pipeline (the R3 regression).
 #]]
   [out-cx [#
 [x 'a\\"b']
+#]]
+ ]
+
+ [# ── stream 13 L58 (I1): r'''…''' / r"""…""" raw strings are legal in DATA
+       mode too — one token grammar, the lexicon's stated purpose. The r
+       prefix is recognised ONLY glued to a triple quote; raw = the body is
+       VERBATIM (no common-indent dedent). Canonical NEVER emits triquote
+       (L15/L17) — a raw string canonicalizes to the escaped quoted
+       spelling. ── #]
+ [case id=050-raw-triple-data-body level=extended
+  [tags string raw-triple data-mode stream-13 L58]
+  [in-cx [#
+[a r'''line1
+line2''']
+#]]
+  [out-cx [#
+[a 'line1\nline2']
+#]]
+ ]
+
+ [case id=051-raw-triple-no-dedent level=extended
+  [tags string raw-triple data-mode no-dedent stream-13 L58]
+  [desc [#
+raw (r-prefixed) skips strip_common_indent: the two-space indents survive
+byte-exact, unlike the dedented plain-triple form.
+#]]
+  [in-cx [#
+[a r'''  keep
+  indent''']
+#]]
+  [out-cx [#
+[a '  keep\n  indent']
+#]]
+ ]
+
+ [case id=052-raw-triple-double-quote-data level=extended
+  [tags string raw-triple double-quote data-mode stream-13 L58]
+  [in-cx [#
+[a r"""p
+q"""]
+#]]
+  [out-cx [#
+[a 'p\nq']
+#]]
+ ]
+
+ [case id=053-raw-triple-attr-value level=extended
+  [tags string raw-triple attribute data-mode stream-13 L58]
+  [in-cx [#
+[a x=r'''p
+q''']
+#]]
+  [out-cx [#
+[a x='p\nq']
+#]]
+ ]
+
+ [case id=054-raw-triple-seq-item level=extended
+  [tags string raw-triple sequence data-mode stream-13 L58]
+  [in-cx [#
+[a (r'''x
+y''', 2)]
+#]]
+  [out-cx [#
+[a ('x\ny', 2)]
+#]]
+ ]
+
+ [# ── stream 13 [2a] witness (grammar repair batch, L57): the `---`
+       document separator is recognised at LINE START only — a mid-line
+       `---` run is ordinary bare text ([2a] BareText narrowed per its own
+       comment; the impl was already line-start-only, this pins it). ── #]
+ [case id=055-midline-dashes-are-text level=extended
+  [tags bare-text document-separator stream-13 grammar-2a]
+  [in-cx [#
+hello --- world
+#]]
+  [out-cx [#
+hello --- world
+#]]
+ ]
+
+ [case id=056-decimal-map-keys-and-equality-matrix level=extended
+  [tags decimal bigint map-key distinctness equality l40 l47 683]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $m {1: "int", 1.0: "float", 1.5: "low-scale", 1.50: "cents"}]
+[= $big 99999999999999999999]
+  ($m, [= 1.10 1.1], [= 1.10 "1.10"], [= $big 99999999999999999999], [< 1.1 1.10], [= 99 $big])]
+#]]
+  [out-text [#
+({1: int, 1.0: float, 1.5: low-scale, 1.50: cents}, true, false, true, false, false)
+#]]
+ ]
+
+ [case id=057-m5-invoice-total-exact level=extended
+  [tags decimal m5 invoice exact sum 683]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $lines ([line sku="A" qty=3 price=19.99], [line sku="B" qty=1 price=5.25], [line sku="C" qty=2 price=0.10])]
+[= $total [?for [in $l $lines] [= $ext [* $l@qty $l@price]] [group-by 1] [yield [invoice-total amount=[$sum $group/ext]]]]]
+  $total]
+#]]
+  [out-text [#
+[invoice-total amount=65.42]
 #]]
  ]
 ]

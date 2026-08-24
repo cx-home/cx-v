@@ -1,0 +1,6 @@
+sequenceDiagram
+  participant w
+  activate w
+  participant ch
+  w -->>+ ch : 'm' (try)
+  deactivate w

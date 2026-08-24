@@ -1,4 +1,4 @@
-[test-suite name=bytes
+[test-suite name=bytes ring=1
   [doc [#
 conformance/stdlib/bytes.cxd — cx-stdlib/bytes (spec/std-lib/bytes.md §6).
 

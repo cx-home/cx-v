@@ -118,6 +118,39 @@ pub mut:
 	// drive-at-await path and cannot be shared across spawned threads).
 	// Cancellation points ([?sleep]/[?check-cancel]) consult it first.
 	current_future &FutureRecord = unsafe { nil }
+	// eval_budget is the F4 evaluation budget (S6.2, RULED: F4; spec/core/
+	// code.md §9.4 CXER0273, xsp_store_profile.md §4.3): a step limit +
+	// monotone-allocated-bytes memory ceiling checked in eval_node — the
+	// single funnel every evaluation shape passes through (the #319 stack-
+	// guard colocation). Shared BY POINTER through same-thread env
+	// derivations (clone / clone_frame_sharing_closures / closure call
+	// envs — the current_worker rule); spawned contexts deliberately start
+	// nil (a budgeted pushdown evaluation is PURE, so it cannot spawn —
+	// CXER4611 upstream — and the daemon's caps posture is the second
+	// fence). nil = unbudgeted (the default everywhere outside a
+	// pushdown/embedder arming).
+	eval_budget &EvalBudget = unsafe { nil }
+}
+
+// EvalBudget — the F4 per-evaluation resource bound (S6.2). steps counts
+// eval_node entries (true reduction steps); mem meters the MONOTONE
+// allocated-bytes counter (gc_total_allocated) against a baseline taken at
+// arm time, sampled every 64 steps — monotone ⇒ immune to collection dips.
+// A zero limit means that conjunct is unbounded (the ENGINE mechanism is
+// per-conjunct; the profile's config layer refuses to spell unbounded —
+// xsp_store_profile.md §4.3). Once a conjunct trips, every subsequent step
+// re-refuses: the budgeted evaluation cannot absorb the refusal and resume.
+pub struct EvalBudget {
+pub mut:
+	steps      u64
+	step_limit u64
+	mem_base   u64
+	mem_limit  u64
+	// tripped_conjunct latches the first exceeded conjunct ('steps'|'memory').
+	// Once set, EVERY subsequent eval_node entry re-refuses immediately —
+	// without the latch a memory-only budget (sampled every 64 steps) would
+	// let a handler squeeze up to 63 steps of progress between refusals.
+	tripped_conjunct string
 }
 
 // FramePool: per-thread free-list of reusable closure call-frame binding maps. See the
@@ -149,11 +182,27 @@ pub mut:
 	// spec/modules/cx.md §3.3). One budget across cx:eval and cx:eval-tree /
 	// [?eval] so alternating the two cannot bypass the depth cap (CXER4114).
 	eval_depth      int
+	// tree_eval_lib_allow is the caller's `[?lib]` alias set, captured on
+	// entry to a tree-eval and released on exit (#808, code.md §6.4.4:
+	// "[?eval] inherits the caller's [?lib] set; may narrow, not widen →
+	// cx-err:CXER4113"). `none` means no tree-eval is in progress, which is
+	// what makes an ordinary top-level `[?lib]` unaffected.
+	//
+	// The rule needs the set, not a flag: a `[?lib]` naming a module the
+	// caller ALREADY has is a re-declaration, not widening, and must stay
+	// legal — only a lib the caller did not have is refused.
+	tree_eval_lib_allow ?[]string
 	cb_state        map[string]CbStateRecord
 	rate_state      map[string]RateStateRecord
 	bulkhead_state  map[string]BulkheadStateRecord
 	channels        map[string]&ChannelRecord
 	workers         map[string]&WorkerRecord
+	// [?monitor] lifecycle subscriptions (U2.1a; #762): per-sub delivered
+	// event count, keyed by "<worker>\x00<id>". The event sequence is
+	// DERIVED from the worker record (spawned → terminal), so monitoring
+	// an already-terminated worker replays it race-free.
+	monitor_pos  map[string]int
+	next_monitor int
 	services        map[string]&ServiceRecord
 	// next_service_port assigns a deterministic ephemeral-port number
 	// to each [?http-service port=0]. Real listeners are out of scope for
@@ -173,6 +222,15 @@ pub mut:
 	// CXER0241 (AWAIT_TIMEOUT). 0 disables the deadline.
 	await_deadline_ns i64
 	test_counters   map[string]i64
+	// idem_records is the per-program effect-boundary dedup registry
+	// (L111, stream 6 W5) — same single-threaded-eval access posture as
+	// rate_state/cb_state; window expiry reads clock_now() (the
+	// [?test-clock]-advanceable engine clock, the resilience posture).
+	idem_records    map[string]IdemRecord
+	// pin_admitted — src_addr keys whose [requires-at] admission read was
+	// evaluated (and passed) by a journal-bound runner for the CURRENT
+	// commit (stream 10; set/cleared around the body run).
+	pin_admitted map[string]bool
 	test_err_counts map[string]i64  // err-then-ok helper progress per call-site
 	test_seq_idx    map[string]int  // test-seq cycling counter per call-site
 	// registry of first-class Slice literal values.
@@ -201,6 +259,23 @@ pub mut:
 	closeables_lock &sync.RwMutex = unsafe { nil }
 	closed_already  int  // count of close_fn calls skipped due to idempotence
 	close_log       []string
+	// iter_closures — the EV-PULL pull-time closure registry (stream
+	// 17 W1): combinator IteratorNodes are Ring-0 values and cannot
+	// hold code-layer Closures, and frame-local anonymous closures
+	// may be gone from env.closures by pull time — so construction
+	// RESOLVES the transform closure and parks it here under a fresh
+	// id (carried in source_args); iter_pull invokes it via the
+	// state, which every env shares. Per-program lifetime.
+	iter_closures map[string]IterClosureEntry
+	next_iter_closure_id int = 1
+	// schema_bindings / schema_contents — the W4 schema registry
+	// (stream 16; shape_inference.md §3): name → content-hash hex
+	// hint-bindings and hash → canonical schema text. Populated by
+	// register-schema / [?schema-register]; consumed by
+	// validate-against's name → hash → content resolution (cx.lock
+	// [schemas] pins and CX_SCHEMA_STORE extend both maps read-side).
+	schema_bindings map[string]string
+	schema_contents map[string]string
 	// module_table is the per-program module loader state backing
 	// [?lib] imports (spec/code.md §12.1). Seeded with the bundled
 	// cx-stdlib sources at program start (register_bundled_stdlib);
@@ -283,6 +358,12 @@ pub mut:
 	root             string  // [root "…"] — filesystem dir for [$serve-file]
 	bind_host        string  // [bind-host "…"] — listener bind address
 	block            bool    // [block true] — eval_http_service blocks
+	// http.md §13 (H2-1): [tls cert=PATH key=PATH] child — with both set the
+	// real-socket listener terminates TLS (mbedtls) and offers ALPN
+	// ("h2", "http/1.1"); the negotiated protocol selects the connection's
+	// framing. Empty → cleartext HTTP/1.1 only, exactly the picoev path.
+	tls_cert         string  // [tls cert="…"] — PEM certificate path
+	tls_key          string  // [tls key="…"] — PEM private-key path
 	// cache opts INTO the static-file cache for [$serve-file]. Default
 	// false: every request reads the file fresh (always current, no cache
 	// memory, no staleness). [cache true]: bodies are memoized keyed by
@@ -360,6 +441,26 @@ pub mut:
 	// the ch_* helpers in eval.v). Initialised at the single construction
 	// site (eval_channel).
 	mu       &sync.RwMutex = unsafe { nil }
+	// ── the U1.11a fan-out axes (code.md §10.4.1; #762) ──────────────
+	// sharing='independent' declares a fan-out stream: consumers hold
+	// per-subscription cursors over `log`, an absolute-positioned
+	// retained window (`base` = the absolute position of log[0]; head =
+	// base + log.len). retention='latest' is the keep=1 point;
+	// retention='window' retains the last `keep` messages. A fan-out
+	// send NEVER blocks (the window is retention, not flow); a cursor
+	// below `base` is the CXER0218 STREAM_GAP refusal. The default
+	// (sharing='group') leaves every field below unused — the classic
+	// channel is byte-identical.
+	sharing   string
+	retention string
+	keep      int
+	log       []cx.Node
+	base      i64
+	// per-subscription cursors (absolute positions); a closed sub is
+	// removed. next_sub mints ids; 0 never issued.
+	sub_pos    map[int]i64
+	sub_closed map[int]bool
+	next_sub   int
 }
 
 // FutureRecord tracks one [?async]'s lifecycle per spec/code.md §10.5.
@@ -552,10 +653,76 @@ pub:
 	// table). nil for plain `[?fn]` lambdas (which capture local lets via
 	// captured_bindings and inherit the caller's closures, the prior behavior).
 	defining_scope &Scope = unsafe { nil }
+	// declared_impure records the [?def]'s declared purity annotation.
+	// validate.md §3.6 gates `validate-with=` on it (an impure validator is
+	// a malformed schema, CXER1603) — the check needs the DECLARATION, which
+	// only the def carries (R3.12; lambdas and builtin wrappers stay false).
+	declared_impure bool
 	// returns_type is the verbatim `[returns T]` annotation ('' when
 	// none). Erased in default mode; the return value is checked against
 	// it under --strict (CXER0207, §12.7).
 	returns_type string
+	// has_effects / effects_caps carry the [?def]'s [effects …] command
+	// declaration (code.md §12.2.7, stream 6 L109/L110). has_effects is
+	// THE command discriminator (clause presence — a zero-item clause is
+	// still a command). invoke_closure_l narrows the active capability
+	// set to (caller's grant ∩ effects_caps) for the body's dynamic
+	// extent; an effect point outside the declaration raises CXER0271
+	// at the effect point. false/empty for lambdas and builtins.
+	has_effects  bool
+	effects_caps []string
+	// [idempotent ([window DUR])?] (code.md §12.2.7, stream 6 L111 — W5):
+	// the effect-boundary dedup disposition. tier2_addr is the command's
+	// Tier-2 `computes-as:` address — the fn component of the DERIVED
+	// idempotency key (computed at registration, idempotent commands
+	// only). idem_window_ns 0 = no declared window (no expiry).
+	is_idempotent  bool
+	idem_window_ns i64
+	tier2_addr     string
+	// cmd_meta carries the command clauses cx:propose / the commit
+	// boundary consume ([requires]/[preconditions] sources, the effect
+	// items with scopes, the two command addresses). ONE pointer field —
+	// Closure is value-copied on every call (#45 perf rule), so the
+	// per-command payload lives behind it; nil for non-commands.
+	cmd_meta &CommandMeta = unsafe { nil }
+}
+
+// CommandMeta is a command def's propose/commit-facing metadata
+// (code.md §12.2.7; stream 6 W6). src_addr is the Tier-1 tagged
+// address of the RAW definition text bytes — the trust key propose-mode
+// approvals bind (the L139 amendment; the F1′ blob-address form);
+// code_addr is the Tier-2 `computes-as:` claim, riding for
+// cache/equivalence only (never a trust input).
+pub struct CommandMeta {
+pub:
+	requires      []string
+	preconditions []string
+	effects_items []cx.DefEffectItem
+	src_addr      string
+	code_addr     string
+	// compensates — the [compensates NAME] pairing (stream 6/10): the
+	// compensating command's def NAME, resolved via env.closures at
+	// compensation time (the pairing is static-checked at registration).
+	compensates string
+	// [requires-at] — the stream-10 cross-stream precondition PIN
+	// (an admission input evaluated by a journal-bound runner at the
+	// commit point; Ring 1 cannot evaluate it, so an unadmitted
+	// invocation refuses CXER4951 fail-closed).
+	has_requires_at    bool
+	requires_at_stream string
+	requires_at_seq    i64
+	requires_at_hash   string
+}
+
+// IdemRecord is one effect-boundary dedup record (L111, W5 R13/R14):
+// the ORIGINAL successful outcome + the window expiry instant on the
+// engine clock (0 = no declared window). Keyed by the idempotency key
+// in ProgramState.idem_records — per-program, the [?retry] scope; the
+// durable (store-CAS) tier is the commit boundary's.
+pub struct IdemRecord {
+pub:
+	outcome    cx.Node
+	expires_ns i64
 }
 
 // body_node returns the closure's body AST node.
@@ -583,29 +750,51 @@ pub fn (b ClosureBox) opaque_kind() string {
 // new_env returns a fresh empty environment with a freshly-allocated
 // ProgramState. Subsequent clones share the same ProgramState pointer
 // so state-machine and mock-clock updates remain consistent.
+// arm_eval_budget arms the F4 evaluation budget on an env (S6.2, RULED: F4).
+// step_limit bounds eval_node entries; mem_limit_bytes bounds MONOTONE
+// allocation growth from this moment (baseline = gc_total_allocated() now).
+// A zero limit leaves that conjunct unbounded at the engine level — config
+// layers (the profile's [limits [pushdown …]]) enforce their own no-unbounded
+// spelling rule above this. Returns the budget for the caller's inspection.
+pub fn arm_eval_budget(mut env MatchEnv, step_limit u64, mem_limit_bytes u64) &EvalBudget {
+	mut b := &EvalBudget{
+		step_limit: step_limit
+		mem_limit:  mem_limit_bytes
+		mem_base:   u64(gc_total_allocated())
+	}
+	env.eval_budget = b
+	return b
+}
+
 pub fn new_env() MatchEnv {
 	// Each evaluated program starts with fresh cx-stdlib/prof process-global
 	// state (counters / histograms / trace buffer / default config) so prof
 	// state never leaks across independent programs (stdlib_prof.v).
 	prof_reset_state()
-	// Likewise the cx-stdlib/session server-held registry (stdlib_session.v):
-	// each program starts with a fresh, empty session store so sessions /
-	// clients / CSRF tokens never leak across independent programs (the
-	// conformance harness runs every fixture in one process).
-	session_reset_state()
-	// Likewise the cx-stdlib/authz server-held authority-store registry
-	// (stdlib_authz.v): each program starts with a fresh, empty trust state
-	// (delegations / guardian grants) so authority never leaks across
-	// independent programs (the conformance harness runs every fixture in one
-	// process).
-	authz_reset_state()
+	// Likewise the Ring-2 server-held registries — cx-stdlib/session
+	// (sessions / clients / CSRF tokens) and cx-stdlib/authz (delegations /
+	// guardian grants): each program starts with fresh, empty state so
+	// nothing leaks across independent programs (the conformance harness
+	// runs every fixture in one process). I3: those packs register their
+	// resets (ring2_register.v) and are run through the registry — Ring-1
+	// new_env holds no direct reference to Ring-2 state.
+	ring2_run_env_resets()
 	// Likewise the cx-stdlib/sched process-global timer registry + virtual
 	// clock (stdlib_sched.v): each program starts with no armed timers and a
 	// fresh virtual clock so schedules never leak across independent programs.
-	sched_reset_state()
+	// Compiled out with the pack (I4): no sched state exists to reset.
+	$if !cx_no_pack_sched ? {
+		sched_reset_state()
+	}
 	// Likewise the §9.6 error-hook frame stack (error_hooks.v).
 	error_hooks_reset()
+	// Likewise the out-effects witness trace (effects_trace.v).
+	effects_trace_reset()
 	state := &ProgramState{
+		// The §12.7 strict dial: seeded from the process-wide CLI flag
+		// (--strict on run/eval → set_strict_mode_cli; W5). Fixture
+		// harnesses may still set state.strict directly per-case.
+		strict:             is_strict_mode()
 		now_ns:             0
 		cb_state:           map[string]CbStateRecord{}
 		rate_state:         map[string]RateStateRecord{}
@@ -644,6 +833,9 @@ pub fn new_env() MatchEnv {
 		scheduler_tasks_lock:    sync.new_rwmutex()
 		clock_lock:              sync.new_rwmutex()
 	}
+	// EV-PULL (stream 17 W1): publish the state pointer for the
+	// env-free iterate() forcing hook.
+	iter_pull_state_set(state)
 	return MatchEnv{
 		bindings:    map[string]cx.Node{}
 		closures:    map[string]Closure{}
@@ -681,7 +873,7 @@ fn (mut e MatchEnv) cow_closures() {
 // constructed fresh map need no guard). Child frames (clone /
 // clone_frame_sharing_closures / build_param_call_env) copy bindings into
 // fresh maps, so the flag never propagates past the request env itself.
-fn (mut e MatchEnv) cow_bindings() {
+pub fn (mut e MatchEnv) cow_bindings() {
 	if e.bindings_shared {
 		e.bindings = e.bindings.clone()
 		e.bindings_shared = false
@@ -694,7 +886,13 @@ fn (e MatchEnv) clone() MatchEnv {
 		closures: map[string]Closure{}
 		state:    e.state
 		anon_counter: e.anon_counter
-		dyn_context: e.dyn_context.clone()
+		// ALIASED, not cloned (#804 leg 1): dyn_context has NO in-place
+		// writer — [?with-scope] (the only writer) wholesale-REPLACES it
+		// with a merged NEW array on a cloned env, so sharing the header
+		// is sound and saves one allocation per derived frame on the
+		// per-item hot path. Any future in-place mutation site must
+		// restore the clone here.
+		dyn_context: e.dyn_context
 		scope:    e.scope // share the program scope (heap, read-only at call time)
 		// A derived frame stays INSIDE the same lexical context (#646): dropping
 		// these two reset every [?let]/[?loop]/[?for]/backtrack frame to "top
@@ -706,6 +904,7 @@ fn (e MatchEnv) clone() MatchEnv {
 		in_function_body:   e.in_function_body
 		cur_defining_scope: e.cur_defining_scope
 		current_worker: e.current_worker // same-thread derivation keeps the §10.5.4 cancel signal
+		eval_budget: e.eval_budget // same-thread derivation keeps the F4 budget (S6.2)
 		current_future: e.current_future // #541: the eager-async cancel/park signal derives the same way
 	}
 	for k, v in e.bindings {
@@ -713,6 +912,25 @@ fn (e MatchEnv) clone() MatchEnv {
 	}
 	for k, c in e.closures {
 		copy.closures[k] = c
+	}
+	return copy
+}
+
+// clone_sharing_closures is clone() with the closures table ALIASED
+// read-only (closures_shared = true) instead of deep-copied — the B17
+// aliasing applied to the [?match] arm path (#871). Bindings are still
+// copied into a fresh map (an arm's pattern threads bindings into the
+// frame, and a failed arm's partial writes must not leak back), but the
+// closures deep copy was the dominant allocation of every arm attempt:
+// a per-node [?match] dispatch inside a tree walk deep-copied the whole
+// accumulated closure table per arm, which is what turned ORIEL's
+// category renders from ~150ms to multi-second after the closure tables
+// fattened. Safe by the standing invariant: every env.closures write
+// site calls cow_closures() first.
+pub fn (e MatchEnv) clone_sharing_closures() MatchEnv {
+	mut copy := e.clone_frame_into(map[string]cx.Node{})
+	for k, v in e.bindings {
+		copy.bindings[k] = v
 	}
 	return copy
 }
@@ -729,19 +947,40 @@ fn (e MatchEnv) clone() MatchEnv {
 // traffic exhausts the heap → `malloc` fails → the #57 OOM panic. Matches
 // `clone()`'s field handling exactly apart from the closures alias; safe because
 // every `env.closures` write site calls `cow_closures()` first.
-fn (e MatchEnv) clone_frame_sharing_closures() MatchEnv {
+pub fn (e MatchEnv) clone_frame_sharing_closures() MatchEnv {
+	return e.clone_frame_into(map[string]cx.Node{})
+}
+
+// clone_frame_into is clone_frame_sharing_closures with the child frame's
+// bindings map SUPPLIED BY THE CALLER — the seam #804 leg 7 needs so the
+// streamed-input walk's per-item frame can take its map from the #36
+// per-thread frame pool instead of allocating a fresh one per record.
+//
+// PRECONDITION: `mp` is EMPTY — either freshly allocated or one that
+// return_frame_map() has cleared. Given that, the result is identical in
+// every field to clone_frame_sharing_closures(); only the map's IDENTITY
+// differs, which matters solely to a caller that pools it.
+//
+// Both entry points route their field handling through here deliberately. A
+// field added to MatchEnv that one of them copied and the other forgot would
+// be a silent frame-semantics bug — the kind no test names and the compiler
+// does not report. One authority makes that impossible rather than unlikely.
+@[inline]
+pub fn (e MatchEnv) clone_frame_into(mp map[string]cx.Node) MatchEnv {
 	mut copy := MatchEnv{
-		bindings:        map[string]cx.Node{}
+		bindings:        mp
 		closures:        e.closures // aliased; cow_closures() before any write
 		closures_shared: true
 		state:           e.state
 		anon_counter:    e.anon_counter
-		dyn_context:     e.dyn_context.clone()
+		// Aliased — see clone(): no in-place writer exists (#804 leg 1).
+		dyn_context:     e.dyn_context
 		scope:           e.scope
 		// Same-context derivation keeps the lexical position (#646) — see clone().
 		in_function_body:   e.in_function_body
 		cur_defining_scope: e.cur_defining_scope
 		current_worker:  e.current_worker // same-thread derivation keeps the §10.5.4 cancel signal
+		eval_budget:     e.eval_budget // same-thread derivation keeps the F4 budget (S6.2)
 		current_future:  e.current_future // #541: the eager-async cancel/park signal derives the same way
 	}
 	for k, v in e.bindings {
@@ -810,7 +1049,8 @@ pub fn match_pattern(pat cx.ProgramPattern, val cx.Node) ?MatchEnv {
 // implemented; they fall through to `none` and will be added with the
 // PathExpr value-kind evaluator.
 pub fn match_arm_pattern(pat cx.ProgramNode, val cx.Node, parent MatchEnv) ?MatchEnv {
-	mut out := parent.clone()
+	// #871 — bindings copied (rollback isolation), closures aliased (COW).
+	mut out := parent.clone_sharing_closures()
 	if match_value_pattern(pat, val, mut out) {
 		return out
 	}
@@ -834,7 +1074,17 @@ fn match_value_pattern(pat cx.ProgramNode, val cx.Node, mut env MatchEnv) bool {
 		cx.ProgramLiteral {
 			match pat.kind {
 				.map_lit {
-					return match_map_pattern(pat.keys, pat.items, val, mut env)
+					// RULED: MSS-4 (#917): a declaration-only entry has no
+					// PATTERN semantics (its item is an inert placeholder —
+					// matching it would silently compare against null). Kind
+					// tests in patterns are the [140g] typed binds; a map
+					// pattern carrying `k: ::T` never matches.
+					for dk in pat.decl_kinds {
+						if dk != '' {
+							return false
+						}
+					}
+					return match_map_pattern(pat.keys, pat.key_kinds, pat.items, val, mut env)
 				}
 				.sequence_lit {
 					return match_seq_or_array_pattern(pat.items, val, seq_marker_name, mut env)
@@ -935,7 +1185,7 @@ fn match_seq_or_array_pattern(items []cx.ProgramNode, val cx.Node, marker string
 // non-rest key, matched by its value sub-pattern; extra keys are allowed.
 // A trailing rest-bind `*$rest` (stored with an empty-string key) binds the
 // unmatched pairs as a Map. A non-Map `val` is a NON-MATCH.
-fn match_map_pattern(keys []string, items []cx.ProgramNode, val cx.Node,
+fn match_map_pattern(keys []string, key_kinds []string, items []cx.ProgramNode, val cx.Node,
                      mut env MatchEnv) bool {
 	if val !is cx.Element {
 		return false
@@ -946,6 +1196,10 @@ fn match_map_pattern(keys []string, items []cx.ProgramNode, val cx.Node,
 	}
 	mut rest_name := ''
 	mut snap := env.clone()
+	// #777 (RULED: 777-1a): a key's identity is the pair (KIND, image), so
+	// the match — and the rest-bind's "already matched" set — compares both.
+	// Matching on the image alone would make `{'7': $v}` match an INT key 7,
+	// which is a different key.
 	mut matched_keys := map[string]bool{}
 	for i, k in keys {
 		sub := items[i]
@@ -956,10 +1210,13 @@ fn match_map_pattern(keys []string, items []cx.ProgramNode, val cx.Node,
 			}
 			continue
 		}
+		raw_kind := if i < key_kinds.len { key_kinds[i] } else { '' }
+		pat_kind := if raw_kind != '' { raw_kind } else { cx.cx_autotype_kind_name(k) }
 		// Find the candidate entry with this key.
 		mut entry_val := ?cx.Node(none)
 		for child in el.items {
-			if child is cx.Element && child.name == k {
+			if child is cx.Element && child.name == k
+				&& map_entry_effective_key_kind(child) == pat_kind {
 				entry_val = map_entry_value(child)
 				break
 			}
@@ -968,12 +1225,13 @@ fn match_map_pattern(keys []string, items []cx.ProgramNode, val cx.Node,
 		if !match_value_pattern(sub, cand, mut snap) {
 			return false
 		}
-		matched_keys[k] = true
+		matched_keys[map_pattern_key_id(pat_kind, k)] = true
 	}
 	if rest_name != '' {
 		mut rest_entries := []cx.Node{}
 		for child in el.items {
-			if child is cx.Element && child.name !in matched_keys {
+			if child is cx.Element
+				&& map_pattern_key_id(map_entry_effective_key_kind(child), child.name) !in matched_keys {
 				rest_entries << child
 			}
 		}
@@ -1294,6 +1552,16 @@ fn literal_to_scalar(n cx.ProgramNode) ?cx.ScalarValue {
 				.float_lit   { return cx.ScalarValue(n.flt_val) }
 				.bool_lit    { return cx.ScalarValue(n.bool_val) }
 				.duration_lit { return cx.ScalarValue(n.dur_val) }
+				.node_lit    {
+					// #923 (RULED: BC-1): a bare attr-value RUN in pattern
+					// position rides a node_lit carrying the data-autotyped
+					// scalar (`@port=8080` → int, `@host=0.0.0.0` → string).
+					inner := n.node or { return none }
+					if inner is cx.ScalarNode {
+						return inner.value
+					}
+					return none
+				}
 				else         { return none }
 			}
 		}
@@ -1484,4 +1752,11 @@ fn match_body_item(item cx.ProgramNode, child cx.Node, mut env MatchEnv) bool {
 			return false
 		}
 	}
+}
+
+// map_pattern_key_id spells an envelope key's IDENTITY — the pair (kind,
+// image) — as one comparable string (#777, RULED: 777-1a). The NUL joiner
+// cannot occur in either half, so the pairing is unambiguous.
+fn map_pattern_key_id(kind string, image string) string {
+	return '${kind}\0${image}'
 }

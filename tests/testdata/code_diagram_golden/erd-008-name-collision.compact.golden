@@ -1,0 +1,17 @@
+erDiagram
+  team ||--|| user : has
+  project ||--|| user : has
+  org ||--|| team : has
+  org ||--|| project : has
+  org {
+  }
+  team {
+    string name "@"
+  }
+  user {
+    int id "@"
+    string name "@"
+  }
+  project {
+    string name "@"
+  }

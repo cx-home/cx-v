@@ -1,0 +1,10 @@
+sequenceDiagram
+  participant jobs
+  participant producer
+  participant consumer
+  activate producer
+  producer ->>+ jobs : 1
+  deactivate producer
+  activate consumer
+  jobs -->>- consumer : msg
+  deactivate consumer

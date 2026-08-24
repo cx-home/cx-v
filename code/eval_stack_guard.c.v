@@ -61,3 +61,17 @@ fn eval_stack_low() bool {
 fn mk_err_stack_exhausted() cx.Node {
 	return mk_err(err_stack_exhausted, 'evaluation stack exhausted — non-tail recursion too deep for this thread stack; rewrite the hot recursion tail-recursively (trampolined), iterate with [?for]/[?reduce], or raise the stack limit')
 }
+
+// err_eval_budget builds the THROWN E_EVAL_BUDGET_EXCEEDED error (F4/S6.2,
+// spec/core/code.md §9.4 — the 0270–0279 runtime-environment band, sibling
+// of 0272). Deterministic message: the conjunct + the configured limit only.
+// Thrown (EvalError), not an err value — a value-form refusal is collectable
+// by the streamed iterator hot paths (measured); the thrown form
+// short-circuits mechanically. Terminal in effect regardless of catching:
+// the budget latches, so every further evaluation step re-refuses.
+fn err_eval_budget(conjunct string, limit u64) EvalError {
+	return EvalError{
+		code:    'cx-err:CXER0273'
+		message: 'evaluation budget exceeded: ${conjunct} limit ${limit} — the budgeted evaluation is over (every further step re-refuses); raise the operator limit or narrow the computation'
+	}
+}

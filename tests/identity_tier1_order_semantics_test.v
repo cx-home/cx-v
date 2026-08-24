@@ -33,7 +33,7 @@ fn test_tier1_sequence_order_is_significant() {
 }
 
 fn test_tier1_array_order_is_significant() {
-	assert h('[r ::int[3, 1, 2]]') != h('[r ::int[1, 2, 3]]'), 'array order must change the Tier-1 hash'
+	assert h('[r::int [3, 1, 2]]') != h('[r::int [1, 2, 3]]'), 'array order must change the Tier-1 hash'
 }
 
 fn test_tier1_attribute_order_is_significant() {
@@ -65,11 +65,11 @@ fn test_tier1_comments_excluded_from_identity() {
 fn test_tier1_distinct_pairs_are_well_formed() {
 	pairs := [
 		['[r (2, 1)]', '[r (1, 2)]'],
-		['[r ::int[3, 1, 2]]', '[r ::int[1, 2, 3]]'],
+		['[r::int [3, 1, 2]]', '[r::int [1, 2, 3]]'],
 		['[rec a=1 b=2]', '[rec b=2 a=1]'],
 	]
 	for p in pairs {
-		assert h(p[0]).len == 64, 'expected 64-hex sha256 for `${p[0]}`'
-		assert h(p[1]).len == 64, 'expected 64-hex sha256 for `${p[1]}`'
+		assert h(p[0]).len == 73, 'expected tagged sha2-256 (73 chars) for `${p[0]}`'
+		assert h(p[1]).len == 73, 'expected tagged sha2-256 (73 chars) for `${p[1]}`'
 	}
 }

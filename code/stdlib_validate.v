@@ -240,7 +240,8 @@ fn val_node_kind(n cx.Node) string {
 
 // val_known_type reports whether `t` is one of the §4.5 type names.
 fn val_known_type(t string) bool {
-	return t in ['string', 'int', 'float', 'number', 'bool', 'bytes', 'date',
+	// I1 stream 11: decimal + bigint join the known-type set.
+	return t in ['string', 'int', 'float', 'number', 'decimal', 'bigint', 'bool', 'bytes', 'date',
 		'datetime', 'duration', 'atom', 'element', 'sequence', 'array', 'map',
 		'any', 'null']
 }
@@ -748,12 +749,13 @@ fn validate_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			// validate_stdlib_builtin_env, which is tried first in dispatch.
 			return val_result(viols, value)
 		}
-		// ── §3.2 validate-against (named registry — unpopulable §3.2) ─
+		// ── §3.2 validate-against (name → hash → content, W4) ─
 		'validate-against' {
-			// The named-schema registry is unpopulable, so this
-			// always raises CXER1600 (§3.2).
+			// The env-aware path (validate_stdlib_builtin_env) resolves
+			// the registry; this env-free fallback fires only where no
+			// evaluator env exists — there, no binding can exist either.
 			return mk_err('cx-err:CXER1600',
-				'E_VALIDATE_SCHEMA_NOT_FOUND: no schema registered under the given name (registry is unpopulable)')
+				'E_VALIDATE_SCHEMA_NOT_FOUND: no schema registered or pinned under the given name')
 		}
 		// ── §3.3 result inspection ───────────────────────────────────
 		'validate-is-ok' {
@@ -964,6 +966,15 @@ fn val_validate_shape_collect(value cx.Node, schema cx.Element) (cx.Node, []ValP
 // the final [ok …] / [invalid …] result, or none for non-validate-shape names
 // and for a malformed schema arg (the env-free path produces its CXER16xx).
 fn validate_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?cx.Node {
+	// The W4 registry surface (stream 16): registration + named
+	// resolution are env-aware by construction (bindings live on
+	// ProgramState; lock pins ride the module table).
+	if name == 'register-schema' {
+		return eval_register_schema(args, mut env)
+	}
+	if name == 'validate-against' {
+		return eval_validate_against(args, mut env)
+	}
 	if name != 'validate-shape' {
 		return none
 	}
@@ -977,7 +988,15 @@ fn validate_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?c
 	if schema.name != 'schema' {
 		return none
 	}
-	decl, pending := val_validate_shape_collect(args[0], schema)
+	return validate_shape_with_env(args[0], schema, mut env)
+}
+
+// validate_shape_with_env is the full inline-schema validation path —
+// declarative collection plus §3.6 custom validators applied with the
+// env in scope. Shared by validate-shape and by validate-against when
+// the registered content is a [schema …] document (W4).
+fn validate_shape_with_env(value cx.Node, schema cx.Element, mut env MatchEnv) cx.Node {
+	decl, pending := val_validate_shape_collect(value, schema)
 	if decl is cx.Element {
 		if is_err_value(decl) {
 			return decl // malformed-schema control-flow err
@@ -991,6 +1010,14 @@ fn validate_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?c
 		cl := env.closures[pc.fn_name] or {
 			return mk_err('cx-err:CXER1603',
 				'E_VALIDATE_SCHEMA_MALFORMED: validate-with= references unknown function `${pc.fn_name}`')
+		}
+		// §3.6 purity gate (validate.md: "the referenced [?def] MUST carry
+		// pure; otherwise CXER1603"). Checked BEFORE invocation — an impure
+		// validator must never run its side effects (R3.12; the declared
+		// annotation is the contract, matching the D11 static checker).
+		if cl.declared_impure {
+			return mk_err('cx-err:CXER1603',
+				'E_VALIDATE_SCHEMA_MALFORMED: validate-with= validator `${pc.fn_name}` is declared impure — a custom validator MUST be pure (validate.md §3.6)')
 		}
 		ret := invoke_closure_l(cl, [pc.value], []string{}, mut env) or {
 			return mk_err('cx-err:CXER1603',

@@ -1,0 +1,13 @@
+%%cx:Wz9mb3IgW2luICR1ICR1c2Vyc10gW3lpZWxkIFtzY29yZSAkdV1dIFtwYXJdXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["$users"]
+    n4{{"for $u :par"}}
+    n3 -- "binds $u" --> n4
+    n5["[score …]"]
+    n4 -- "iter" --> n5
+    n6(["collect"])
+    n5 --> n6
+    n1 --> n6
+    n6 --> n2

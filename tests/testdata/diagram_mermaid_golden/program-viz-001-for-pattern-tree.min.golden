@@ -1,0 +1,13 @@
+%%cx:Wz9mb3IgW3VzZXIgW2VtYWlsICRlXV0gW3lpZWxkICRlXV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["[user]"]
+    n4{{"for $_"}}
+    n3 -- "binds $_" --> n4
+    n5["$e"]
+    n4 -- "iter" --> n5
+    n6(["collect"])
+    n5 --> n6
+    n1 --> n6
+    n6 --> n2

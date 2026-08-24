@@ -1,4 +1,4 @@
-[test-suite name=sched
+[test-suite name=sched ring=1
   [doc [#
 conformance fixtures for cx-stdlib/sched (spec/02-working/stdlib_sched.md
 §3/§6/§10). Each program imports the bundled module via [?lib 'cx-stdlib/sched']
@@ -334,6 +334,11 @@ false
 
   [case id=sched-017-on-missed-skip-fires-once level=core
    [tags sched on-missed skip catch-up fixed-rate]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
    [in-cx [# [empty] #]]
    [in-code [#
 [?lib 'cx-stdlib/sched']
@@ -343,15 +348,20 @@ false
 [= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
 [= $a [?receive from=$ch]]
 [= $b [?receive from=$ch]]
-[seq $a $b]]
+($a, $b)]
 #]]
    [out-text [#
-[seq [tick timer=timer-1] [err code=cx-err:CXER0202 message='receive timed out']]
+([tick timer=timer-1], [err code=cx-err:CXER0202 message='receive timed out'])
 #]]
   ]
 
   [case id=sched-018-on-missed-coalesce-fires-once level=core
    [tags sched on-missed coalesce catch-up fixed-rate]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
    [in-cx [# [empty] #]]
    [in-code [#
 [?lib 'cx-stdlib/sched']
@@ -361,10 +371,10 @@ false
 [= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
 [= $a [?receive from=$ch]]
 [= $b [?receive from=$ch]]
-[seq $a $b]]
+($a, $b)]
 #]]
    [out-text [#
-[seq [tick timer=timer-1] [err code=cx-err:CXER0202 message='receive timed out']]
+([tick timer=timer-1], [err code=cx-err:CXER0202 message='receive timed out'])
 #]]
   ]
 
@@ -413,6 +423,11 @@ false
 
   [case id=sched-021-recur-skip-catch-up-once level=core
    [tags sched recur on-missed skip single-advance once]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
    [in-cx [# [empty] #]]
    [in-code [#
 [?lib 'cx-stdlib/sched']
@@ -423,16 +438,16 @@ false
 [= $_ [$sched:test-clock-advance [$time:duration-d 30]]]
 [= $a [?receive from=$ch]]
 [= $b [?receive from=$ch]]
-[seq $a $b]]
+($a, $b)]
 #]]
    [out-text [#
-[seq [tick timer=timer-1] [err code=cx-err:CXER0202 message='receive timed out']]
+([tick timer=timer-1], [err code=cx-err:CXER0202 message='receive timed out'])
 #]]
   ]
 
   [# ── 022-027: durable / restore (worker-recycle correctness) ── #]
 
-  [case id=sched-022-durable-appends-intent level=core
+  [case id=sched-022-durable-appends-intent level=core ring=2
    [tags sched durable journal append intent]
    [in-cx [# [empty] #]]
    [in-code [#
@@ -445,11 +460,11 @@ false
 [$journal:head $jr]]
 #]]
    [out-text [#
-[entry seq=1 tenant=tenant actor=sched authority='sched/durable' ts='epoch:00:00:01' prev-hash=b3:GENESIS hash=sha256:ef1b71180dfb55ca71df058c7cde5f8ce8df59db793adeb159a7838706830e7b [event [sched-intent [kind 'after'] [name 'no-ack'] [deadline 600000000000] [dur-ns 600000000000] [mode 'fixed-delay'] [on-missed 'skip'] [status 'pending']]]]
+[entry seq=1 tenant=tenant actor=sched authority='sched/durable' ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload=sha2-256:b232c7b1c7e0e9d35541ce19dd1e234da4073d0002041dfc04d11091054f6453 hash='sha2-256:830826380c4312500432e6332283fe83b2befc909f6209d6e189a2f7eb140314' [event [sched-intent [kind 'after'] [name 'no-ack'] [deadline 600000000000] [dur-ns 600000000000] [mode 'fixed-delay'] [on-missed 'skip'] [status 'pending']]]]
 #]]
   ]
 
-  [case id=sched-023-restore-rearms-bound level=core
+  [case id=sched-023-restore-rearms-bound level=core ring=2
    [tags sched restore rearmed registry worker-recycle]
    [in-cx [# [empty] #]]
    [in-code [#
@@ -485,7 +500,7 @@ false
 #]]
   ]
 
-  [case id=sched-025-restore-orphaned-surfaced level=core
+  [case id=sched-025-restore-orphaned-surfaced level=core ring=2
    [tags sched restore orphaned finding not-dropped]
    [in-cx [# [empty] #]]
    [in-code [#
@@ -502,7 +517,7 @@ false
 #]]
   ]
 
-  [case id=sched-026-canceled-durable-not-rearmed level=core
+  [case id=sched-026-canceled-durable-not-rearmed level=core ring=2
    [tags sched durable cancel closed not-rearmed restore]
    [in-cx [# [empty] #]]
    [in-code [#
@@ -520,7 +535,7 @@ false
 #]]
   ]
 
-  [case id=sched-027-durable-recur-restore level=core
+  [case id=sched-027-durable-recur-restore level=core ring=2
    [tags sched durable recur restore rearmed]
    [in-cx [# [empty] #]]
    [in-code [#
@@ -608,7 +623,7 @@ cx-err:CXER4972
 #]]
   ]
 
-  [case id=sched-033-durable-no-name-CXER4973 level=core
+  [case id=sched-033-durable-no-name-CXER4973 level=core ring=2
    [tags sched negative durable-no-name]
    [in-cx [# [empty] #]]
    [in-code [#
@@ -617,7 +632,7 @@ cx-err:CXER4972
 [?lib 'cx-stdlib/time']
 [?let [= $ch [?channel name="t" buffer=4]]
 [?let [= $jr [$journal:open "mem://s" "t"]]
-[$sched:after [$time:duration-m 10] $ch {durable: $jr}]]]]
+[$sched:after [$time:duration-m 10] $ch {durable: $jr}]]]
 #]]
    [out-err [#
 cx-err:CXER4973
@@ -671,6 +686,11 @@ cx-err:CXER0271
 
   [case id=sched-037-recur-skip-large-advance-fires-once level=core
    [tags sched recur on-missed skip large-advance perf hostile]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
    [doc [#
 HOSTILE (blocker): an unbounded :skip recur advanced across ~50000 occurrences
 must fire EXACTLY ONCE and return immediately. The prior sch_fire_recur walked
@@ -689,15 +709,20 @@ fast-forwarding call; if the O(N) walk is reintroduced this case hangs the gate.
 [= $_ [$sched:test-clock-advance [$time:duration-d 50000]]]
 [= $a [?receive from=$ch]]
 [= $b [?receive from=$ch]]
-[seq $a $b]]
+($a, $b)]
 #]]
    [out-text [#
-[seq [tick timer=timer-1] [err code=cx-err:CXER0202 message='receive timed out']]
+([tick timer=timer-1], [err code=cx-err:CXER0202 message='receive timed out'])
 #]]
   ]
 
   [case id=sched-038-restore-no-duplicate-timer level=core
    [tags sched restore durable dedup worker-recycle hostile]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
    [doc [#
 HOSTILE (major): restore re-arms a durable intent by name, but the registry was
 keyed by a fresh monotonic id, so re-arming a name already live left a
@@ -718,10 +743,36 @@ second receive times out). Name is now the registry identity.
 [= $_ [$sched:test-clock-advance [$time:duration-m 10]]]
 [= $a [?receive from=$ch]]
 [= $b [?receive from=$ch]]
-[seq $a $b]]
+($a, $b)]
 #]]
    [out-text [#
-[seq [tick timer=win] [err code=cx-err:CXER0202 message='receive timed out']]
+([tick timer=win], [err code=cx-err:CXER0202 message='receive timed out'])
+#]]
+  ]
+
+  [case id=sched-039-tick-reaches-a-fan-out-subscriber level=core
+   [tags sched timer channel fan-out regression sup-1e]
+   [doc [#
+REGRESSION (SUP-1e class): a timer armed on a FAN-OUT channel
+(sharing=independent) delivered its tick through the GROUP queue, where no
+subscriber ever looks — a dead wire, invisible because nothing had ever armed
+a timer at a fan-out point until the supervisor module did. The tick must
+reach a subscriber's window like any other fan-out send. Pinned directly at
+the sched layer so the guarantee does not rest on supervise's fixtures alone.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $ch [?channel name="fanout-tick" sharing=independent retention=window keep=4]]
+[= $sub [?subscribe from=$ch]]
+[= $t [$sched:after [$time:duration-m 5] $ch {name: 'fan'}]]
+[= $_ [$sched:test-clock-advance [$time:duration-m 5]]]
+[= $r [?receive from=$sub]]
+$r]
+#]]
+   [out-text [#
+[tick timer=fan]
 #]]
   ]
 ]

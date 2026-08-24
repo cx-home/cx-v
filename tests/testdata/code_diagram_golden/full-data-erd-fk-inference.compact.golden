@@ -1,0 +1,11 @@
+erDiagram
+  doc ||--|| user : has
+  doc ||--|| order : has
+  doc {
+  }
+  user {
+    int id "@"
+  }
+  order {
+    int user-id "@"
+  }

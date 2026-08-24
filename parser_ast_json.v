@@ -11,6 +11,7 @@ pub fn parse_ast_json(src string) !Document {
 	v := r.read_val()
 	mut doc := ajv_to_doc(v)!
 	resolve_namespaces(mut doc)
+	validate_reserved_ns_bindings(doc)!
 	return doc
 }
 

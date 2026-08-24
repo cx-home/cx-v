@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  unk_1[/"unresolved callee: mymod:go"/]
+  any{{"any granted capability"}}
+  prog ==> unk_1
+  unk_1 ==> any

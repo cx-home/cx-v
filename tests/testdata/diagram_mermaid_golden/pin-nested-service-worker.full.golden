@@ -1,0 +1,18 @@
+%%cx:Wz9pZiAkcCB0aGVuPVs/aHR0cC1zZXJ2aWNlIG5hbWU9InN2Yy1hIl0gZWxzZT1bP3dvcmtlciBuYW1lPSJ3MiIgYm9keT1bP3JlY2VpdmUgZnJvbT0kY2hdXV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3{"if $p"}
+    n4["[?if] result"]
+    n5[["[?service] \"svc-a\""]]
+    n3 -- "true" --> n5
+    n5 --> n4
+    n6[["[?worker] \"w2\""]]
+    n7["[?receive]"]
+    n8[/"channel $ch"/]
+    n8 -- "recv" --> n7
+    n6 -- ":body" --> n7
+    n3 -- "false" --> n6
+    n6 --> n4
+    n1 --> n4
+    n4 --> n2

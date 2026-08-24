@@ -1,0 +1,10 @@
+[schema of=order mode=open]
+[order
+ [attr sku::string [req] [pattern "^SKU-[0-9]+$"]]
+ [attr placed::datetime [opt]]
+ [elem line [card "1..*"]]
+ [elem note [card "0..1"]]]
+[line
+ [attr qty::int [req] [range 1 999]]
+ [body decimal [req]]]
+[type note::string]

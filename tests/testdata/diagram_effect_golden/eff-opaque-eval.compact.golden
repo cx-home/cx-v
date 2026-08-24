@@ -1,0 +1,10 @@
+flowchart TD
+  prog(["program"])
+  eff_eval[["[?eval]"]]
+  unk_1[/"[?eval] — executes a tree the image does not hold"/]
+  cap_eval{{"eval --allow-eval"}}
+  any{{"any granted capability"}}
+  prog --> eff_eval
+  eff_eval --> cap_eval
+  prog ==> unk_1
+  unk_1 ==> any

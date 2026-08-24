@@ -2,6 +2,7 @@ module code
 
 import cx
 import crypto.sha256
+import crypto.blake3
 import crypto.sha512
 import encoding.base64
 import os
@@ -55,11 +56,15 @@ import os
 //                            `table.registered_sources` (the test
 //                            harness pre-registers cx-stdlib /
 //                            synthetic fixtures here).
-//       - https_url        : returns MODULE_HTTPS_FETCH_DEFERRED. The
-//                            SRI shape is still verified pre-fetch
-//                            against the lockfile (validates the
-//                            algo-base64 form per spec/lockfile.md
-//                            §4.4).
+//       - https_url        : the Phase-2.14 graft (register R3.12,
+//                            RULED (b) 2026-08-09): lockfile-pinned
+//                            resolution — cx.lock entry REQUIRED
+//                            (else MODULE_UNPINNED/CXER0211); bytes
+//                            from the in-memory registry seam, the
+//                            on-disk (url, sri) cache, or a live TLS
+//                            GET (http-client pack); verified against
+//                            the pinned sri (mismatch = CXER0209,
+//                            never cached).
 //
 //     Cycle detection: the function adds the requested module name to
 //     `table.in_flight` before recursing; if a recursive resolve_lib
@@ -75,11 +80,15 @@ import os
 //     `MODULE_SRI_MISMATCH` (surfaces as `CXER0209` at the loader
 //     boundary).
 //
-// Scope simplifications at Phase 2.13 + 2.14 partial (deferred):
+// Scope simplifications at Phase 2.13 + 2.14 partial — the fetch/cache/
+// lockfile items CLOSED by the Phase-2.14 graft (register R3.12, RULED (b)
+// 2026-08-09):
 //
-//   - HTTPS fetch is deferred (returns MODULE_HTTPS_FETCH_DEFERRED).
-//     SRI shape is still verified pre-fetch.
-//   - No on-disk module cache (Phase 2.x graft).
+//   - HTTPS fetch: LIVE (module_fetch_https_live, http-client pack; TLS
+//     always on; net-capability-gated; engines without the pack refuse
+//     loudly and keep cache/registry loads).
+//   - On-disk module cache: LIVE ((url, sri)-keyed per lockfile.md §5;
+//     $CX_MODULE_CACHE override; verified bytes only).
 //   - `:scope public/private` visibility enforcement landed at Phase
 //     2.15 — see `is_def_public` / `is_const_public` / `lookup_def` /
 //     `lookup_const` below, plus the `:only` selective-import check
@@ -95,10 +104,11 @@ import os
 //     ConstNode and the topological order is exposed via
 //     `Module.const_order` so a downstream evaluator can walk them
 //     in dependency order.
-//   - Lockfile-driven SRI verification is wired through `verify_sri`
-//     but the loader does not yet consult the lockfile to look up
-//     the recorded SRI for a given resolver — the harness drives
-//     `verify_sri` directly at Phase 2.14 partial.
+//   - Lockfile-driven SRI verification: LIVE — the loader lazily reads
+//     `<base_dir>/cx.lock` (module_lock_load; malformed/unknown-schema
+//     refuses CXER0212) and looks up entries by literal name
+//     (module_lock_entry, lockfile.md §4.1/§4.3.1); HTTPS-resolved
+//     entries verify on every load.
 //
 // Cross-references:
 //   - spec/lockfile.md §4.4 (SRI integrity format)
@@ -111,10 +121,10 @@ import os
 // `error('MODULE_*: …')`; the dispatcher-integration follow-up maps
 // them to the canonical `CXER0*` spec error codes.
 //
-// MODULE_HTTPS_FETCH_DEFERRED — the loader has resolved the HTTPS
-// resolver shape (and validated any associated SRI shape) but
-// declines to actually fetch the bytes at this phase. Phase 2.14
-// graft replaces this with a real HTTP client + on-disk cache.
+// MODULE_UNPINNED — an HTTPS-resolved module has no matching cx.lock
+// entry (or the entry lacks the required sri). Surfaces as CXER0211
+// E_LIB_UNPINNED at the boundary. (MODULE_HTTPS_FETCH_DEFERRED is
+// RETIRED — the Phase-2.14 graft made the fetch real.)
 //
 // MODULE_CYCLE_DETECTED — the in-flight set already contained the
 // requested module name when a recursive resolve_lib call entered.
@@ -215,6 +225,9 @@ pub mut:
 	registered_sources map[string]string
 	base_dir           string
 	lockfile           ?cx.Lockfile
+	// lock_probed: `<base_dir>/cx.lock` is loaded at most once per table
+	// (Phase 2.14 graft); a harness-seeded `lockfile` sets this itself.
+	lock_probed        bool
 	// alias_modules maps an import call-prefix (`:as ALIAS` or the
 	// derived last-segment, spec/code.md §12.1.1) to the module it
 	// resolved to. Populated by eval_lib at import time. The QName
@@ -474,10 +487,12 @@ pub fn load_module(source string, name string, mut table ModuleTable) !&Module {
 //   - MODULE_CYCLE_DETECTED      : `node.resolver_source` is already
 //                                  in `table.in_flight`. Surfaces as
 //                                  CXER0210 at the boundary.
-//   - MODULE_HTTPS_FETCH_DEFERRED: the resolver_kind is `https_url`.
-//                                  SRI shape (if a lockfile entry
-//                                  exists) is still validated before
-//                                  raising this.
+//   - MODULE_UNPINNED            : HTTPS-resolved module with no
+//                                  cx.lock entry / no sri (CXER0211).
+//   - MODULE_SRI_MISMATCH        : resolved bytes fail the pinned sri
+//                                  (CXER0209; never cached).
+//   - MODULE_LOCKFILE_MALFORMED  : cx.lock unparseable or unknown
+//                                  schema version (CXER0212).
 //   - MODULE_UNKNOWN_REGISTERED  : registered-name resolver not in
 //                                  `table.registered_sources`.
 //   - MODULE_FILE_NOT_FOUND      : file-path resolver could not be
@@ -507,35 +522,40 @@ pub fn resolve_lib(node cx.LibNode, mut table ModuleTable) !&Module {
 			}
 		}
 		.registered_name {
-			s := table.registered_sources[name] or {
-				return error('MODULE_UNKNOWN_REGISTERED: registered name `${name}` has no in-memory source (CXER0213)')
+			// Phase 2.14 graft (register R3.12, RULED (b) 2026-08-09): the
+			// lockfile may map a registered NAME to HTTPS-resolved bytes
+			// (lockfile.md §4.2 — "resolves to an HTTPS URL … via lockfile",
+			// code.md §12.1.3); that path carries the full pin + verify
+			// discipline. A name with no lock entry (or a file/bundled-
+			// resolved one) keeps the registry path — §4.4: sri is required
+			// only for HTTPS-resolved modules.
+			module_lock_load(mut table)!
+			if ml := module_lock_entry(table, name) {
+				if ml.resolved.starts_with('https://') {
+					module_https_resolve_entry(mut table, name, ml)!
+				} else {
+					s := table.registered_sources[name] or {
+						return error('MODULE_UNKNOWN_REGISTERED: registered name `${name}` has no in-memory source (CXER0213)')
+					}
+					s
+				}
+			} else {
+				s := table.registered_sources[name] or {
+					return error('MODULE_UNKNOWN_REGISTERED: registered name `${name}` has no in-memory source (CXER0213)')
+				}
+				s
 			}
-			s
 		}
 		.https_url {
-			// SRI shape validation — pre-fetch. If the lockfile carries
-			// a `:sri` entry for this resolver, ensure its shape parses.
-			if lf := table.lockfile {
-				for ml in lf.modules {
-					if ml.name == name {
-						if sri := ml.integrity {
-							verify_sri_shape(sri) or {
-								return error('MODULE_SRI_MALFORMED: lockfile :sri for `${name}` is malformed: ${err}')
-							}
-						}
-					}
-				}
-			}
-			// In-memory test source for a pinned HTTPS resolver: an
-			// in-memory test module keyed by its literal URL, NOT a live
-			// fetch (real HTTPS fetch + on-disk cache is deferred per
-			// §12.4.2). When no in-memory source is registered, the fetch
-			// is still deferred.
-			if s := table.registered_sources[name] {
-				s
-			} else {
-				return error('MODULE_HTTPS_FETCH_DEFERRED: HTTPS fetch deferred to Phase 2.14 graft (resolver=`${name}`)')
-			}
+			// Phase 2.14 graft (register R3.12, RULED (b) 2026-08-09; spec
+			// code.md §12.1.3 / lockfile.md §4.4, §5): the lockfile is the
+			// AUTHORITY — an HTTPS resolver without a matching cx.lock entry
+			// is unpinned remote code and refuses (CXER0211); a present
+			// entry's sri is REQUIRED and verified against the resolved
+			// bytes wherever they came from (the harness's in-memory
+			// registry, the on-disk (url, sri) cache, or a live TLS GET).
+			// Mismatched bytes are NEVER cached.
+			module_https_resolve(mut table, name)!
 		}
 		.pkg_url {
 			// distribution spec §6.2: resolve through the bound registry with
@@ -544,8 +564,12 @@ pub fn resolve_lib(node cx.LibNode, mut table ModuleTable) !&Module {
 			// the literal reference take precedence (hermetic fixtures).
 			if s := table.registered_sources[name] {
 				s
+			} else if g_ring2_pkg_source.len > 0 {
+				// I3: the pkg: resolver is the Ring-2 distribution
+				// engine, reached through the registry slot.
+				g_ring2_pkg_source[0](name)!
 			} else {
-				xap_pkg_module_source(name)!
+				return error('pkg: module source requires the distribution engine (platform profile): ${name}')
 			}
 		}
 	}
@@ -573,6 +597,167 @@ pub fn resolve_lib(node cx.LibNode, mut table ModuleTable) !&Module {
 	return loaded
 }
 
+// ── Phase 2.14: lockfile-pinned HTTPS resolution (register R3.12, RULED (b)) ──
+
+// module_lock_load lazily loads `<base_dir>/cx.lock` into the table, once.
+// A harness-seeded lockfile (table.lockfile already set) wins; an absent
+// file is fine (programs with no remote modules need no lockfile — the
+// first HTTPS resolver will then refuse UNPINNED); a malformed file or an
+// unrecognized schema version refuses loudly (lockfile.md §3.1, CXER0212).
+fn module_lock_load(mut table ModuleTable) ! {
+	if table.lock_probed {
+		return
+	}
+	table.lock_probed = true
+	if _ := table.lockfile {
+		return
+	}
+	base := if table.base_dir == '' { '.' } else { table.base_dir }
+	p := os.join_path(base, 'cx.lock')
+	if !os.exists(p) {
+		return
+	}
+	lf := cx.read_lockfile(p) or {
+		return error('MODULE_LOCKFILE_MALFORMED: ${p}: ${err.msg()} (CXER0212)')
+	}
+	if lf.schema_version != '1' {
+		return error('MODULE_LOCKFILE_MALFORMED: ${p}: unrecognized cx.lock schema version `${lf.schema_version}` — this loader reads version=1 (lockfile.md §3.1, no graceful degrade) (CXER0212)')
+	}
+	table.lockfile = lf
+}
+
+// module_lock_entry finds the `[module]` entry for a resolver string by
+// literal name match (lockfile.md §4.1). §4.3.1's selection rule: the
+// entry with NO version field wins; when every match carries a version
+// (and the `[?lib]` has no hotfix override — not yet parsed into LibNode),
+// there is no selectable entry and the caller refuses UNPINNED.
+fn module_lock_entry(table ModuleTable, name string) ?cx.ModuleLock {
+	lf := table.lockfile or { return none }
+	for ml in lf.modules {
+		if ml.name != name {
+			continue
+		}
+		if _ := ml.version {
+			continue
+		}
+		return ml
+	}
+	return none
+}
+
+// module_https_resolve — the direct-URL entry: pin lookup, then the shared
+// entry path.
+fn module_https_resolve(mut table ModuleTable, name string) !string {
+	module_lock_load(mut table)!
+	ml := module_lock_entry(table, name) or {
+		return error('MODULE_UNPINNED: HTTPS module `${name}` has no matching cx.lock entry — remote code must be integrity-pinned (code.md §12.1.3 / lockfile.md §4.4) (CXER0211)')
+	}
+	return module_https_resolve_entry(mut table, name, ml)
+}
+
+// module_https_resolve_entry retrieves + verifies HTTPS-resolved bytes for
+// a lock entry: sri REQUIRED (§4.4), bytes from the in-memory registry /
+// the (url, sri) cache / a live TLS GET, verified byte-identically, and
+// cached ONLY after verification succeeds (a poisoned fetch is never
+// cached, §4.4).
+fn module_https_resolve_entry(mut table ModuleTable, name string, ml cx.ModuleLock) !string {
+	sri := ml.integrity or {
+		return error('MODULE_UNPINNED: cx.lock entry for `${name}` carries no sri — required for HTTPS-resolved modules (lockfile.md §4.4) (CXER0211)')
+	}
+	verify_sri_shape(sri) or {
+		return error('MODULE_SRI_MALFORMED: lockfile sri for `${name}` is malformed: ${err.msg()}')
+	}
+	url := if ml.resolved.starts_with('https://') { ml.resolved } else { name }
+	bytes, live := module_https_bytes(mut table, url, sri)!
+	ok := verify_sri(sri, bytes)!
+	if !ok {
+		return error('MODULE_SRI_MISMATCH: `${name}` resolved bytes do not match the cx.lock sri (CXER0209)')
+	}
+	if live {
+		module_cache_store(url, sri, bytes)
+	}
+	return bytes
+}
+
+// module_https_bytes returns (bytes, fetched-live). Source precedence:
+// the harness's in-memory registry (the hermetic conformance seam — the
+// caller still verifies, which is exactly how the tampered fixtures
+// refuse), then the on-disk (url, sri) cache, then the live transport.
+fn module_https_bytes(mut table ModuleTable, url string, sri string) !(string, bool) {
+	if s := table.registered_sources[url] {
+		return s, false
+	}
+	cpath := module_cache_path(url, sri)
+	if os.exists(cpath) {
+		c := os.read_file(cpath) or {
+			return error('MODULE_CACHE_UNREADABLE: ${cpath}: ${err.msg()}')
+		}
+		return c, false
+	}
+	b := module_fetch_transport(url)!
+	return b, true
+}
+
+// module_fetch_transport — the live GET. The http-client PACK carries the
+// real transport (module_fetch_https_live, in the pack-gated sibling
+// file); an engine composed without the pack refuses loudly here — the
+// on-disk cache and pre-registered pinned sources stay loadable (they
+// need no network).
+fn module_fetch_transport(url string) !string {
+	$if cx_no_pack_http_client ? {
+		return error('MODULE_HTTPS_FETCH_UNAVAILABLE: this engine composition carries no http-client pack — only cached or pre-registered pinned modules are loadable (resolver=`${url}`)')
+	} $else {
+		return module_fetch_https_live(url)
+	}
+}
+
+// module_cache_dir — `$CX_MODULE_CACHE` override (tests / hermetic CI),
+// else the user cache dir. The key is the (url, sri) PAIR (lockfile.md
+// §5): bumping the sri in cx.lock is a fresh cache miss by construction.
+fn module_cache_dir() string {
+	env := os.getenv('CX_MODULE_CACHE')
+	if env != '' {
+		return env
+	}
+	return os.join_path(os.cache_dir(), 'cx', 'modules')
+}
+
+fn module_cache_path(url string, sri string) string {
+	key := sha256.hexhash('${url}\x00${sri}')
+	return os.join_path(module_cache_dir(), '${key}.cx')
+}
+
+// module_cache_path_for_test exposes the (url, sri) cache path to the
+// loader's own test battery (cache seeding under $CX_MODULE_CACHE).
+pub fn module_cache_path_for_test(url string, sri string) string {
+	return module_cache_path(url, sri)
+}
+
+// module_cache_store persists verified bytes. A failed write is a lost
+// OPTIMIZATION only (the next resolve re-fetches and re-verifies), so it
+// degrades silently by design — correctness never depends on the cache.
+fn module_cache_store(url string, sri string, content string) {
+	dir := module_cache_dir()
+	os.mkdir_all(dir) or { return }
+	os.write_file(module_cache_path(url, sri), content) or {}
+}
+
+// make_sri computes the W3C SRI string for content under `algo` — the
+// producer-side complement of verify_sri (same registry), used by the
+// conformance seeding, tests, and `cx lock` tooling.
+pub fn make_sri(algo string, content string) !string {
+	digest := match algo {
+		'sha256' { sha256.sum256(content.bytes())[..] }
+		'sha384' { sha512.sum384(content.bytes())[..] }
+		'sha512' { sha512.sum512(content.bytes())[..] }
+		'blake3' { blake3.sum256(content.bytes())[..] }
+		else {
+			return error('MODULE_SRI_MALFORMED: unsupported algo `${algo}` (registry: sha256, sha384, sha512, blake3)')
+		}
+	}
+	return '${algo}-${base64.encode(digest)}'
+}
+
 // ── Public entry: verify_sri ─────────────────────────────────────────────────
 
 // verify_sri verifies an SRI integrity string per spec/lockfile.md
@@ -586,14 +771,20 @@ pub fn resolve_lib(node cx.LibNode, mut table ModuleTable) !&Module {
 // sha384; 64 bytes for sha512).
 pub fn verify_sri(integrity string, content string) !bool {
 	parsed := verify_sri_shape(integrity)!
+	// I1 stream 19 (L35): the SRI algo set is UNIFIED with the stdlib lane
+	// against the one registry — sha256/sha384/sha512/blake3 (W3C dash
+	// spelling; the divergence had the loader rejecting what the stdlib
+	// accepted).
 	computed_digest := match parsed.algo {
+		'sha256' { sha256.sum256(content.bytes()) }
 		'sha384' { sha512.sum384(content.bytes()) }
 		'sha512' {
 			d := sha512.sum512(content.bytes())
 			d
 		}
+		'blake3' { blake3.sum256(content.bytes()) }
 		else {
-			return error('MODULE_SRI_MALFORMED: unsupported algo `${parsed.algo}` (expected sha384 or sha512)')
+			return error('MODULE_SRI_MALFORMED: unsupported algo `${parsed.algo}` (registry: sha256, sha384, sha512, blake3)')
 		}
 	}
 	if computed_digest.len != parsed.expected_digest.len {
@@ -636,10 +827,12 @@ pub fn verify_sri_shape(integrity string) !SriShape {
 		return error('MODULE_SRI_MALFORMED: empty base64 segment in `${integrity}`')
 	}
 	expected_len := match algo {
+		'sha256' { 32 }
 		'sha384' { 48 }
 		'sha512' { 64 }
+		'blake3' { 32 }
 		else {
-			return error('MODULE_SRI_MALFORMED: unsupported algo `${algo}` (expected sha384 or sha512)')
+			return error('MODULE_SRI_MALFORMED: unsupported algo `${algo}` (registry: sha256, sha384, sha512, blake3)')
 		}
 	}
 	decoded := base64.decode(b64)
@@ -656,14 +849,37 @@ pub fn verify_sri_shape(integrity string) !SriShape {
 
 // ModuleLoaderDirectiveKind discriminates the three top-level
 // directive shapes the loader walks at Pass 1.
-enum ModuleLoaderDirectiveKind {
+pub enum ModuleLoaderDirectiveKind {
 	lib
 	def
 	const_
 }
 
-struct ModuleLoaderDirective {
+pub struct ModuleLoaderDirective {
+pub:
 	kind ModuleLoaderDirectiveKind
+	text string
+}
+
+// ModuleLoaderSpanKind discriminates EVERY top-level bracket span the
+// scanner walks: the three loader directives, any other `[?…]`
+// directive (e.g. `[?cx …]`), and plain (non-directive) elements —
+// the module's co-located doc blocks ([module-doc]/[fn-doc]) among
+// them. Stream 18: `cx:ast` serves the plain spans as its `docs`
+// array (verbatim source — each span parses cleanly as DATA on its
+// own, where a whole-module data parse chokes on program-bearing
+// def bodies).
+pub enum ModuleLoaderSpanKind {
+	lib
+	def
+	const_
+	other_directive
+	plain
+}
+
+pub struct ModuleLoaderSpan {
+pub:
+	kind ModuleLoaderSpanKind
 	text string
 }
 
@@ -677,9 +893,32 @@ struct ModuleLoaderDirective {
 // The scanner is bracket-counting: it tracks `[` / `]` nesting and
 // returns the verbatim outer-bracket span for each recognised
 // directive. The directive head is matched by literal-prefix
-// comparison against `[?lib`, `[?def`, `[?const`.
-fn module_loader_scan_directives(source string) ![]ModuleLoaderDirective {
+// comparison against `[?lib`, `[?def`, `[?const`. (Layered over
+// module_loader_scan_spans — ONE scanner, two views.)
+pub fn module_loader_scan_directives(source string) ![]ModuleLoaderDirective {
+	spans := module_loader_scan_spans(source)!
 	mut out := []ModuleLoaderDirective{}
+	for sp in spans {
+		k := match sp.kind {
+			.lib { ModuleLoaderDirectiveKind.lib }
+			.def { ModuleLoaderDirectiveKind.def }
+			.const_ { ModuleLoaderDirectiveKind.const_ }
+			else { continue }
+		}
+		out << ModuleLoaderDirective{
+			kind: k
+			text: sp.text
+		}
+	}
+	return out
+}
+
+// module_loader_scan_spans is the kinds-preserving scan: every
+// top-level bracket span in source order, classified. Same skipping
+// rules (whitespace, `#` line comments, `[; … ]` block comments,
+// `[# … #]` raw blocks) and the same stray-`]` refusal.
+pub fn module_loader_scan_spans(source string) ![]ModuleLoaderSpan {
+	mut out := []ModuleLoaderSpan{}
 	src := source.bytes()
 	mut i := 0
 	for i < src.len {
@@ -736,35 +975,35 @@ fn module_loader_scan_directives(source string) ![]ModuleLoaderDirective {
 			i++
 			continue
 		}
-		// Identify directive kind by head prefix.
-		mut kind := ?ModuleLoaderDirectiveKind(none)
-		if module_loader_starts_with(src, i, '[?lib') {
-			// Disambiguate `[?lib` vs `[?libx`: require space or `]` after.
-			next := if i + 5 < src.len { src[i + 5] } else { u8(0) }
-			if next == ` ` || next == `\t` || next == `\n` || next == `\r` || next == `]` {
-				kind = ModuleLoaderDirectiveKind.lib
+		// Classify the span by head prefix.
+		mut kind := ModuleLoaderSpanKind.plain
+		if i + 1 < src.len && src[i + 1] == `?` {
+			kind = .other_directive
+			if module_loader_starts_with(src, i, '[?lib') {
+				// Disambiguate `[?lib` vs `[?libx`: require space or `]` after.
+				next := if i + 5 < src.len { src[i + 5] } else { u8(0) }
+				if next == ` ` || next == `\t` || next == `\n` || next == `\r` || next == `]` {
+					kind = .lib
+				}
 			}
-		}
-		if kind == none && module_loader_starts_with(src, i, '[?def') {
-			next := if i + 5 < src.len { src[i + 5] } else { u8(0) }
-			if next == ` ` || next == `\t` || next == `\n` || next == `\r` || next == `]` {
-				kind = ModuleLoaderDirectiveKind.def
+			if kind == .other_directive && module_loader_starts_with(src, i, '[?def') {
+				next := if i + 5 < src.len { src[i + 5] } else { u8(0) }
+				if next == ` ` || next == `\t` || next == `\n` || next == `\r` || next == `]` {
+					kind = .def
+				}
 			}
-		}
-		if kind == none && module_loader_starts_with(src, i, '[?const') {
-			next := if i + 7 < src.len { src[i + 7] } else { u8(0) }
-			if next == ` ` || next == `\t` || next == `\n` || next == `\r` || next == `]` {
-				kind = ModuleLoaderDirectiveKind.const_
+			if kind == .other_directive && module_loader_starts_with(src, i, '[?const') {
+				next := if i + 7 < src.len { src[i + 7] } else { u8(0) }
+				if next == ` ` || next == `\t` || next == `\n` || next == `\r` || next == `]` {
+					kind = .const_
+				}
 			}
 		}
 		// Locate end of bracket-balanced span (with quote-shielding).
 		end := module_loader_find_close_bracket(src, i)!
-		if k := kind {
-			text := src[i..end + 1].bytestr()
-			out << ModuleLoaderDirective{
-				kind: k
-				text: text
-			}
+		out << ModuleLoaderSpan{
+			kind: kind
+			text: src[i..end + 1].bytestr()
 		}
 		i = end + 1
 	}

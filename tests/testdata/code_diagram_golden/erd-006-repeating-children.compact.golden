@@ -1,0 +1,9 @@
+erDiagram
+  user ||--o{ order : has
+  user {
+    int id "@"
+  }
+  order {
+    int id "@"
+    decimal total "@"
+  }

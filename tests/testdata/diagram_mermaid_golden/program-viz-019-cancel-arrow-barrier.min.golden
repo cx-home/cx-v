@@ -1,0 +1,9 @@
+%%cx:Wz9sZXQgWz0gJGYgWz9hc3luYyBbP3NsZWVwIDEwcyBtb2NrXV1dIFs9ICRfIFs/Y2FuY2VsICRmXV0gWz9hd2FpdCAkZl1d%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["?"]
+    n4[["$"]]
+    n3 --> n4
+    n1 --> n4
+    n4 --> n2

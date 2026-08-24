@@ -1,0 +1,11 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  m{"match $v"}
+  a1["[x]"]
+  m -- "a-really-long-pattern-string-w…" --> a1
+  a1 --> done
+  a2["[y]"]
+  m -- "else" --> a2
+  a2 --> done
+  start --> m

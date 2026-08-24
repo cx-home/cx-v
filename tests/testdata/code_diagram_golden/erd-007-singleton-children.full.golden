@@ -1,0 +1,14 @@
+erDiagram
+  DOCUMENT {
+    int node_count "2"
+    int type_count "2"
+    int max_depth "1"
+  }
+  user ||--|| profile : has
+  user {
+    int id "@ 1"
+  }
+  profile {
+    string email "@ 'a@x.test'"
+    string note "appears 1× depth 1"
+  }

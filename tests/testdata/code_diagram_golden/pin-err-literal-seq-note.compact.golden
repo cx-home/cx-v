@@ -1,0 +1,5 @@
+sequenceDiagram
+  participant w
+  activate w
+  Note over w : [err]
+  deactivate w

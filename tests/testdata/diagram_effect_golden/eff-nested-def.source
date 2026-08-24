@@ -1,0 +1,2 @@
+[?def outer () [?def inner () [$io:read-file "/x"]]]
+[$outer]

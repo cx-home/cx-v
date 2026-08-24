@@ -90,7 +90,8 @@ whitespace strip, but that is *lossy* for fixtures: it would also remove a
 payload's own indentation (e.g. nested JSON, indented CX). So the convention
 is: **payload content starts flush-left, on the line after `[#`, and `#]` sits
 on its own line.** With that layout the two-strip rule is byte-exact for any
-content — proven by [_audit_fixture.py](_audit_fixture.py) (§8). Do *not* put
+content — proven by the `_audit_fixture.py` gate (§8; retired with the
+migration scaffolding once every legacy `.txt` was converted). Do *not* put
 content on the `[#` or `#]` lines (the inline `[# x #]` form leaves stray
 spaces the loader won't trim). **This is the only place the fixture format adds
 semantics on top of stock CX parsing.**
@@ -213,9 +214,9 @@ to `strict` per family later if we want closed validation there.
    into a bare-slug `id` (CXPath-addressable, filename-safe) and a verbatim
    `title`. Required because names carry spaces, quotes, and brackets.
 6. **Migration** — via the parse→emit pipeline, never text substitution
-   ([_convert_fixture.py](_convert_fixture.py)). Payloads are copied verbatim;
-   no CX syntax is rewritten. Every conversion is gated by
-   [_audit_fixture.py](_audit_fixture.py) (§8).
+   (`_convert_fixture.py`, retired). Payloads are copied verbatim;
+   no CX syntax is rewritten. Every conversion was gated by
+   `_audit_fixture.py` (§8).
 
 ---
 
@@ -282,8 +283,8 @@ workarounds can be unwound:
 
 ## 8 — Pilots: two families converted & audited
 
-Both via [_convert_fixture.py](_convert_fixture.py) → validated against the
-schema → audited byte-exact by [_audit_fixture.py](_audit_fixture.py) (which
+Both via `_convert_fixture.py` → validated against the
+schema → audited byte-exact by `_audit_fixture.py` (which
 re-parses the `.cxd` with the real `cx` binary, applies the §2 loader
 normalization, and asserts every payload equals the original legacy body):
 
@@ -322,9 +323,13 @@ This audit is the gate every future conversion must pass before the legacy
 | ---- | ---- |
 | `fixtures.cxs` | the schema |
 | `stdlib_format.cxd`, `schema_validate.cxd` | converted pilot suites |
-| `_convert_fixture.py` | legacy `.txt` → `.cxd` (verbatim payloads, typed assertions) |
-| `_audit_fixture.py` | byte-exact + semantic round-trip gate |
+| `_convert_fixture.py` | RETIRED — legacy `.txt` → `.cxd` (verbatim payloads, typed assertions) |
+| `_audit_fixture.py` | RETIRED — byte-exact + semantic round-trip gate |
 | `_sample_suite.cx` | hand-written two-case schema demo |
 
-(The `_`-prefixed scripts/sample are scaffolding for review; fold into the
-harness — or drop — once the format is accepted.)
+(The `_`-prefixed scripts were review-era scaffolding. The format was
+accepted, every legacy `.txt` was converted and then removed — commit
+`bed0ee85`, ".cxd is canonical" — so both scripts became spent one-shots
+with no possible input left in the tree and were deleted 2026-08-23
+(#922 / PYE-5) rather than ported: their only argument is a legacy `.txt`
+path, and no Makefile/CI/script references them.)

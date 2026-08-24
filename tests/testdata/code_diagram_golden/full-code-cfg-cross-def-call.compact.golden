@@ -1,0 +1,15 @@
+flowchart TD
+  subgraph greet
+    gs[/"def greet"/]
+    ge([exit])
+    gb["[concat 'hi ' $name]"]
+  gs --> gb
+  gb --> ge
+  end
+  subgraph main
+    ms[/"def main"/]
+    me([exit])
+    mb["[greet 'world']"]
+  ms --> mb
+  mb --> me
+  end

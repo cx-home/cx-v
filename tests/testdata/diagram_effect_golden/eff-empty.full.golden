@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  nocap["no capability-charging effect reached"]
+  prog --> nocap

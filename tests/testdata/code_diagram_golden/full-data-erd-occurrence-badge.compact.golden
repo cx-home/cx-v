@@ -1,0 +1,7 @@
+erDiagram
+  doc ||--o{ user : has
+  doc {
+  }
+  user {
+    int id "@"
+  }

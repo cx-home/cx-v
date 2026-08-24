@@ -1,4 +1,4 @@
-[test-suite name=xsp-auth
+[test-suite name=xsp-auth ring=2
   [doc [#
 conformance fixtures for the XSP-AUTH handshake calculus
 (spec/03-approved/xap/xap_identity_model.md §4, fixture plan §9.8–§9.15 — the
@@ -255,8 +255,12 @@ cx-err:CXER-XSP-AUTH-STATE
   [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
   [= $r-did [$did:key-create $r-pub]]
   [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
-  [; hand-forged M2 selecting a version the initiator never offered ]
-  [= $m2-v2 [xsp-auth phase=challenge [version 2] [responder $r-did]
+  [; hand-forged M2 selecting a version the initiator never offered.
+     The §4.4a offer fields are present-and-well-formed so the VERSION
+     lane is what this case tests (a missing offer field is its own
+     refusal — see the downgrade family, cases 025-029). ]
+  [= $m2-v2 [xsp-auth phase=challenge [version 2]
+    [offer-profiles ""] [offer-features ""] [responder $r-did]
     [nonce $n-r] [eph $r-eph-pub] [cb [$bytes:from-hex ""]] [sig "zAAA"]]]
   [$xsp:auth-prove $m1 $m2-v2 {eph-priv: $i-eph-priv,
     attach: [attach [session mirror]]}]]
@@ -445,8 +449,11 @@ cx-err:CXER-XSP-AUTH-CONFIRM
   [= $r-did [$did:key-create $r-pub]]
   [= $m1 [$xsp:auth-hello {nonce: $n-i, eph: $i-eph-pub, endpoint: ""}]]
   [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [; §4.4a fields present-and-well-formed: the CONFIRM (key-confirmation)
+     lane is what this case tests, not the offer-field shape ]
   [= $m4-bad [xsp-auth phase=confirm
     [tag [$bytes:from-hex "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]]
+    [confirmed-profiles ""] [confirmed-features ""]
     [session [session id="s-evil"]]]]
   [$xsp:auth-finish $m1 $m2 $m4-bad {eph-priv: $i-eph-priv}]]
 #]]
@@ -778,6 +785,369 @@ same channel id.
 #]]
   [out-text [#
 [seq 'did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT' true]
+#]]
+ ]
+
+ [# ── 025-030: §4.4a vocabulary negotiation — the downgrade-strip family
+    (stream 4 / #676 L164; #718 item 1, the security item). Semantic
+    profile+feature OFFERS ride M1/M2 INSIDE the signed transcript; the
+    selection is COMPUTED as their intersection and M4 merely STATES it,
+    re-verified by the initiator. A MITM stripping a token therefore
+    breaks a signature or the M4 check — it can never silently narrow the
+    vocabulary. Landed with the xsp-auth/2/ → /3/ HKDF label bump: the
+    label generation is the version handle for what the transcript
+    covers, so a /2/ transcript is not replayable here. ─── #]
+
+ [case id=xsp-auth-025-offers-negotiated-intersection level=core gate=enforced
+  [tags xsp-auth negotiation offers confirmed intersection i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [; the client offers store+xap and four features (deliberately unsorted
+     on input — builders normalize to the canonical sorted set form);
+     the server offers store only, three features. The confirmed set is
+     the intersection, in canonical order. ]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "",
+           offer-profiles: "xap store", offer-features: "store-feed credit resume store-delta"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           offer-profiles: "store", offer-features: "credit resume store-feed"}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [tenant "acme"] [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv,
+           session: [session id="s-1" [principal $i-did] [tenant "acme"]]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [seq [$text $m1/offer-features]
+       [$text $m4/confirmed-profiles]
+       [$text $m4/confirmed-features]
+       [$text $done/confirmed/@features]]]
+#]]
+  [out-text [#
+[seq 'credit resume store-delta store-feed' 'store' 'credit resume store-feed' 'credit resume store-feed']
+#]]
+ ]
+
+ [case id=xsp-auth-026-stripped-offer-breaks-transcript level=core gate=enforced
+  [doc [#
+THE downgrade-strip case (#718 item 1). A MITM re-writes M2's offer set
+to drop `store-feed`, leaving the responder signature untouched. The
+offers are inside the transcript, so the signature no longer verifies
+and auth-prove aborts — the client never proceeds on a narrowed
+vocabulary. Pre-/3/ this attack was invisible: negotiation lived on the
+post-attach advert, outside every signature.
+#]]
+  [tags xsp-auth negotiation downgrade mitm security i5-stream4 issue-718]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "",
+           offer-profiles: "store", offer-features: "credit store-feed"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           offer-profiles: "store", offer-features: "credit store-feed"}]]
+  [; the MITM: same message, same signature, `store-feed` stripped ]
+  [= $m2-stripped [xsp-auth phase=challenge [version 1]
+    [offer-profiles "store"] [offer-features "credit"]
+    [responder $r-did] [nonce $n-r] [eph $r-eph-pub]
+    [cb [$bytes:from-hex ""]] [sig [$text $m2/sig]]]]
+  [$xsp:auth-prove $m1 $m2-stripped {eph-priv: $i-eph-priv, key: $i-seed,
+    attach: [attach [session mirror]]}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-SIG
+#]]
+ ]
+
+ [case id=xsp-auth-027-forged-confirmed-set-refused level=core gate=enforced
+  [doc [#
+The second half of the property: a responder (or a MITM rewriting M4)
+cannot state a selection that is not the intersection. The initiator
+recomputes it from its own M1 and the received M2 and refuses on
+mismatch — so a server cannot quietly disable a feature the client
+believes it negotiated, and cannot claim one neither side offered.
+#]]
+  [tags xsp-auth negotiation downgrade confirmed forged security i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "",
+           offer-profiles: "store", offer-features: "credit store-feed"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           offer-profiles: "store", offer-features: "credit store-feed"}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv, session: [session id="s-1"]}]]
+  [; the forgery: a real M4 (valid tag) with the feature set narrowed ]
+  [= $m4-forged [xsp-auth phase=confirm [tag [$first $m4/tag]]
+    [confirmed-profiles "store"] [confirmed-features "credit"]
+    [session [session id="s-1"]]]]
+  [$xsp:auth-finish $m1 $m2 $m4-forged {eph-priv: $i-eph-priv}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+
+ [case id=xsp-auth-028-offers-required-from-v3 level=core gate=enforced
+  [doc [#
+A pre-/3/ peer's M1 (no offer fields at all) is REFUSED, not tolerated:
+silent tolerance would restore the very unsigned-vocabulary surface the
+bump closes. This is also the cross-generation replay guard on the
+message-shape side — the keyed tags already diverge by derivation.
+#]]
+  [tags xsp-auth negotiation version-handle required refuse i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [; a /2/-era M1: versions/nonce/eph/endpoint, no offer fields ]
+  [= $m1-v2 [xsp-auth phase=hello [versions 1]
+    [nonce $n-i] [eph $i-eph-pub] [endpoint ""]]]
+  [$xsp:auth-challenge $m1-v2 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+
+ [case id=xsp-auth-029-offer-set-must-be-canonical level=core gate=enforced
+  [doc [#
+Token sets are canonical ON THE WIRE (sorted, duplicate-free): the
+transcript signs bytes, so two spellings of one set would be two
+different signed values — an aliasing surface. Builders normalize;
+validators refuse. Here a hand-forged M1 carries an unsorted set.
+#]]
+  [tags xsp-auth negotiation canonical sorted aliasing i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1-bad [xsp-auth phase=hello [versions 1]
+    [offer-profiles "store"] [offer-features "store-feed credit"]
+    [nonce $n-i] [eph $i-eph-pub] [endpoint ""]]]
+  [$xsp:auth-challenge $m1-bad {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+
+ [case id=xsp-auth-030-offers-survive-frame-roundtrip level=core gate=enforced
+  [doc [#
+The offer fields are SINGLE-SCALAR precisely so they atomize across the
+data-bin frame round trip like every other handshake field — an
+element-shaped carrier would pin child order and move the signed bytes
+between the fresh and decoded forms (the failure this shape avoids).
+The full handshake runs with M1 wire round-tripped and the confirmed
+set is unchanged.
+#]]
+  [tags xsp-auth negotiation frame data-bin lossless i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "",
+           offer-profiles: "store", offer-features: "credit store-feed"}]]
+  [= $wire [$xsp:encode [frame type=request stream=0 [payload $m1]]]]
+  [= $decoded [$xsp:decode $wire]]
+  [= $m1-rt $decoded/payload]
+  [= $m2 [$xsp:auth-challenge $m1-rt {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           offer-profiles: "store", offer-features: "credit store-feed"}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1-rt $m2 $m3 {eph-priv: $r-eph-priv, session: [session id="s-1"]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [seq [$text $m1-rt/@offer-features] [$text $done/confirmed/@features]]]
+#]]
+  [out-text [#
+[seq 'credit store-feed' 'credit store-feed']
+#]]
+ ]
+
+ [case id=xsp-auth-031-v2-schedule-not-replayable level=core gate=enforced
+  [doc [#
+The label IS the version handle: bumping xsp-auth/2/ → /3/ re-keys the
+whole schedule, so a /2/-era artifact can never verify here. The three
+hex constants below are the ACTUAL /2/ values these exact vectors
+produced on the shipped pre-bump build (recorded 2026-08-06, commit
+c9cb2d41, M1 without offer fields — the closest /2/ transcript to this
+one); the /3/ run must disagree with every one of them. If this case
+ever fails, the key schedule stopped being label-partitioned.
+#]]
+  [tags xsp-auth negotiation label-bump replay key-schedule i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "tcps://helm.local/xsp"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [tenant "acme"] [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv,
+           session: [session id="s-1" [principal $i-did] [tenant "acme"]]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [; the recorded /2/ values (tag_i, tag_r, chan-id) — inequality pins ]
+  [seq [not [= [$bytes:to-hex [$first $m3/tag]]
+              "af9520ff5ffbcea8f890c480c97196494b100a4c9a157f952d74eef63594fe56"]]
+       [not [= [$bytes:to-hex [$first $m4/tag]]
+              "29c84f43fe7360b3b09887091d5cdc1218ab9b75d0ce9fe5e71ecf67bf9e78d4"]]
+       [not [= [$text $done/@chan-id] "56fc3863b8b6dce55b60b13bc5eb7c38"]]]]
+#]]
+  [out-text [#
+[seq true true true]
+#]]
+ ]
+
+ [case id=xsp-auth-032-sole-store-attach-shorthand-survives level=core gate=enforced
+  [doc [#
+The sole-store shorthand's M3 carries an EMPTY [attach] (no [tenant]
+child) — the degenerate case of the W2 atomization rule: an empty
+element ATOMIZES to the attribute form (`attach=null`) across the
+data-bin frame round trip, so the prove validation and the attach-xsp
+session reader MUST read the field child-OR-attr. Measured 2026-08-08:
+a child-only read refused the only M3 an anonymous sole-mount client
+can send (`M3 missing [attach]`) — the shorthand had NO live consumer
+until the S6 pushdown client exercised it. This case wire-round-trips
+M3 and requires the handshake to complete.
+#]]
+  [tags xsp-auth attach sole-store atomization frame data-bin i5-stream4 s6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "",
+           offer-profiles: "store", offer-features: "credit store-journal"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           offer-profiles: "store", offer-features: "credit store-journal"}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach]}]]
+  [= $w3 [$xsp:encode [frame type=request stream=0 [payload $m3]]]]
+  [= $d3 [$xsp:decode $w3]]
+  [= $m3-rt $d3/payload]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3-rt {eph-priv: $r-eph-priv, session: [session id="s-1"]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [seq [$text $m4/@phase] [$text $done/confirmed/@features]]]
+#]]
+  [out-text [#
+[seq 'confirm' 'credit store-journal']
 #]]
  ]
 ]

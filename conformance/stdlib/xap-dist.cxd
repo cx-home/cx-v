@@ -1,4 +1,4 @@
-[test-suite name=xap-dist
+[test-suite name=xap-dist ring=2
   [doc [#
 Conformance fixtures for XAP feature distribution — the §6.1 P0 function
 surface of spec/02-working/xap_feature_distribution_market.md (P0 subset of the
@@ -18,8 +18,8 @@ honest content-addressed store cannot produce it (get-doc(H) re-renders to H
 by construction) — it guards dishonest mirrors and is defense-in-depth behind
 the store's own CXER1120. The absent-content stage is 4886 (010).
 
-The nmea0183 case (016) reads the REAL packaged codec source from
-packages/nmea0183/nmea0183.cx (repo-root-relative, the runner's process CWD
+The gtin case (016) reads the REAL packaged codec source from
+packages/gtin/gtin.cx (repo-root-relative, the runner's process CWD
 contract) — the distribution pipeline is dogfooded on the actual first
 kind=library package, not a toy.
 
@@ -27,7 +27,7 @@ Case 025 (§11.15, stage-1 half) consumes the COMMITTED registry/ store — a
 git-repo-as-registry (§4.1): full hash + publisher-DID signature verification
 against committed bytes, no service running. Its pinned hashes are the §7
 supply-chain witness: they are stable forever because a released artifact is
-immutable (a codec change is a NEW version; nmea0183@0.1.0 never moves).
+immutable (a codec change is a NEW version; gtin@0.1.0 never moves).
 #]]
 
   [case id=xap-dist-001-tree-canonical-order level=core
@@ -298,7 +298,7 @@ cx-err:CXER4883
  ($p@alias, $f@name, $f@version)]
 #]]
    [out-text [#
-('toylib@0.1.0', 'toylib', '0.1.0')
+('toylib@0.1.0', toylib, '0.1.0')
 #]]
   ]
 
@@ -371,8 +371,8 @@ cx-err:CXER4880
 #]]
   ]
 
-  [case id=xap-dist-016-install-nmea-library-dogfood level=core
-   [tags xap-dist pkg-install library nmea0183 dogfood n-dist-2]
+  [case id=xap-dist-016-install-gtin-library-dogfood level=core
+   [tags xap-dist pkg-install library gtin dogfood n-dist-2]
    [in-cx [# [empty] #]]
    [in-code [#
 [?lib 'cx-xap' :as xap]
@@ -380,30 +380,30 @@ cx-err:CXER4880
 [?lib 'cx-stdlib/crypto' :as crypto]
 [?lib 'cx-stdlib/did' :as did]
 [?lib 'cx-stdlib/io' :as io]
-[?let [= $src [$io:read-file "packages/nmea0183/nmea0183.cx"]]
+[?let [= $src [$io:read-file "packages/gtin/gtin.cx"]]
  [= $s [$store:open "mem://"]]
  [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "nmea0183.cx"] $src])]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "gtin.cx"] $src])]]
  [= $draft [?element "package"
-                       [?attr "name" "nmea0183"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                       [?attr "name" "gtin"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
                   [?element "publisher" [?attr "did" $pub]]
                   [?element "exports"
-                         [?element "def" [?attr "name" "nmea0183/checksum"]]
-                    [?element "def" [?attr "name" "nmea0183/parse"]]
-                    [?element "def" [?attr "name" "nmea0183/render"]]
-                    [?element "def" [?attr "name" "nmea0183/valid"]]]]]
+                         [?element "def" [?attr "name" "gtin/check-digit"]]
+                    [?element "def" [?attr "name" "gtin/parse"]]
+                    [?element "def" [?attr "name" "gtin/render"]]
+                    [?element "def" [?attr "name" "gtin/valid"]]]]]
  [= $sealed [$xap:pkg-seal $s $tree $draft]]
  [= $m [$store:get-doc $s $sealed@manifest]]
  [= $signed [$xap:pkg-sign $m $kp@private]]
  [= $mh [$store:put-doc $s $signed]]
- [= $p [$xap:pkg-publish $s "nmea0183" "0.1.0" $mh]]
+ [= $p [$xap:pkg-publish $s "gtin" "0.1.0" $mh]]
  [= $rt [$xap:run {tenant: "demo"}]]
- [= $inst [$xap:pkg-install [xap name=demo] $s "nmea0183@0.1.0" {runtime: $rt grantee: "agent:helper-1"}]]
+ [= $inst [$xap:pkg-install [xap name=demo] $s "gtin@0.1.0" {runtime: $rt grantee: "agent:helper-1"}]]
  ($inst@name, $inst@kind, [$count $inst/granted/grant])]
 #]]
    [out-text [#
-('nmea0183', 'library', 0)
+(gtin, library, 0)
 #]]
   ]
 
@@ -416,16 +416,16 @@ cx-err:CXER4880
 [?lib 'cx-stdlib/crypto' :as crypto]
 [?lib 'cx-stdlib/did' :as did]
 [?lib 'cx-stdlib/io' :as io]
-[?let [= $src [$io:read-file "packages/nmea0183/nmea0183.cx"]]
+[?let [= $src [$io:read-file "packages/gtin/gtin.cx"]]
  [= $s [$store:open "mem://"]]
  [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "nmea0183.cx"] $src])]]
+ [= $tree [$xap:pkg-tree ([?element "entry" [?attr "path" "gtin.cx"] $src])]]
  [= $draft [?element "package"
-                       [?attr "name" "nmea0183"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
+                       [?attr "name" "gtin"] [?attr "version" "0.1.0"] [?attr "kind" "library"]
                   [?element "publisher" [?attr "did" $pub]]
                   [?element "exports"
-                         [?element "def" [?attr "name" "nmea0183/teleport"]]]]]
+                         [?element "def" [?attr "name" "gtin/teleport"]]]]]
  [= $sealed [$xap:pkg-seal $s $tree $draft]]
  [= $m [$store:get-doc $s $sealed@manifest]]
  [= $signed [$xap:pkg-sign $m $kp@private]]
@@ -458,7 +458,7 @@ cx-err:CXER4884
                   [?element "publisher" [?attr "did" $pub]]
                   [?element "needs"
                          [?element "reads" [?attr "noun" "traffic/vessel"]]
-                    [?element "gateways" [?attr "kind" "nmea-serial"]]]]]
+                    [?element "gateways" [?attr "kind" "scanner-serial"]]]]]
  [= $sealed [$xap:pkg-seal $s $tree $draft]]
  [= $m [$store:get-doc $s $sealed@manifest]]
  [= $signed [$xap:pkg-sign $m $kp@private]]
@@ -469,7 +469,7 @@ cx-err:CXER4884
   $inst/granted]]
 #]]
    [out-text [#
-[granted [grant capability='traffic/vessel'] [grant capability=nmea-serial]]
+[granted [grant capability='traffic/vessel'] [grant capability=scanner-serial]]
 #]]
   ]
 
@@ -676,7 +676,7 @@ cx-err:CXER4886
  ($inst@name, $inst@kind)]
 #]]
    [out-text [#
-('toylib', 'library')
+(toylib, library)
 #]]
   ]
 
@@ -688,11 +688,11 @@ cx-err:CXER4886
 [?lib 'cx-stdlib/store' :as store]
 [?lib 'cx-stdlib/path' :as path]
 [?let [= $s [$store:open [$concat "file://" [$path:absolute "registry/store"]]]]
- [= $inst [$xap:pkg-install [xap name=consumer] $s "nmea0183@0.1.0"]]
+ [= $inst [$xap:pkg-install [xap name=consumer] $s "gtin@0.1.0"]]
  ($inst@name, $inst@version, $inst@hash)]
 #]]
    [out-text [#
-('nmea0183', '0.1.0', '9420de8aa767372ec3afe4def2a78723abb3cd76c78818a4a76cf9e77aae6b7c')
+(gtin, '0.1.0', 'sha2-256:9f0e24be318275856dc8a845d1be4a5e9c02d1ff2f68919d0249d8312a08eca9')
 #]]
   ]
 
@@ -729,7 +729,7 @@ cx-err:CXER4886
       its paren sequence form — the pre-fix expectation carried a raw
       newline mid-sequence, which is not parseable CX. ]
    [out-text [#
-(2, ('liba', 'libb'))
+(2, (liba, libb))
 #]]
   ]
 
@@ -763,7 +763,7 @@ cx-err:CXER4886
  ([$count $c/package], $hit@name)]
 #]]
    [out-text [#
-(1, 'liba')
+(1, liba)
 #]]
   ]
 
@@ -775,12 +775,12 @@ cx-err:CXER4886
 [?lib 'cx-stdlib/store' :as store]
 [?lib 'cx-stdlib/path' :as path]
 [?let [= $s [$store:open [$concat "file://" [$path:absolute "registry/store"]]]]
- [= $c [$xap:pkg-catalog $s {name: "nmea0183" version: "0.1.0"}]]
+ [= $c [$xap:pkg-catalog $s {name: "gtin" version: "0.1.0"}]]
  [= $e $c//package]
  ($e@manifest, $e@hash, $e@kind)]
 #]]
    [out-text [#
-('dfc7a847dfe0748e4491ee9d9cfc7854bb4fa8fbf9ed53b74ec9f50b9dd0eed6', '9420de8aa767372ec3afe4def2a78723abb3cd76c78818a4a76cf9e77aae6b7c', 'library')
+('sha2-256:938ccff3085fc331ad8aabb318ad80f6566bb4f2e94386b9353c405dde1e4f43', 'sha2-256:9f0e24be318275856dc8a845d1be4a5e9c02d1ff2f68919d0249d8312a08eca9', library)
 #]]
   ]
 
@@ -793,8 +793,8 @@ cx-err:CXER4886
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "1.x" kind: "perpetual"}]]
- [?let [= $v [$xap:license-verify $vc "nmea0183" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "gtin" versions: "1.x" kind: "perpetual"}]]
+ [?let [= $v [$xap:license-verify $vc "gtin" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
   $v@status]]
 #]]
    [out-text [#
@@ -811,8 +811,8 @@ cx-err:CXER4886
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "1.x" kind: "perpetual"}]]
- [$xap:license-verify $vc "nmea0183" "2.0.0" {now: "2026-07-06T00:00:00Z"}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "gtin" versions: "1.x" kind: "perpetual"}]]
+ [$xap:license-verify $vc "gtin" "2.0.0" {now: "2026-07-06T00:00:00Z"}]]
 #]]
    [out-err [#
 cx-err:CXER4883
@@ -828,8 +828,8 @@ cx-err:CXER4883
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "*" kind: "subscription" expires: "2026-06-30T00:00:00Z" grace-until: "2026-07-15T00:00:00Z"}]]
- [?let [= $v [$xap:license-verify $vc "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "gtin" versions: "*" kind: "subscription" expires: "2026-06-30T00:00:00Z" grace-until: "2026-07-15T00:00:00Z"}]]
+ [?let [= $v [$xap:license-verify $vc "gtin" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
   $v@status]]
 #]]
    [out-text [#
@@ -846,8 +846,8 @@ cx-err:CXER4883
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "*" kind: "subscription" expires: "2026-06-30T00:00:00Z" grace-until: "2026-07-15T00:00:00Z"}]]
- [$xap:license-verify $vc "nmea0183" "0.1.0" {now: "2026-08-01T00:00:00Z"}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "gtin" versions: "*" kind: "subscription" expires: "2026-06-30T00:00:00Z" grace-until: "2026-07-15T00:00:00Z"}]]
+ [$xap:license-verify $vc "gtin" "0.1.0" {now: "2026-08-01T00:00:00Z"}]]
 #]]
    [out-err [#
 cx-err:CXER4883
@@ -865,9 +865,9 @@ cx-err:CXER4883
  [= $okp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
  [= $org [$did:key-create $okp@public]]
- [= $orgvc [$xap:license-issue $pub $kp@private $org {package: "nmea0183" versions: "*" kind: "per-seat" seats: "2"}]]
- [= $seat [$xap:license-issue $org $okp@private "principal:alice" {package: "nmea0183" versions: "*" seat: "2" parent: $orgvc}]]
- [?let [= $v [$xap:license-verify $seat "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
+ [= $orgvc [$xap:license-issue $pub $kp@private $org {package: "gtin" versions: "*" kind: "per-seat" seats: "2"}]]
+ [= $seat [$xap:license-issue $org $okp@private "principal:alice" {package: "gtin" versions: "*" seat: "2" parent: $orgvc}]]
+ [?let [= $v [$xap:license-verify $seat "gtin" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
   $v@status]]
 #]]
    [out-text [#
@@ -886,9 +886,9 @@ cx-err:CXER4883
  [= $okp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
  [= $org [$did:key-create $okp@public]]
- [= $orgvc [$xap:license-issue $pub $kp@private $org {package: "nmea0183" versions: "*" kind: "per-seat" seats: "2"}]]
- [= $seat [$xap:license-issue $org $okp@private "principal:carol" {package: "nmea0183" versions: "*" seat: "3" parent: $orgvc}]]
- [$xap:license-verify $seat "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
+ [= $orgvc [$xap:license-issue $pub $kp@private $org {package: "gtin" versions: "*" kind: "per-seat" seats: "2"}]]
+ [= $seat [$xap:license-issue $org $okp@private "principal:carol" {package: "gtin" versions: "*" seat: "3" parent: $orgvc}]]
+ [$xap:license-verify $seat "gtin" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
 #]]
    [out-err [#
 cx-err:CXER4883
@@ -904,8 +904,8 @@ cx-err:CXER4883
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "marine-suite" members: ([member package=nmea0183 versions='0.x'], [member package=collision-cpa versions='*'])}]]
- [?let [= $v [$xap:license-verify $vc "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "commerce-suite" members: ([member package=gtin versions='0.x'], [member package=shipment-alerts versions='*'])}]]
+ [?let [= $v [$xap:license-verify $vc "gtin" "0.1.0" {now: "2026-07-06T00:00:00Z"}]]
   $v@status]]
 #]]
    [out-text [#
@@ -922,8 +922,8 @@ cx-err:CXER4883
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "marine-suite" members: ([member package=nmea0183 versions='0.x'])}]]
- [$xap:license-verify $vc "radar-overlay" "1.0.0" {now: "2026-07-06T00:00:00Z"}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "commerce-suite" members: ([member package=gtin versions='0.x'])}]]
+ [$xap:license-verify $vc "route-overlay" "1.0.0" {now: "2026-07-06T00:00:00Z"}]]
 #]]
    [out-err [#
 cx-err:CXER4883
@@ -938,7 +938,7 @@ cx-err:CXER4883
 [?lib 'cx-stdlib/store' :as store]
 [?lib 'cx-stdlib/path' :as path]
 [?let [= $s [$store:open [$concat "file://" [$path:absolute "registry/store"]]]]
- [$xap:pkg-install [xap name=paid-market-consumer] $s "nmea0183@0.1.0" {require-entitlement: true}]]
+ [$xap:pkg-install [xap name=paid-market-consumer] $s "gtin@0.1.0" {require-entitlement: true}]]
 #]]
    [out-err [#
 cx-err:CXER4883
@@ -956,13 +956,13 @@ cx-err:CXER4883
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "0.x"}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "gtin" versions: "0.x"}]]
  [= $s [$store:open [$concat "file://" [$path:absolute "registry/store"]]]]
- [= $inst [$xap:pkg-install [xap name=paid-market-consumer] $s "nmea0183@0.1.0" {require-entitlement: true entitlement: $vc now: "2026-07-06T00:00:00Z"}]]
+ [= $inst [$xap:pkg-install [xap name=paid-market-consumer] $s "gtin@0.1.0" {require-entitlement: true entitlement: $vc now: "2026-07-06T00:00:00Z"}]]
  ($inst@name, $inst@hash)]
 #]]
    [out-text [#
-('nmea0183', '9420de8aa767372ec3afe4def2a78723abb3cd76c78818a4a76cf9e77aae6b7c')
+(gtin, 'sha2-256:9f0e24be318275856dc8a845d1be4a5e9c02d1ff2f68919d0249d8312a08eca9')
 #]]
   ]
 
@@ -1043,18 +1043,18 @@ cx-err:CXER4850
 [?lib 'cx-stdlib/crypto' :as crypto]
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $s [$store:open "mem://"]]
- [= $bh [$store:put-doc $s [bundle name=marine-suite version=1 [member package=nmea0183 versions='0.x']]]]
- [= $al [$store:set-alias $s "marine-suite@1" $bh]]
+ [= $bh [$store:put-doc $s [bundle name=commerce-suite version=1 [member package=gtin versions='0.x']]]]
+ [= $al [$store:set-alias $s "commerce-suite@1" $bh]]
  [= $c [$xap:pkg-catalog $s]]
  [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "marine-suite" bundle-version: "1"}]]
- [= $v [$xap:license-verify $vc "nmea0183" "0.1.0" {now: "2026-07-06T00:00:00Z" store: $s}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "commerce-suite" bundle-version: "1"}]]
+ [= $v [$xap:license-verify $vc "gtin" "0.1.0" {now: "2026-07-06T00:00:00Z" store: $s}]]
  [= $be $c//bundle]
  ($be@name, $be@version, $v@status)]
 #]]
    [out-text [#
-('marine-suite', '1', 'ok')
+(commerce-suite, '1', ok)
 #]]
   ]
 
@@ -1067,14 +1067,14 @@ cx-err:CXER4850
 [?lib 'cx-stdlib/crypto' :as crypto]
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $s [$store:open "mem://"]]
- [= $b1 [$store:put-doc $s [bundle name=marine-suite version=1 [member package=nmea0183 versions='0.x']]]]
- [= $a1 [$store:set-alias $s "marine-suite@1" $b1]]
- [= $b2 [$store:put-doc $s [bundle name=marine-suite version=2 [member package=nmea0183 versions='0.x'] [member package=radar-overlay versions='*']]]]
- [= $a2 [$store:set-alias $s "marine-suite@2" $b2]]
+ [= $b1 [$store:put-doc $s [bundle name=commerce-suite version=1 [member package=gtin versions='0.x']]]]
+ [= $a1 [$store:set-alias $s "commerce-suite@1" $b1]]
+ [= $b2 [$store:put-doc $s [bundle name=commerce-suite version=2 [member package=gtin versions='0.x'] [member package=route-overlay versions='*']]]]
+ [= $a2 [$store:set-alias $s "commerce-suite@2" $b2]]
  [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "marine-suite" bundle-version: "1"}]]
- [$xap:license-verify $vc "radar-overlay" "1.0.0" {now: "2026-07-06T00:00:00Z" store: $s}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {bundle: "commerce-suite" bundle-version: "1"}]]
+ [$xap:license-verify $vc "route-overlay" "1.0.0" {now: "2026-07-06T00:00:00Z" store: $s}]]
 #]]
    [out-err [#
 cx-err:CXER4883
@@ -1124,7 +1124,7 @@ cx-err:CXER4883
      name, its unrecognized attrs (package=, status=) preserved, the pin
      attrs (version/manifest/hash) and the resolved requires closure written
      onto it. Appending a second same-name row would leave the doc ill-formed
-     (two rows claiming one feature). Found converting xap-marine stage 0 → 1. ]
+     (two rows claiming one feature). Found converting the external reference instance stage 0 → 1. ]
   [case id=xap-dist-045-install-merges-existing-feature-row level=core
    [tags xap-dist pkg-install enable lockfile stage-1]
    [in-cx [# [empty] #]]
@@ -1158,7 +1158,7 @@ cx-err:CXER4883
   [= [$concat "" $row@hash] [$concat "" $sealed@hash]])]
 #]]
    [out-text [#
-(1, './features/door', 'ready', true)
+(1, './features/door', ready, true)
 #]]
   ]
 
@@ -1267,7 +1267,7 @@ cx-err:CXER4884
  ($inst@name, $inst@kind)]
 #]]
    [out-text [#
-('door', 'feature')
+(door, feature)
 #]]
   ]
 
@@ -1322,15 +1322,145 @@ cx-err:CXER4884
 [?lib 'cx-stdlib/did' :as did]
 [?let [= $kp [$crypto:ed25519-keypair]]
  [= $pub [$did:key-create $kp@public]]
- [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "nmea0183" versions: "1.x" kind: "perpetual"}]]
+ [= $vc [$xap:license-issue $pub $kp@private "principal:alice" {package: "gtin" versions: "1.x" kind: "perpetual"}]]
  [= $rt [$cx-parse [$cx:emit $vc]]]
  [= $vc2 [$first [?for [in $x ($rt)] [yield $x]]]]
- [= $v1 [$xap:license-verify $vc "nmea0183" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
- [= $v2 [$xap:license-verify $vc2 "nmea0183" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
+ [= $v1 [$xap:license-verify $vc "gtin" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
+ [= $v2 [$xap:license-verify $vc2 "gtin" "1.4.2" {now: "2026-07-06T00:00:00Z"}]]
  ([$concat "" $v1@status], [$concat "" $v2@status])]
 #]]
    [out-text [#
-('ok', 'ok')
+(ok, ok)
+#]]
+  ]
+
+  [case id=xap-dist-051-publish-lineage-derived-and-refused level=core
+   [tags xap-dist pkg-publish schema-lineage compat sea-1 sea-1d fail-closed]
+   [; RULED: SEA-1 (§6 step 3): publish diffs the new version's schema
+      entries against the previous release — an ADDITIVE change derives
+      its Lane-2 [schema-lineage] claim mechanically (stored, aliased
+      NAME@VERSION+lineage) and deploys silently; a REINTERPRETING
+      change (int -> string) refuses CXER4890 with the missing rule
+      NAMED; the same change plus an authored in-tree `lineage.cx`
+      claim covering the pair publishes. Schema addresses are canonical
+      content-hashes — deterministic, so the stored claim is pinned
+      byte-for-byte. ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?let [= $s [$store:open "mem://sea-pub"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $sv1 "[schema of=order name='Order v1']
+[order
+ [attr id::string [req]]
+ [attr total::int [req]]]"]
+ [= $sv2 "[schema of=order name='Order v2']
+[order
+ [attr id::string [req]]
+ [attr total::int [req]]
+ [attr channel::string [default 'web']]]"]
+ [= $sv3 "[schema of=order name='Order v3']
+[order
+ [attr id::string [req]]
+ [attr total::string [req]]]"]
+ [= $authored "[schema-lineage [from 'sha2-256:f27cf222c09af228f90e08c2099ce670ad5785ea0adf3d7d08b73b0a2d7cd37e'] [to 'sha2-256:3a5ebbd4617680b0407159adc4a286cef4ecd0e6893a3932ffa0ecf73314f003'] [relation :narrowing] [upcaster hand-written]]"]
+ [= $code "[?def id scope=public pure ($x) $x]"]
+ [= $mk [?fn ($v) [?element "package"
+      [?attr "name" "shoplib"] [?attr "version" $v] [?attr "kind" "library"]
+      [?element "publisher" [?attr "did" $pub]]
+      [?element "exports" [?element "def" [?attr "name" "shoplib/id"]]]]]]
+ [= $pubv [?fn ($v $tree)
+   [?let [= $sl [$xap:pkg-seal $s $tree [$mk $v]]]
+    [= $sm [$xap:pkg-sign [$store:get-doc $s $sl@manifest] $kp@private]]
+    [= $mh [$store:put-doc $s $sm]]
+    [$xap:pkg-publish $s "shoplib" $v $mh]]]]
+ [= $p1 [$pubv "1.0.0" [$xap:pkg-tree ([entry path='lib.cx' $code], [entry path='order.cxs' $sv1])]]]
+ [= $p2 [$pubv "1.1.0" [$xap:pkg-tree ([entry path='lib.cx' $code], [entry path='order.cxs' $sv2])]]]
+ [= $p3 [?fallback [$pubv "1.2.0" [$xap:pkg-tree ([entry path='lib.cx' $code], [entry path='order.cxs' $sv3])]] [recover-with [context] [refused code=$err@code rules=[$count $err/missing-rule]]]]]
+ [= $p4 [$pubv "1.3.0" [$xap:pkg-tree ([entry path='lib.cx' $code], [entry path='lineage.cx' $authored], [entry path='order.cxs' $sv3])]]]
+ [= $ldoc [$store:get-doc $s [$store:get-alias $s "shoplib@1.1.0+lineage"]]]
+  [publish-lineage derived-claims=$p2/lineage/@claims derived=$p2/lineage/@derived
+                   authored-claims=$p4/lineage/@claims authored=$p4/lineage/@authored
+                   [p3 $p3] [stored $ldoc]]]
+#]]
+   [out-text [#
+[publish-lineage derived-claims='1' derived='1' authored-claims='1' authored='1' [p3 [refused code=cx-err:CXER4890 rules=2]] [stored [lineage package=shoplib version='1.1.0' [schema-lineage [from 'sha2-256:77cea633717690b1dd15c7975a46d497de200710f04352a8120760f7c31d54cf'] [to 'sha2-256:f27cf222c09af228f90e08c2099ce670ad5785ea0adf3d7d08b73b0a2d7cd37e'] [relation :additive] [upcaster 'upcast-77cea633-to-f27cf222'] [derived root=order [set-default attr=channel value=web vtype=string]]]]]]
+#]]
+  ]
+
+  [case id=xap-dist-052-install-journal-coverage level=core
+   [tags xap-dist pkg-install coverage journal schema-lineage sea-1 sea-1e fail-closed]
+   [; RULED: SEA-1 (L151 productized): with opts.journal supplied, every
+      declared schema= address in scope of the package's history must be
+      current or admit the unique lineage path to a current address.
+      Covered: the published derived lineage carries v1 -> v2. Gap: a
+      schema moved to a NEW tree path dodges the path-matched publish
+      diff, so the old address has no lineage — the install refuses
+      CXER4891 naming it. The installer-supplied opts.lineage claim
+      closes the gap; without a journal the gate is vacuous (nothing to
+      check — stated honestly). ]
+   [in-cx [#
+[empty]
+#]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/store' :as store]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/did' :as did]
+[?lib 'cx-stdlib/journal' :as journal]
+[?let [= $s [$store:open "mem://sea-cov"]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $pub [$did:key-create $kp@public]]
+ [= $sv1 "[schema of=order name='Order v1']
+[order
+ [attr id::string [req]]
+ [attr total::int [req]]]"]
+ [= $sv2 "[schema of=order name='Order v2']
+[order
+ [attr id::string [req]]
+ [attr total::int [req]]
+ [attr channel::string [default 'web']]]"]
+ [= $sv3 "[schema of=order name='Order v3']
+[order
+ [attr id::string [req]]
+ [attr total::string [req]]]"]
+ [= $code "[?def id scope=public pure ($x) $x]"]
+ [= $mk [?fn ($n $v) [?element "package"
+      [?attr "name" $n] [?attr "version" $v] [?attr "kind" "library"]
+      [?element "publisher" [?attr "did" $pub]]
+      [?element "exports" [?element "def" [?attr "name" "lib/id"]]]]]]
+ [= $pubv [?fn ($n $v $tree)
+   [?let [= $sl [$xap:pkg-seal $s $tree [$mk $n $v]]]
+    [= $sm [$xap:pkg-sign [$store:get-doc $s $sl@manifest] $kp@private]]
+    [= $mh [$store:put-doc $s $sm]]
+    [$xap:pkg-publish $s $n $v $mh]]]]
+ [= $shop1 [$pubv "shoplib" "1.0.0" [$xap:pkg-tree ([entry path='lib.cx' $code], [entry path='order.cxs' $sv1])]]]
+ [= $shop2 [$pubv "shoplib" "1.1.0" [$xap:pkg-tree ([entry path='lib.cx' $code], [entry path='order.cxs' $sv2])]]]
+ [= $ren1 [$pubv "renlib" "1.0.0" [$xap:pkg-tree ([entry path='lib.cx' $code], [entry path='order.cxs' $sv1])]]]
+ [= $ren2 [$pubv "renlib" "2.0.0" [$xap:pkg-tree ([entry path='lib.cx' $code], [entry path='neworder.cxs' $sv3])]]]
+ [= $j [$journal:open "mem://sea-cov-j" "acme"]]
+ [= $e1 [$journal:append $j [order id="A" total=7 schema="sha2-256:77cea633717690b1dd15c7975a46d497de200710f04352a8120760f7c31d54cf"] {actor: "u" authority: "g"}]]
+ [= $xd [xap]]
+ [= $ok1 [$xap:pkg-install $xd $s "shoplib@1.1.0" {journal: $j}]]
+ [= $gap [?fallback [$xap:pkg-install $xd $s "renlib@2.0.0" {journal: $j}] [recover-with [context] [refused code=$err@code uncovered=[$string [$nth $err/uncovered 1]@address] entries=[$string [$nth $err/uncovered 1]@entries]]]]]
+ [= $claim [schema-lineage
+   [from 'sha2-256:77cea633717690b1dd15c7975a46d497de200710f04352a8120760f7c31d54cf']
+   [to 'sha2-256:3a5ebbd4617680b0407159adc4a286cef4ecd0e6893a3932ffa0ecf73314f003']
+   [relation :additive]
+   [upcaster manual]
+   [derived root=order]]]
+ [= $ok2 [$xap:pkg-install $xd $s "renlib@2.0.0" {journal: $j lineage: ($claim)}]]
+ [= $novac [$xap:pkg-install $xd $s "renlib@2.0.0" {}]]
+  [coverage covered=$ok1@name recovered=$ok2@name vacuous=$novac@name [gap $gap]]]
+#]]
+   [out-text [#
+[coverage covered=shoplib recovered=renlib vacuous=renlib [gap [refused code=cx-err:CXER4891 uncovered='sha2-256:77cea633717690b1dd15c7975a46d497de200710f04352a8120760f7c31d54cf' entries='1']]]
 #]]
   ]
 ]

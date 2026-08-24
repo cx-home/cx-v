@@ -1,0 +1,7 @@
+%%cx:Wz9idWxraGVhZCBtYXgtY29uY3VycmVudD00IHF1ZXVlPTggbmFtZT0idml6LWJoIiBbY2FsbCBlbmRwb2ludD0kdXJsXV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?bulkhead] :max-concurrent 4 :queue 8 …"]]
+    n1 --> n3
+    n3 --> n2

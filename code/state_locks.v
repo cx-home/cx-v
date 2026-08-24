@@ -1,6 +1,7 @@
 module code
 
 import cx
+import time
 
 // ── ProgramState locked accessors ──────────────────────────
 //
@@ -215,7 +216,7 @@ fn (mut s ProgramState) worker_publish_cancelled(rec_ptr &WorkerRecord) {
 // ── services ────────────────────────────────────────────────────────────────
 
 @[inline]
-fn (mut s ProgramState) service_get(name string) ?&ServiceRecord {
+pub fn (mut s ProgramState) service_get(name string) ?&ServiceRecord {
 	s.services_lock.rlock()
 	defer { s.services_lock.runlock() }
 	if r := s.services[name] {
@@ -225,14 +226,14 @@ fn (mut s ProgramState) service_get(name string) ?&ServiceRecord {
 }
 
 @[inline]
-fn (mut s ProgramState) service_set(name string, r &ServiceRecord) {
+pub fn (mut s ProgramState) service_set(name string, r &ServiceRecord) {
 	s.services_lock.lock()
 	defer { s.services_lock.unlock() }
 	s.services[name] = r
 }
 
 @[inline]
-fn (mut s ProgramState) service_has(name string) bool {
+pub fn (mut s ProgramState) service_has(name string) bool {
 	s.services_lock.rlock()
 	defer { s.services_lock.runlock() }
 	return name in s.services
@@ -240,7 +241,7 @@ fn (mut s ProgramState) service_has(name string) bool {
 
 // service_next_port atomically increments and returns the previous
 // next_service_port value (the assigned port).
-fn (mut s ProgramState) service_next_port() int {
+pub fn (mut s ProgramState) service_next_port() int {
 	s.services_lock.lock()
 	defer { s.services_lock.unlock() }
 	port := s.next_service_port
@@ -465,4 +466,112 @@ fn (mut s ProgramState) current_task_set(v int) {
 	s.clock_lock.lock()
 	defer { s.clock_lock.unlock() }
 	s.current_task_id = v
+}
+
+// drain_workers_at_exit is EV-WORKER-EXIT (code.md §14.4, stream 22
+// W4 — the one register row RULED AGAINST shipped behavior, L76):
+// cancel-and-drain at top-level return. Every non-terminal worker
+// receives the cancellation stamp (a body parked at a §10.5.4
+// cancellation point observes it and terminates CANCELLED; a body
+// with no cancellation point runs to completion — cancellation is
+// cooperative, so its effects land and it is never orphaned), then
+// the runtime JOINS each to quiescence. Exit is deterministic: no
+// worker outlives the program. A non-cancellable infinite body hangs
+// exit by construction — inherent to cooperative cancellation, and
+// exactly the visibility the rule wants (never a silent kill).
+pub fn (mut s ProgramState) drain_workers_at_exit() {
+	// REPEATED passes, not one shot: a single snapshot+cancel+join RACES
+	// spawns that happen DURING the drain — a supervisor worker reacting
+	// to a cancelled child by RESTARTING it mints a fresh record after the
+	// snapshot, and that newborn is never stamped, parks at its (checked!)
+	// cancellation point with cancelled=false, and outlives the program.
+	// Measured 2026-08-23 (supervise sup-012, cli profile, full-parallel
+	// suite): main sat in this join for 3.5 hours while a post-snapshot
+	// supervise worker spun in channel_sub_receive_single — whose
+	// worker_cancel_pending check was live the whole time — because no
+	// pass ever cancelled it. Each pass joins its own snapshot fully;
+	// the next pass catches anything born meanwhile; quiescence = an
+	// empty snapshot. Restart chains terminate because the SPAWNING
+	// worker is itself stamped in the following pass and observes it at
+	// its next cancellation point.
+	for {
+		s.workers_lock.lock()
+		mut live := []&WorkerRecord{}
+		for _, rec in s.workers {
+			if !rec.done {
+				live << rec
+			}
+		}
+		s.workers_lock.unlock()
+		if live.len == 0 {
+			return
+		}
+		for rec in live {
+			s.worker_request_cancel(rec)
+		}
+		for rec in live {
+			for !rec.done {
+				time.sleep(time.millisecond)
+			}
+		}
+	}
+}
+
+// drain_futures_at_exit is the OTHER half of the §10.5.1 spawn contract —
+// "a spawned body that is never awaited still runs to a terminal state
+// BEFORE TOP-LEVEL PROGRAM RETURN", the clause that makes
+// `[?async [ship $order]]` with no await ship the order.
+//
+// It was not implemented. An un-awaited future was simply abandoned when
+// the top level returned, so a fire-and-forget body outlived by the
+// program's own return never ran to completion: a spawn whose body slept
+// 800 ms returned in 106 ms with the body dropped. Eagerness was fine —
+// the body STARTS without an await (#541) — but starting is not the
+// guarantee; completing is (found working #814).
+//
+// This JOINS, it does not cancel, and that is the difference from
+// drain_workers_at_exit above. EV-WORKER-EXIT rules `[?worker]` bodies
+// cancel-and-drained, so a worker parked at a §10.5.4 point terminates
+// CANCELLED. §10.5.1 makes the stronger promise for futures: the body runs
+// to a terminal state, subject only to a cancellation someone explicitly
+// requested. Cancelling here would break exactly the case the spec names —
+// the order would not ship.
+//
+// The mock-clock arm mirrors the await barrier (async.v await_concurrent):
+// an un-awaited body parked at `[?sleep DUR mock]` is waiting on LOGICAL
+// time, which only a barrier moves. With no awaiter left to move it, this
+// drain is the barrier — when nothing is runnable and something is parked,
+// advance to the earliest wake. Without that arm a fire-and-forget mock
+// sleep would hang exit forever, since real time never reaches a logical
+// deadline.
+//
+// A fire-and-forget body that blocks forever on something real hangs exit
+// by construction. That is the same visibility EV-WORKER-EXIT accepts, and
+// it is preferable to the silent drop it replaces.
+pub fn (mut s ProgramState) drain_futures_at_exit() {
+	for {
+		s.futures_lock.rlock()
+		mut live := 0
+		for _, f in s.futures {
+			if !f.concurrent {
+				continue // the lazy drive-at-await substrate has nothing running
+			}
+			if f.state in ['done', 'failed', 'cancelled'] {
+				continue
+			}
+			live++
+		}
+		s.futures_lock.runlock()
+		if live == 0 {
+			return
+		}
+		runnable, earliest := s.futures_parked_earliest()
+		if runnable == 0 && earliest > 0 {
+			now := s.clock_now()
+			if earliest > now {
+				s.clock_advance(earliest - now)
+			}
+		}
+		time.sleep(time.millisecond)
+	}
 }

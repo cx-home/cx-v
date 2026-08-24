@@ -1,0 +1,19 @@
+%%cx:Wz9pZiAkcCB0aGVuPVs/c2VsZWN0IGNhc2U9W2FybSBmcm9tPSRjaCBkbz1baGFuZGxlZF1dIGNhc2U9W2FybSBmcm9tPSRvdGhlcl1dIGVsc2U9Wz9zZW5kICJ4IiB0bz0kY2hdXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3{"if $p"}
+    n4["[?if] result"]
+    n5{"[?select]"}
+    n6["[?select] result"]
+    n5 -- "case 1" --> n6
+    n5 -- "case 2" --> n6
+    n3 -- "true" --> n6
+    n6 --> n4
+    n7["send 'x'"]
+    n8[/"channel $ch"/]
+    n7 -- "'x'" --> n8
+    n3 -- "false" --> n8
+    n8 --> n4
+    n1 --> n4
+    n4 --> n2

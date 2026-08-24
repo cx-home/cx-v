@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  cap_subprocess{{"subprocess"}}
+  prog --> cap_subprocess

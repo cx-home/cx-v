@@ -1,0 +1,2 @@
+[?worker name="producer" [ok]]
+[?worker name="consumer" [ok]]

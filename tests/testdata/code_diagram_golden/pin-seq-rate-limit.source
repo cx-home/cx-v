@@ -1,0 +1,1 @@
+[?worker name="w" body=[?rate-limit rate=10 body=[?send "m" to=$ch]]]

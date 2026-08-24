@@ -1,7 +1,7 @@
-[test-suite name=jsonschema
+[test-suite name=jsonschema ring=1
   [doc [#
 Conformance fixtures for cx-stdlib/jsonschema (JSON Schema 2020-12, the common
-MCP-tool-schema subset; spec/02-working/agentic_positioning.md D3 — frozen `std`
+MCP-tool-schema subset; spec/03-approved/x/README.md D3 — frozen `std`
 substrate; cx-private #6 S7).
 
 MCP tool input schemas ARE JSON Schema, so this module lets CX consume them

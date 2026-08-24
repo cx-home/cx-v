@@ -1,4 +1,4 @@
-[test-suite name=strings
+[test-suite name=strings ring=1
 
  [case id=strings-001-upper level=core
   [tags strings upper case]
@@ -472,7 +472,7 @@ true
 [$strings:split "a,b,c" ","]
 #]]
   [out-text [#
-('a', 'b', 'c')
+(a, b, c)
 #]]
  ]
 
@@ -486,7 +486,7 @@ true
 [$strings:split "abc" ""]
 #]]
   [out-text [#
-('a', 'b', 'c')
+(a, b, c)
 #]]
  ]
 
@@ -514,7 +514,7 @@ true
 [$strings:split-limit "a,b,c,d" "," 2]
 #]]
   [out-text [#
-('a', 'b', 'c,d')
+(a, b, 'c,d')
 #]]
  ]
 
@@ -528,7 +528,7 @@ true
 [$strings:split-lines "a\nb\r\nc\rd"]
 #]]
   [out-text [#
-('a', 'b', 'c', 'd')
+(a, b, c, d)
 #]]
  ]
 
@@ -542,7 +542,7 @@ true
 [$strings:split-lines "a\nb\n"]
 #]]
   [out-text [#
-('a', 'b')
+(a, b)
 #]]
  ]
 
@@ -556,7 +556,7 @@ true
 [$strings:split-whitespace "  a   b \t c  "]
 #]]
   [out-text [#
-('a', 'b', 'c')
+(a, b, c)
 #]]
  ]
 

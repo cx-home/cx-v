@@ -1,0 +1,240 @@
+[test-suite name=tools ring=1
+  [doc [#
+Conformance fixtures for cx-x/tools — the agent-tool projection (stream 18,
+#690; letters L138–L146). NB cx-x/tools is an EXPERIMENTAL x/-TIER module
+(D3): bundled + gated but exempt from the frozen-std stability promise.
+Programs name the tier explicitly via [?lib 'cx-x/tools'].
+
+The module is the PURE projection: command defs ([effects]-bearing [?def]s —
+clause PRESENCE is the discriminator, stream 6) → the ONE tool-descriptor
+model both protocol adapters consume (L141), derived at call time from module
+source text over two lanes: [$cx:ast] (structured defs — params kind/type/
+default-presence, effects, requires, idempotent, returns, Tier-1 def text;
+modules/cx.md §2.2, L146) and [$cx:parse] ([fn-doc] blocks — [summary]
+REQUIRED for projectability, fail-loud L143; [param-doc name=…] →
+per-property descriptions).
+
+Descriptor meta: [source] = Tier-1 address of the def text (cx:hash — the
+L139 trust key the approval binds); [code] = Tier-2 computes-as address
+(cx:computation-id — cache/equivalence only); [input-schema-id]/
+[output-schema-id] = sha2-256 of each schema's JSON emission (the
+adapter-visible bytes — drift detectable at the protocol surface; the CX
+canonical lane is #810-blocked for singleton sequences in map values).
+Annotations are HINTS (L142 lossy-downward): enforcement stays at the CX
+effect point (CXER0271) and the propose boundary regardless of the client.
+
+Every expected output below was re-derived by RUNNING the program against
+the shipped binary (cx <file> — the single oracle).
+
+   Case families:
+     001     the refund-order golden descriptor (the M5 worked example)
+     002     description-required fail-loud negative (L143)
+     003     pure defs excluded; command-free module → ()
+     004     zero-item [effects] IS a command; read-only per the empty set
+     005     rest param: out of properties, additionalProperties opens
+     006     malformed source propagates the cx:ast err (never silent)
+     007     requires + idempotent carriage (cap: refs into [meta])
+     008     type-schema-of carrier conventions (stream-16 alignment)
+#]]
+
+ [# ---- the golden descriptor ---------------------------------------- #]
+
+ [case id=tools-001-refund-order-golden-descriptor level=core
+  [tags tools projection descriptor command effects param-doc stream-18 690 L141 L142 L143]
+  [meta [#
+note: the M5 worked example — refund-order projected end-to-end: description
+note: from [fn-doc][summary]; properties typed via the stream-16 carriers
+note: (decimal rides a string carrier) and described via [param-doc];
+note: required = the non-defaulted positionals; hints per the L142 table
+note: (net ∈ effects ⇒ open-world; not read-only ⇒ destructive); [meta]
+note: carries the Tier-1 source address, the Tier-2 code address, and the
+note: JSON-emission schema ids.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/tools' :as tools]
+[?let [= $src """
+[fn-doc name=refund-order scope=public purity=impure
+  [sig '''($order-id::string $amount::decimal) -> element''']
+  [summary '''Refund an order via the payment provider.''']
+  [param-doc name=order-id '''The order identifier.''']
+  [param-doc name=amount '''The refund amount (decimal string).''']]
+[?def refund-order scope=public impure [effects [write] [net]] [returns element] ($order-id::string $amount::decimal) [refunded $order-id]]
+"""]
+  [$tools:descriptors-of $src]]
+#]]
+  [out-text [#
+[tool name=refund-order [description 'Refund an order via the payment provider.'] [input-schema {type: object, properties: {order-id: {type: string, description: 'The order identifier.'}, amount: {type: string, description: 'The refund amount (decimal string).'}}, required: (order-id, amount), additionalProperties: false}] [output-schema {type: object}] [annotations read-only=false idempotent=false destructive=true open-world=true] [meta [source 'sha2-256:907e9f12b8a65cca1d35e763ad27a434502f95882a56f7e68289c67139c5b3a7'] [code 'computes-as:sha2-256:81ef3ae6a7561c8c1a9b01d59bcd9c2132e0c2898c0ff7075aff761b5fb700b8'] [input-schema-id 'sha2-256:2b933c24d1c04939b247686c723ac3cbc9194c69f89098dd56355de665a1aa4e'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires ()]]]
+#]]
+ ]
+
+ [# ---- fail-loud (L143) ---------------------------------------------- #]
+
+ [case id=tools-002-missing-summary-fails-loud level=core
+  [tags tools projection fail-loud summary stream-18 690 L143]
+  [meta [#
+note: a command def whose [fn-doc] lacks a [summary] refuses the WHOLE
+note: projection with one [err] naming every undocumented command — never
+note: a partial descriptor list.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/tools' :as tools]
+[$tools:descriptors-of "[?def undocumented-cmd impure [effects [write]] ($x::string) [w $x]]"]
+#]]
+  [out-text [#
+[err code=missing-summary ([missing-summary def=undocumented-cmd])]
+#]]
+ ]
+
+ [# ---- the discriminator ---------------------------------------------- #]
+
+ [case id=tools-003-pure-defs-excluded level=core
+  [tags tools projection discriminator stream-18 690]
+  [meta [#
+note: only [effects]-bearing defs project — a pure def in the same module
+note: contributes nothing; a module with no commands projects ().
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/tools' :as tools]
+[?let [= $src """
+[fn-doc name=refund-order scope=public purity=impure [sig '''x'''] [summary '''Refund.''']]
+[?def refund-order scope=public impure [effects [write] [net]] [returns element] ($order-id::string) [refunded $order-id]]
+[fn-doc name=lookup-order scope=public purity=pure [sig '''x'''] [summary '''Look up.''']]
+[?def lookup-order scope=public ($order-id::string) [order $order-id]]
+"""]
+      [= $ds [$tools:descriptors-of $src]]
+      [= $none [$tools:descriptors-of "[?def plain scope=public ($x::string) [p $x]]"]]
+  [?str '{[$count $ds]}|{[$first [?for [in $t $ds] [yield $t@name]]]}|{[$count $none]}']]
+#]]
+  [out-text [#
+'1|refund-order|0'
+#]]
+ ]
+
+ [case id=tools-004-zero-item-effects-is-a-command level=core
+  [tags tools projection discriminator zero-item effects read-only stream-18 690 L142]
+  [meta [#
+note: clause PRESENCE discriminates (stream 6): [effects] with zero items
+note: still projects — and the empty effect set is trivially inside the
+note: read-only set, so read-only=true and destructive=false (L142).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/tools' :as tools]
+[?let [= $src """
+[fn-doc name=touch scope=public purity=impure
+  [sig '''($x::string) -> string''']
+  [summary '''A zero-item-effects command (still a command).''']]
+[?def touch scope=public impure [effects] [returns string] ($x::string) [$x]]
+"""]
+  [$tools:descriptors-of $src]]
+#]]
+  [out-text [#
+[tool name=touch [description 'A zero-item-effects command (still a command).'] [input-schema {type: object, properties: {x: {type: string}}, required: (x), additionalProperties: false}] [output-schema {type: string}] [annotations read-only=true idempotent=false destructive=false open-world=false] [meta [source 'sha2-256:f4f07639305cc94650b0a3108912e29635964a4ffd905742e3fe24a864ad4aad'] [code 'computes-as:sha2-256:531a5e15748b3545e0f1d8b38efe1e7d9353b597d9468cd6969a1f38a2e619da'] [input-schema-id 'sha2-256:e83d97d3f70736b8f54f426885f1875873cfed9c61cb88656e81dd8a0c534e61'] [output-schema-id 'sha2-256:00404e686415370f1711c4d7acfa2905444d3cf23cef2e10c47d445ebe690f96'] [returns-type 'string'] [requires ()]]]
+#]]
+ ]
+
+ [# ---- params ---------------------------------------------------------- #]
+
+ [case id=tools-005-rest-param-opens-additional-properties level=core
+  [tags tools projection params rest additionalProperties stream-18 690 L142]
+  [meta [#
+note: a rest param (*$extras) never becomes a named property — it opens
+note: additionalProperties instead; without one the object is CLOSED (a
+note: command's args-map binds the parameter list — the cx:propose basis).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/tools' :as tools]
+[?let [= $src """
+[fn-doc name=broadcast scope=public purity=impure
+  [sig '''($chan::string *$extras) -> element''']
+  [summary '''A rest-param command (open args).''']]
+[?def broadcast scope=public impure [effects [read]] [returns element] ($chan::string *$extras) [b $chan]]
+"""]
+  [$tools:descriptors-of $src]]
+#]]
+  [out-text [#
+[tool name=broadcast [description 'A rest-param command (open args).'] [input-schema {type: object, properties: {chan: {type: string}}, required: (chan), additionalProperties: true}] [output-schema {type: object}] [annotations read-only=true idempotent=false destructive=false open-world=false] [meta [source 'sha2-256:bf4b38f3aaca14e47e1a4ca6039748aaf97b833a530ffb1d1305be84d6036e2d'] [code 'computes-as:sha2-256:d94623eab2a10919428a10455f786011bd8ae8dbfc771abf30c6d9a1638c84cd'] [input-schema-id 'sha2-256:475f284c5970c054423286360df927bbdb8213d3d9c95f4bd8e14d6ca3d7bdb9'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires ()]]]
+#]]
+ ]
+
+ [# ---- errors ----------------------------------------------------------- #]
+
+ [case id=tools-006-malformed-source-propagates level=core
+  [tags tools projection error CXER4100 stream-18 690]
+  [meta [#
+note: a source that does not scan/parse propagates the cx:ast err value —
+note: never a silent empty projection.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/tools' :as tools]
+[$tools:descriptors-of "[?def broken ($x [oops]"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER4100 message='cx:ast: malformed CX source: MODULE_PARSE: unbalanced `[` starting at position 0']
+#]]
+ ]
+
+ [# ---- clause carriage --------------------------------------------------- #]
+
+ [case id=tools-007-requires-and-idempotent-carriage level=core
+  [tags tools projection requires idempotent meta stream-18 690 L142]
+  [meta [#
+note: [requires cap:…] projects into [meta][requires] (enforced regardless —
+note: the lossy-downward rule); [idempotent] → idempotent=true EXACT.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/tools' :as tools]
+[?let [= $src """
+[fn-doc name=archive-order scope=public purity=impure
+  [sig '''($opts::map {}) -> element''']
+  [summary '''Archive an order (idempotent).''']]
+[?def archive-order scope=public impure [idempotent] [effects [write]] [requires cap:orders/archive] [returns element] ($opts::map {}) [archived]]
+"""]
+  [$tools:descriptors-of $src]]
+#]]
+  [out-text [#
+[tool name=archive-order [description 'Archive an order (idempotent).'] [input-schema {type: object, properties: {opts: {type: object}}, required: (), additionalProperties: false}] [output-schema {type: object}] [annotations read-only=false idempotent=true destructive=true open-world=false] [meta [source 'sha2-256:223e66a93f6efd71a938761394b6511854e3b9bcdea76266d7e846f5f906a0cb'] [code 'computes-as:sha2-256:58a3c2bb6aafad54183e012d03a1d69637201a3bb3c6aa551136b6dc012f495b'] [input-schema-id 'sha2-256:70163a54e6531120b453428673522f1c4aa7b411906b19661244fde3a3b44edd'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires ([cap 'cap:orders/archive'])]]]
+#]]
+ ]
+
+ [# ---- carrier conventions ------------------------------------------------ #]
+
+ [case id=tools-008-type-schema-carrier-conventions level=core
+  [tags tools projection type-schema carriers stream-16 stream-18 690]
+  [meta [#
+note: the stream-16 carrier conventions (schema_export.v): exact numerics
+note: and temporals ride string carriers; bytes ride base64; element maps
+note: to the object envelope.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/tools' :as tools]
+([$tools:type-schema-of "decimal"], [$tools:type-schema-of "int"], [$tools:type-schema-of "bytes"], [$tools:type-schema-of "datetime"], [$tools:type-schema-of "element"])
+#]]
+  [out-text [#
+({type: string}, {type: integer}, {type: string, contentEncoding: base64}, {type: string, format: date-time}, {type: object})
+#]]
+ ]
+]

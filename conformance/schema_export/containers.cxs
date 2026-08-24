@@ -1,0 +1,9 @@
+[schema of=cfg mode=strict]
+[cfg
+ [attr level::[or int string] [req]]
+ [elem ports [card "1..1"]]
+ [elem opts [card "0..1"]]
+ [elem pair [card "0..*"]]]
+[ports [body [list u16] [req]]]
+[opts [body [map string int] [req]]]
+[pair [body [tuple int string] [req]]]

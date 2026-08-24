@@ -1,0 +1,8 @@
+erDiagram
+  rec {
+    int i
+    float f
+    bool b
+    string s
+    atom a
+  }

@@ -62,6 +62,10 @@ mut:
 	update_name string
 	output_path string
 	files       []string
+	// --pin-schema NAME=FILE.cxs — bind NAME to the schema file's
+	// content-hash in the [schemas] block (stream 16 W4; names are
+	// hints, hashes are identity). Repeatable.
+	pin_schemas []string
 }
 
 fn parse_cx_lock_opts(args []string) CxLockOpts {
@@ -100,6 +104,18 @@ fn parse_cx_lock_opts(args []string) CxLockOpts {
 				o.output_path = a[9..]
 				i++
 			}
+			a.starts_with('--pin-schema=') {
+				o.pin_schemas << a['--pin-schema='.len..]
+				i++
+			}
+			a == '--pin-schema' {
+				if i + 1 >= args.len {
+					eprintln('cx lock: --pin-schema requires NAME=FILE.cxs')
+					exit(2)
+				}
+				o.pin_schemas << args[i + 1]
+				i += 2
+			}
 			a.starts_with('--') {
 				eprintln('cx lock: unknown flag ${a}')
 				print_cx_lock_usage()
@@ -119,9 +135,12 @@ fn print_cx_lock_usage() {
 	eprintln('       cx lock --check [FILE...]')
 	eprintln('       cx lock --update NAME [FILE...]')
 	eprintln('       cx lock --output PATH [FILE...]')
+	eprintln('       cx lock --pin-schema NAME=FILE.cxs [FILE...]')
 	eprintln('')
 	eprintln('Generates / verifies cx.lock from a project\'s [?lib] directives.')
 	eprintln('FILE may be one or more *.cx source files; defaults to *.cx in cwd.')
+	eprintln('--pin-schema binds NAME to the schema file\'s content-hash in the')
+	eprintln('[schemas] block (repeatable; validate-against resolves these pins).')
 }
 
 // run_cx_lock is the `cx lock` subcommand entry point — dispatched
@@ -206,7 +225,52 @@ pub fn run_cx_lock(args []string) {
 		seen[k] = true
 	}
 
-	new_text := emit_cx_lock(entries)
+	// Schema pins: prior [schemas] entries carry forward verbatim
+	// (pins are AUTHORED state, not derivable from source scanning);
+	// --pin-schema NAME=FILE.cxs adds or re-pins by name.
+	mut pins := []cx.SchemaLock{}
+	if os.exists(opts.output_path) {
+		if plf := cx.read_lockfile(opts.output_path) {
+			pins = plf.schemas.clone()
+		}
+	}
+	for spec_arg in opts.pin_schemas {
+		eq := spec_arg.index('=') or {
+			eprintln('cx lock: --pin-schema takes NAME=FILE.cxs, got `${spec_arg}`')
+			exit(2)
+		}
+		pname := spec_arg[..eq]
+		pfile := spec_arg[eq + 1..]
+		if pname == '' || pfile == '' {
+			eprintln('cx lock: --pin-schema takes NAME=FILE.cxs, got `${spec_arg}`')
+			exit(2)
+		}
+		ptext := os.read_file(pfile) or {
+			eprintln('cx lock: --pin-schema ${pname}: cannot read ${pfile}: ${err}')
+			exit(2)
+		}
+		phash := cx.schema_content_hash(ptext) or {
+			eprintln('cx lock: --pin-schema ${pname}: ${pfile}: ${err}')
+			exit(2)
+		}
+		hex := phash.hex()
+		mut replaced := false
+		for mut existing_pin in pins {
+			if existing_pin.name == pname {
+				existing_pin.hash = hex
+				replaced = true
+			}
+		}
+		if !replaced {
+			pins << cx.SchemaLock{
+				name: pname
+				hash: hex
+			}
+		}
+	}
+	pins.sort(a.name < b.name)
+
+	new_text := emit_cx_lock(entries, pins)
 
 	if opts.check {
 		// Compare freshly-computed text against existing file.
@@ -422,7 +486,7 @@ fn is_bundled_stdlib_name(name string) bool {
 // The shape mirrors spec/lockfile.md §7 worked example, except
 // attribute syntax follows the existing CX-data grammar [55] rather
 // than the editorial `:name VALUE` form.
-fn emit_cx_lock(entries []cx.ModuleLock) string {
+fn emit_cx_lock(entries []cx.ModuleLock, pins []cx.SchemaLock) string {
 	mut b := []string{}
 	b << '[cx.lock version="1"'
 	b << '  [modules'
@@ -448,6 +512,17 @@ fn emit_cx_lock(entries []cx.ModuleLock) string {
 	if entries.len == 0 {
 		// Empty [modules] block — close it.
 		b[b.len - 1] = b[b.len - 1] + ']'
+	}
+	if pins.len > 0 {
+		b << '  [schemas'
+		for i, pin in pins {
+			line := '    [schema name=${quote_attr(pin.name)} hash=${quote_attr(pin.hash)}]'
+			if i == pins.len - 1 {
+				b << line + ']'
+			} else {
+				b << line
+			}
+		}
 	}
 	b << ']'
 	return b.join('\n') + '\n'

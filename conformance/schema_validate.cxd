@@ -1,4 +1,4 @@
-[test-suite name=schema-validate
+[test-suite name=schema-validate ring=0
   [doc [#
 # Schema validator conformance suite — Phase 7.74c-schema-validator-v-core
 #.
@@ -33,7 +33,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -57,7 +57,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -80,7 +80,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -105,7 +105,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -126,7 +126,7 @@
 [server port='not-an-int']
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr port::i32 [req]]
@@ -142,7 +142,7 @@
 [server port=8080]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr port::i32 [req]]
@@ -158,7 +158,7 @@
 [movie id='m1' [title 'X']]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -182,7 +182,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -206,7 +206,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -233,7 +233,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -260,7 +260,7 @@
 [server host='localhost']
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr host::string [req]]
@@ -277,7 +277,7 @@
 [server host='localhost']
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr host::string [req]]
@@ -294,7 +294,7 @@
 [x name='hello']
 #]]
   [schema-cxs [#
-[?cx schema-of x]
+[schema of=x]
 
 [x
   [attr name::string [pattern '\w+']]
@@ -310,7 +310,7 @@
 [x name='hello world!']
 #]]
   [schema-cxs [#
-[?cx schema-of x]
+[schema of=x]
 
 [x
   [attr name::string [pattern '\w+']]
@@ -326,7 +326,7 @@
 [x ver='1.2.3']
 #]]
   [schema-cxs [#
-[?cx schema-of x]
+[schema of=x]
 
 [x
   [attr ver::string [pattern '^\d+\.\d+\.\d+$']]
@@ -342,7 +342,7 @@
 [x ver='vXYZ-1.2.3']
 #]]
   [schema-cxs [#
-[?cx schema-of x]
+[schema of=x]
 
 [x
   [attr ver::string [pattern '^\d+\.\d+\.\d+$']]
@@ -360,8 +360,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx schema-mode open]
+[schema of=server mode=open]
 
 [server
   [attr host::string [req]]
@@ -379,8 +378,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx schema-mode strict]
+[schema of=server mode=strict]
 
 [server
   [attr host::string [req]]
@@ -398,8 +396,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx schema-mode closed]
+[schema of=server mode=closed]
 
 [server
   [attr host::string [req]]
@@ -415,8 +412,7 @@
 [server host='localhost' weird='1']
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx schema-mode open]
+[schema of=server mode=open]
 
 [server
   [attr host::string [req]]
@@ -432,8 +428,7 @@
 [server host='localhost' weird='1']
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx schema-mode strict]
+[schema of=server mode=strict]
 
 [server
   [attr host::string [req]]
@@ -449,8 +444,7 @@
 [server host='localhost' weird='1']
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx schema-mode closed]
+[schema of=server mode=closed]
 
 [server
   [attr host::string [req]]
@@ -466,7 +460,7 @@
 [server port=8080]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr port::i32 [req] [range 1 65535]]
@@ -482,7 +476,7 @@
 [server port=99999]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr port::i32 [req] [range 1 65535]]
@@ -498,7 +492,7 @@
 [server port=0]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr port::i32 [req] [range 1 65535]]
@@ -514,7 +508,7 @@
 [user name='alice']
 #]]
   [schema-cxs [#
-[?cx schema-of user]
+[schema of=user]
 
 [user
   [attr name::string [req] [min-length 3] [max-length 10]]
@@ -530,7 +524,7 @@
 [user name='hi']
 #]]
   [schema-cxs [#
-[?cx schema-of user]
+[schema of=user]
 
 [user
   [attr name::string [req] [min-length 3] [max-length 10]]
@@ -546,7 +540,7 @@
 [user name='thisistoolongname']
 #]]
   [schema-cxs [#
-[?cx schema-of user]
+[schema of=user]
 
 [user
   [attr name::string [req] [min-length 3] [max-length 10]]
@@ -562,7 +556,7 @@
 [u status='active']
 #]]
   [schema-cxs [#
-[?cx schema-of u]
+[schema of=u]
 
 [u
   [attr status::string [req] [enum active inactive]]
@@ -578,7 +572,7 @@
 [u status='unknown']
 #]]
   [schema-cxs [#
-[?cx schema-of u]
+[schema of=u]
 
 [u
   [attr status::string [req] [enum active inactive]]
@@ -598,7 +592,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [check ordering=strict]
@@ -625,7 +619,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [check ordering=strict]
@@ -651,7 +645,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [check ordering=strict]
@@ -672,7 +666,7 @@
 [server host='localhost']
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr host::string [req]]
@@ -689,8 +683,7 @@
 [u]
 #]]
   [schema-cxs [#
-[?cx schema-of u]
-[?cx schema-version 0.7]
+[schema of=u version='0.7']
 
 [u]
 #]]
@@ -704,7 +697,7 @@
 [name]
 #]]
   [schema-cxs [#
-[?cx schema-of name]
+[schema of=name]
 
 [type name::string [req]]
 #]]
@@ -718,7 +711,7 @@
 [name 'alice']
 #]]
   [schema-cxs [#
-[?cx schema-of name]
+[schema of=name]
 
 [type name::string [req]]
 #]]
@@ -732,7 +725,7 @@
 [u]
 #]]
   [schema-cxs [#
-[?cx schema-name 'empty schema']
+[schema name='empty schema']
 #]]
   [expect-codes [:S009]]
  ]
@@ -744,7 +737,7 @@
 [server]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 
 [server
   [attr port::i32 [default 'abc']]
@@ -763,7 +756,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of database]
+[schema of=database]
 
 [server-config &server-config
   [attr host::string [req]]
@@ -790,7 +783,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of database]
+[schema of=database]
 
 [server-config &server-config
   [attr host::string [req]]
@@ -815,7 +808,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of database]
+[schema of=database]
 
 [database
   [elem primary [card "1..1"]]
@@ -833,7 +826,7 @@
 [outer]
 #]]
   [schema-cxs [#
-[?cx schema-of outer]
+[schema of=outer]
 
 [outer &outer
   [elem outer]
@@ -845,14 +838,15 @@
  ]
 
  [case id=sv-044 level=must
-  [title [#standalone [?cx frag &name [body...]] directive form#]]
+  [title [#fragment-only anchored type declaration form#]]
   [tags schema fragments]
   [in-cx [#
 [server port=8080]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx frag &port-range
+[schema of=server]
+
+[port-range &port-range
   [body i32 [range 1 65535]]
 ]
 
@@ -864,14 +858,15 @@
  ]
 
  [case id=sv-045 level=must
-  [title [#standalone fragment — range constraint inherited fires S006#]]
+  [title [#fragment-only anchored type declaration — range constraint inherited fires S006#]]
   [tags schema fragments S006]
   [in-cx [#
 [server port=99999]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx frag &port-range
+[schema of=server]
+
+[port-range &port-range
   [body i32 [range 1 65535]]
 ]
 
@@ -889,8 +884,9 @@
 [server]
 #]]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx frag &port-range
+[schema of=server]
+
+[port-range &port-range
   [body i32 [range 1 65535]]
 ]
 
@@ -908,7 +904,7 @@
 [x name='hello']
 #]]
   [schema-cxs [#
-[?cx schema-of x]
+[schema of=x]
 
 [x
   [attr name::string [pattern '[a-z]+']]
@@ -924,7 +920,7 @@
 [x name='Hello']
 #]]
   [schema-cxs [#
-[?cx schema-of x]
+[schema of=x]
 
 [x
   [attr name::string [pattern '^[a-z]+$']]
@@ -940,7 +936,7 @@
 [u status='active']
 #]]
   [schema-cxs [#
-[?cx schema-of u]
+[schema of=u]
 
 [u
   [attr status::string [req] [enum active inactive pending]]
@@ -956,7 +952,7 @@
 [u status='inactive']
 #]]
   [schema-cxs [#
-[?cx schema-of u]
+[schema of=u]
 
 [u
   [attr status::string [req] [enum active inactive pending]]
@@ -972,7 +968,7 @@
 [u status='unknown']
 #]]
   [schema-cxs [#
-[?cx schema-of u]
+[schema of=u]
 
 [u
   [attr status::string [req] [enum active inactive pending]]
@@ -1005,7 +1001,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
+[schema of=book]
 
 [book
   [attr id::string [req]]
@@ -1058,7 +1054,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of doc]
+[schema of=doc]
 
 [doc
   [elem section [card "1..*"]]
@@ -1085,7 +1081,7 @@
 ]
 #]]
   [schema-cxs [#
-[?cx schema-of doc]
+[schema of=doc]
 
 [doc
   [elem xref [card "1..*"]]
@@ -1103,8 +1099,7 @@
 [book id=x]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
-[?cx schema-name 'Book schema v1']
+[schema of=book name='Book schema v1']
 
 [book [attr id::string [req]]]
 #]]
@@ -1118,12 +1113,53 @@
 [book id=x]
 #]]
   [schema-cxs [#
-[?cx schema-of book]
-[?cx schema-version 0.8]
+[schema of=book version='0.8']
 
 [book [attr id::string [req]]]
 #]]
   [expect-valid true]
+ ]
+
+ [case id=sv-059a level=must
+  [title [#schema-version full semver 0.8.0 accepted — dialect identity is major.minor#]]
+  [tags schema schema-version semver S020 stream-21 716]
+  [in-cx [#
+[book id=x]
+#]]
+  [schema-cxs [#
+[schema of=book version='0.8.0']
+
+[book [attr id::string [req]]]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-059b level=must
+  [title [#schema-version patch revision 0.8.3 accepted — a dialect patch is clarification-only#]]
+  [tags schema schema-version semver S020 stream-21 716]
+  [in-cx [#
+[book id=x]
+#]]
+  [schema-cxs [#
+[schema of=book version='0.8.3']
+
+[book [attr id::string [req]]]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-059c level=must
+  [title [#S020 non-semver schema-version rejected#]]
+  [tags schema schema-version semver S020 stream-21 716]
+  [in-cx [#
+[book id=x]
+#]]
+  [schema-cxs [#
+[schema of=book version='latest']
+
+[book [attr id::string [req]]]
+#]]
+  [expect-codes [:S020]]
  ]
 
  [case id=sv-060 level=must
@@ -1133,7 +1169,7 @@
 [r lvl=:core]
 #]]
   [schema-cxs [#
-[?cx schema-of r]
+[schema of=r]
 
 [r [attr lvl::atom [enum :core :extended]]]
 #]]
@@ -1147,10 +1183,258 @@
 [r lvl=:bogus]
 #]]
   [schema-cxs [#
-[?cx schema-of r]
+[schema of=r]
 
 [r [attr lvl::atom [enum :core :extended]]]
 #]]
   [expect-codes [:S007]]
+ ]
+
+ [case id=sv-062 level=must
+  [title [#S006 range on decimal compares EXACTLY (#703 item E — the f64 collapse hid a 1e-20 excess)#]]
+  [tags schema S006 decimal exact range 703]
+  [in-cx [#
+[acct amount=0.12345678901234567891]
+#]]
+  [schema-cxs [#
+[schema of=acct]
+
+[acct
+  [attr amount::decimal [range 0 0.12345678901234567890]]
+]
+#]]
+  [expect-codes [:S006]]
+ ]
+
+ [case id=sv-063 level=must
+  [title [#S006 range on bigint compares EXACTLY beyond 2^53 (#703 item E)#]]
+  [tags schema S006 bigint exact range 703]
+  [in-cx [#
+[ctr n=9223372036854775808]
+#]]
+  [schema-cxs [#
+[schema of=ctr]
+
+[ctr
+  [attr n::bigint [range 0 9223372036854775807]]
+]
+#]]
+  [expect-codes [:S006]]
+ ]
+
+ [case id=sv-064-retired-schema-of-directive level=must
+  [title [#retired [?cx schema-of] directive spelling aborts schema-load — S009#]]
+  [tags schema header retired i5-s1 S009]
+  [in-cx [#
+[server host=x]
+#]]
+  [schema-cxs [#
+[?cx schema-of server]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-codes [:S009]]
+ ]
+
+ [case id=sv-065-retired-frag-directive level=must
+  [title [#retired [?cx frag &name ...] directive spelling aborts schema-load — S009#]]
+  [tags schema header retired i5-s1 S009]
+  [in-cx [#
+[server host=x]
+#]]
+  [schema-cxs [#
+[schema of=server]
+[?cx frag &f [body i32]]
+#]]
+  [expect-codes [:S009]]
+ ]
+
+ [case id=sv-066-header-unknown-mode level=must
+  [title [#header with unknown mode= value aborts schema-load — S009#]]
+  [tags schema header retired i5-s1 S009]
+  [in-cx [#
+[server host=x]
+#]]
+  [schema-cxs [#
+[schema of=server mode=bogus]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-codes [:S009]]
+ ]
+
+ [case id=sv-067-header-missing-of level=must
+  [title [#header missing required of= attribute aborts schema-load — S009#]]
+  [tags schema header retired i5-s1 S009]
+  [in-cx [#
+[server host=x]
+#]]
+  [schema-cxs [#
+[schema mode=closed]
+
+[server
+  [attr host::string [req]]
+]
+#]]
+  [expect-codes [:S009]]
+ ]
+ [case id=sv-068-or-union-body-and-attr level=must
+  [title [#[or T…] validates member-wise — attr scalar unions + body unions#]]
+  [tags schema algebraic or stream-16 688 706 S005]
+  [in-cx [#
+[order id=7 [alt "text"]]
+#]]
+  [schema-cxs [#
+[schema of=order]
+
+[order
+  [attr id::[or int string] [req]]
+  [elem alt [card "0..1"]]]
+
+[type alt::[or int string]]
+#]]
+  [expect-valid true]
+ ]
+
+ [case id=sv-069-or-union-no-member-matches level=must
+  [title [#[or int string] refuses a float — S005 naming the union#]]
+  [tags schema algebraic or stream-16 688 706 S005]
+  [in-cx [#
+[order id=2.5e0]
+#]]
+  [schema-cxs [#
+[schema of=order]
+
+[order [attr id::[or int string] [req]]]
+#]]
+  [expect-codes [:S005]]
+ ]
+
+ [case id=sv-070-tuple-fixed-arity level=must
+  [title [#[tuple int int] — arity + per-position item checks#]]
+  [tags schema algebraic tuple stream-16 688 706 S005]
+  [in-cx [#
+[shape [point (1, 2)] [bad (1, 2, 3)]]
+#]]
+  [schema-cxs [#
+[schema of=shape]
+
+[shape [elem point [card "1..1"]] [elem bad [card "0..1"]]]
+
+[type point::[tuple int int]]
+
+[type bad::[tuple int int]]
+#]]
+  [expect-codes [:S005]]
+ ]
+
+ [case id=sv-071-ref-named-type-resolution level=must
+  [title [#[ref Name] resolves the named type; an item mismatch surfaces through it#]]
+  [tags schema algebraic ref stream-16 688 706 S005]
+  [in-cx [#
+[order [xref ("a", 2)]]
+#]]
+  [schema-cxs [#
+[schema of=order]
+
+[order [elem xref [card "0..1"]]]
+
+[Coord [body [tuple int int]]]
+
+[type Coord::[tuple int int]]
+
+[type xref::[ref Coord]]
+#]]
+  [expect-codes [:S005]]
+ ]
+
+ [case id=sv-072-ref-unknown-type-fail-closed level=must
+  [title [#[ref Missing] is S025 — refs resolve fail-closed, never silently pass#]]
+  [tags schema algebraic ref stream-16 688 S025]
+  [in-cx [#
+[order [xref (1, 2)]]
+#]]
+  [schema-cxs [#
+[schema of=order]
+
+[order [elem xref [card "0..1"]]]
+
+[type xref::[ref Missing]]
+#]]
+  [expect-codes [:S025]]
+ ]
+
+ [case id=sv-073-nested-bracket-prefix-recursion level=must
+  [title [#[list [list float]] recurses with real item paths#]]
+  [tags schema container nested stream-16 688 706 S005]
+  [in-cx [#
+[grid [rows [[1.0e0, "x"]]]]
+#]]
+  [schema-cxs [#
+[schema of=grid]
+
+[grid [elem rows [card "1..1"]]]
+
+[type rows::[list [list float]]]
+#]]
+  [expect-codes [:S005]]
+ ]
+
+ [case id=sv-074-container-attr-unsatisfiable level=must
+  [title [#a container type in attribute position is S024 — attrs are strictly scalar#]]
+  [tags schema container attr-scalar stream-16 688 S024 CXER1603]
+  [in-cx [#
+[order tags=3]
+#]]
+  [schema-cxs [#
+[schema of=order]
+
+[order [attr tags::[list string] [req]]]
+#]]
+  [expect-codes [:S024]]
+ ]
+
+ [case id=sv-075-text-body-under-nonstring-kind-refused level=must
+  [title [#a prose/quoted body under a declared :int is S005 — the #813 symmetric repair#]]
+  [tags schema S005 text-body stream-14 686 813]
+  [in-cx [#
+[book
+  [title 'words']
+]
+#]]
+  [schema-cxs [#
+[schema of=book]
+
+[book
+  [elem title [card "1..1"]]
+]
+
+[type title::int]
+#]]
+  [expect-codes [:S005]]
+ ]
+
+ [case id=sv-076-text-body-under-string-kind-valid level=must
+  [title [#the same prose body under :string is valid — the symmetric twin#]]
+  [tags schema S005 text-body stream-14 686 813]
+  [in-cx [#
+[book
+  [title 'words']
+]
+#]]
+  [schema-cxs [#
+[schema of=book]
+
+[book
+  [elem title [card "1..1"]]
+]
+
+[type title::string]
+#]]
+  [expect-valid true]
  ]
 ]

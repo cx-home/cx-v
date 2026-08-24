@@ -1,4 +1,4 @@
-[test-suite name=table
+[test-suite name=table ring=0
   [doc [#
 # CX Conformance — :table block tests
 # Version: 1.0 — 2026-05-08
@@ -165,9 +165,9 @@ users:
 #]]
   [out-cx [#
 [t [table[ratio::float]]
-  1.5
-  2.5
-  3.5
+  1.5e0
+  2.5e0
+  3.5e0
 ]
 #]]
  ]
@@ -419,8 +419,8 @@ users:
 #]]
   [out-cx [#
 [users [table[name age::int active::bool score::float note]]
-  alice 30 true 1.5 admin
-  bob 25 false 2.0 user
+  alice 30 true 1.5e0 admin
+  bob 25 false 2.0e0 user
 ]
 #]]
   [assert-ast-bin-roundtrip [#

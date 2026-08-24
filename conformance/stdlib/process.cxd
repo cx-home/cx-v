@@ -1,4 +1,4 @@
-[test-suite name=process
+[test-suite name=process ring=1
   [doc [#
 conformance fixtures for cx-stdlib/process (spec/std-lib/process.md §6).
 

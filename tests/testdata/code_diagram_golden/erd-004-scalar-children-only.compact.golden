@@ -1,0 +1,5 @@
+erDiagram
+  user {
+    string email
+    string phone
+  }

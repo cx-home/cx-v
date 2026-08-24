@@ -1,11 +1,17 @@
-[test-suite name=lint
+[test-suite name=lint ring=0
   [doc [#
 # CX Conformance — cx lint
 # Version: 1.0 — 2026-05-08
 # Covers: CX-L001 (comment-style), CX-L003 (unused anchor),
-# CX-L004 (dangling alias/merge), CX-L005 ( deprecated
+# CX-L004 (dangling alias/merge), CX-L005 (deprecated
 #         patterns — leading-zero numerics). CX-L002 (long/short type
-# mixing) was removed by — short aliases no longer exist.
+# mixing) was removed with the v0.8.0 surface reshape — short type
+# aliases no longer exist; type labels are the glued `name::T` form
+# (grammar.ebnf's type-label note records the removal).
+#
+# [Provenance note, recovered 2026-08-05 (corpus audit n27): the two
+#  drained citations above originally pointed at spec/decisions/ ADRs;
+#  ADRs are retired.]
 #
 # Each test runs `cx lint --format=json` on `in_cx` and asserts:
 #   - `expected_check_count` matches the number of findings

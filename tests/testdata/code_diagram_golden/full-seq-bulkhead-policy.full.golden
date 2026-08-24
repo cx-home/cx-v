@@ -1,0 +1,8 @@
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+  activate w
+  Note over w : bulkhead max=2
+  Note over w : [ok]
+  deactivate w

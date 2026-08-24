@@ -1,0 +1,5 @@
+sequenceDiagram
+  participant w
+  activate w
+  Note over w : await-all $fs
+  deactivate w

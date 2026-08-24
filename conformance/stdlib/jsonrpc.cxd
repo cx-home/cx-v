@@ -1,7 +1,7 @@
-[test-suite name=jsonrpc
+[test-suite name=jsonrpc ring=1
   [doc [#
-Conformance fixtures for cx-stdlib/jsonrpc (JSON-RPC 2.0; spec/02-working/
-agentic_positioning.md D3 — frozen `std` substrate; cx-private #6 S1).
+Conformance fixtures for cx-stdlib/jsonrpc (JSON-RPC 2.0; spec/03-approved/x/
+README.md D3 — frozen `std` substrate; cx-private #6 S1).
 
 Each program imports the bundled module via [?lib 'cx-stdlib/jsonrpc'] (resolver
 MUST be quoted) and the codec via [?lib 'cx-stdlib/json']. The module is the

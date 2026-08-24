@@ -1,15 +1,37 @@
-[test-suite name=identity
+[test-suite name=identity ring=0
   [doc [#
 # CX Conformance — ID/IDREF tests
 # Version: 1.0 — 2026-05-08
-# Covers: (ID declarations, attribute-
-#         value references, CXPath [#id] predicate, round-trip).
+# Covers: spec/core/cxdm.md "Identity (ID / IDREF)" (ID declarations,
+#         attribute-value references, CXPath [#id] predicate,
+#         round-trip).
 #
-# v0 scope (per ): document-scope only. The CX → XML / JSON /
-# YAML / TOML / MD round-trip mappings (D6), canonical-form ID
-# renaming (D7), include-time ID merging (D3 second paragraph), and
-# the [ref @id] body-position node form (D1 second bullet) are
-# deferred to follow-up phases.
+# [Provenance note, recovered 2026-08-05 (corpus audit D-ID / n27):
+#  this header originally cited a spec/decisions/ ADR; ADRs are
+#  retired — the normative home is cxdm.md's Identity section, and the
+#  D1/D3/D6/D7 labels below are that retired decision's item numbers,
+#  kept because the corpus audit's D-ID gap row uses them.]
+#
+# v0 scope (per cxdm.md "Identity"): document-scope only. Claim state
+# re-verified against the shipped engine 2026-08-20 (#709) — the four
+# labels are the retired decision's item numbers, kept because the
+# corpus audit's D-ID gap row uses them:
+#
+#   D7 canonical-form ID renaming — SHIPPED. Strict canonical rewrites
+#     IDs to deterministic `id-N`, depth-first in source order
+#     (canonical.md "Strict canonical" / §2.7b, stream 12).
+#   D1 [ref @id] body-position node form — SHIPPED as syntax. It parses
+#     and round-trips: [root [user #ada] [post [ref @ada]]] survives
+#     CX → CX intact (probe-verified). What is NOT shipped is
+#     RESOLUTION — the reader carries the reference, it does not
+#     dereference it; that half stays open.
+#   D6 cross-format ID round-trip — PARTIAL, and the split is the
+#     lossless flag: default JSON keeps an @ref's VALUE but drops the
+#     #id declaration (probe: one 'ada' survives, the declaration is
+#     gone); --lossless keeps both. So the mapping exists on the
+#     lossless lane only; the default lossy projections still lose the
+#     declaration side.
+#   D3 include-time ID merging — genuinely open, unchanged.
 #
 # Verification: parse `in_cx`, re-emit through emit_cx, compare
 # against `out_cx`. Mismatch on parse OR mismatch on round-trip
@@ -434,7 +456,7 @@ E207
  [case id=id-028-array-order-preserved level=core
   [tags identity canonical order-semantics array]
   [in-cx [#
-[r ::int[3,1,2]]
+[r::int [3, 1, 2]]
 #]]
   [out-canonical [#
 [r::int [3, 1, 2]]

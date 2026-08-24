@@ -1,0 +1,2 @@
+[?channel name="ch"]
+[?send "m" to=$ch]

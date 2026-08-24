@@ -151,7 +151,7 @@ fn eval_fp_builtin(name string, args []cx.Node, mut env MatchEnv) ?cx.Node {
 
 // err_to_node coerces an EvalError raised inside an fp primitive into a
 // renderable [err …] VALUE node (errors-are-values; §4 / code.md §9.1.2).
-fn err_to_node(e IError) cx.Node {
+pub fn err_to_node(e IError) cx.Node {
 	if e is EvalError {
 		return mk_err(e.code, e.message)
 	}

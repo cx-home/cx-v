@@ -1,0 +1,8 @@
+flowchart TD
+  prog(["program"])
+  cap_eval{{"eval"}}
+  prog --> cap_eval
+  unk_eval[/"[?eval] — executes a tree the image does not hold"/]
+  prog ==> unk_eval
+  any{{"any granted capability"}}
+  unk_eval ==> any

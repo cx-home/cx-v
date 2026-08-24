@@ -98,11 +98,11 @@ fn walk_for_match(node cx.ProgramNode, source string, mut diags []json2.Any) {
 			}
 		}
 		cx.ProgramForComp {
-			for clause in node.clauses {
-				if src := clause.source { walk_for_match(src, source, mut diags) }
-				if expr := clause.expr { walk_for_match(expr, source, mut diags) }
+			// L100: THE ONE traversal (was blind to the `[yield-map K V]`
+			// value node).
+			for item in cx.for_comp_children(node) {
+				walk_for_match(item.node, source, mut diags)
 			}
-			walk_for_match(node.yield, source, mut diags)
 		}
 		cx.ProgramPattern {
 			for child in node.body {
@@ -449,15 +449,13 @@ fn find_pathexpr_at(node cx.ProgramNode, source string, offset int) ?cx.ProgramP
 			return none
 		}
 		cx.ProgramForComp {
-			for clause in node.clauses {
-				if src := clause.source {
-					if hit := find_pathexpr_at(src, source, offset) { return hit }
-				}
-				if expr := clause.expr {
-					if hit := find_pathexpr_at(expr, source, offset) { return hit }
-				}
+			// L100: THE ONE traversal. The hand-rolled walk this replaces
+			// stopped at `yield` — hover / go-to-definition over a path
+			// expression inside a `[yield-map K V]` value found nothing.
+			for item in cx.for_comp_children(node) {
+				if hit := find_pathexpr_at(item.node, source, offset) { return hit }
 			}
-			return find_pathexpr_at(node.yield, source, offset)
+			return none
 		}
 		cx.ProgramPattern {
 			for child in node.body {
@@ -510,9 +508,11 @@ fn pathexpr_end_offset(p cx.ProgramPathExpr, source string) int {
 //   1. The path source text (header)
 //   2. Anchor kind ('//', '/', or 'relative')
 //   3. Step count
-//   4. Static focus type — currently 'any' (full inference is a
-//      follow-up; the hover affordance itself
-//      ships today so editors can wire UI ahead of inference).
+//   4. Static focus type — `any` when no declaration is in scope
+//      (the Layer-B rule, shape_inference.md §2: declarations are the
+//      contract, inference is modular and stops at [?def] boundaries;
+//      a document-anchored path carries no declaration, so `any` IS
+//      the declared answer, not a placeholder).
 fn render_pathexpr_hover(p cx.ProgramPathExpr) string {
 	anchor := match p.leading {
 		.descendant { '`//` (descendant-or-self)' }
@@ -528,5 +528,5 @@ fn render_pathexpr_hover(p cx.ProgramPathExpr) string {
 		}
 		step_summary = '\n\n**Steps:** `${bits.join('/')}`'
 	}
-	return '**CXPath expression**\n\n**Anchor:** ${anchor}\n\n**Step count:** ${step_count}${step_summary}\n\n**Focus type (static):** `any`\n\n*Type inference for CXPath focus is reserved for a future LSP iteration; this hover ships the affordance and the structural breakdown today.*'
+	return '**CXPath expression**\n\n**Anchor:** ${anchor}\n\n**Step count:** ${step_count}${step_summary}\n\n**Focus type (declared):** `any`\n\n*Shape flow is declaration-driven (modular — declarations are the contract); a document-anchored path carries no declared shape, so `any` is the answer, not a gap. Declared [?pipe]-stage flow renders as inlay hints.*'
 }

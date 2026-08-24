@@ -1,0 +1,11 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  i{"if $x"}
+  t["'big'"]
+  i -- "true" --> t
+  t --> done
+  e["'small'"]
+  i -- "false" --> e
+  e --> done
+  start --> i

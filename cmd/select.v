@@ -71,7 +71,10 @@ fn run_select(args []string) {
 	}
 	// Pure query surface: install the empty capability set explicitly
 	// (deny-by-default; a path evaluation reaches no effect point).
-	code.caps_set_list([])
+	code.caps_set_list([]) or {
+		eprintln('cx select: ${err.msg()}')
+		exit(2)
+	}
 	res := code.select_path(doc_src, path_src) or {
 		eprintln('cx select: ${err}')
 		exit(2)

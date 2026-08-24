@@ -1,7 +1,16 @@
-[test-suite name=code
+[test-suite name=code ring=0 eval-ring=1
   [doc [#
 # CX code Conformance Suite
 Version: 0.3 — 2026-05-24.
+
+Ring lanes (partition corpus audit §2, MIXED suite): this suite has two
+consumers. The parse lane (`code_parse_fixtures_test.v`, `in-cx` + parse
+of `in-code`) is Ring-0 work — `ring=0`. The eval lane
+(`code_eval_fixtures_test.v`, evaluates `in-code`) is Ring-1 work —
+`eval-ring=1` on this header is the machine-readable discriminator;
+`scripts/ring_query.cx` implements it (every case joins the eval lane
+at ring 1 in addition to its parse-lane ring). The lane is defined by
+the CONSUMER, not the case: no per-case tag can express it.
 
 This file is the conformance home for CX code — the unified
 pattern/query/transform language, normative per
@@ -167,6 +176,512 @@ wall-clock behaviour; they require harness extensions.
 #]]
  ]
 
+ [case id=program-for-group-010-m5-revenue-by-region level=core
+  [tags for group-by key group aggregates stream-2 L94 m5]
+  [meta [#
+note: the ruled M5 skeleton (planar_algebra.md worked example) — the
+note: full gamma binding set: dollar-key = partition key, dollar-count,
+note: dollar-group = one [item …] per grouped frame carrying generator
+note: and let binder values as named children, so aggregates navigate
+note: group/NAME and atomize. First-appearance group order pinned.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $orders [orders
+  [order region=east [line qty=2 price=10] [line qty=1 price=5]]
+  [order region=west [line qty=3 price=4]]
+  [order region=east [line qty=1 price=100]]]]
+  [?for [in $o $orders/order] [in $l $o/line]
+    [= $r [* $l@qty $l@price]]
+    [group-by $o@region]
+    [yield [row region=$key revenue=[$sum $group/r] n=$count]]]]
+#]]
+  [out-text [#
+[row region=east revenue=125 n=3]
+[row region=west revenue=12 n=1]
+#]]
+ ]
+
+ [case id=program-for-group-011-top-sku level=core
+  [tags for group-by order-by limit aggregates stream-2 L94 m5 barrier-composition]
+  [meta [#
+note: the second spec-handoff skeleton — gamma THEN tau over a group
+note: aggregate THEN lambda. Pins the frame-set barrier pipeline: the
+note: order-by operates ACROSS groups (the per-frame engine could
+note: never order after a group-by).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $orders [orders
+  [order [line sku=aa qty=2 price=10] [line sku=bb qty=1 price=5]]
+  [order [line sku=bb qty=3 price=40] [line sku=aa qty=1 price=7]]]]
+  [?for [in $o $orders/order] [in $l $o/line]
+    [= $rev [* $l@qty $l@price]]
+    [group-by $l@sku]
+    [order-by [$sum $group/rev] desc]
+    [limit 1]
+    [yield [top sku=$key revenue=[$sum $group/rev]]]]]
+#]]
+  [out-text [#
+[top sku=bb revenue=125]
+#]]
+ ]
+
+ [case id=program-for-group-012-aggregate-set-over-group level=core
+  [tags for group-by aggregates sum max min avg count distinct stream-2 L94]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4, 5, 6)] [group-by [$mod $x 2]]
+  [yield [g key=$key count=$count sum=[$sum $group/x] max=[$max $group/x] min=[$min $group/x] avg=[$avg $group/x] distinct=[$count [$distinct $group/x]]]]]
+#]]
+  [out-text [#
+[g key=1 count=3 sum=9 max=5 min=1 avg=3.0 distinct=3]
+[g key=0 count=3 sum=12 max=6 min=2 avg=4.0 distinct=3]
+#]]
+ ]
+
+ [case id=program-for-group-013-orderby-then-groupby level=core
+  [tags for order-by group-by barrier-composition stream-2]
+  [meta [#
+note: tau THEN gamma — the reverse composition. The per-frame engine
+note: partitioned one frame at a time (every item its own group); the
+note: frame-set pipeline groups the whole ordered set.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (3, 1, 2, 4)] [order-by $x] [group-by [$mod $x 2]]
+  [yield [g key=$key n=$count members=[$count $group/x]]]]
+#]]
+  [out-text [#
+[g key=1 n=2 members=2]
+[g key=0 n=2 members=2]
+#]]
+ ]
+
+ [case id=program-for-lambda-001-repeated-take-min level=core
+  [tags for take lambda-composition stream-2 L93]
+  [meta [#
+note: repeated literal [take] clauses COMPOSE — each truncates the
+note: relation, so the minimum wins (code.md §7.9 λ tail). The pre-W4
+note: engine kept the LAST take (last-wins overwrite), which broke the
+note: ruled limit≡take collapse under multiplicity.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4, 5)] [take 2] [take 3] [yield $x]]
+#]]
+  [out-text [#
+1
+2
+#]]
+ ]
+
+ [case id=program-for-lambda-002-repeated-take-min-reversed level=core
+  [tags for take lambda-composition stream-2 L93]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4, 5)] [take 3] [take 2] [yield $x]]
+#]]
+  [out-text [#
+1
+2
+#]]
+ ]
+
+ [case id=program-for-lambda-003-repeated-drop-sum level=core
+  [tags for drop lambda-composition stream-2 L93]
+  [meta [#
+note: repeated literal [drop] clauses compose — the skips SUM (the
+note: pre-W4 engine kept only the last drop).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4)] [drop 1] [drop 1] [yield $x]]
+#]]
+  [out-text [#
+3
+4
+#]]
+ ]
+
+ [case id=program-for-lambda-004-limit-take-mix-min level=core
+  [tags for limit take lambda-composition stream-2 L93]
+  [meta [#
+note: [limit] and [take] both truncate the relation (the ruled L93
+note: collapse) — mixed occurrences compose to the minimum, in either
+note: spelling order.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+(
+[?for [in $x (1, 2, 3, 4, 5)] [limit 3] [take 2] [yield $x]],
+[?for [in $x (1, 2, 3, 4, 5)] [limit 2] [take 3] [yield $x]]
+)
+#]]
+  [out-text [#
+((1, 2), (1, 2))
+#]]
+ ]
+
+ [case id=program-for-lambda-005-repeated-limit-min level=core
+  [tags for limit lambda-composition stream-2 L93]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4, 5)] [limit 2] [limit 3] [yield $x]]
+#]]
+  [out-text [#
+1
+2
+#]]
+ ]
+
+ [case id=program-for-lambda-006-drop-before-take level=core
+  [tags for take drop lambda-composition stream-2 L93]
+  [meta [#
+note: λ clauses are relation-level truncations applied drops-first
+note: (the algebra's OFFSET/LIMIT reading, code.md §7.9) — clause
+note: position does not reorder them.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4, 5)] [take 2] [drop 1] [yield $x]]
+#]]
+  [out-text [#
+2
+3
+#]]
+ ]
+
+ [case id=program-for-lambda-007-post-barrier-take-min level=core
+  [tags for order-by take lambda-composition barrier stream-2 L93]
+  [meta [#
+note: the λ tail truncates AFTER the barriers — repeated takes compose
+note: to the minimum over the ordered relation.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (3, 1, 2, 5, 4)] [order-by $x] [take 2] [take 3] [yield $x]]
+#]]
+  [out-text [#
+1
+2
+#]]
+ ]
+
+ [case id=program-for-lambda-008-expression-take-count level=core
+  [tags for take lambda-composition expression-count stream-2 L93]
+  [meta [#
+note: grammar [129k] admits any ProgramExpr as the [take] count — the
+note: pre-W4 engine honored INT LITERALS ONLY and silently no-opped
+note: every other count (this case yielded all five items). Counts are
+note: evaluated once at comprehension entry, in the enclosing scope.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4, 5)] [take [+ 1 1]] [yield $x]]
+#]]
+  [out-text [#
+1
+2
+#]]
+ ]
+
+ [case id=program-for-lambda-009-binding-drop-count level=core
+  [tags for drop lambda-composition expression-count stream-2 L93]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $n 2] [?for [in $x (1, 2, 3, 4, 5)] [drop $n] [yield $x]]]
+#]]
+  [out-text [#
+3
+4
+5
+#]]
+ ]
+
+ [case id=program-for-lambda-010-expression-limit-count level=core
+  [tags for limit lambda-composition expression-count stream-2 L93]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4, 5)] [limit [* 1 2]] [yield $x]]
+#]]
+  [out-text [#
+1
+2
+#]]
+ ]
+
+ [case id=program-for-lambda-011-non-integer-count-refused level=core
+  [tags for take lambda-composition expression-count negative stream-2 L93]
+  [meta [#
+note: a λ count that does not evaluate to a non-negative integer is a
+note: typed error — never a silent no-op (the pre-W4 behavior).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3)] [take "two"] [yield $x]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-for-lambda-012-negative-count-refused level=core
+  [tags for take lambda-composition negative stream-2 L93]
+  [meta [#
+note: [take -1] was a SILENT NO-OP pre-W4 (the engine's n>=0 guard
+note: skipped it, yielding everything); a negative count is a typed
+note: error — cutover, fail-loud.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3)] [take -1] [yield $x]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-planar-equiv-001-sigma-below-tau level=core
+  [tags for where order-by planar-equivalence stream-2 L96]
+  [meta [#
+note: the L96 σ-pushdown-below-τ equivalence ground truth — filtering
+note: before or after a stable sort yields the identical relation (the
+note: rewriter applies this direction only for established-total
+note: predicates; this pair pins the engine-level equivalence).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+(
+[?for [in $x (5, 3, 1, 4, 2)] [order-by $x desc] [where [= $x 4]] [yield $x]],
+[?for [in $x (5, 3, 1, 4, 2)] [where [= $x 4]] [order-by $x desc] [yield $x]]
+)
+#]]
+  [out-text [#
+(4, 4)
+#]]
+ ]
+
+ [case id=program-planar-equiv-002-sigma-placement level=core
+  [tags for where generator planar-equivalence stream-2 L96]
+  [meta [#
+note: σ-placement — a filter referencing only the FIRST generator's
+note: bind yields the identical relation from either side of an
+note: independent second generator (Cartesian independence).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+(
+[?for [in $a (1, 2)] [in $b (10, 20)] [where [= $a 2]] [yield [p $a $b]]],
+[?for [in $a (1, 2)] [where [= $a 2]] [in $b (10, 20)] [yield [p $a $b]]]
+)
+#]]
+  [out-text [#
+(([p 2 10], [p 2 20]), ([p 2 10], [p 2 20]))
+#]]
+ ]
+
+ [case id=program-planar-equiv-003-sigma-below-tau-err-case level=core
+  [tags for where order-by planar-equivalence err stream-2 L96]
+  [meta [#
+note: the err-case pair — the yield errs on the surviving frame; both
+note: spellings surface the SAME err (σ-pushdown may not create,
+note: destroy, or reorder err observations).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+(
+[?for [in $x (5, 3, 4)] [order-by $x] [where [= $x 4]] [yield [$div 1 [- $x 4]]]],
+[?for [in $x (5, 3, 4)] [where [= $x 4]] [order-by $x] [yield [$div 1 [- $x 4]]]]
+)
+#]]
+  [out-text [#
+([err code=cx-err:CXER0101 message='division by zero'], [err code=cx-err:CXER0101 message='division by zero'])
+#]]
+ ]
+
+ [case id=program-planar-equiv-004-lambda-barrier-ground-truth level=core
+  [tags for where take nested planar-equivalence order-barrier stream-2 L96]
+  [meta [#
+note: the σ-across-λ ORDER BARRIER ground truth — filtering OUTSIDE a
+note: nested [take 5] (7 already truncated away → empty) is a different
+note: relation than filtering INSIDE (7 survives): the two spellings
+note: are NOT equivalent, which is exactly why the rewriter refuses to
+note: push σ through λ (L96: order-fixing barriers).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+(
+[?for [in $y [?for [in $x [$range 1 10]] [take 5] [yield $x]]] [where [= $y 7]] [yield $y]],
+[?for [in $y [?for [in $x [$range 1 10]] [where [= $x 7]] [take 5] [yield $x]]] [yield $y]]
+)
+#]]
+  [out-text [#
+((), 7)
+#]]
+ ]
+
+ [case id=program-for-fail-fast-001-sequential-noop level=core
+  [tags for fail-fast sequential noop stream-2 grammar-129r]
+  [meta [#
+note: grammar [129r] — [fail-fast] previously MIS-PARSED as a
+note: pattern-generator searching for elements named fail-fast
+note: (it errored with pattern-as-source-requires-doc). Sequential
+note: evaluation already short-circuits, so the clause is a no-op
+note: without [par], by contract (code.md section 7.3).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3)] [fail-fast] [yield [n $x]]]
+#]]
+  [out-text [#
+[n 1]
+[n 2]
+[n 3]
+#]]
+ ]
+
+ [case id=program-for-fail-fast-002-par-err-short-circuit level=core
+  [tags for fail-fast par err short-circuit stream-2 grammar-129r]
+  [meta [#
+note: under [par], [fail-fast] short-circuits on the FIRST observed
+note: err (stop dispatching queued items, discard in-flight) instead
+note: of the default earliest-input-index surfacing. One err in the
+note: input keeps the result deterministic.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3, 4)] [par 2] [fail-fast] [where [?if [= $x 3] [then [/ 1 0]] [else true]]] [yield [n $x]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-purity-for-map-001-impure-value-refused level=core
+  [tags purity def for-map yield-map CXER0233 stream-2 L100]
+  [meta [#
+note: the [yield-map K V] VALUE position must not escape the def-time
+note: purity refusal. Before the W2 fix, the ?for-map head was missing
+note: from the pure-flow table AND an unclassified head ABORTED the
+note: body scan — so a declared-pure for-map def with an impure call
+note: anywhere in its body registered and ran.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?def leak pure ($xs) [?for-map [in $x $xs] [yield-map $x [$random:int 1 9]]]]
+[$leak (1, 2)]
+#]]
+  [out-err [#
+cx-err:CXER0233
+#]]
+ ]
+
+ [case id=program-purity-for-map-002-impure-key-refused level=core
+  [tags purity def for-map yield-map CXER0233 stream-2 L100]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?def leak3 pure ($xs) [?for-map [in $x $xs] [yield-map [$random:int 1 9] $x]]]
+[$leak3 (1, 2)]
+#]]
+  [out-err [#
+cx-err:CXER0233
+#]]
+ ]
+
+ [case id=program-purity-for-map-003-pure-accepted level=core
+  [tags purity def for-map yield-map positive stream-2]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?def pairs pure ($xs) [?for-map [in $x $xs] [yield-map $x [* $x 10]]]]
+[$pairs (1, 2, 3)]
+#]]
+  [out-text [#
+{1: 10, 2: 20, 3: 30}
+#]]
+ ]
+
+ [case id=program-eq-element-020-structural level=core
+  [tags equality element structural attrs document-order decimal distinct]
+  [meta [#
+note: element VALUE equality is STRUCTURAL — names, attributes
+note: as a name-keyed set (order-insensitive) under scalar rules,
+note: children pairwise in DOCUMENT order, recursing. Decimal keeps
+note: mathematical value equality inside elements (1.10 = 1.1). The
+note: pre-fix arm compared name + child count only, so [x 1] = [x 3]
+note: was true across every consumer.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[probe
+  a=[= [x 1] [x 3]]
+  b=[= [x 1] [x 1]]
+  c=[$eq [x a=1] [x a=2]]
+  d=[$eq [x a=1] [x a=1]]
+  e=[= [p 1.10] [p 1.1]]
+  f=[$count [$distinct ([x 1], [x 3], [x 1])]]
+  g=[= [x k=1 v=2] [x v=2 k=1]]
+  h=[= [x [y 1] [z 2]] [x [z 2] [y 1]]]]
+#]]
+  [out-text [#
+[probe a=false b=true c=false d=true e=true f=2 g=true h=false]
+#]]
+ ]
+
  [case id=program-for-005-sort-limit level=core
   [tags for order-by limit]
   [in-cx [#
@@ -238,6 +753,12 @@ note: sort is expressible by chaining `:order-by` clauses. Sort by the
 note: SECONDARY key first, then the PRIMARY; the stable sort preserves
 note: the secondary order within primary ties. Here: name asc, then age
 note: desc → ties on age=30 stay name-ordered (B before C).
+note: RE-PINNED (stream-2 W1, frame-set barrier pipeline): the prior
+note: pin (A,B,C — name asc only) captured a DEFECT — the old engine
+note: recursed per-frame after the first barrier, so the second
+note: order-by saw one frame at a time and never sorted; chained
+note: order-by clauses now actually chain, matching this note's own
+note: stated semantics (primary = age desc → 30s first, tie stable).
 #]]
   [in-cx [#
 [ignored]
@@ -247,9 +768,9 @@ note: desc → ties on age=30 stay name-ordered (B before C).
         [yield [r n=$u/@name a=$u/@age]]]]
 #]]
   [out-text [#
-[r n=A a=25]
 [r n=B a=30]
 [r n=C a=30]
+[r n=A a=25]
 #]]
  ]
 
@@ -725,17 +1246,20 @@ Alice
  ]
 
  [case id=program-map-003-par-unordered level=core
-  [tags map par unordered]
+  [tags map par source-order L105]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
 [?map (1, 2, 3, 4) [using [?fn $x [* $x $x]]] [par]]
 #]]
-  [out-multiset [#
+  [out-text [#
 (1, 4, 9, 16)
 #]]
  ]
+note: L105 (pure ⇒ deterministic, stream 5): [par] reassembles source
+note: order ALWAYS — bare [par] output is exact source order, no longer
+note: a completion-order multiset. The case id keeps its historical name.
 
  [case id=program-map-004-ordered-without-par-rejected level=core
   [tags map grammar CXER0100 ordered-without-par]
@@ -775,6 +1299,298 @@ cx-err:CXER0100
 cx-err:CXER0100
 #]]
  ]
+
+ [case id=program-map-101-mss4-declaration-entry level=core
+  [tags map literal declaration mss-4 issue-917]
+  [title a prefix annotation as the sole value declares the field — kind kept, value ABSENT]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {order: ::string compact: ::bool tags: ::string[] n: 5}] $m]
+#]]
+  [out-text [#
+{order: ::string, compact: ::bool, tags: ::string[], n: 5}
+#]]
+ ]
+
+ [case id=program-map-102-mss4-declared-read-is-absent level=core
+  [tags map literal declaration absence mss-4 issue-917]
+  [title reading a declared entry's value refuses — declared-absent is not null]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {a: ::int b: 2}] $m.a]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-map-103-mss4-unknown-kind-refuses level=core
+  [tags map literal declaration mss-4 issue-917]
+  [title the declaration vocabulary is the [157] KindName set — unknown kinds refuse]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {a: ::bogus}] $m]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-map-104-mss3-spaced-glue-refuses level=core
+  [tags map literal ascription mss-3 issue-917]
+  [title a spaced `::` after a map key refuses — never the atom entry the data reader used to invent]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {a ::int}] $m]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-map-105-mss3-key-ascription-parity level=core
+  [tags map literal ascription keys mss-3 issue-917]
+  [title a valid ascription on an ident key is accepted and normalized in the program reading too]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {a::string: 5}] $m]
+#]]
+  [out-text [#
+{a: 5}
+#]]
+ ]
+
+ [case id=program-map-106-mss3-key-ascription-checked level=core
+  [tags map literal ascription keys mss-3 issue-917]
+  [title a key ascription that cannot coerce refuses in the program reading — parity with the data reader]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {a::int: 5}] $m]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-map-107-mss3-fallback-hatch-closed level=core
+  [tags map literal fallback mss-3 issue-917]
+  [title a failed program parse inside a map literal surfaces ITS error — never a silent data re-read]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+{order ::ref compact ::bool}
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+note: before MSS-3 item 6 this exact document evaluated to {order: false}
+note: at rc=0 — the program refusal was swallowed by the top-level
+note: data-fallback and the data reader invented a bool from prose.
+
+ [case id=program-map-108-mss2-ws-entries-normalize level=core
+  [tags map literal separators mss-2 issue-917]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {tenant: "acme" journal: 7}] $m]
+#]]
+  [out-text [#
+{tenant: acme, journal: 7}
+#]]
+ ]
+
+ [case id=program-map-112-mss7-prefix-typed-value level=core
+  [tags map literal ascription prefix mss-7 issue-917]
+  [title a prefix annotation WITH a value types it — the type-first spelling users reach for]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {name: 'Alice', age: ::int 30, price: ::decimal 2}] $m]
+#]]
+  [out-text [#
+{name: Alice, age: 30, price: 2::decimal}
+#]]
+ ]
+
+ [case id=program-map-113-mss7-kind-with-value-refuses level=core
+  [tags map literal ascription prefix mss-7 issue-917]
+  [title a kind-only tag declares — with a value it refuses]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {v: ::element 5}] $m]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-map-109-dupkey-parity-refuses level=core
+  [tags map literal keys duplicate w014 issue-920]
+  [title the program reading dup-checks literal map keys exactly as the data reading — (kind, image) identity]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {1: a, 1::int: c}] $m]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-map-110-computed-entry-dup-refuses level=core
+  [tags map literal keys duplicate computed w014 issue-920]
+  [title a computed [?entry] key colliding with an existing key refuses — never a silent duplicate]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $k "a"] {a: 1 [?entry $k 2]}]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-map-111-key-identity-kind-and-image level=core
+  [tags map literal keys identity issue-920]
+  [title key identity is the (kind, image) pair — a quoted '7' and a bare 7 are TWO keys, scale-distinct numerics three]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {'7': a, 7: b, 1: x, 1.0: y, 1::bigint: z}] $m]
+#]]
+  [out-text [#
+{'7': a, 7: b, 1: x, 1.0: y, 1::bigint: z}
+#]]
+ ]
+
+ [case id=program-map-114-equality-kind-strict level=core
+  [tags map equality keys kind identity issue-927]
+  [title map equality is key-KIND-strict (cxdm §5.3/§2.6) — an int key 1 and a string key '1' are different key sets]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $z 0] ([= {1: 'x'} {'1': 'x'}], [= {true: 1} {'true': 1}], [= {7: a} {7: a}])]
+#]]
+  [out-text [#
+(false, false, true)
+#]]
+ ]
+
+ [case id=program-map-115-equality-order-independent level=core
+  [tags map equality order issue-927]
+  [title map equality is order-independent (cxdm §5.3) — same entries in any insertion order are one value]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $z 0] ([= {a: 1, b: 2} {b: 2, a: 1}], [= {a: 1, b: 2} {a: 1, b: 3}], [= {a: 1} {a: 1, b: 2}])]
+#]]
+  [out-text [#
+(true, false, false)
+#]]
+ ]
+
+ [case id=program-map-116-decl-entry-equality level=core
+  [tags map equality declaration mss-4 issue-927]
+  [title a declared entry equals a declaration of the same key and kind — never a valued entry, never another kind]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $z 0] ([= {k: ::int} {k: ::int}], [= {k: ::int} {k: ::string}], [= {k: ::int} {k: 1}])]
+#]]
+  [out-text [#
+(true, false, false)
+#]]
+ ]
+
+ [case id=program-map-030-par-source-order-skewed level=core
+  [tags map par source-order determinism L105 stream-5]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?map (1, 2, 3, 4, 5, 6, 7, 8) [using [?fn $x [?let [= $burn [$sum [$range 1 [* [- 9 $x] 20000]]]] [* $x 10]]]] [par]]
+#]]
+  [out-text [#
+(10, 20, 30, 40, 50, 60, 70, 80)
+#]]
+ ]
+note: L105 discriminator — per-item work is skewed so earlier items
+note: finish LAST under the pool; completion-order assembly would return
+note: a permutation, source-order reassembly returns exactly this.
+
+ [case id=program-for-030-par-source-order-skewed level=core
+  [tags for par source-order determinism L105 stream-5]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[r [?for [in $i (1, 2, 3, 4, 5, 6, 7, 8)] [= $burn [$sum [$range 1 [* [- 9 $i] 20000]]]] [par] [yield [* $i 10]]]]
+#]]
+  [out-text [#
+[r (10, 20, 30, 40, 50, 60, 70, 80)]
+#]]
+ ]
+note: the [?for … [par]] path (par_for_run) is distinct from the
+note: [?map] par_map path — both must reassemble source order (L105).
+
+ [case id=program-for-031-par-ordered-tombstone-noop level=core
+  [tags for par ordered tombstone L105 stream-5]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[$eq
+ [?for [in $i (1, 2, 3, 4, 5)] [par] [yield [* $i 7]]]
+ [?for [in $i (1, 2, 3, 4, 5)] [par] [ordered] [yield [* $i 7]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+note: [ordered] is TOMBSTONED (L105): a documented no-op — [par] always
+note: preserves source order, so the two spellings are indistinguishable.
+note: It remains grammatically valid where it was valid; [ordered]
+note: without [par] stays CXER0100 (program-map-004).
+
+ [case id=program-for-032-par-float-sum-source-order level=core
+  [tags for par float determinism source-order L105 stream-5]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[$sum [?for [in $x (0.1, 0.2, 0.3, 10000000000.0, -10000000000.0, 0.1)] [par] [yield $x]]]
+#]]
+  [out-text [#
+0.7000003814697265
+#]]
+ ]
+note: float aggregation over a [par] result is SOURCE order — the sum is
+note: byte-identical to the sequential fold (no reassociation, L105);
+note: completion-order assembly would make this value nondeterministic.
 
  [case id=program-iterator-map-001-lazy level=core
   [tags iterator map]
@@ -850,7 +1666,7 @@ cx-err:CXER0100
 [?zip (1, 2, 3) ("a", "b", "c")]
 #]]
   [out-text [#
-((1, 'a'), (2, 'b'), (3, 'c'))
+((1, a), (2, b), (3, c))
 #]]
  ]
 
@@ -863,20 +1679,22 @@ cx-err:CXER0100
 [?enumerate ("a", "b", "c")]
 #]]
   [out-text [#
-((0, 'a'), (1, 'b'), (2, 'c'))
+((0, a), (1, b), (2, c))
 #]]
  ]
 
+ [# ── [?chain] RETIRED (stream 13, L55): the registry's only alias is gone —
+       [?concat] is the one name. An alias head is an unknown directive. ── #]
  [case id=program-iterator-chain-001 level=core
-  [tags iterator chain concat]
+  [tags iterator chain retired negative]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
 [?chain (1, 2) (3, 4) (5, 6)]
 #]]
-  [out-text [#
-(1, 2, 3, 4, 5, 6)
+  [out-err [#
+cx-err:CXER0100
 #]]
  ]
 
@@ -1190,7 +2008,7 @@ false
     its result — it is never EBV-coerced (an err element would read truthy:
     items.len > 0). ENFORCED for [?if] (005-007). The guard/predicate
     boundaries — [?match] :when/:where, [?filter], [?partition], [?for]
-    [where]/[takewhile]/[dropwhile] (008-014, gate=pending) — are an OPEN
+    [where]/[take-while]/[drop-while] (008-014, gate=pending) — are an OPEN
     OWNER DECISION: shipped stdlib code (xap-dist registry lookups,
     validate shape walks) relies on err-valued guards meaning SKIP, while a
     uniform §9.2 reading says PROPAGATE. Do not enforce until decided. ]
@@ -1306,12 +2124,12 @@ false
  ]
 
  [case id=program-err-013-for-takewhile-err level=core
-  [tags errors propagation for takewhile predicate]
+  [tags errors propagation for take-while predicate]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
-[?for [in $x (1, 2)] [takewhile [/ 1 0]] [yield $x]]
+[?for [in $x (1, 2)] [take-while [/ 1 0]] [yield $x]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0101 message='division by zero']
@@ -1319,12 +2137,12 @@ false
  ]
 
  [case id=program-err-014-for-dropwhile-err level=core
-  [tags errors propagation for dropwhile predicate]
+  [tags errors propagation for drop-while predicate]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
-[?for [in $x (1, 2)] [dropwhile [/ 1 0]] [yield $x]]
+[?for [in $x (1, 2)] [drop-while [/ 1 0]] [yield $x]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0101 message='division by zero']
@@ -1577,21 +2395,31 @@ cx-err:CXER0100
 
  [case id=program-cb-003-half-open-after-reset level=resilience
   [tags circuit-breaker half-open reset]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
 [?let [= $a [?circuit-breaker threshold=0.0 window=60s reset=30s
                              min-samples=1 name="cb-003" [?test-err-then-ok err-count=1 ok-value=probe-ok]]] [= $_ [?test-clock advance=31s]] [= $b [?circuit-breaker threshold=0.0 window=60s reset=30s
-min-samples=1 name="cb-003" [?test-err-then-ok err-count=1 ok-value=probe-ok]]] ([a $a], [b $b])]
+min-samples=1 name="cb-003" [?test-err-then-ok err-count=1 ok-value=probe-ok]]] ($a, $b)]
 #]]
   [out-text [#
-([a [err code=test-failure message='test failure']], [b 'probe-ok'])
+([err code=test-failure message='test failure'], probe-ok)
 #]]
  ]
 
  [case id=program-cb-004-half-open-failure-reopens level=resilience
   [tags circuit-breaker half-open reopen]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
   [in-cx [#
 [ignored]
 #]]
@@ -1599,10 +2427,10 @@ min-samples=1 name="cb-003" [?test-err-then-ok err-count=1 ok-value=probe-ok]]] 
 [?let [= $first [?circuit-breaker threshold=0.0 window=60s reset=30s
                                  min-samples=1 name="cb-004" [?test-always-err]]] [= $_ [?test-clock advance=31s]] [= $second [?circuit-breaker threshold=0.0 window=60s reset=30s
 min-samples=1 name="cb-004" [?test-always-err]]] [= $third [?circuit-breaker threshold=0.0 window=60s reset=30s
-min-samples=1 name="cb-004" [?test-always-err]]] ([r1 $first], [r2 $second], [r3 $third])]
+min-samples=1 name="cb-004" [?test-always-err]]] ($first, $second, $third)]
 #]]
   [out-text [#
-([r1 [err code=test-failure message='test failure']], [r2 [err code=test-failure message='test failure']], [r3 [err code=cx-err:CXER0150 message='circuit breaker open' [until [instant 61s]]]])
+([err code=test-failure message='test failure'], [err code=test-failure message='test failure'], [err code=cx-err:CXER0150 message='circuit breaker open' [until [instant 61s]]])
 #]]
  ]
 
@@ -1709,14 +2537,19 @@ secondary
 
  [case id=program-ratelimit-003-replenish-after-window level=resilience
   [tags rate-limit replenish]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
-[?let [= $a [?rate-limit max=1 per=1s name="rl-003" a]] [= $b [?rate-limit max=1 per=1s name="rl-003" b]] [= $_ [?test-clock advance=1100ms]] [= $c [?rate-limit max=1 per=1s name="rl-003" c]] ([a $a], [b $b], [c $c])]
+[?let [= $a [?rate-limit max=1 per=1s name="rl-003" a]] [= $b [?rate-limit max=1 per=1s name="rl-003" b]] [= $_ [?test-clock advance=1100ms]] [= $c [?rate-limit max=1 per=1s name="rl-003" c]] ($a, $b, $c)]
 #]]
   [out-text [#
-([a 'a'], [b [err code=cx-err:CXER0151 message='rate limit exceeded' retry-after=1s]], [c 'c'])
+(a, [err code=cx-err:CXER0151 message='rate limit exceeded' retry-after=1s], c)
 #]]
  ]
 
@@ -2260,7 +3093,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-001-get-happy-path level=services
+ [case id=program-svc-001-get-happy-path level=services eval-ring=2
   [tags service client get happy-path]
   [in-cx [#
 [ignored]
@@ -2276,7 +3109,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-002-post-happy-path level=services
+ [case id=program-svc-002-post-happy-path level=services eval-ring=2
   [tags service client post body happy-path]
   [in-cx [#
 [ignored]
@@ -2292,7 +3125,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-003-put-happy-path level=services
+ [case id=program-svc-003-put-happy-path level=services eval-ring=2
   [tags service client put body]
   [in-cx [#
 [ignored]
@@ -2311,7 +3144,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-004-delete-happy-path level=services
+ [case id=program-svc-004-delete-happy-path level=services eval-ring=2
   [tags service client delete]
   [in-cx [#
 [ignored]
@@ -2329,7 +3162,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-005-patch-happy-path level=services
+ [case id=program-svc-005-patch-happy-path level=services eval-ring=2
   [tags service client patch body]
   [in-cx [#
 [ignored]
@@ -2348,7 +3181,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-006-head-happy-path level=services
+ [case id=program-svc-006-head-happy-path level=services eval-ring=2
   [tags service client head]
   [in-cx [#
 [ignored]
@@ -2366,7 +3199,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-007-options-happy-path level=services
+ [case id=program-svc-007-options-happy-path level=services eval-ring=2
   [tags service client options]
   [in-cx [#
 [ignored]
@@ -2384,7 +3217,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-008-400-bad-request level=services
+ [case id=program-svc-008-400-bad-request level=services eval-ring=2
   [tags service error CXER0160 bad-request]
   [in-cx [#
 [ignored]
@@ -2401,7 +3234,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-009-401-unauthorized level=services
+ [case id=program-svc-009-401-unauthorized level=services eval-ring=2
   [tags service error CXER0161 unauthorized]
   [in-cx [#
 [ignored]
@@ -2419,7 +3252,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-010-404-not-found level=services
+ [case id=program-svc-010-404-not-found level=services eval-ring=2
   [tags service error CXER0162 not-found]
   [in-cx [#
 [ignored]
@@ -2436,7 +3269,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-011-408-request-timeout level=services
+ [case id=program-svc-011-408-request-timeout level=services eval-ring=2
   [tags service error CXER0163 read-timeout]
   [in-cx [#
 [ignored]
@@ -2453,7 +3286,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-012-413-payload-too-large level=services
+ [case id=program-svc-012-413-payload-too-large level=services eval-ring=2
   [tags service error CXER0164 max-body-bytes]
   [in-cx [#
 [ignored]
@@ -2470,7 +3303,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-013-500-internal-error level=services
+ [case id=program-svc-013-500-internal-error level=services eval-ring=2
   [tags service error CXER0165 internal-error]
   [in-cx [#
 [ignored]
@@ -2487,7 +3320,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-014-503-shutting-down level=services
+ [case id=program-svc-014-503-shutting-down level=services eval-ring=2
   [tags service error CXER0166 shutdown drain]
   [in-cx [#
 [ignored]
@@ -2502,7 +3335,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-015-client-connection-refused level=services
+ [case id=program-svc-015-client-connection-refused level=services eval-ring=2
   [tags client error CXER0180 connection-refused]
   [in-cx [#
 [ignored]
@@ -2515,7 +3348,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-016-client-tls-handshake-failed level=services
+ [case id=program-svc-016-client-tls-handshake-failed level=services eval-ring=2
   [tags client error CXER0181 tls]
   [in-cx [#
 [ignored]
@@ -2531,7 +3364,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-017-client-invalid-response level=services
+ [case id=program-svc-017-client-invalid-response level=services eval-ring=2
   [tags client error CXER0182 invalid-response]
   [in-cx [#
 [ignored]
@@ -2550,7 +3383,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-018-tls-round-trip level=services
+ [case id=program-svc-018-tls-round-trip level=services eval-ring=2
   [tags service client tls round-trip]
   [in-cx [#
 [ignored]
@@ -2567,7 +3400,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-019-streaming-body level=services
+ [case id=program-svc-019-streaming-body level=services eval-ring=2
   [tags service client streaming-body]
   [in-cx [#
 [ignored]
@@ -2586,7 +3419,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-020-graceful-stop-drains level=services
+ [case id=program-svc-020-graceful-stop-drains level=services eval-ring=2
   [tags service lifecycle stop wait-for]
   [in-cx [#
 [ignored]
@@ -2601,7 +3434,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-021-service-handle-lookup level=services
+ [case id=program-svc-021-service-handle-lookup level=services eval-ring=2
   [tags service service-handle]
   [in-cx [#
 [ignored]
@@ -2615,7 +3448,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-real-001-wildcard-route-captures-remainder level=services
+ [case id=program-svc-real-001-wildcard-route-captures-remainder level=services eval-ring=2
   [tags service wildcard route]
   [in-cx [#
 [ignored]
@@ -2632,7 +3465,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-real-002-wildcard-route-root-only level=services
+ [case id=program-svc-real-002-wildcard-route-root-only level=services eval-ring=2
   [tags service wildcard route]
   [in-cx [#
 [ignored]
@@ -2649,7 +3482,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-real-003-uppercase-method-clause level=services
+ [case id=program-svc-real-003-uppercase-method-clause level=services eval-ring=2
   [tags service uppercase-method]
   [in-cx [#
 [ignored]
@@ -2665,7 +3498,7 @@ fb
 #]]
  ]
 
- [case id=program-svc-real-004-default-headers-applied level=services
+ [case id=program-svc-real-004-default-headers-applied level=services eval-ring=2
   [tags service default-headers]
   [in-cx [#
 [ignored]
@@ -2726,7 +3559,7 @@ the §10.4 channel / worker / select surface end-to-end:
         [?receive from=$ch])]]
 #]]
   [out-text [#
-([ok], 'sync')
+([ok], sync)
 #]]
  ]
 
@@ -2745,14 +3578,19 @@ the §10.4 channel / worker / select surface end-to-end:
 
  [case id=program-conc-004-receive-drained-closed level=concurrency
   [tags channel receive closed drained CXER0200]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
-[?let [= $ch [?channel name="c4" buffer=2]] [= $_ [?send "a" to=$ch]] [= $_ [?close $ch]] [= $first [?receive from=$ch]] [= $second [?receive from=$ch]] ([r1 $first], [r2 $second])]
+[?let [= $ch [?channel name="c4" buffer=2]] [= $_ [?send "a" to=$ch]] [= $_ [?close $ch]] [= $first [?receive from=$ch]] [= $second [?receive from=$ch]] ($first, $second)]
 #]]
   [out-text [#
-([r1 'a'], [r2 [err code=cx-err:CXER0200 message='channel closed']])
+(a, [err code=cx-err:CXER0200 message='channel closed'])
 #]]
  ]
 
@@ -2968,7 +3806,7 @@ lookupable
  ]
 
  [# §10.5.4 cooperative cancellation in a pure loop: the worker's only exit is
-    observing the cancel signal — [?check-cancel] in the takewhile predicate
+    observing the cancel signal — [?check-cancel] in the take-while predicate
     (or the [?for] iteration-boundary cancellation point) reports CXER0260
     once [?cancel] lands. Deterministic by construction: the body CANNOT run
     to completion before the cancel, so [?wait-for] always surfaces the
@@ -2982,13 +3820,286 @@ lookupable
   [in-code [#
 [?let [= $w [?worker name="w20"
               [body [?for [in $i [$range 1 *]]
-                     [takewhile [?match [?check-cancel] [case [err @code="cx-err:CXER0260"] false] [else true]]]
+                     [take-while [?match [?check-cancel] [case [err @code="cx-err:CXER0260"] false] [else true]]]
                      [yield $i]]]]] [= $_ [?cancel worker=$w]] [?wait-for worker=$w]]
 #]]
   [out-text [#
 [err code=cx-err:CXER0221 message='worker cancelled' [cause [err code=cx-err:CXER0260 message='operation cancelled']]]
 #]]
  ]
+
+ [case id=program-conc-021-fanout-subscribe-window level=concurrency
+  [tags channel subscribe fan-out window u1-11a delivery 762]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="fan1" sharing=independent retention=window keep=3]]
+[= $sub1 [?subscribe from=$ch]]
+[= $s1 [?send [ev 1] to=$ch]]
+[= $s2 [?send [ev 2] to=$ch]]
+[= $sub2 [?subscribe from=$ch from-pos=0]]
+[= $r1 [?receive from=$sub1]]
+[= $r2 [?receive from=$sub1]]
+[= $r3 [?receive from=$sub2]]
+[= $b [?receive from=$sub2 max=5 deadline=0]]
+  ($r1, $r2, $r3, $b, [rung $sub1@rung])]
+#]]
+  [out-text [#
+([ev 1], [ev 2], [ev 1], ([ev 2]), [rung ':complete-ordered'])
+#]]
+ ]
+
+ [case id=program-conc-022-fanout-lag-gap-reseed level=concurrency
+  [tags channel subscribe fan-out gap CXER0218 stream-gap u1-11a 762]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="fan2" sharing=independent retention=window keep=2]]
+[= $sub [?subscribe from=$ch from-pos=0]]
+[= $s1 [?send [ev 1] to=$ch]]
+[= $s2 [?send [ev 2] to=$ch]]
+[= $s3 [?send [ev 3] to=$ch]]
+[= $s4 [?send [ev 4] to=$ch]]
+[= $gap [?receive from=$sub]]
+[= $resub [?subscribe from=$ch from-pos=$gap@floor]]
+[= $r [?receive from=$resub]]
+  ($gap@code, $gap@floor, $r)]
+#]]
+  [out-text [#
+('cx-err:CXER0218', 2, [ev 3])
+#]]
+ ]
+
+ [case id=program-conc-023-latest-coalesces level=concurrency
+  [tags channel subscribe fan-out latest coalesce delivery-s6 u1-11a 762]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="lat1" sharing=independent retention=latest]]
+[= $sub [?subscribe from=$ch]]
+[= $s1 [?send [v 1] to=$ch]]
+[= $s2 [?send [v 2] to=$ch]]
+[= $s3 [?send [v 3] to=$ch]]
+[= $r [?receive from=$sub]]
+[= $empty [?try-receive from=$sub]]
+  ($r, $empty@code)]
+#]]
+  [out-text [#
+([v 3], 'cx-err:CXER0202')
+#]]
+ ]
+
+ [case id=program-conc-024-channel-policy-refusals level=concurrency
+  [tags channel negative policy CXER0217 u1-11a 762]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $e1 [?channel name="bad1" sharing=independent]]
+[= $e2 [?channel name="bad2" sharing=independent retention=window]]
+[= $e3 [?channel name="bad3" retention=latest]]
+[= $e4 [?channel name="bad4" sharing=independent retention=window keep=2 buffer=3]]
+  ($e1@code, $e2@code, $e3@code, $e4@code)]
+#]]
+  [out-text [#
+('cx-err:CXER0217', 'cx-err:CXER0217', 'cx-err:CXER0217', 'cx-err:CXER0217')
+#]]
+ ]
+
+ [case id=program-conc-025-select-send-case-and-group-batch level=concurrency
+  [tags channel select send-case batch u1-12a u1-15a 762]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="sel1" buffer=2]]
+[= $r1 [?select [case [to $ch [job 1]] [sent]] [case [timeout 0] [idle]]]]
+[= $got [?receive from=$ch]]
+[= $ch2 [?channel name="grp1" buffer=4]]
+[= $s1 [?send [a] to=$ch2]]
+[= $s2 [?send [b] to=$ch2]]
+[= $batch [?receive from=$ch2 max=2]]
+  ($r1, $got, $batch)]
+#]]
+  [out-text [#
+([sent], [job 1], ([a], [b]))
+#]]
+ ]
+
+ [case id=program-conc-026-deadline-requires-max level=concurrency
+  [tags channel receive batch negative deadline CXER0108 u1-12a 762]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="dl1" buffer=2]]
+  [?receive from=$ch deadline=10]]
+#]]
+  [out-err [#
+cx-err:CXER0108
+#]]
+ ]
+
+ [case id=program-conc-027-fanout-select-close-drain level=concurrency
+  [tags channel subscribe select close closed-and-drained u1-11a 762]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="fan6" sharing=independent retention=window keep=4]]
+[= $sub [?subscribe from=$ch]]
+[= $s1 [?send [ev 6] to=$ch]]
+[= $sel [?select [case [from $sub $m] [got $m]] [case [timeout 0] [idle]]]]
+[= $cl [?close $sub]]
+[= $drained [?receive from=$sub]]
+  ($sel, $cl, $drained@code)]
+#]]
+  [out-text [#
+([got [ev 6]], [ok], 'cx-err:CXER0200')
+#]]
+ ]
+
+ [case id=program-conc-028-monitor-lifecycle level=concurrency
+  [tags monitor worker lifecycle subscription u2-1a delivery 762]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $w [?worker name="calc" [+ 20 22]]]
+[= $mon [?monitor $w]]
+[= $e1 [?receive from=$mon]]
+[= $wait [?wait-for worker=$w]]
+[= $e2 [?receive from=$mon]]
+[= $e3 [?receive from=$mon]]
+[= $mon2 [?monitor $w]]
+[= $post [?receive from=$mon2 max=3]]
+  ($e1, $e2, $e3@code, $post, [rung $mon@rung])]
+#]]
+  [out-text [#
+([spawned name=calc], [done name=calc 42], 'cx-err:CXER0200', ([spawned name=calc], [done name=calc 42]), [rung ':complete-ordered'])
+#]]
+ ]
+
+ [# ── program-delivery-001…005: the delivery.md §8 cross-surface lanes
+      (#762; RULED: U1.1a–U1.15a, U2.1a). Per-surface lanes live in each
+      module's suite; these pin the CROSS-surface obligations: the
+      cross-mechanism select, the degenerate-cursor doctrine, instance
+      conformance (§4 attrs + the one close contract), the coalescing
+      structural pair, and the bus dispatch-boundary negative. ─────── #]
+
+ [case id=program-delivery-001-cross-mechanism-select level=core eval-ring=2 grant='read write'
+  [tags delivery select cross-mechanism channel fabric u1-5a u1-15a 762]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://del-001" "acme"]]
+[= $f [$fabric:open $j]]
+[= $fs [$fabric:subscribe $f "orders" :o.p {group: "g1"}]]
+[= $ch [?channel name="del1" buffer=2]]
+[= $sel1 [?select [case [from $ch $m] [chan $m]] [case [from $fs $e] [fab seq=$e/@seq]] [case [timeout 0] [idle]]]]
+[= $p1 [$fabric:publish $f "orders" [do :o.p id=1] {actor: "u" authority: "g"}]]
+[= $sel2 [?select [case [from $ch $m] [chan $m]] [case [from $fs $e] [fab seq=$e/@seq]] [case [timeout 0] [idle]]]]
+[= $s1 [?send [job 7] to=$ch]]
+[= $sel3 [?select [case [from $ch $m] [chan $m]] [case [from $fs $e] [fab seq=$e/@seq]] [case [timeout 0] [idle]]]]
+  ($sel1, $sel2, $sel3)]
+#]]
+  [out-text [#
+([idle], [fab seq=1], [chan [job 7]])
+#]]
+ ]
+
+ [case id=program-delivery-002-degenerate-cursor-roundtrip level=core eval-ring=2 grant='eval read write'
+  [tags delivery cursor degenerate head-set doctrine u1-6a 762]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/live']
+[?let [= $j [$journal:open "mem://del-002" "acme"]]
+[= $e1 [$journal:append $j [a 1] {actor: "u" authority: "g" stream: "s"}]]
+[= $e2 [$journal:append $j [a 2] {actor: "u" authority: "g" stream: "s"}]]
+[= $scalar [$journal:subscribe $j {stream: "s" from: 1}]]
+[= $r [?receive from=$scalar]]
+[= $q [?quote [?for [in $e [$journal:source $jrn "s"]] [yield [ev seq=$e@seq]]]]]
+[= $c [$live:changes-since $q {jrn: $j} [head-set [s source="jrn" pos=1]]]]
+[= $hs-row [$first [?for [in $fr $c/insert] [yield [$first $fr/*]]]]]
+  ([scalar-form seq=$r/@seq], [headset-form $hs-row], [agree eq=[$cx:equal $r/@seq $hs-row/@seq]])]
+#]]
+  [out-text [#
+([scalar-form seq=2], [headset-form [ev seq=2]], [agree eq=true])
+#]]
+ ]
+
+ [case id=program-delivery-003-instance-conformance level=core eval-ring=2 grant='read write'
+  [tags delivery contract attrs closeable fabric-sub watch u1-2a 762]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://del-003" "acme"]]
+[= $f [$fabric:open $j]]
+[= $s [$fabric:subscribe $f "orders" :o.p {group: "g1"}]]
+[= $w [$io:watch "/tmp"]]
+[= $fs [fsub rung=$s@rung sharing=$s@sharing flow=$s@flow retention=$s@retention]]
+[= $ws [wsub rung=$w@rung sharing=$w@sharing flow=$w@flow retention=$w@retention]]
+[= $cf [?close $s]]
+[= $cw [?close $w]]
+[= $post [?receive from=$s max=1]]
+  ($fs, $ws, $cf, $cw, $post@code)]
+#]]
+  [out-text [#
+([fsub rung=':complete-ordered' sharing=group flow=pull retention=full], [wsub rung=':coalesced-rescan' sharing=independent flow=pull retention=none], [ok], [ok], 'cx-err:CXER4921')
+#]]
+ ]
+
+ [case id=program-delivery-004-coalescing-structural-pair level=core
+  [tags delivery retention window latest coalesce structural u1-11a 762]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $win [?channel name="delw" sharing=independent retention=window keep=5]]
+[= $lat [?channel name="dell" sharing=independent retention=latest]]
+[= $ws [?subscribe from=$win]]
+[= $ls [?subscribe from=$lat]]
+[= $w1 [?send [v 1] to=$win]] [= $w2 [?send [v 2] to=$win]] [= $w3 [?send [v 3] to=$win]]
+[= $l1 [?send [v 1] to=$lat]] [= $l2 [?send [v 2] to=$lat]] [= $l3 [?send [v 3] to=$lat]]
+[= $wb [?receive from=$ws max=9 deadline=0]]
+[= $lv [?receive from=$ls]]
+[= $lq [?try-receive from=$ls]]
+  ([window n=[$count $wb]], [latest $lv], [drained $lq@code])]
+#]]
+  [out-text [#
+([window n=3], [latest [v 3]], [drained 'cx-err:CXER0202'])
+#]]
+ ]
+
+ [case id=program-delivery-005-dispatch-boundary-negative level=core eval-ring=2
+  [tags delivery bus dispatch boundary negative CXER0100 762]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bus']
+[?let [= $b [$bus:new]]
+[= $sub [$bus:on $b :ev.x [?fn ($e) $e]]]
+  [?receive from=$sub]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
 
  [case id=program-async-001-await-done level=async
   [tags async await done happy-path]
@@ -3122,14 +4233,19 @@ good
 
  [case id=program-async-011-await-race-cancels-losers level=async
   [tags await-race cancel-losers]
+  [; #853 (§6.4.1 — construction is operand-consuming) — outcomes are collected in
+     a paren SEQUENCE, not a labelling element. A computed [err] in element CHILD
+     position propagates, so `[r1 $e]` would short-circuit the construction and
+     destroy the evidence this case exists to show. Position carries what the
+     labels carried; the full err VALUE stays asserted, so nothing is weakened. ]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
-[?let [= $fast [?async fast]] [= $slow [?async [?let [= $_ [?sleep 10s mock]] slow]]] [= $winner [?await-race ($fast, $slow)]] [= $slow-state [?await $slow]] [pair [winner $winner] [slow-state $slow-state]]]
+[?let [= $fast [?async fast]] [= $slow [?async [?let [= $_ [?sleep 10s mock]] slow]]] [= $winner [?await-race ($fast, $slow)]] [= $slow-state [?await $slow]] ($winner, $slow-state)]
 #]]
   [out-text [#
-[pair [winner 'fast'] [slow-state [err code=cx-err:CXER0260 message='operation cancelled']]]
+(fast, [err code=cx-err:CXER0260 message='operation cancelled'])
 #]]
  ]
 
@@ -3182,6 +4298,84 @@ good
 #]]
   [out-text [#
 [err code=cx-err:CXER0141 message='operation timed out after 50ms' elapsed=50ms]
+#]]
+ ]
+
+ [case id=program-async-016-await-positional-atom-refused level=async
+  [tags async await arg-validation fail-loud CXER0100
+   issue-793]
+  [meta [#
+note: `:timeout 2ms` is the WRONG spelling (the labeled `timeout=2ms` is
+note: the one code.md §10.5.2 defines). It used to parse as two EXTRA
+note: positional slots that the engine dropped, so the bounded await the
+note: author wrote ran as an unbounded one — a spelling mistake silently
+note: became a behavior change. Unknown arguments are refused loud.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $f [?async 1]] [?await $f :timeout 2ms]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-async-017-await-unknown-label-refused level=async
+  [tags async await arg-validation fail-loud CXER0100
+   issue-793]
+  [meta [#
+note: the same fail-open class through the labeled door: a MISSPELLED
+note: label was dropped exactly like an unknown positional, so
+note: `timeuot=` awaited forever. [?await] defines one label, `timeout=`.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $f [?async 1]] [?await $f timeuot=2ms]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-async-018-await-all-rejects-timeout level=async
+  [tags await-all arg-validation fail-loud CXER0100
+   issue-793]
+  [meta [#
+note: the barrier family (-all / -any / -race) awaits UNBOUNDED by
+note: §10.5.2 — it defines no `timeout=`. Accepting-then-ignoring one
+note: would promise a deadline the engine never applies, so it refuses.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $a [?async 1]] [= $b [?async 2]] [?await-all ($a, $b) timeout=1s]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-async-019-await-race-extra-positional-refused level=async
+  [tags await-race arg-validation fail-loud CXER0100
+   issue-793]
+  [meta [#
+note: the refusal is the FAMILY's, not one verb's — the barrier verbs
+note: share the argument check, so an extra positional is refused on
+note: await-race exactly as on await.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $a [?async 1]] [= $b [?async 2]] [?await-race ($a, $b) $a]]
+#]]
+  [out-err [#
+cx-err:CXER0100
 #]]
  ]
 
@@ -4145,7 +5339,7 @@ false
 [?for [prose $p] [yield [p $p]]]
 #]]
   [out-text [#
-[p [prose 'The same parser handles every shape' (round-tripping JSON, YAML, TOML) ' cleanly.']]
+[p [prose 'The same parser handles every shape' ('round-tripping JSON', YAML, TOML) ' cleanly.']]
 #]]
  ]
 
@@ -4158,7 +5352,7 @@ false
 [item ('a', 'b', 'c')]
 #]]
   [out-text [#
-[item ('a', 'b', 'c')]
+[item (a, b, c)]
 #]]
  ]
 
@@ -6193,8 +7387,8 @@ true
 [doc]
 #]]
   [in-code [#
-[?lib './helper-module.cx' as=helper]
-[$helper:private-fn 1]
+[?lib './mixed-module.cx' as=helper]
+[$helper:priv-c 1]
 #]]
   [out-err [#
 cx-err:CXER0216
@@ -6335,6 +7529,280 @@ cx-err:CXER0206
 #]]
   [out-err [#
 cx-err:CXER0207
+#]]
+ ]
+
+ [case id=cmd-025-type-language-full-grammar level=core
+  [tags def type-language returns stream-16 688 706 L65]
+  [; ── stream 16 W1 (L65/#706): TypeExpr covers the FULL [155]-[158]
+     grammar — any/number/iterator/document/the node family/refinements
+     all parse structurally; [iterator T] joins [or]/[sequence] as a
+     bracket head; a structural parse failure at a [returns] clause is a
+     LOUD def-time diagnostic, never a silently-dropped slot.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def takes-doc [returns document] ($d::document) $d]
+[?def takes-iter [returns [iterator int]] ($xs) [$iterate $xs]]
+[?def takes-num [returns number] ($n::number) $n]
+[?def union-ret [returns [or int string]] ($x) $x]
+[?let
+[= $ok1 [$takes-num 5]]
+[= $ok2 [$takes-num 2.5e0]]
+[= $u1 [$union-ret 7]]
+[= $u2 [$union-ret "s"]]
+[= $bad [?fallback [?def broken [returns [zap int]] ($x) $x] [recover-with [context] [code $err@code]]]]
+  [probe [n1 $ok1] [n2 $ok2] [u1 $u1] [u2 $u2] [malformed $bad]]]
+#]]
+  [out-text [#
+[probe [n1 5] [n2 2.5] [u1 7] [u2 's'] [malformed [code 'cx-err:CXER0100']]]
+#]]
+ ]
+
+ [case id=cmd-026-strict-structural-checks level=core
+  [tags def strict-mode type-language stream-16 688 706 CXER0206 CXER0207]
+  [; ── under --strict the COMPLETED checker enforces structurally: a
+     union return admits exactly its members (a bool return against
+     [or int string] refuses 0207); a [sequence int] parameter checks
+     every item (a mixed sequence refuses 0206); temporals check by
+     KIND (a string is not a datetime — the largest silent-pass class
+     closed); number admits int and float.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def union-ret [returns [or int string]] ($x) $x]
+[?def sums [returns int] ($xs::[sequence int]) [$sum $xs]]
+[?def stamps [returns datetime] ($t::datetime) $t]
+[?let
+[= $ok [$sums (1, 2, 3)]]
+[= $bad-ret [?fallback [$union-ret true] [recover-with [context] [code $err@code]]]]
+[= $bad-seq [?fallback [$sums (1, "two", 3)] [recover-with [context] [code $err@code]]]]
+[= $ok-dt [$stamps 2026-08-13T00:00:00Z]]
+[= $bad-dt [?fallback [$stamps "2026-08-13"] [recover-with [context] [code $err@code]]]]
+  [probe [sum $ok] [union-refuses $bad-ret] [seq-refuses $bad-seq] [dt $ok-dt] [dt-refuses $bad-dt]]]
+#]]
+  [out-text [#
+[probe [sum 6] [union-refuses [code 'cx-err:CXER0207']] [seq-refuses [code 'cx-err:CXER0206']] [dt 2026-08-13T00:00:00Z] [dt-refuses [code 'cx-err:CXER0206']]]
+#]]
+ ]
+
+ [case id=eff-trace-001-order-observed level=core rule=EV-EFFECT-SET
+  [tags effects out-effects trace stream-22 694]
+  [; ── the out-effects channel (stream 22 W1): the ordered
+     admitted-effect-point trace — one capability:resource line per
+     effect the gate admits, exact in order AND count. This case and
+     its reversed twin form the channel's own discriminator pair: an
+     unordered (multiset) reading grades both identically; the ordered
+     reading tells them apart.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/env']
+[?lib 'cx-stdlib/time']
+[?let [= $h [$env:var "HOME"]]
+  [?let [= $t [$time:now]]
+    [ok]]]
+#]]
+  [out-text [#
+[ok]
+#]]
+  [out-effects [#
+env:env-var
+clock:time-now
+#]]
+ ]
+
+ [case id=eff-trace-002-order-discriminates level=core rule=EV-EFFECT-SET
+  [tags effects out-effects trace stream-22 694 discriminator]
+  [; ── the reversed twin: same effect MULTISET, opposite order — the
+     trace must follow evaluation order, never a canonical/sorted
+     order.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/env']
+[?lib 'cx-stdlib/time']
+[?let [= $t [$time:now]]
+  [?let [= $h [$env:var "HOME"]]
+    [ok]]]
+#]]
+  [out-text [#
+[ok]
+#]]
+  [out-effects [#
+clock:time-now
+env:env-var
+#]]
+ ]
+
+ [case id=ev-pull-001-take-over-map-pulls-exactly level=core rule=EV-PULL
+  [tags iterator pull ev-pull stream-22 694 710 frontier discriminator]
+  [; ── EV-PULL (code.md §6.7/§14.4): [?take 3] over [?map] pulls the
+     transform EXACTLY 3 times. ENFORCED since stream 17 W1 (#710
+     item 6 — the demand-driven engine; this row's advisory→enforced
+     flip was the acceptance evidence).]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $out [?take 3 [?map (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) [using [?fn $x [?let [= $c [?test-counter name=pull1 op=inc]] [* $x 10]]]]]]]
+  [?let [= $forced [$count $out]]
+    ([?test-counter name=pull1 op=read], $forced)]]
+#]]
+  [out-text [#
+(3, 3)
+#]]
+ ]
+
+ [case id=ev-pull-002-full-consumption-fires-once-per-item level=core rule=EV-PULL
+  [tags iterator pull ev-pull stream-22 694]
+  [; ── the pair-mate, ENFORCED now: full consumption fires the
+     transform exactly once per yielded item under EITHER engine — no
+     over-pull, no re-pull (memoization is identity-level, §6.7).]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $out [?map (1, 2, 3, 4, 5) [using [?fn $x [?let [= $c [?test-counter name=pull2 op=inc]] [* $x 10]]]]]]
+  [?let [= $forced [$count $out]]
+    ([?test-counter name=pull2 op=read], $forced)]]
+#]]
+  [out-text [#
+(5, 5)
+#]]
+ ]
+
+ [case id=ev-pull-003-filter-pulls-until-satisfied level=core rule=EV-PULL
+  [tags iterator pull ev-pull stream-22 694 710 frontier discriminator]
+  [; ── [?take 2] over an even-filter of 1..10: the filter probes its
+     source until TWO evens surface — exactly 4 pulls. ENFORCED since
+     stream 17 W1 (#710 item 6).]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $out [?take 2 [?filter (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) [using [?fn $x [?let [= $c [?test-counter name=pull3 op=inc]] [$even $x]]]]]]]
+  [?let [= $forced [$count $out]]
+    ([?test-counter name=pull3 op=read], $forced)]]
+#]]
+  [out-text [#
+(4, 2)
+#]]
+ ]
+
+ [case id=ev-select-fair-001-not-source-biased level=core rule=EV-SELECT-FAIR
+  [tags select fairness stream-22 694 discriminator]
+  [; ── EV-SELECT-FAIR (code.md §14.4): among simultaneously-ready
+     cases, selection MUST NOT be deterministically biased toward
+     source order. 20 trials over two always-ready channels; a
+     first-ready-in-source-order engine picks case 1 every time
+     (result false); a fair tiebreak picks case 2 at least once w/
+     false-failure probability 2^-20. The distribution test proper is
+     reference-lane-only (§11.4 partition).]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [?channel name="sf-a" buffer=32]] [= $b [?channel name="sf-b" buffer=32]]
+  [?loop [= $i 0] [= $second 0]
+    [?if [= $i 20]
+      [then [break [> $second 0]]]
+      [else
+        [?let [= $s1 [?send 1 to=$a]] [= $s2 [?send 2 to=$b]]
+          [?let [= $pick [?select
+                           [case [from $a $m] 1]
+                           [case [from $b $m] 2]]]
+            [?let [= $drain [?receive from=[?if [= $pick 1] [then $b] [else $a]]]]
+              [?if [= $pick 1]
+                [then [continue [+ $i 1] $second]]
+                [else [continue [+ $i 1] [+ $second 1]]]]]]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=ev-select-fair-002-only-ready-fires level=core rule=EV-SELECT-FAIR
+  [tags select fairness readiness stream-22 694]
+  [; ── the pair-mate: fairness applies AMONG READY cases only — with
+     exactly one ready case (the other channel empty), selection is
+     deterministic; 20 trials all pick the ready case.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [?channel name="sfo-a" buffer=32]] [= $b [?channel name="sfo-b" buffer=32]]
+  [?loop [= $i 0] [= $wrong 0]
+    [?if [= $i 20]
+      [then [break [= $wrong 0]]]
+      [else
+        [?let [= $s2 [?send 2 to=$b]]
+          [?let [= $pick [?select
+                           [case [from $a $m] 1]
+                           [case [from $b $m] 2]]]
+            [?if [= $pick 2]
+              [then [continue [+ $i 1] $wrong]]
+              [else [continue [+ $i 1] [+ $wrong 1]]]]]]]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cmd-027-strict-pinned-schema-enforces level=core
+  [tags def strict-mode e2-pin schema-registry stream-16 688 CXER0206]
+  [; ── W5 (L64): under strict, an ELEMENT-NAME type whose name has a
+     REGISTERED schema enforces by SCHEMA VALIDATION — the schema's own
+     of= root subsumes the head match (Order ↔ [schema of=order]). A
+     conforming order passes; one missing the required attr refuses
+     CXER0206 at the call boundary. An UNPINNED element-name keeps the
+     W1 head-match.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?def take-order [returns int] ($o::Order) 1]
+[?def take-memo [returns int] ($m::Memo) 2]
+[?let
+[= $h [$validate:register-schema "Order" "[schema of=order mode=open]
+[order [attr sku::string [req]]]"]]
+[= $ok [$take-order [order sku=SKU-1]]]
+[= $bad [?fallback [$take-order [order]] [recover-with [context] [code $err@code]]]]
+[= $unpinned [$take-memo [Memo]]]
+  [probe [ok $ok] [bad $bad] [unpinned $unpinned]]]
+#]]
+  [out-text [#
+[probe [ok 1] [bad [code 'cx-err:CXER0206']] [unpinned 2]]
+#]]
+ ]
+
+ [case id=cmd-028-strict-pipe-preexecution-flow level=core
+  [tags pipe strict-mode layer-b stream-16 688 CXER0206]
+  [; ── W5 (L62B): the Layer-B minimum — declared [returns]/::T flow
+     across [?pipe] stages checks PRE-EXECUTION under strict: adjacent
+     declared boundaries that cannot compose refuse CXER0206 BEFORE any
+     stage runs (the side-effect counter proves nothing executed). A
+     composing chain runs normally; undeclared boundaries are silent
+     (annotations are optional — modular, declarations are the
+     contract).]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def to-text [returns string] ($x::int) 'n']
+[?def shout [returns string] ($s::string) $s]
+[?let
+[= $ok [?pipe 3 to-text shout]]
+[= $bad [?fallback [?pipe 3 to-text shout to-text] [recover-with [context] [code $err@code]]]]
+  [probe [ok $ok] [bad $bad]]]
+#]]
+  [out-text [#
+[probe [ok 'n'] [bad [code 'cx-err:CXER0206']]]
 #]]
  ]
 
@@ -6864,7 +8332,7 @@ SHOUT
 #]]
  ]
 
- [case id=module-resolve-manifest-override level=core
+ [case id=module-resolve-manifest-override level=core packs=http-client
   [tags module resolve manifest-override sub-path gate-35.8]
   [in-cx [#
 [doc]
@@ -6902,7 +8370,7 @@ true
 [$internal-util:anything]
 #]]
   [out-err [#
-cx-err:CXER0216
+cx-err:CXER0213
 #]]
  ]
 
@@ -7226,6 +8694,996 @@ true
 #]]
  ]
 
+ [case id=cmd-001-command-effects-declared-cap-allowed level=core grant='read'
+  [tags def command effects narrowing stream-6 678]
+  [meta [#
+note: L109/L110 (commands_effects, RULED (a) 2026-08-05) — a [?def] with
+note: an [effects] clause is a command; the declared set narrows the
+note: active capability set for the body. A declared capability that the
+note: caller granted stays usable.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path' as=path]
+[?def canon impure [effects [read]] ($p) [$path:canonical $p]]
+[$canon '/']
+#]]
+  [out-text [#
+'/'
+#]]
+ ]
+
+ [case id=cmd-002-command-effects-undeclared-cap-denied level=core grant='read random'
+  [tags def command effects narrowing denial CXER0271 stream-6 678]
+  [meta [#
+note: THE L110 enforcement fixture — checked AND enforced, never
+note: advisory. The caller grants read+random, but the command declares
+note: only [effects [read]]: the body reaching a random effect point is
+note: a capability denial AT the effect point, exactly the
+note: [?with-caps]-like narrowing the ruling names.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/uuid' as=uuid]
+[?def stamp impure [effects [read]] () [$uuid:v4]]
+[$stamp]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=cmd-003-pure-nonempty-effects-contradiction level=core
+  [tags def command effects purity static-contradiction CXER0239 stream-6 678]
+  [meta [#
+note: L109 — pure + non-empty [effects] is a STATIC contradiction by the
+note: effect-totality theorem (code.md 6.5.1): a checker-accepted pure
+note: body provably reaches no effect point, so a non-empty declaration
+note: is unsatisfiable. E_COMMAND_CONTRACT, cx-err:CXER0239.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def f pure [effects [read]] ($x) $x]
+[$f 1]
+#]]
+  [out-err [#
+cx-err:CXER0239
+#]]
+ ]
+
+ [case id=cmd-004-pure-empty-effects-legal level=core
+  [tags def command effects purity empty-set stream-6 678]
+  [meta [#
+note: the empty [effects] is the one form compatible with pure — a
+note: declared-no-gated-effect command. Still a command (the
+note: discriminator is clause PRESENCE), still callable.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def double-cmd pure [effects] ($x) [* $x 2]]
+[$double-cmd 2]
+#]]
+  [out-text [#
+4
+#]]
+ ]
+
+ [case id=cmd-005-effects-unknown-capability-fail-closed level=core
+  [tags def command effects unknown-cap fail-closed CXER0274 stream-6 678 713]
+  [meta [#
+note: an unknown capability name in [effects] gets the SAME fail-closed
+note: refusal as a typo d host grant (E_CAP_UNKNOWN, cx-err:CXER0274,
+note: the #713/L114 posture) — one code wherever a capability name is
+note: spelled. Never a silent no-op declaration.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def f impure [effects [bogus]] () 1]
+[$f]
+#]]
+  [out-err [#
+cx-err:CXER0274
+#]]
+ ]
+
+ [case id=cmd-006-compensates-unknown-target level=core
+  [tags def command compensates static CXER0239 stream-6 678]
+  [meta [#
+note: [compensates NAME] must resolve to a sibling command; an unknown
+note: target is the static contract violation cx-err:CXER0239.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def f impure [effects [read]] [compensates no-such-command] () 1]
+[$f]
+#]]
+  [out-err [#
+cx-err:CXER0239
+#]]
+ ]
+
+ [case id=cmd-007-compensates-valid-pairing level=core grant='read'
+  [tags def command compensates pairing stream-6 678]
+  [meta [#
+note: valid pairing — the target precedes its pairing def at program
+note: (script) top level (code.md 12.2.7; module level is
+note: order-independent via the 12.5 two-pass). Both are commands.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/path' as=path]
+[?def undo-canon impure [effects [read]] ($p) [$path:canonical $p]]
+[?def do-canon impure [effects [read]] [compensates undo-canon] ($p) [$path:canonical $p]]
+[$do-canon '/']
+#]]
+  [out-text [#
+'/'
+#]]
+ ]
+
+ [case id=cmd-008-compensates-non-command-target level=core
+  [tags def command compensates non-command CXER0239 stream-6 678]
+  [meta [#
+note: the compensates target EXISTS but carries no [effects] clause —
+note: not a command, so the pairing is the static contract violation
+note: cx-err:CXER0239 (a compensating action must itself be a command).
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def helper ($x) $x]
+[?def do-y impure [effects [read]] [compensates helper] ($p) $p]
+[$do-y 1]
+#]]
+  [out-err [#
+cx-err:CXER0239
+#]]
+ ]
+
+ [case id=cmd-023-requires-at-parse level=core gate=enforced
+  [tags code def clause requires-at stream-10 682]
+  [; ── stream 10 (cross_stream_coordination §2): the [requires-at] clause
+     parses the FULL locator triple plus the position — stream=, seq>=1,
+     hash= — and refuses anything less (a bare hash is not a locator).
+     Direct invocation of a pinned command refuses CXER4951 fail-closed:
+     Ring 1 holds no journal, so the admission read runs only under a
+     journal-bound commit (authz commit / the saga runner) — never
+     silently skipped.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def pinned impure [effects] [requires-at stream="sku:88" seq=1 hash="sha2-256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff"] ($o='') $o]
+[?fallback [$pinned "o-1"] [recover-with [context] [code $err@code]]]
+#]]
+  [out-text [#
+[code 'cx-err:CXER4951']
+#]]
+ ]
+
+ [case id=cmd-024-requires-at-incomplete-refused level=core
+  [tags code def clause requires-at parse stream-10 682]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def pinned impure [effects] [requires-at hash="sha2-256:00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff"] ($o='') $o]
+#]]
+  [out-err [#
+CXDEF_PARSE
+#]]
+ ]
+
+ [case id=cmd-009-idempotent-window-parses level=core
+  [tags def command idempotent window stream-6 678]
+  [meta [#
+note: [idempotent [window 7d]] parses and the def stays callable — the
+note: L111 key/dedup semantics are the effect-boundary machinery; the
+note: clause itself is declaration data (opt-in disposition).
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def put-once impure [effects] [idempotent [window 7d]] ($x) $x]
+[$put-once 5]
+#]]
+  [out-text [#
+5
+#]]
+ ]
+
+ [case id=cmd-010-requires-preconditions-carried level=core
+  [tags def command requires preconditions stream-6 678]
+  [meta [#
+note: [requires] and [preconditions] parse and are carried as command
+note: metadata; a direct call executes (direct effects stay the
+note: default). Propose/commit evaluation is the trust-boundary
+note: machinery (commands_effects L113).
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def triple-cmd impure [effects] [requires 'cap:sha2-256:0000000000000000000000000000000000000000000000000000000000000000'] [preconditions [> $x 0]] ($x) [* $x 3]]
+[$triple-cmd 3]
+#]]
+  [out-text [#
+9
+#]]
+ ]
+
+ [case id=cmd-011-clauses-outside-tier2 level=core
+  [tags def command tier2 identity exclusion stream-6 678]
+  [meta [#
+note: the S0 rule — every command clause is OUTSIDE the Tier-2
+note: computes-as hash (excluded-by-default closed participating list;
+note: purity is out too). Adding [effects]/[idempotent] must not move
+note: the semantic identity. The Tier-1 SOURCE address (the L139 trust
+note: key) trivially moves with the text — content addressing.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x) [* $x 2]]']
+     [$cx:computation-id '[?def f impure [effects [read]] [idempotent] ($x) [* $x 2]]']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cmd-012-duplicate-clause-rejected level=core
+  [tags def command effects duplicate parse stream-6 678]
+  [meta [#
+note: at most ONE occurrence of each command clause kind per [?def]
+note: (grammar 152a) — a repeat is a parse error.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def f impure [effects] [effects] () 1]
+[$f]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=cmd-013-idempotent-direct-call-dedups level=core
+  [tags def command idempotent dedup stream-6 678 L111]
+  [meta [#
+note: L111 effect-boundary dedup at the DIRECT call (W5 R13/R14) — the
+note: second structurally-identical call is a dedup hit: a PRESENT
+note: [deduped <original outcome>] wrapper, never the absence channel.
+note: This is the property that makes [?retry] safe around a command.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def put-once impure [effects] [idempotent] ($x) [* $x 10]]
+[?let [= $a [$put-once 5]] [= $b [$put-once 5]] ([first $a], [second $b])]
+#]]
+  [out-text [#
+([first 50], [second [deduped 50]])
+#]]
+ ]
+
+ [case id=cmd-014-arg-spelling-one-key level=core
+  [tags def command idempotent key normalization anti-double-refund stream-6 678 L111]
+  [meta [#
+note: THE anti-double-refund trap (L111): the derived key is built from
+note: the param-name-to-value map AFTER defaulting — never the raw call
+note: expression — so two spellings of the same business event (named
+note: args in either order, defaults spelled or elided) are ONE key.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def refund impure [effects] [idempotent] ($order='' $amount=10) $amount]
+[?let [= $a [$refund order='o-1' amount=42]]
+  [= $b [$refund amount=42 order='o-1']]
+  [= $c [$refund order='o-1']]
+  ([first $a], [swapped $b], [defaulted $c])]
+#]]
+  [out-text [#
+([first 42], [swapped [deduped 42]], [defaulted 10])
+#]]
+ ]
+
+ [case id=cmd-015-explicit-key-wins level=core
+  [tags def command idempotent explicit-key stream-6 678 L111]
+  [meta [#
+note: an explicit caller key WINS over the derived key (only the caller
+note: knows two structurally-identical requests are distinct business
+note: events — and vice versa): same key + different args = dedup hit
+note: carrying the FIRST outcome; a different key executes fresh.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def put2 impure [effects] [idempotent] ($x) [* $x 10]]
+[?let [= $a [$put2 5 idempotency-key='evt-1']]
+  [= $b [$put2 6 idempotency-key='evt-1']]
+  [= $c [$put2 5 idempotency-key='evt-2']]
+  ([a $a], [b $b], [c $c])]
+#]]
+  [out-text [#
+([a 50], [b [deduped 50]], [c 50])
+#]]
+ ]
+
+ [case id=cmd-016-failure-not-recorded level=core
+  [tags def command idempotent failure retry-safety stream-6 678 L111]
+  [meta [#
+note: W5 R13 — only a SUCCESSFUL outcome creates a dedup record: the
+note: first (swallowed) failure leaves no record, so the second call
+note: RE-EXECUTES and errs again (out-err, not a [deduped [err ...]]
+note: value). Recording failures would make the first crash permanent
+note: — the opposite of what makes [?retry] safe.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def boom impure [effects] [idempotent] ($x) [/ $x 0]]
+[?let [= $a [?fallback [$boom 1] [recover-with :swallowed]]]
+  [$boom 1]]
+#]]
+  [out-err [#
+cx-err:CXER0101
+#]]
+ ]
+
+ [case id=cmd-017-window-expiry-reexecutes level=core
+  [tags def command idempotent window clock stream-6 678 L111]
+  [meta [#
+note: the declared [window DUR] bounds the dedup record's lifetime; the
+note: engine clock ([?test-clock]-advanceable, the resilience posture)
+note: expires it — inside the window a hit, past it a re-execution.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def once impure [effects] [idempotent [window 1s]] ($x) [* $x 2]]
+[?let [= $a [$once 3]]
+  [= $m [$once 3]]
+  [= $_ [?test-clock advance=1100ms]]
+  [= $b [$once 3]]
+  ([a $a], [mid $m], [after $b])]
+#]]
+  [out-text [#
+([a 6], [mid [deduped 6]], [after 6])
+#]]
+ ]
+
+ [case id=cmd-018-non-idempotent-never-dedups level=core
+  [tags def command idempotent opt-in deny-by-default stream-6 678 L111]
+  [meta [#
+note: disposition is OPT-IN (deny-by-default): an undeclared command is
+note: NOT idempotent — structurally identical calls each execute.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def plain impure [effects] ($x) [* $x 3]]
+[?let [= $a [$plain 3]] [= $b [$plain 3]] ([a $a], [b $b])]
+#]]
+  [out-text [#
+([a 9], [b 9])
+#]]
+ ]
+
+ [case id=cmd-019-propose-value-shape level=core
+  [tags def command propose proposal L113 L139 stream-6 678]
+  [meta [#
+note: L113 (W6 R16) — the proposal value: Tier-1 of the def TEXT as
+note: the TRUST key (L139; Tier-2 code= rides for cache/equivalence),
+note: post-default param-name-keyed args, resolved effects,
+note: propose-time-evaluated preconditions, the derived idempotency
+note: key, the tenant. An ordinary CX value — cx:hash addresses it.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def refund-order impure [effects [read]] [preconditions [> $amount 0]] [idempotent [window 7d]] ($order='' $amount=10) $amount]
+[$cx:propose refund-order {order: 'o-1', amount: 42} {tenant: 'acme'}]
+#]]
+  [out-text [#
+[proposal [command tier1='sha2-256:9b67313a100be30d5cc23527b82f0d731c7c82fc75f81d8d0c31a88d199789cd' code=sha2-256:e54650ef163b64c5a017e980c63463fff9791893774ffbc5e59b03710699a40f] [args {order: o-1, amount: 42}] [effects [read]] [preconditions [ok '[> $amount 0]']] [idempotency-key 'd:ce4e175558b9d2ec69f84e6c3e49e64e7c12f7dd8716aa1a966e1140d5e50ed7'] [tenant 'acme']]
+#]]
+ ]
+
+ [case id=cmd-020-propose-precondition-false-refuses level=core
+  [tags def command propose preconditions CXER4112 stream-6 678 L113]
+  [meta [#
+note: a FALSE precondition at propose REFUSES the proposal (CXER4112)
+note: — nothing coherent to approve. Commit-side re-evaluation
+note: divergence is the authz commit refusal (two-times enforcement).
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def refund-order impure [effects [read]] [preconditions [> $amount 0]] ($order='' $amount=10) $amount]
+[$cx:propose refund-order {order: 'o-1', amount: 0} {}]
+#]]
+  [out-err [#
+cx-err:CXER4112
+#]]
+ ]
+
+ [case id=cmd-021-proposal-address-binding level=core
+  [tags def command propose tier1 tamper address stream-6 678 L113 L139]
+  [meta [#
+note: the address IS the binding: the same call in a different arg
+note: spelling is the SAME proposal (the args record is param-name
+note: keyed in param order); different args are a DIFFERENT address —
+note: an approval bound to one can never authorize the other.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def refund-order impure [effects [read]] ($order='' $amount=10) $amount]
+[?let [= $p1 [$cx:propose refund-order {order: 'o-1', amount: 42} {}]]
+  [= $p2 [$cx:propose refund-order {amount: 42, order: 'o-1'} {}]]
+  [= $p3 [$cx:propose refund-order {order: 'o-1', amount: 43} {}]]
+  ([same [$eq [$cx:hash $p1] [$cx:hash $p2]]], [tampered [$eq [$cx:hash $p1] [$cx:hash $p3]]])]
+#]]
+  [out-text [#
+([same true], [tampered false])
+#]]
+ ]
+
+ [case id=cmd-022-propose-non-command-refused level=core
+  [tags def command propose non-command CXER4111 stream-6 678 L113]
+  [meta [#
+note: only a command (an [effects]-bearing def) can be proposed — a
+note: plain def has no declared effect contract to authorize.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def plain-fn ($x) [* $x 2]]
+[$cx:propose plain-fn {x: 1} {}]
+#]]
+  [out-err [#
+cx-err:CXER4111
+#]]
+ ]
+
+ [case id=cmd-023-args-record-binds-positionals-by-name level=core
+  [tags def command propose args-record positional stream-18 690 L139]
+  [meta [#
+note: the §5 args map is a NAME-KEYED record over the WHOLE parameter
+note: list — a non-defaulted (and typed) POSITIONAL param binds by its
+note: name exactly like a named param; defaults fill unbound entries.
+note: (The general call surface binds positionals by position only —
+note: the record semantics is the propose/commit seam's own; this is
+note: the binding an MCP tools/call arguments object rides at W3.)
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def ship-order impure [effects] ($order-id::string $qty::int 1) [$concat $order-id "|" $qty]]
+[?let [= $p [$cx:propose ship-order {order-id: 'o-9'} {}]]
+  [?for [in $c $p/args] [yield $c]]]
+#]]
+  [out-text [#
+[args {order-id: o-9, qty: 1}]
+#]]
+ ]
+
+ [case id=cmd-024-args-record-unknown-key-refused level=core
+  [tags def command propose args-record unknown-key CXER4111 stream-18 690]
+  [meta [#
+note: an unknown record key refuses LOUD (CXER4111) — a mis-spelled
+note: parameter must never silently vanish; the closed-args posture the
+note: projection's additionalProperties:false mirrors.
+#]]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[?def ship-order impure [effects] ($order-id::string) [shipped $order-id]]
+[$cx:propose ship-order {order-id: 'o-9', quantity: 3} {}]
+#]]
+  [out-err [#
+cx-err:CXER4111
+#]]
+ ]
+
+
+
+ [case id=ev-let-001-sequential-binding-discriminator level=core rule=EV-LET-SEQ
+  [tags let sequential discriminator witness stream-14 686 stream-22 694 EV-LET-SEQ]
+  [meta [#
+note: the let-vs-let* discriminator (EV-LET-SEQ: sequential — each
+note: binding sees prior bindings): $y binds the INNER $x (1), never
+note: the outer shadow (9) — a parallel-let would answer y=9; a
+note: no-visibility let would refuse unbound.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $x 9]
+  [?let [= $x 1] [= $y $x]
+    [pair x=$x y=$y]]]
+#]]
+  [out-text [#
+[pair x=1 y=1]
+#]]
+ ]
+
+ [case id=ev-pull-006-drop-pulls-skips-plus-yields level=core rule=EV-PULL
+  [tags iterator pull drop witness stream-14 686 stream-22 694 EV-PULL]
+  [meta [#
+note: the per-combinator pull matrix, drop's row: [?drop 2] over a
+note: mapped 5-source pulls ALL 5 (the 2 skipped are pulled to be
+note: skipped + the 3 yielded) — drop documents its skip-pulls; the
+note: yielded count stays 3.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $out [?drop 2 [?map (1, 2, 3, 4, 5) [using [?fn $x [?let [= $c [?test-counter name=pd op=inc]] [* $x 10]]]]]]]
+  [?let [= $forced [$count $out]]
+    ([?test-counter name=pd op=read], $forced)]]
+#]]
+  [out-text [#
+(5, 3)
+#]]
+ ]
+
+ [case id=ev-async-006-spawned-body-runs-exactly-once level=async
+  [tags async fire-and-forget scheduling witness stream-14 686 stream-22 694 814]
+  [meta [#
+note: an [?async] body runs EXACTLY ONCE — the counter reads 1 after the
+note: await, not 0 (never spawned) and not 2 (spawned eagerly AND re-run
+note: on demand). That is the in-program-observable half of
+note: EV-ASYNC-SPAWN (code.md §10.5.1).
+note:
+note: WHAT THIS CASE DELIBERATELY NO LONGER ASSERTS (#814). It used to
+note: spawn the counter, await an UNRELATED future, and require the
+note: counter to have already reached 1 — "has run by the time another
+note: await completes". §10.5.1 does not promise that. It promises the
+note: body runs to a terminal state BEFORE TOP-LEVEL PROGRAM RETURN, which
+note: says nothing about where some other await lands relative to it. The
+note: old shape therefore measured scheduler luck: green on a quiet
+note: machine, red under the parallel gate's compile storm, and it
+note: poisoned full-union runs on loaded machines.
+note:
+note: The guarantee it was reaching for is real and is now pinned where it
+note: is actually observable — AFTER the program returns, in
+note: eval_semantics_umbrella_test.v
+note: (test_fire_and_forget_completes_before_top_level_return). A
+note: conformance case compares a program's VALUE, and no program value
+note: can witness what is guaranteed only once that value has been
+note: produced.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $f [?async [?test-counter name=ff op=inc]]] [= $x [?await $f]] [= $seen [?test-counter name=ff op=read]] [ran value=$x times=$seen]]
+#]]
+  [out-text [#
+[ran value=1 times=1]
+#]]
+ ]
+
+ [case id=ev-park-001-mock-clock-deadline-order level=async
+  [tags async sleep mock parking deadline-order witness stream-14 686 stream-22 694]
+  [meta [#
+note: mock-clock parking across CONCURRENT futures: the 100ms future
+note: wakes FIRST (order counter 1), the 500ms future second (2) —
+note: parked futures wake in DEADLINE order under the mock clock,
+note: deterministically, regardless of spawn order.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $slow [?async [?let [= $s [?sleep 500ms mock]] [?let [= $o [?test-counter name=order op=inc]] (:slow, $o)]]]]
+      [= $fast [?async [?let [= $s [?sleep 100ms mock]] [?let [= $o [?test-counter name=order op=inc]] (:fast, $o)]]]]
+  [park [slow [?await $slow]] [fast [?await $fast]]]]
+#]]
+  [out-text [#
+[park [slow (:slow, 2)] [fast (:fast, 1)]]
+#]]
+ ]
+
+ [case id=img-001-scalar-and-quoting-image level=core rule=EV-RESULT-IMAGE
+  [tags result-image scalars quoting witness stream-14 686 stream-22 694 EV-RESULT-IMAGE]
+  [meta [#
+note: the §11.1a golden family, R2+R6 over one vector: atoms/numbers/
+note: bool/null bare; a date-SHAPED string quotes (auto-type
+note: protection); duration-shaped bare; prose quotes.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+(:go, 42, 2.5, true, null, "2026-08-14", "500ms", "plain words")
+#]]
+  [out-text [#
+(:go, 42, 2.5, true, null, '2026-08-14', '500ms', 'plain words')
+#]]
+ ]
+
+ [case id=img-002-collection-and-element-image level=core rule=EV-RESULT-IMAGE
+  [tags result-image collections elements witness stream-14 686 stream-22 694 EV-RESULT-IMAGE]
+  [meta [#
+note: R3+R4: empty (), nested sequence-as-item, array brackets, map
+note: entry order, element w/ attr + labeled slot + BODY TEXT QUOTED
+note: (never bare — each text token quotes per R6's chooser).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+((), (1, (2, 3)), [1, 2], {a: 1, b: 'x y'}, [item n=1 :note 'hi' plain text])
+#]]
+  [out-text [#
+((), (1, (2, 3)), [1, 2], {a: 1, b: 'x y'}, [item n=1 :note 'hi' 'plain' 'text'])
+#]]
+ ]
+
+ [case id=img-003-quote-chooser-ladder level=core rule=EV-RESULT-IMAGE
+  [tags result-image quoting chooser witness stream-14 686 stream-22 694 EV-RESULT-IMAGE]
+  [meta [#
+note: R6's chooser ladder: apostrophe-bearing → double quotes;
+note: double-quote-bearing → single; auto-typing strings (bool-shaped,
+note: hex-shaped, number-shaped) MUST quote so the kind survives; the
+note: empty string quotes.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+("it's", 'both "and" one', "true", "0x1f", "-3.5", "")
+#]]
+  [out-text [#
+("it's", 'both "and" one', 'true', '0x1f', '-3.5', '')
+#]]
+ ]
+
+
+ [case id=cxtape-001-trace-document-format-round-trip level=core
+  [tags debug tape cx-trace format round-trip g9 stream-14 686 D-DBG]
+  [meta [#
+note: the D-DBG ruled adoption's FORMAT half (debug.md §6a; corpus
+note: audit G9): the tape is a versioned CX DOCUMENT — a §6a-shaped
+note: [cx-trace] parses, round-trips (serialize∘parse equal), keeps a
+note: stable Tier-1 address, and its step ids read positionally. The
+note: COMPLETENESS invariant (all nondeterminism recorded) requires
+note: the v1 RECORDER, which has no shipped surface — that half lands
+note: WITH the recorder (the no-surface verdict, recorded in the
+note: stream-14 ledger; the format can no longer drift meanwhile).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $tape [cx-trace version=1
+  [seed clock="2026-08-14T00:00:00Z" rng=42 [env]]
+  [event step=1 effect=http-get [result [response status=200]]]
+  [event step=2 effect=receive [result 42]]]]
+      [= $rt [$cx:parse [$cx:serialize $tape]]]
+  [probe [version $tape@version]
+         [steps [?for [in $e $tape/event] [yield $e@step]]]
+         [round-trip [$cx:equal $tape $rt]]
+         [hash-stable [$eq [$cx:hash $tape] [$cx:hash $rt]]]]]
+#]]
+  [out-text [#
+[probe [version 1] [steps (1, 2)] [round-trip true] [hash-stable true]]
+#]]
+ ]
+
+
+ [case id=program-slot-singleton-001-sequence-fills-slot level=core
+  [tags cxpath map array sequence singleton slot round-trip 810 stream-14 686]
+  [meta [#
+note: #810 RULED (a) — a lone paren group filling a collection SLOT
+note: (map value / array item) is a SEQUENCE LITERAL even without a
+note: comma: a slot has no prose lane, so the body-text comma
+note: disambiguator does not apply. The canonical singleton emission
+note: (x) now re-parses to the singleton sequence it came from —
+note: serialize∘parse identity + cx:hash totality hold; the value
+note: stays DISTINCT from its item (('x') never collapses to 'x').
+note: The spec already permitted this ([53] BodyItem admits
+note: CollectionLiteral; [L86] MapEntry value is a BodyItem; cxdm
+note: preserves sequence-as-item inside containers) — the parser was
+note: below spec.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $m {req: ('x')}]
+      [= $rt [$cx:parse [$cx:serialize $m]]]
+      [= $mi {req: (7)}]
+      [= $nested {a: {b: ('x')}}]
+      [= $arr [((2)), 5]]
+  [probe [faithful [$cx:equal $m $rt]]
+         [hash-total [$exists [$cx:hash $m]]]
+         [int-too [$cx:equal $mi [$cx:parse [$cx:serialize $mi]]]]
+         [nested-too [$cx:equal $nested [$cx:parse [$cx:serialize $nested]]]]
+         [arr-slot [$cx:equal $arr [$cx:parse [$cx:serialize $arr]]]]
+         [distinct [$cx:equal [?let [= $p [$cx:parse "{req: (7)}"]] $p.req] 7]]]]
+#]]
+  [out-text [#
+[probe [faithful true] [hash-total true] [int-too true] [nested-too true] [arr-slot true] [distinct false]]
+#]]
+ ]
+
+ [case id=program-slot-singleton-002-prose-refusals-preserved level=core
+  [tags cxpath map slot prose refusal 810 stream-14 686]
+  [meta [#
+note: the #810 fix is NARROW: mixed content in a map value stays
+note: refused exactly as before (the lone group must FILL the slot);
+note: prose parens in element body text keep the comma disambiguator.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?fallback [$count [$cx:parse "{k: hello (world) tail}"]] [recover-with :still-refused]]
+#]]
+  [out-text [#
+:still-refused
+#]]
+ ]
+
+ [case id=cmd-025-tier2-alpha-renaming-invariant level=core
+  [tags def command tier2 computation-id alpha pair stream-14 686 g2]
+  [meta [#
+note: the G2 Tier-2 pair family (code-identity.md §4, corpus-expressed
+note: beside cmd-011's precedent): alpha-renaming a parameter does not
+note: move the computes-as address — the computation is the identity,
+note: not the spelling of its bindings.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x) [* $x 2]]']
+     [$cx:computation-id '[?def f ($y) [* $y 2]]']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cmd-026-tier2-whitespace-invariant level=core
+  [tags def command tier2 computation-id whitespace pair stream-14 686 g2]
+  [meta [#
+note: G2: whitespace never participates in Tier-2 — the strict-canonical
+note: normalization precedes the computes-as hash.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x) [* $x 2]]']
+     [$cx:computation-id '[?def f  ($x)   [* $x 2]]']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=cmd-027-tier2-scope-and-name-excluded level=core
+  [tags def command tier2 computation-id scope name exclusion pair stream-14 686 g2]
+  [meta [#
+note: G2, the S0 exclusion set beyond cmd-011's clauses: scope= is out
+note: (visibility is not computation), and the DEF NAME ITSELF is out —
+note: computes-as addresses the COMPUTATION, not the binding; trust and
+note: naming are Tier-1's job (L139). f and g with identical
+note: params/body share one Tier-2 address.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $base [$cx:computation-id '[?def f ($x) [* $x 2]]']]
+  [probe [scope-out [$eq $base [$cx:computation-id '[?def f scope=public ($x) [* $x 2]]']]]
+         [name-out [$eq $base [$cx:computation-id '[?def g ($x) [* $x 2]]']]]]]
+#]]
+  [out-text [#
+[probe [scope-out true] [name-out true]]
+#]]
+ ]
+
+ [case id=cmd-028-tier2-semantics-participate level=core
+  [tags def command tier2 computation-id divergence pair stream-14 686 g2]
+  [meta [#
+note: G2's divergence twin: the BODY participates — a different
+note: computation is a different computes-as address (the exclusions
+note: never collapse distinct semantics).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x) [* $x 2]]']
+     [$cx:computation-id '[?def f ($x) [* $x 3]]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=cxast-001-command-def-projects-structured level=core
+  [tags cx-module ast projection def command effects params stream-18 690 L146]
+  [meta [#
+note: [$cx:ast SOURCE] — the declaration-AST projection (modules/cx.md
+note: §2.2). A command def projects with STRUCTURED params (kind/name/
+note: type + default PRESENCE), the [152d-h] clauses (effects items,
+note: requires, idempotent), returns, scope, and purity. This is the
+note: structured input the agent-tool projection (x/tools.cx) consumes —
+note: the def head + params are data-layer text runs, unreachable by
+note: CXPath, so the AST lane is THE lane (stream-18 W1 probe program).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $src """
+[?def refund-order scope=public impure [effects [write] [net]] [returns element] ($order-id::string $amount::decimal) [refunded $order-id]]
+[?def archive-order scope=public impure [idempotent] [effects [write]] [requires cap:orders/archive] ($opts::map {}) [archived]]
+"""]
+      [= $j [$cx:ast $src]]
+      [= $a [$contains $j '"type":"DefNode","name":"refund-order"']]
+      [= $b [$contains $j '"effects":[{"cap":"write"},{"cap":"net"}]']]
+      [= $c [$contains $j '{"kind":"positional","name":"order-id","type":"string"']]
+      [= $d [$contains $j '"default":"{}"']]
+      [= $e [$contains $j '"requires":["cap:orders/archive"]']]
+      [= $f [$contains $j '"idempotent":true']]
+      [= $g [$contains $j '"returns":"element"']]
+  [?str '{$a}|{$b}|{$c}|{$d}|{$e}|{$f}|{$g}']]
+#]]
+  [out-text [#
+'true|true|true|true|true|true|true'
+#]]
+ ]
+
+ [case id=cxast-002-effects-presence-is-the-discriminator level=core
+  [tags cx-module ast projection def command discriminator stream-18 690 L146]
+  [meta [#
+note: clause PRESENCE discriminates commands (stream 6): a pure def
+note: with no [effects] clause OMITS the field entirely; a zero-item
+note: [effects] clause projects as an EMPTY array (still a command).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $lookup [$cx:ast '[?def lookup-order scope=public ($id::string) [order $id]]']]
+      [= $touch  [$cx:ast '[?def touch impure [effects] ($x::string) [t $x]]']]
+      [= $a [$contains $lookup '"effects"']]
+      [= $b [$contains $touch '"effects":[]']]
+      [= $c [$contains $lookup '"purity":"pure"']]
+  [?str '{$a}|{$b}|{$c}']]
+#]]
+  [out-text [#
+'false|true|true'
+#]]
+ ]
+
+ [case id=cxast-003-declaration-free-source-empty-program level=core
+  [tags cx-module ast projection empty docs stream-18 690 L146]
+  [meta [#
+note: a source with no declarations AND no plain elements projects as
+note: the bare Program object — every array is omitted when empty (the
+note: ast.md omit-when-absent convention), never emitted as []. A plain
+note: element rides the docs lane instead (cxast-006).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [$cx:ast "# only a comment"]]
+      [= $b [$cx:ast '[just-data [x 1]]']]
+  [?str '{$a}|{$b}']]
+#]]
+  [out-text [#
+'{"type":"Program"}|{"type":"Program","docs":["[just-data [x 1]]"]}'
+#]]
+ ]
+
+ [case id=cxast-004-non-string-arg-refused level=core
+  [tags cx-module ast projection error CXER0100 stream-18 690 L146]
+  [meta [#
+note: cx:ast takes a SOURCE STRING only. A value focus is refused —
+note: canonical serialization quotes directive-head text runs, which
+note: is not program-parseable source; silent coercion would project
+note: an empty Program and hide the mistake.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:ast 42]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=cxast-006-docs-lane-verbatim-spans level=core
+  [tags cx-module ast projection docs fn-doc spans stream-18 690 L146]
+  [meta [#
+note: the docs lane (modules/cx.md §2.2): top-level PLAIN element
+note: spans ride the Program projection as VERBATIM source strings —
+note: each parses cleanly as DATA on its own. This is THE doc lane for
+note: the agent-tool projection and the doc-freshness gate: a
+note: whole-module data parse degrades on program-bearing def bodies
+note: (the stream-18 W5 finding); the spans lane is immune.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $src """
+[fn-doc name=refund-order [summary '''Refund.''']]
+[?def refund-order scope=public impure [effects] ($x::string) [r $x]]
+[module-doc name=m [scope '''s''']]
+"""]
+      [= $j [$cx:ast $src]]
+      [= $a [$contains $j '"docs":["[fn-doc name=refund-order [summary \'\'\'Refund.\'\'\']]"']]
+  [?str '{$a}']]
+#]]
+  [out-text [#
+'true'
+#]]
+ ]
+
+ [case id=cxast-005-malformed-def-refused level=core
+  [tags cx-module ast projection error CXER4100 stream-18 690 L146]
+  [meta [#
+note: a [?def] span that does not parse is CXER4100 (malformed CX
+note: source) — loud, never a silently-skipped declaration.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:ast '[?def ($x) [no-name]]']
+#]]
+  [out-err [#
+cx-err:CXER4100
+#]]
+ ]
+
  [case id=pred-017-purity-unclassified-builtin level=core gate=pending
   # gate=pending: this fixture predates the §6.5 bare-head=data invariant.
   # CXER0234 (E_PURITY_UNCLASSIFIED_BUILTIN) is "a reference to a BUILTIN
@@ -7340,7 +9798,7 @@ true
 [cast 3.7 :int]
 #]]
   [out-text [#
-3
+[err code=cx-err:CXER0290 message='cast: decimal `3.7` is not integral — :int requires a whole value (L44)']
 #]]
  ]
 
@@ -7444,7 +9902,7 @@ true
 [cast 1 :widget]
 #]]
   [out-text [#
-[err code=cx-err:CXER0290 message='cast: unknown target kind :widget (supported target kinds: :int, :float, :string, :bool, :atom)']
+[err code=cx-err:CXER0290 message='cast: unknown target kind :widget (supported target kinds: :int, :float, :string, :bool, :atom, :decimal, :bigint)']
 #]]
  ]
 
@@ -7691,6 +10149,28 @@ $doc/user[= $_position $_last]
 #]]
   [out-text [#
 [user name=Carol]
+#]]
+ ]
+
+ [case id=program-cxpath-pred-attr-type-test level=core
+  [tags cxpath binding-path predicate attr-type-test issue-772]
+  [meta [#
+note: #772 — `[@name::T]` (§5.2 rule 14, the predicate position): the
+note: attribute must exist AND its value's kind must be T. The parser
+note: previously dropped the type name, degrading every type-test
+note: predicate to an existence test (type-blind, matched any @age).
+#]]
+  [in-cx [#
+[people
+  [x age::int=5]
+  [x age=n]
+  [x]]
+#]]
+  [in-code [#
+[r [$count $doc/x[@age::int]] [$count $doc/x[@age::string]] [$count $doc/x[@age]]]
+#]]
+  [out-text [#
+[r 1 1 2]
 #]]
  ]
 
@@ -7969,7 +10449,7 @@ cx-err:CXER0100
 {[?entry 7 "v"]}
 #]]
   [out-text [#
-{7: 'v'}
+{7: v}
 #]]
  ]
 
@@ -8117,7 +10597,11 @@ cx-err:CXER0100
  ]
 
  [case id=program-dc-bare-var-inert level=core
-  [tags dc quasiquote two-color]
+  [tags dc quasiquote two-color hole i1]
+  [; I1 row 9 (L78): the inert image of a bare $x inside [?quote] is the
+     authorable variable HOLE — canonical spelling `$x` (the former
+     <cx:var> lift died on re-parse; quoted trees now carry plain CX
+     text and real Tier-1 addresses). ]
   [in-cx [#
 [empty]
 #]]
@@ -8125,7 +10609,7 @@ cx-err:CXER0100
 [?quote [a $x]]
 #]]
   [out-text [#
-[a [cx:var 'x']]
+[a $x]
 #]]
  ]
 
@@ -8401,7 +10885,7 @@ cx-err:CXER0233
 [?for [in $x [$range 1 *]] [yield $x]]
 #]]
   [out-text [#
-[err code=cx-err:CXER0100 message='infinite range cannot be fully materialised — use [take] / [takewhile]']
+[err code=cx-err:CXER0100 message='infinite range cannot be fully materialised — use [take] / [take-while]']
 #]]
  ]
 
@@ -8576,7 +11060,7 @@ cx-err:CXER0233
   [tags range open unbounded force error]
   [in-cx [# [empty] #]]
   [in-code [# [$count [$range 1 *]] #]]
-  [out-text [# [err code=cx-err:CXER0100 message='infinite range cannot be fully materialised — use [take] / [takewhile]'] #]]
+  [out-text [# [err code=cx-err:CXER0100 message='infinite range cannot be fully materialised — use [take] / [take-while]'] #]]
  ]
 
  [# ── P2-21 illegal `*` positions — parse error (grounded today; advisory until enforced with C-gen-3) ── #]
@@ -8642,7 +11126,7 @@ cx-err:CXER0233
 [?def dbl ($x) [* $x 2]]
 [$count [$iterate $dbl 1]]
 #]]
-  [out-text [# [err code=cx-err:CXER0100 message='infinite generator cannot be fully materialised — use [take] / [takewhile]'] #]]
+  [out-text [# [err code=cx-err:CXER0100 message='infinite generator cannot be fully materialised — use [take] / [take-while]'] #]]
  ]
  [case id=program-gen-iterate-003-noncallable-error level=core
   [tags iterate non-callable error]
@@ -9104,6 +11588,209 @@ false
 #]]
   [out-text [#
 '2|0|1'
+#]]
+ ]
+
+ [case id=program-construction-err-001-computed-child-propagates level=core
+  [tags construction err propagation operand-consuming]
+  [; §6.4.1 (#853, owner ruling 2026-08-18 "2a") — construction is
+     OPERAND-CONSUMING: a positional child that EVALUATES to an [err …]
+     propagates instead of being adopted as a child. Before this, the
+     refusal became a node in the tree — it no longer short-circuited and
+     [?match … [case [err …] …]] could not see it, which shipped as a 200 OK
+     with <err code="…"> serialized into a page. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $seq [?for [in $x ("a")] [yield $x]]]
+  [bar [$concat $seq "-suffix"]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='concat: an argument does not satisfy the builtin signature (scalar kind/type — code.md §6.5)']
+#]]
+ ]
+
+ [case id=program-construction-err-002-propagation-is-transitive level=core
+  [tags construction err propagation nested transitive]
+  [; §6.4.1 — propagation is TRANSITIVE: the inner construction propagates,
+     and the enclosing one propagates in turn, so a refusal cannot come to
+     rest inside a document at any depth. This is the shape #853 actually
+     reported (…</section><err …></err></div>…) — a containment rule that
+     stopped at one level would still have buried it. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $seq [?for [in $x ("a")] [yield $x]]]
+  [section [div [$concat $seq "-x"]]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='concat: an argument does not satisfy the builtin signature (scalar kind/type — code.md §6.5)']
+#]]
+ ]
+
+ [case id=program-construction-err-003-literal-err-stays-data level=core
+  [tags construction err literal data position]
+  [; §6.4.1 — THE DISCRIMINATOR IS POSITION, NOT VALUE. A SOURCE-LITERAL
+     [err …] element is data and stays data, so err-shaped documents remain
+     expressible. A rule keyed on "is this value an err" would pass case 001
+     and silently make this case impossible. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[foo [err code='x' message='y']]
+#]]
+  [out-text [#
+[foo [err code=x message=y]]
+#]]
+ ]
+
+ [case id=program-construction-err-004-captured-err-propagates level=core
+  [tags construction err binding captured cost]
+  [; §6.4.1 "the cost of this rule, stated" — a BINDING READ is an operand,
+     so embedding a CAPTURED err as data no longer works: this propagates
+     rather than building [report [err …]]. Pinned deliberately: the cost is
+     part of the ruled semantics, not an accident, and a future change that
+     makes this contain again is a semantics reversal, not a fix. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $e [err code='c' message='m']] [report $e]]
+#]]
+  [out-text [#
+[err code=c message=m]
+#]]
+ ]
+
+ [case id=program-construction-err-005-rebuild-from-parts level=core
+  [tags construction err path-navigation workaround]
+  [; §6.4.1 — the documented escape: to EMBED a refusal as data, build a
+     fresh element from its parts. Path navigation does not propagate
+     (§9.2), so @code / @message read cleanly off the captured err. This is
+     the spelling the spec text points at, so it is pinned here. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $e [err code='c' message='m']] [report [code $e@code] [message $e@message]]]
+#]]
+  [out-text [#
+[report [code 'c'] [message 'm']]
+#]]
+ ]
+
+ [case id=program-construction-err-006-sequence-collects-outcomes level=core
+  [tags construction err sequence collect outcomes]
+  [; §6.4.1 — the collect-outcomes escape, and the contrast that makes it
+     necessary: a paren SEQUENCE is not element construction and does not
+     propagate, so refusals survive as members. This is what the resilience
+     / scheduler cases use to assert "which call was rejected" and "fired
+     exactly once" (program-cb-004, sched-017). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $e [err code='c' message='m']] ($e, 'kept', [box $e@code])]
+#]]
+  [out-text [#
+([err code=c message=m], kept, [box 'c'])
+#]]
+ ]
+
+ [case id=program-builtin-present-001-shape-table level=core
+  [tags builtin present absence sequence element]
+  [; §6.5 `present(value)` (#854, #849) — the presence predicate does NOT
+     look inside: a CHILDLESS element is present, "" is present, a
+     non-empty sequence is present. False ONLY for the absence channel
+     (§9.1.2.1 (1)): the empty sequence (). This is the "some vs none"
+     test of §9.1.2.3 in builtin form. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?str '{[$present ()]}|{[$present [foo]]}|{[$present [foo [kid]]]}|{[$present ""]}|{[$present ("a","b")]}|{[$present ("a")]}']
+#]]
+  [out-text [#
+'false|true|true|true|true|true'
+#]]
+ ]
+
+ [case id=program-builtin-present-002-not-exists-content-arity level=core
+  [tags builtin present exists count content-arity]
+  [; §6.5 — `present` and `exists` answer DIFFERENT questions and both
+     answers are correct. Over a childless element `exists`/`count` report
+     its CONTENT arity (0 / false — §6.2 #584, closed by design and
+     UNCHANGED by this addition); `present` reports that the element is
+     there. This case is the guard that #584 still stands: if a future
+     change makes `exists` true here, that ruling has been reversed. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?str 'present={[$present [input]]}|exists={[$exists [input]]}|count={[$count [input]]}|empty={[$empty [input]]}']
+#]]
+  [out-text [#
+'present=true|exists=false|count=0|empty=true'
+#]]
+ ]
+
+ [case id=program-builtin-present-003-leaf-match-vs-no-match level=core
+  [tags builtin present cxpath node-set first-child]
+  [; §6.5 (#854, the reported regression) — the two cases `exists` cannot
+     tell apart. `[$first $h/h/*]` over `[h [input] …]` yields the LEAF
+     element `[input]`: a real match. `$h/nope` matched nothing: absence.
+     `exists` answers false for BOTH (a leaf has no children), so every
+     "did this step match" test written with it is wrong on the first row.
+     `present` separates them. The last pair is the field-read path of the
+     same distinction: `$h/h/input` yields the CHILDLESS ELEMENT itself
+     (`[$name …]` is 'input'), so it is present even though its content
+     arity is 0. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $h [box [h [input] [sel [opt]]]]]
+  [?str 'match-present={[$present [$first $h/h/*]]}|match-exists={[$exists [$first $h/h/*]]}|nomatch-present={[$present $h/nope]}|nomatch-exists={[$exists $h/nope]}|field-present={[$present $h/h/input]}|field-count={[$count $h/h/input]}']]
+#]]
+  [out-text [#
+'match-present=true|match-exists=false|nomatch-present=false|nomatch-exists=false|field-present=true|field-count=0'
+#]]
+ ]
+
+ [case id=program-builtin-present-004-null-is-present level=core
+  [tags builtin present null absence]
+  [; §9.1.2.1 (2) — a `null` scalar is a PRESENT value, never absence, so
+     `present` is true for it. The no-conflation guard in the other
+     direction: absence is the empty channel, never `null`. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?str 'null={[$present null]}|absent={[$present ()]}|not-absent={[not [$present ()]]}']
+#]]
+  [out-text [#
+'null=true|absent=false|not-absent=true'
+#]]
+ ]
+
+ [case id=program-builtin-present-005-not-a-container-test level=core
+  [tags builtin present container contents]
+  [; §6.5 (#849) — `present` is a PRESENCE test, not a container/contents
+     discriminator: an element with two children and a two-member sequence
+     are both simply present. The discriminating spelling stays the
+     documented `[= [?else [$name v] ""] ""]` (an element has a name; a
+     multi-item sequence refuses it). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?str 'elem={[$present [c [a] [b]]]}|seq={[$present ([a],[b])]}|elem-named={[= [?else [$name [c [a] [b]]] ""] ""]}|seq-named={[= [?else [$name ([a],[b])] ""] ""]}']
+#]]
+  [out-text [#
+'elem=true|seq=true|elem-named=false|seq-named=true'
 #]]
  ]
 
@@ -10720,6 +13407,52 @@ cx-err:CXER3000
 #]]
  ]
 
+ [case id=program-builtin-case-locale-audit-001-upper-simple level=core
+  [tags builtin string upper unicode locale-audit L105 stream-5]
+  [; L105 locale audit — the §6.5 pure `upper` applies Unicode DEFAULT
+     casing (simple 1:1 mapping), never host locale: accented Latin and
+     Greek map; ß is NOT expanded at this tier (full-mapping ß→SS lives
+     on the strings module surface, strings-003). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$upper 'héllo ώρα straße']
+#]]
+  [out-text [#
+'HÉLLO ΏΡΑ STRAßE'
+#]]
+ ]
+
+ [case id=program-builtin-case-locale-audit-002-lower-simple level=core
+  [tags builtin string lower unicode locale-audit L105 stream-5]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$lower 'HÉLLO ΏΡΑ']
+#]]
+  [out-text [#
+'héllo ώρα'
+#]]
+ ]
+
+ [case id=program-builtin-case-locale-audit-003-turkish-trap level=core
+  [tags builtin string case locale-audit turkish L105 stream-5]
+  [; L105 — Unicode default casing, never host locale: under tr_TR libc
+     casing 'i'→'İ' and 'I'→'ı'; the pure builtins MUST give the default
+     mapping on every host. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$concat [$upper 'i'] [$lower 'I']]
+#]]
+  [out-text [#
+'Ii'
+#]]
+ ]
+
  [case id=program-call-inline-element-arg-001 level=core
   [tags call dispatch inline-element directive-argument]
   [; #540 — an inline [?element NAME-EXPR …] constructor is a valid positional
@@ -10960,7 +13693,7 @@ null
 [% 7.5 2]
 #]]
   [out-text [#
-1.5
+[err code=cx-err:CXER0100 message='mod: argument 1 is not numeric']
 #]]
  ]
 
@@ -11394,12 +14127,12 @@ cx-err:CXER0272
  ]
 
  [case id=program-for-takewhile-001-basic level=core
-  [tags for-comp takewhile]
+  [tags for-comp take-while]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
-[?for [in $x [$range 1 100]] [takewhile [< $x 5]] [yield $x]]
+[?for [in $x [$range 1 100]] [take-while [< $x 5]] [yield $x]]
 #]]
   [out-text [#
 1
@@ -11410,12 +14143,12 @@ cx-err:CXER0272
  ]
 
  [case id=program-for-takewhile-002-short-circuit level=core
-  [tags for-comp takewhile short-circuit]
+  [tags for-comp take-while short-circuit]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
-[?for [in $x (3, 1, 5, 2, 9)] [takewhile [< $x 5]] [yield $x]]
+[?for [in $x (3, 1, 5, 2, 9)] [take-while [< $x 5]] [yield $x]]
 #]]
   [out-text [#
 3
@@ -11424,12 +14157,12 @@ cx-err:CXER0272
  ]
 
  [case id=program-for-dropwhile-001-basic level=core
-  [tags for-comp dropwhile]
+  [tags for-comp drop-while]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
-[?for [in $x [$range 1 10]] [dropwhile [< $x 5]] [yield $x]]
+[?for [in $x [$range 1 10]] [drop-while [< $x 5]] [yield $x]]
 #]]
   [out-text [#
 5
@@ -11442,12 +14175,12 @@ cx-err:CXER0272
  ]
 
  [case id=program-for-dropwhile-002-keeps-after-flip level=core
-  [tags for-comp dropwhile flip]
+  [tags for-comp drop-while flip]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
-[?for [in $x (1, 2, 5, 1, 3)] [dropwhile [< $x 5]] [yield $x]]
+[?for [in $x (1, 2, 5, 1, 3)] [drop-while [< $x 5]] [yield $x]]
 #]]
   [out-text [#
 5
@@ -11456,13 +14189,97 @@ cx-err:CXER0272
 #]]
  ]
 
- [case id=program-for-dropwhile-takewhile-composed level=core
-  [tags for-comp dropwhile takewhile compose]
+ [# ── takewhile/dropwhile RETIRED SPELLINGS (stream 13, L55): the clause
+       names are take-while / drop-while (the vocabulary's kebab rule; the
+       registry's only non-kebab multi-word names are gone). The old
+       spellings tombstone-error loudly — a silent pattern-generator
+       fallback would change meaning, never do that. ── #]
+ [case id=program-for-takewhile-003-retired-spelling-negative level=core
+  [tags for-comp take-while retired negative]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
-[?for [in $x [$range 1 20]] [dropwhile [< $x 5]] [takewhile [< $x 10]] [yield $x]]
+[?for [in $x (1, 2)] [takewhile [< $x 5]] [yield $x]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+ [case id=program-for-dropwhile-003-retired-spelling-negative level=core
+  [tags for-comp drop-while retired negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?for [in $x (1, 2)] [dropwhile [< $x 5]] [yield $x]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [# ── [stream] → [lazy] RENAME (U1.1a, #763, stream-2 W2): `stream` is
+       the delivery concept's name (delivery.md); the [?for] hint means
+       lazy evaluation, so it is spelled [lazy]. Cutover, no dual-accept:
+       the old spelling tombstone-errors loudly (same rule as the
+       takewhile/dropwhile retirements above — a silent pattern-generator
+       fallback would change meaning). ── #]
+ [case id=program-for-lazy-001-hint-accepted level=core
+  [tags for-comp lazy hint stream-2 U1-1a]
+  [meta [#
+note: [lazy] is an evaluation HINT (code.md section 7.4) — the yielded
+note: values and their order are identical to the plain evaluation.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?for [in $x (1, 2, 3)] [lazy] [yield [n $x]]]
+#]]
+  [out-text [#
+[n 1]
+[n 2]
+[n 3]
+#]]
+ ]
+ [case id=program-for-lazy-002-stream-retired-spelling-negative level=core
+  [tags for-comp lazy retired negative stream-2 U1-1a]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?for [in $x (1, 2)] [stream] [yield $x]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+ [case id=program-for-lazy-003-materialiser-combine-negative level=core
+  [tags for-comp lazy order-by negative stream-2 U1-1a]
+  [meta [#
+note: code.md section 7.4 — [lazy] MUST NOT be combined with [order-by]
+note: or [group-by]; materialising barriers contradict lazy evaluation.
+note: Parse-time refusal, previously spec'd but never pinned.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?for [in $x (3, 1)] [lazy] [order-by $x] [yield $x]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-for-dropwhile-takewhile-composed level=core
+  [tags for-comp drop-while take-while compose]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?for [in $x [$range 1 20]] [drop-while [< $x 5]] [take-while [< $x 10]] [yield $x]]
 #]]
   [out-text [#
 5
@@ -11527,7 +14344,7 @@ cx-err:CXER0272
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[2:5]]
 #]]
   [out-text [#
-('b', 'c', 'd', 'e')
+(b, c, d, 'e')
 #]]
  ]
 
@@ -11540,7 +14357,7 @@ cx-err:CXER0272
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[:3]]
 #]]
   [out-text [#
-('a', 'b', 'c')
+(a, b, c)
 #]]
  ]
 
@@ -11553,7 +14370,7 @@ cx-err:CXER0272
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[3:]]
 #]]
   [out-text [#
-('c', 'd', 'e')
+(c, d, 'e')
 #]]
  ]
 
@@ -11566,7 +14383,7 @@ cx-err:CXER0272
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[::2]]
 #]]
   [out-text [#
-('a', 'c', 'e')
+(a, c, 'e')
 #]]
  ]
 
@@ -11579,7 +14396,7 @@ cx-err:CXER0272
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[::-1]]
 #]]
   [out-text [#
-('e', 'd', 'c', 'b', 'a')
+('e', d, c, b, a)
 #]]
  ]
 
@@ -11592,7 +14409,7 @@ cx-err:CXER0272
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[5::-2]]
 #]]
   [out-text [#
-('e', 'c', 'a')
+('e', c, a)
 #]]
  ]
 
@@ -11631,7 +14448,7 @@ cx-err:CXER0272
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[-3:]]
 #]]
   [out-text [#
-('c', 'd', 'e')
+(c, d, 'e')
 #]]
  ]
 
@@ -11657,7 +14474,7 @@ cx-err:CXER0272
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[2:[- $_last 1]]]
 #]]
   [out-text [#
-('b', 'c', 'd')
+(b, c, d)
 #]]
  ]
 
@@ -11696,7 +14513,7 @@ cx-err:CXER0100
 [?let [= $xs ("a", "b", "c", "d", "e")] $xs[*]]
 #]]
   [out-text [#
-('a', 'b', 'c', 'd', 'e')
+(a, b, c, d, 'e')
 #]]
  ]
 
@@ -11722,7 +14539,7 @@ cx-err:CXER0100
 [?let [= $s [2:4]] [?let [= $xs ("a", "b", "c", "d", "e")] $xs[$s]]]
 #]]
   [out-text [#
-('b', 'c', 'd')
+(b, c, d)
 #]]
  ]
 
@@ -11735,7 +14552,7 @@ cx-err:CXER0100
 [?let [= $w [2:4]] [= $xs ("a", "b", "c", "d", "e")] [= $ys (10, 20, 30, 40, 50)] ($xs[$w], $ys[$w])]
 #]]
   [out-text [#
-(('b', 'c', 'd'), (20, 30, 40))
+((b, c, d), (20, 30, 40))
 #]]
  ]
 
@@ -11748,7 +14565,7 @@ cx-err:CXER0100
 [?let [= $w [2:[- $_last 1]]] [= $xs (1, 2, 3, 4, 5)] [= $ys ("a", "b", "c", "d")] ($xs[$w], $ys[$w])]
 #]]
   [out-text [#
-((2, 3, 4), ('b', 'c'))
+((2, 3, 4), (b, c))
 #]]
  ]
 
@@ -11826,7 +14643,7 @@ cx-err:CXER0100
 [?let [= $t ([row name="A" email="a@x"], [row name="B" email="b@x"])] $t[*, "name"]]
 #]]
   [out-text [#
-('A', 'B')
+(A, B)
 #]]
  ]
 
@@ -11889,7 +14706,7 @@ cx-err:CXER0100
 [?let [= $t [$first $input//users]] $t[*, "name"]]
 #]]
   [out-text [#
-('alice', 'bob')
+(alice, bob)
 #]]
  ]
 
@@ -11921,7 +14738,7 @@ cx-err:CXER0100
 [?let [= $t [$first $input//users]] $t[1:2, "name":"age"]]
 #]]
   [out-text [#
-(('alice', 30), ('bob', 25))
+((alice, 30), (bob, 25))
 #]]
  ]
 
@@ -11937,7 +14754,7 @@ cx-err:CXER0100
 [?let [= $t [$first $input//users]] [out [a $t[2, *]] [b $t[2]]]]
 #]]
   [out-text [#
-[out [a {name: 'bob', age: 25}] [b {name: 'bob', age: 25}]]
+[out [a {name: bob, age: 25}] [b {name: bob, age: 25}]]
 #]]
  ]
 
@@ -11960,7 +14777,7 @@ cx-err:CXER0100
        [liter [?for [in $r $l] [yield $r]]]]]]
 #]]
   [out-text [#
-[out [n 2] [f {name: 'alice', age: 30}] [z {name: 'bob', age: 25}] [ln 0] [le true] [liter ()]]
+[out [n 2] [f {name: alice, age: 30}] [z {name: bob, age: 25}] [ln 0] [le true] [liter ()]]
 #]]
  ]
 
@@ -12040,7 +14857,138 @@ cx-err:CXER0100
  $rows[*, "name"]]
 #]]
   [out-text [#
-('A', 'B')
+(A, B)
+#]]
+ ]
+
+ [case id=program-table-d22-012-row-vs-column-lanes level=core
+  [tags table d22 transparency row-lane column-lane l92 689]
+  [; ── §9 pair family (runtime_representation.md L92): row-iteration
+     and column-iteration over ONE input answer identically — the
+     representation (row walk vs column slice) is invisible in the
+     result. ;]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+ carol 41
+ dan 19
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]]
+  [= $rows [?for [in $r $t] [yield $r.age]]]
+  [r [rowsum [$sum $rows]] [colsum [$sum $t[*, "age"]]]]]
+#]]
+  [out-text [#
+[r [rowsum 115] [colsum 115]]
+#]]
+ ]
+
+ [case id=ev-pull-004-take-over-map-table-source level=core rule=EV-PULL
+  [tags table d22 iterator pull ev-pull l92 689 710]
+  [; ── EV-PULL over a TABLE source (§9 L92 effect-count probe):
+     [?take 2] over [?map $t …] invokes the transform EXACTLY twice —
+     the demand-driven engine constructs row views on pull, never
+     up-front (the W2 batch-[?for] walk and the W1 pull core jointly). ;]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+ carol 41
+ dan 19
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]]
+  [= $out [?take 2 [?map $t [using [?fn $r [?let [= $c [?test-counter name=tblpull op=inc]] $r.age]]]]]]
+  [= $n [$count $out]]
+  ([?test-counter name=tblpull op=read], $n)]
+#]]
+  [out-text [#
+(2, 2)
+#]]
+ ]
+
+ [case id=ev-pull-005-filter-until-satisfied-table-source level=core rule=EV-PULL
+  [tags table d22 iterator pull ev-pull filter l92 689 710]
+  [; ── EV-PULL over a TABLE source, filter arm: [?take 1] over
+     [?filter $t …] pulls rows until the FIRST satisfying row (ages
+     30/25/41/19 with [> age 30] → 3 predicate invocations), never the
+     whole table. ;]
+  [in-cx [#
+[users [table[name::string age::int]]
+ alice 30
+ bob 25
+ carol 41
+ dan 19
+]
+#]]
+  [in-code [#
+[?let [= $t [$first $input//users]]
+  [= $out [?take 1 [?filter $t [using [?fn $r [?let [= $c [?test-counter name=tblf op=inc]] [> $r.age 30]]]]]]]
+  [= $n [$count $out]]
+  ([?test-counter name=tblf op=read], $n)]
+#]]
+  [out-text [#
+(3, 1)
+#]]
+ ]
+
+ [case id=ev-budget-001-exactly-at-floor level=core rule=EV-BUDGET
+  [tags iterator pull ev-budget floor l92 689 710]
+  [; ── EV-BUDGET (code.md §Evaluation): the iterator force budget is
+     FLOORED — implementations MUST accept ≥ 1,000,000 pulls before
+     the guard may fire (limits ship with floors, never bare
+     numbers). Exactly-at-the-floor succeeds; firing above the floor
+     is permitted, so no negative twin exists. Ruled into W7
+     acceptance by the I5 audit (Q6a). ;]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$count [?take 1000000 [$range 1 *]]]
+#]]
+  [out-text [#
+1000000
+#]]
+ ]
+
+ [case id=program-par-001-width-cap-fail-loud level=core
+  [tags par width cap CXER0153 805]
+  [; ── §7.3: an explicit [par N] beyond the 64×ncpu sanity cap is the
+     FAIL-LOUD refusal CXER0153 (E_PAR_WIDTH_TOO_LARGE) — never a
+     silent clamp. 999999 exceeds 64×ncpu on any real host (ncpu
+     would need to exceed 15,624); the pinned token is the CODE (the
+     message names the host's own cap). Covers the last uncited §7.3
+     code (gate-4 repair, #805). ;]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?for [in $x (1, 2)] [par 999999] [yield $x]]
+#]]
+  [out-err [#
+cx-err:CXER0153
+#]]
+ ]
+
+ [case id=program-const-001-body-failed level=core
+  [tags const eager CXER0215 805]
+  [; ── §12.5.2: a [?const] whose initializer RAISES at load surfaces
+     the typed CXER0215 (E_CONST_BODY_FAILED) naming the const —
+     the unbound-variable body rides the throwing channel the wrap
+     covers. Covers the last uncited module-range code (gate-4
+     repair, #805). ;]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?const boom $nope]
+$boom
+#]]
+  [out-err [#
+cx-err:CXER0215
 #]]
  ]
 
@@ -12790,6 +15738,42 @@ cx-err:CXER0110
 #]]
  ]
 
+ [case id=program-caps-001-c4-value-full-grant level=core
+  [tags caps capability introspection C4 L104 stream-5]
+  [; security.md C4 — the active capability set is exposed as an
+     introspectable CX value: a canonical map over the closed nine-name
+     list (granted-unscoped = true, scoped = a sorted scope sequence,
+     ungranted = absent) + the private-range-policy field. The
+     conformance runner grants in full, so this pins the L104
+     normalization: the allow-all opt-out IS the explicit nine-grant
+     form + private-range-allowed — one canonical form, not two. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$caps]
+#]]
+  [out-text [#
+{clock: true, env: true, eval: true, net: true, private-range-allowed: true, random: true, read: true, secret-reveal: true, subprocess: true, write: true}
+#]]
+ ]
+
+ [case id=program-caps-002-value-reflects-narrowing level=core
+  [tags caps capability introspection with-caps narrowing C4 L104 stream-5]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?with-caps [deny net] [deny subprocess] [deny secret-reveal] [$caps]]
+#]]
+  [out-text [#
+{clock: true, env: true, eval: true, random: true, read: true, write: true}
+#]]
+ ]
+note: narrowing is visible to the ACTIVE-set view — denied caps leave the
+note: map (absent = ungranted, the canonical minimal form); a narrowed set
+note: never carries the private-range-policy field.
+
  [case id=program-secret-001-reveal-denied level=core
   [tags secret reveal capability secret-reveal CXER0271]
   [in-cx [#
@@ -13086,7 +16070,7 @@ cx-err:CXER0281
   [tags sap O1 match attr capture rule10]
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r [err code=rate-limited]] [?match $r [case [err @code=$c] {got: $c}] [else other]]] #]]
-  [out-text [# {got: 'rate-limited'} #]]
+  [out-text [# {got: rate-limited} #]]
  ]
  [case id=program-sap-O1-02-map-literal level=core
   [tags sap O1 match map literal grounded]
@@ -13145,7 +16129,7 @@ cx-err:CXER0281
  [case id=program-sap-O1-07-typetest-float level=core
   [tags sap O1 type-test scalar float]
   [in-cx [# [empty] #]]
-  [in-code [# [?let [= $r 3.14] [?match $r [case _::float [f]] [else [n]]]] #]]
+  [in-code [# [?let [= $r 3.14e0] [?match $r [case _::float [f]] [else [n]]]] #]]
   [out-text [# [f] #]]
  ]
  [case id=program-sap-O1-08-typetest-bool level=core
@@ -13165,6 +16149,15 @@ cx-err:CXER0281
   [in-cx [# [empty] #]]
   [in-code [# [?let [= $r :ok] [?match $r [case _::atom [a]] [else [n]]]] #]]
   [out-text [# [a] #]]
+ ]
+ [case id=program-sap-O1-10b-typetest-path-refuses-nonpath level=core
+  [tags sap O1 type-test path kind rule14]
+  [; The ::path kind test is a REAL check since the I5-s17 W6 PathNode
+     graft — the pre-graft arm accepted EVERY value as ::path (the
+     stream-16 residual pinned on #689). A scalar must fall through. ]
+  [in-cx [# [empty] #]]
+  [in-code [# [?match 42 [case _::path [p]] [else [n]]] #]]
+  [out-text [# [n] #]]
  ]
  [case id=program-sap-O1-11-attr-type-test level=core
   [tags sap O1 match attr type-test rule14]
@@ -13457,7 +16450,7 @@ cx-err:CXER0101
     host granted the capability. (The runner grants in full; the revocation is
     in-program, proving the §6.5.1 effect system is the cancellation-safety
     substrate.) #]
- [case id=program-sap-revoke-01-cap-revoked-after-cancel level=core gate=enforced
+ [case id=program-sap-revoke-01-cap-revoked-after-cancel level=core gate=enforced packs=env
   [tags sap concurrency cancel revoke CXER0271 capability]
   [; #541 re-bless: under EAGER spawn (§10.5.1) the original bare-effect
      body raced the cancel (a fast body legitimately completes done —
@@ -13510,8 +16503,7 @@ cx-err:CXER0101
 line two'''
 #]]
   [out-text [#
-'line one
-line two'
+'line one\nline two'
 #]]
  ]
 
@@ -13541,8 +16533,7 @@ line two'
   $s]
 #]]
   [out-text [#
-'alpha
-beta'
+'alpha\nbeta'
 #]]
  ]
 
@@ -13572,16 +16563,16 @@ beta'
 #]]
  ]
 
- [case id=program-cx-pi-003-unknown-cx-key-preserved level=core
-  [tags cx-pi cx-directive unknown-key preserve issue-421 grammar-34]
+ [case id=program-cx-pi-003-unknown-cx-key-refused level=core
+  [tags cx-pi cx-directive unknown-key fail-closed CXP-1 grammar-34]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
 [?cx bogus=1]
 #]]
-  [out-text [#
-[?cx bogus=1]
+  [out-err [#
+unknown [?cx] pragma key
 #]]
  ]
 
@@ -13698,7 +16689,7 @@ cx-err:CXER0100
  ]
 
  [case id=program-int-ascription-001-hex-overflow-err level=core
-  [tags type-annotation int hex overflow CXER0109 issue-457]
+  [tags type-annotation int hex overflow CXER0290 issue-457]
   [in-cx [#
 [empty]
 #]]
@@ -13706,12 +16697,12 @@ cx-err:CXER0100
 [x::int 0x89504e470d0a1a0a]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
  [case id=program-float-ascription-001-hex-token-err level=core
-  [tags type-annotation float hex CXER0109 issue-457]
+  [tags type-annotation float hex CXER0290 issue-457]
   [in-cx [#
 [empty]
 #]]
@@ -13719,7 +16710,7 @@ cx-err:CXER0109
 [x::float 0x2a]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
@@ -13787,7 +16778,7 @@ cx-err:CXER0109
     valid in attribute position and OVERRIDES §9 auto-typing). Pre-#466
     every case below was a parse error ("unexpected token '::' in
     expression position"). Coercion is checked (M-ERR-2/D-H): malformed →
-    CXER0109; array annotation → CXER0100 (scalar-only attributes, D2). ]
+    CXER0290; array annotation → CXER0100 (scalar-only attributes, D2). ]
 
  [case id=program-attr-ascription-001-sized-u16 level=core
   [tags element attribute ascription sized-int issue-466]
@@ -13812,6 +16803,168 @@ cx-err:CXER0109
 #]]
   [out-text [#
 [e n=42]
+#]]
+ ]
+
+ [; #925 (RULED: PYE-1a + PYE-1b): every compact step takes a COMPUTED name
+    — `$m.$k`, `$x/$k`, `$x//$k`, `$x@$k` — resolved from the binding at
+    walk time. A computed MEMBER key looks up by the full (kind, image)
+    identity; unbound / empty / non-string-on-name-axes refuse loudly. ]
+ [case id=program-computed-step-001-member-kind-strict level=core
+  [tags path computed member kind identity issue-925]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {alpha: 1, beta: 2}] [= $mm {1: iv, '1': sv}] [= $k 'beta'] [= $ki 1] [= $ks '1'] ($m.$k, $mm.$ki, $mm.$ks)]
+#]]
+  [out-text [#
+(2, iv, sv)
+#]]
+ ]
+
+ [case id=program-computed-step-002-child-descendant-attr level=core
+  [tags path computed child descendant attr issue-925]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $d [$cx:parse '[u [name Ada] [role lead]]']] [= $e [srv host=zeta]] [= $k 'name'] [= $a 'host'] ([$string $d/$k], [$string $d//$k], [$string $e@$a])]
+#]]
+  [out-text [#
+(Ada, Ada, zeta)
+#]]
+ ]
+
+ [case id=program-computed-step-003-unbound-refuses level=core
+  [tags path computed refusal issue-925]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {a: 1}] $m.$nope]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-computed-step-004-nonstring-name-refuses level=core
+  [tags path computed refusal kind issue-925]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $d [$cx:parse '[u [n 1]]']] [= $k 5] $d/$k]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-computed-step-005-mapnode-receiver level=core
+  [tags path computed member data-seam issue-925]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m [$cx:parse '{x: 41}']] [= $k 'x'] [+ 1 $m.$k]]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [; #923 (RULED: BC-1): a bare attribute value is ONE ws-delimited RUN
+    auto-typed by the data core — the program reading of the bytes IS the
+    data reading. `host=0.0.0.0` used to truncate to float 0.0 and spill
+    `.0.0` as two phantom body items at rc=0 (the #917 silent-mangle class
+    in attribute position). ]
+ [case id=program-attr-bare-001-run-is-the-string level=core
+  [tags attr bare-value run parity issue-923]
+  [title multi-dot / ident-run / date bare attr values read as the data reading reads them]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $e [server host=0.0.0.0 tls=true ver=v1.2.3 when=2026-01-01]] ($e, [?match $e@host [case $v::string str] [else other]], [?match $e@when [case $v::date date] [else other]])]
+#]]
+  [out-text [#
+([server host='0.0.0.0' tls=true ver='v1.2.3' when='2026-01-01'], str, date)
+#]]
+ ]
+
+ [case id=program-attr-bare-002-run-shapes level=core
+  [tags attr bare-value run parity issue-923]
+  [title runs the program lexer used to refuse loudly (1a, 1:2, urn:x:y) are the data reading's strings]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $e [e a=1-2 b=1a c=1:2 d=urn:x:y]] $e]
+#]]
+  [out-text [#
+[e a='1-2' b='1a' c='1:2' d=urn:x:y]
+#]]
+ ]
+
+ [case id=program-attr-bare-003-slash-run-refuses-loud level=core
+  [tags attr bare-value run cxpath refusal issue-923]
+  [title a /-bearing run whose prefix is not a path head refuses with the quote-the-value hint — never a silent mangle]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $z 0] [e a=1.2.3/x]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-attr-bare-004-pattern-parity level=core
+  [tags attr bare-value pattern match issue-923]
+  [title pattern attr tests read bare runs exactly as construction does — string vs string, capture carries the run]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $e [server host=0.0.0.0]] ([?match $e [case [server host=0.0.0.0] hit] [else miss]], [?match $e [case [server @host=$v] $v] [else miss]])]
+#]]
+  [out-text [#
+(hit, '0.0.0.0')
+#]]
+ ]
+
+ [; #935 (the #923 class, one slot over): a glued-residue bare token in
+    element-BODY position is ONE run read as the data reading reads it —
+    `[e 0.0.0.0]` was three phantom items, `[e v1.2.3]` a prose-joined
+    string with invented interior spaces. Clean tokens ([par 2], slices,
+    ascriptions, $-paths) are untouched by construction. ]
+ [case id=program-body-bare-001-run-is-the-string level=core
+  [tags body bare-value run parity issue-935]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $z 0] ([e 0.0.0.0], [e 1.2.3], [e v1.2.3], [e 1-2], [e true.x])]
+#]]
+  [out-text [#
+([e '0.0.0.0'], [e '1.2.3'], [e 'v1.2.3'], [e '1-2'], [e 'true.x'])
+#]]
+ ]
+
+ [case id=program-body-bare-002-clean-tokens-untouched level=core
+  [tags body bare-value run guards issue-935]
+  [title member steps, slices, ascriptions, arithmetic, and map keys keep their lanes]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {bar: 7}] [= $xs (9, 8, 7)] ($m.bar, $xs[1:2], [e 1::int], [+ 1 -2], {1: x})]
+#]]
+  [out-text [#
+(7, (9, 8), [e 1], -1, {1: x})
 #]]
  ]
 
@@ -13846,7 +16999,7 @@ cx-err:CXER0109
  ]
 
  [case id=program-attr-ascription-005-computed-range-err level=core
-  [tags element attribute ascription error CXER0109 issue-466]
+  [tags element attribute ascription error CXER0290 issue-466]
   [in-cx [#
 [empty]
 #]]
@@ -13854,12 +17007,12 @@ cx-err:CXER0109
 [?let [= $p 99999] [e n::u8=$p]]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
  [case id=program-attr-ascription-006-malformed-err level=core
-  [tags element attribute ascription error CXER0109 issue-466]
+  [tags element attribute ascription error CXER0290 issue-466]
   [in-cx [#
 [empty]
 #]]
@@ -13867,7 +17020,7 @@ cx-err:CXER0109
 [?let [= $x [e n::int=abc]] $x]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
@@ -13900,9 +17053,9 @@ true
  ]
 
  [case id=program-attr-ascription-009-decimal-hex-err level=core
-  [tags element attribute ascription decimal hex error CXER0109 issue-466]
+  [tags element attribute ascription decimal hex error CXER0290 issue-466]
   [; OWNER RULING (#466 item 3): hex under ::decimal REJECTS loudly
-     (CXER0109) — decimal is a base-10 value type; hex there is a
+     (CXER0290) — decimal is a base-10 value type; hex there is a
      mistake (M-ERR-2 fail-loud). Supersedes the former verbatim pin;
      same outcome in the data reading (extended.cxd 016g). ]
   [in-cx [#
@@ -13912,7 +17065,7 @@ true
 [?let [= $x [e n::decimal=0x2a]] $x]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
@@ -13949,9 +17102,9 @@ cx-err:CXER0109
  ]
 
  [case id=program-body-ascription-011b-bigint-hex-err level=core
-  [tags element ascription bigint hex error CXER0109 issue-466]
+  [tags element ascription bigint hex error CXER0290 issue-466]
   [; OWNER RULING (#466 item 3): hex under ::bigint REJECTS loudly
-     (CXER0109) — bigint is a base-10 value type. Same outcome in the
+     (CXER0290) — bigint is a base-10 value type. Same outcome in the
      data reading (extended.cxd 016h). ]
   [in-cx [#
 [empty]
@@ -13960,7 +17113,7 @@ cx-err:CXER0109
 [?let [= $x [x::bigint 0x2a]] $x]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
 
@@ -13990,12 +17143,12 @@ cx-err:CXER0109
 [?let [= $x [x::decimal 1_000.50]] $x]
 #]]
   [out-text [#
-[x::decimal '1000.50']
+[x::decimal 1000.50]
 #]]
  ]
 
  [case id=program-body-ascription-014-atom-number-err level=core
-  [tags element ascription atom error CXER0109 issue-466]
+  [tags element ascription atom error CXER0290 issue-466]
   [; #466 item 2: ::atom demands a denotable atom name ([L40]); a number
      token fails loud in BOTH readings instead of minting an atom whose
      render `:42` would not re-parse. ]
@@ -14006,7 +17159,890 @@ cx-err:CXER0109
 [?let [= $x [x::atom 42]] $x]
 #]]
   [out-err [#
-cx-err:CXER0109
+cx-err:CXER0290
 #]]
  ]
+
+ [case id=program-ascription-001-expression-positions level=core
+  [tags decimal bigint ascription expression l50 776 683]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $x 99::bigint]
+[= $y 1.50::decimal]
+[= $m {1: "i", 1::bigint: "b", 1.0: "f"}]
+  ([= $x 99], [= 1.10::decimal 1.1::decimal], [+ $y 0.25], (2::bigint, 3.5::decimal), $m)]
+#]]
+  [out-text [#
+(true, true, 1.75, (2::bigint, 3.5), {1: i, 1::bigint: b, 1.0: f})
+#]]
+ ]
+
+ [case id=program-map-key-kind-bool level=core
+  [tags map key kind bool 777 one-lane]
+  [in-cx [# [empty] #]]
+  [in-code [# {true: 'x', false: 'y'} #]]
+  [out-text [# {true: x, false: y} #]]
+ ]
+ [case id=program-map-key-kind-string-vs-bool level=core
+  [tags map key kind string bool 777 round-trip]
+  [in-cx [# [empty] #]]
+  [in-code [# {'true': 'str-key', true: 'bool-key'} #]]
+  [out-text [# {'true': str-key, true: bool-key} #]]
+ ]
+ [case id=program-map-key-kind-string-vs-int level=core
+  [tags map key kind string int 777 w014]
+  [in-cx [# [empty] #]]
+  [in-code [# {'7': 'a', 7: 'b'} #]]
+  [out-text [# {'7': a, 7: b} #]]
+ ]
+ [case id=program-map-key-kind-ascribed-numeric level=core
+  [tags map key kind bigint ascription 776 777]
+  [in-cx [# [empty] #]]
+  [in-code [# {1: 'int', 1::bigint: 'big'} #]]
+  [out-text [# {1: int, 1::bigint: big} #]]
+ ]
+ [case id=program-map-key-kind-date level=core
+  [tags map key kind date 777 one-lane]
+  [in-cx [# [empty] #]]
+  [in-code [# {2026-08-16: 'd', '2026-08-16': 's'} #]]
+  [out-text [# {2026-08-16: d, '2026-08-16': s} #]]
+ ]
+ [case id=program-map-key-kind-match-bool level=core
+  [tags map key kind match bool 777]
+  [in-cx [# [empty] #]]
+  [in-code [# [?let [= $m {true: 'bv', 'true': 'sv'}] [?match $m [case {true: $b} {got: $b}] [else [no]]]] #]]
+  [out-text [# {got: bv} #]]
+ ]
+ [case id=program-map-key-bare-ident-equals-quoted level=core
+  [tags map key kind ident string L87 777]
+  [in-cx [# [empty] #]]
+  [in-code [# [?let [= $m {yes: 'v'}] [?match $m [case {'yes': $s} {matched: $s}] [else [no-match]]]] #]]
+  [out-text [# {matched: v} #]]
+ ]
+ [case id=program-map-key-bare-ident-one-spelling level=core
+  [tags map key kind ident string L87 777 canonical]
+  [in-cx [# [empty] #]]
+  [in-code [# {'yes': 'x'} #]]
+  [out-text [# {yes: x} #]]
+ ]
+ [case id=program-map-key-kind-match-is-kind-exact level=core
+  [tags map key kind match string int 777]
+  [in-cx [# [empty] #]]
+  [in-code [# [?let [= $m {7: 'iv'}] [?match $m [case {'7': $s} {got: $s}] [else [no-match]]]] #]]
+  [out-text [# [no-match] #]]
+ ]
+ [case id=program-ascription-002-hex-under-exact-refused level=core
+  [tags decimal ascription negative hex CXER0290 466 776 683]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $bad 0x2a::decimal] $bad]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [doc [#
+## Fixtures (cxpath kind tests — grammar [131b], `spec/core/ast.md`
+## node-test table)
+
+The four kind tests test node KINDS, not names:
+
+| Test          | Matches |
+|---|---|
+| `node()`      | any node |
+| `text()`      | Text nodes only |
+| `element()`   | element nodes only |
+| `attribute()` | attribute nodes only |
+
+`attribute()` is therefore non-empty on the ATTRIBUTE AXIS alone — no
+other axis carries attribute nodes (XPath 3.1 §3.3.2). Every one of the
+four was unreachable before issue-809: in expression position
+`$t/node()` misparsed as a path plus an empty sequence literal, and in
+binding position it was a hard parse error.
+#]]
+
+ [case id=program-conc-005a-try-send-malformed-timeout-refused level=concurrency
+  [tags channel try-send timeout negative CXER0100 issue-816]
+  [meta [#
+note: issue-816 — code.md §10.4.2 defines `timeout=DURATION` on both
+note: try-variants and the engine read only to= / from=, so the deadline
+note: was accepted and dropped: a zero-wait poll wearing a timeout's
+note: name. The #793 class through a different door.
+note:
+note: The deadline is now honoured, which makes a MALFORMED one a real
+note: error rather than a second silent drop — answering a
+note: silently-ignored argument with another silent ignore would be no
+note: fix at all. The duration is read by the same reader [?timeout] and
+note: [?circuit-breaker] use, so one spelling of a duration cannot mean
+note: two things.
+note:
+note: The WAIT itself is asserted in vcx/tests (a fixture cannot read a
+note: clock); these pin the surface contract.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="c5a" buffer=1]] [?try-send "x" to=$ch timeout=soon]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-conc-006a-try-receive-malformed-timeout-refused level=concurrency
+  [tags channel try-receive timeout negative CXER0100 issue-816]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="c6a" buffer=1]] [?try-receive from=$ch timeout=soon]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-conc-006b-try-receive-timeout-does-not-delay-a-ready-message level=concurrency
+  [tags channel try-receive timeout issue-816]
+  [meta [#
+note: the deadline is an upper bound on WAITING, never a delay imposed
+note: on success — a satisfiable receive answers on the first attempt.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="c6b" buffer=1]] [= $_ [?send "hi" to=$ch]] [?try-receive from=$ch timeout=5s]]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=program-tree-eval-nonwidening-001-refused level=core
+  [tags tree-eval lib sandbox negative CXER4113 issue-808]
+  [meta [#
+note: RULED 808-1a. code.md §6.4.4 states the sandbox rule normatively —
+note: "[?eval] inherits the caller's [?lib] set; may narrow, not widen →
+note: cx-err:CXER4113" — and its depth-cap TWIN (CXER4114) was enforced
+note: while this half was not. It was worse than unenforced: the tree-eval
+note: sub-env shares `state`, and [?lib] registers into
+note: state.module_table, so a [?lib] inside an evaluated tree WIDENED THE
+note: CALLER'S OWN module table as a side effect.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [grant eval]
+  [in-code [#
+[?eval [?quote [?lib 'cx-stdlib/strings']]]
+#]]
+  [out-err [#
+cx-err:CXER4113
+#]]
+ ]
+
+ [case id=program-tree-eval-nonwidening-002-redeclaration-ok level=core
+  [tags tree-eval lib sandbox issue-808]
+  [meta [#
+note: the boundary, and the reason the guard holds the caller's alias SET
+note: rather than a flag: "may narrow, not widen" means a lib the caller
+note: ALREADY has is a re-declaration, not widening, and stays legal. A
+note: flag would have refused this too and broken ordinary code.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [grant eval]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[?eval [?quote [?lib 'cx-stdlib/strings']]]
+#]]
+  [out-text [#
+[result status=ok imported=strings]
+#]]
+ ]
+
+ [case id=program-tree-eval-nonwidening-003-top-level-lib-unaffected level=core
+  [tags tree-eval lib sandbox issue-808]
+  [meta [#
+note: the other boundary: the restriction applies INSIDE a tree-eval
+note: only. An ordinary top-level [?lib] is untouched — which is what the
+note: `none` state of the captured set means.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings']
+[$strings:upper 'hi']
+#]]
+  [out-text [#
+'HI'
+#]]
+ ]
+
+ [case id=program-reserved-ns-001-cx-head-refused level=core
+  [tags reserved-namespace cx-prefix negative E210 issue-820 issue-704]
+  [meta [#
+note: RULED 820-1a. The `cx:` prefix is reserved for the serializer's
+note: canonical image. The DATA reader has always refused it; the PROGRAM
+note: reader did not, so a program could construct and emit `[cx:x 1]` —
+note: a document the data reader then refused to read back. Output failing
+note: its own re-parse, the issue-704 class, through a door beside the
+note: wall.
+note:
+note: Refused at CONSTRUCTION, not at emit: refusing on the way out would
+note: let the bad node exist and be operated on first, and would point the
+note: diagnostic at the emit site instead of at the name the author wrote.
+note: E210 is reused rather than a new program-band code being minted — it
+note: is ONE reservation, and two codes would teach a reader that
+note: authoring `cx:foo` is two different mistakes depending on which
+note: reader saw it first.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[cx:x 1]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-reserved-ns-002-ordinary-qname-unaffected level=core
+  [tags reserved-namespace qname issue-820]
+  [meta [#
+note: the boundary — only `cx:` is reserved. An ordinary namespace-
+note: qualified head keeps working, so the refusal cannot creep into
+note: legitimate QNames.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[ns:x 1]
+#]]
+  [out-text [#
+[ns:x 1]
+#]]
+ ]
+
+ [case id=program-reserved-ns-003-computed-name-cannot-reach-cx level=core
+  [tags reserved-namespace cx-prefix computed-name negative CXER0236 issue-820]
+  [meta [#
+note: the OTHER door this issue asked to check: a name that is not
+note: literal in the source cannot be caught by a parse-time rule. It is
+note: already closed, though by a different rule — a computed element name
+note: must be an NCName, and an NCName admits no colon, so `cx:x` cannot
+note: be reached that way at all. Pinned so it STAYS closed: if computed
+note: QNames are ever admitted, this case goes red and the reservation
+note: check has to move with them.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?element "cx:x" 1]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0236 message='computed element name "cx:x" is not a valid NCName']
+#]]
+ ]
+
+ [case id=program-cxpath-attr-head-001-named level=core
+  [tags cxpath attribute axis head-position issue-824]
+  [meta [#
+note: issue-824 — `//@id` desugars to
+note: descendant-or-self::node()/attribute::id, so it selects every `id`
+note: attribute anywhere. It returned the EMPTY SEQUENCE with no
+note: diagnostic: the attribute materialization is routed only when the
+note: path has more than one step, so a head-position attribute step fell
+note: through to apply_path_step_idx's `.attribute` arm, which is a
+note: documented no-op precisely BECAUSE the materialization lives
+note: elsewhere. Parsed, evaluated, selected nothing.
+#]]
+  [in-cx [#
+[users
+  [user id=1 role=admin]
+  [user id=2]]
+#]]
+  [in-code [#
+//@id
+#]]
+  [out-text [#
+[id 1]
+[id 2]
+#]]
+ ]
+
+ [case id=program-cxpath-attr-head-002-wildcard level=core
+  [tags cxpath attribute axis head-position wildcard issue-824]
+  [in-cx [#
+[users
+  [user id=1 role=admin]
+  [user id=2]]
+#]]
+  [in-code [#
+//@*
+#]]
+  [out-text [#
+[id 1]
+[role 'admin']
+[id 2]
+#]]
+ ]
+
+ [case id=program-cxpath-attr-head-003-kind-test level=core
+  [tags cxpath attribute axis head-position kind-test issue-824 issue-809]
+  [meta [#
+note: the [131b] kind test reaches head position too — `@*` and
+note: `attribute::attribute()` name the same set, which is what makes them
+note: two spellings of one thing rather than two mechanisms.
+#]]
+  [in-cx [#
+[users
+  [user id=1 role=admin]
+  [user id=2]]
+#]]
+  [in-code [#
+([$count //attribute::attribute()], [$count //@*])
+#]]
+  [out-text [#
+(3, 3)
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-001-node-descendant level=core
+  [tags cxpath kind-test node issue-809]
+  [in-cx [#
+[doc
+  [a first]
+  [b second]
+  [c [d inner]]]
+#]]
+  [in-code [#
+//node()
+#]]
+  [out-text [#
+[doc [a 'first'] [b 'second'] [c [d 'inner']]]
+[a 'first']
+first
+[b 'second']
+second
+[c [d 'inner']]
+[d 'inner']
+inner
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-002-text-descendant level=core
+  [tags cxpath kind-test text issue-809]
+  [in-cx [#
+[doc
+  [a first]
+  [b second]
+  [c [d inner]]]
+#]]
+  [in-code [#
+//text()
+#]]
+  [out-text [#
+first
+second
+inner
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-003-element-equals-star level=core
+  [tags cxpath kind-test element issue-809]
+  [meta [#
+note: element() is the kind-test spelling of the `*` wildcard — the two
+note: MUST select the same set, which is what this fixture pins.
+#]]
+  [in-cx [#
+[doc
+  [a first]
+  [b second]
+  [c [d inner]]]
+#]]
+  [in-code [#
+([$count //element()], [$count //*])
+#]]
+  [out-text [#
+(5, 5)
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-004-attribute-axis level=core
+  [tags cxpath kind-test attribute axis issue-809]
+  [meta [#
+note: attribute() selects attribute nodes, so it is the attribute axis
+note: that carries them; `attribute::node()` takes the same set.
+#]]
+  [in-cx [#
+[users
+  [user id=1 role=admin]
+  [user id=2]]
+#]]
+  [in-code [#
+//user/attribute::attribute()
+#]]
+  [out-text [#
+[id 1]
+[role 'admin']
+[id 2]
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-005-attribute-child-axis-empty level=core
+  [tags cxpath kind-test attribute axis negative issue-809]
+  [meta [#
+note: the child axis carries no attribute nodes, so a child-axis
+note: attribute() selects NOTHING. Reachable, well-defined, empty — not
+note: a parse error and not a silent name test.
+#]]
+  [in-cx [#
+[users
+  [user id=1 role=admin]
+  [user id=2]]
+#]]
+  [in-code [#
+[$count //user/attribute()]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-006-child-step level=core
+  [tags cxpath kind-test node child-step issue-809]
+  [meta [#
+note: node() on the child axis takes DIRECT children only — `[d]` but
+note: not its own text child.
+#]]
+  [in-cx [#
+[doc
+  [a first]
+  [b second]
+  [c [d inner]]]
+#]]
+  [in-code [#
+//c/node()
+#]]
+  [out-text [#
+[d 'inner']
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-007-positional-predicate level=core
+  [tags cxpath kind-test text predicate issue-809]
+  [in-cx [#
+[doc
+  [a first]
+  [b second]
+  [c [d inner]]]
+#]]
+  [in-code [#
+//text()[2]
+#]]
+  [out-text [#
+second
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-008-binding-child level=core
+  [tags cxpath kind-test binding-path issue-809]
+  [meta [#
+note: the binding-path surface [135a] — this spelling was a HARD PARSE
+note: ERROR before issue-809 ("expected ']' … got (").
+#]]
+  [in-cx [#
+[doc
+  [a first]
+  [b second]
+  [c [d inner]]]
+#]]
+  [in-code [#
+[?for [in $x //c] [yield $x/node()]]
+#]]
+  [out-text [#
+[d 'inner']
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-009-binding-descendant-text level=core
+  [tags cxpath kind-test binding-path descendant text issue-809]
+  [in-cx [#
+[doc
+  [a first]
+  [b second]
+  [c [d inner]]]
+#]]
+  [in-code [#
+[?for [in $t $doc//text()] [yield $t]]
+#]]
+  [out-text [#
+first
+second
+inner
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-010-text-takes-typed-scalars level=core
+  [tags cxpath kind-test text scalar issue-809 ruled-809-1a]
+  [meta [#
+note: RULED 809-1a — `text()` takes BOTH character-data node kinds, Text
+note: AND ScalarNode. cxdm.md §2.2 keeps them distinct Node KINDS, but
+note: which one a body lands in is decided by AUTO-TYPING, not by the
+note: author: this document's three values are a ScalarNode(int), a Text
+note: and a ScalarNode(bool) from one authorial act each. Separating them
+note: would make a result set depend on whether a value happened to
+note: auto-type.
+note:
+note: This case previously pinned the NARROW reading (1, 7) as shipped,
+note: deliberately, so the ruling would have a fixture to move rather
+note: than a silent behaviour change. It moved. `node()` is unchanged at
+note: 7 — it also takes the three elements and the root, which is why it
+note: was never a substitute for a widened text().
+#]]
+  [in-cx [#
+[doc [port 8080] [name Ann] [flag true]]
+#]]
+  [in-code [#
+([$count //text()], [$count //node()])
+#]]
+  [out-text [#
+(3, 7)
+#]]
+ ]
+
+ [case id=program-cxpath-kindtest-011-unknown-kind-test-refused level=core
+  [tags cxpath kind-test negative issue-809]
+  [meta [#
+note: only the four [131b] names take the `()` NodeTest form. Before
+note: issue-809 this SILENTLY misparsed as the path `//bogus` plus an
+note: empty sequence literal; now both path readers refuse it.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+//bogus()
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+
+ [case id=program-callstep-001-attr-on-call-result level=core
+  [tags call path-step crs-1 issue-862]
+  [meta [#
+note: RULED CRS-1 (2026-08-20) — both call forms take the [135a]
+note: compact-step postfix, byte-adjacent to the closing bracket.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $h ([e v=1], [e v=2])] [report [$first $h]@v]]
+#]]
+  [out-text [#
+[report 1]
+#]]
+ ]
+
+ [case id=program-callstep-002-child-step-on-call-result level=core
+  [tags call path-step crs-1]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $u ([user [b 7]], [user [b 9]])] [$string [$last $u]/b]]
+#]]
+  [out-text [#
+'9'
+#]]
+ ]
+
+ [case id=program-callstep-003-let-equivalence level=core
+  [tags call path-step crs-1 equivalence]
+  [meta [#
+note: the CRS-1 semantic pin — a stepped call result is identical to
+note: binding the result and stepping the binding.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $h ([r [n 4]], [r [n 6]])]
+  [pair [$count [$first $h]//n] [?let [= $t [$first $h]] [$count $t//n]]]]
+#]]
+  [out-text [#
+[pair 1 1]
+#]]
+ ]
+
+ [case id=program-callstep-004-axis-on-call-result-refused level=core
+  [tags call path-step negative crs-1 bp-1]
+  [meta [#
+note: the BP-1 refusal applies unchanged on call-result heads —
+note: explicit axis:: spellings are not binding-path surface.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $h ([user [b 1]],)] [$string [$first $h]/ancestor::user]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+
+ [case id=program-callstep-005-step-on-directive-result level=core
+  [tags directive path-step ps-1 issue-886]
+  [meta [#
+note: RULED PS-1 (2026-08-20) — every program-position bracketed form's
+note: closing bracket takes the [135a] compact-step postfix; a stepped
+note: [?let] result reads exactly like a binding of that result.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $u [user [name "ann"]]] $u]/name
+#]]
+  [out-text [#
+'ann'
+#]]
+ ]
+
+ [case id=program-callstep-006-attr-on-if-result level=core
+  [tags directive path-step ps-1]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[report [?if true [then [row v=9]]]@v]
+#]]
+  [out-text [#
+[report 9]
+#]]
+ ]
+
+ [case id=program-callstep-007-step-on-for-comp-result level=core
+  [tags for-comp path-step ps-1 equivalence]
+  [meta [#
+note: the PS-1 semantic pin on the comprehension head — a stepped
+note: [?for] result is identical to binding the result and stepping the
+note: binding (O4 distribution included).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $d [?for [in $u ([row v=1], [row v=2])] [yield $u]]@v]
+  [?let [= $t [?for [in $u ([row v=1], [row v=2])] [yield $u]]]
+    [pair $d $t@v]]]
+#]]
+  [out-text [#
+[pair ([v 1], [v 2]) ([v 1], [v 2])]
+#]]
+ ]
+
+ [case id=program-callstep-008-step-on-operator-form level=core
+  [tags operator path-step ps-1]
+  [meta [#
+note: kind-driven totality — a child step on a scalar result yields
+note: empty (the same shape bindings have), never an error.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[report [+ 1 2]/x]
+#]]
+  [out-text [#
+[report ()]
+#]]
+ ]
+
+ [case id=program-callstep-009-attr-on-operator-form-refuses-typed level=core
+  [tags operator path-step negative ps-1]
+  [meta [#
+note: @attr on a non-element result refuses TYPED (CXER0001), exactly
+note: as on a binding of that scalar.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[+ 1 2]@a
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-callstep-010-step-on-element-literal level=core
+  [tags element path-step ps-1]
+  [meta [#
+note: element-literal stepping is redundant-but-legal (PS letter §3a).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[$string [user [b 1] [c 2]]/c]
+#]]
+  [out-text [#
+'2'
+#]]
+ ]
+
+ [case id=program-callstep-011-step-on-collection-literals level=core
+  [tags collection path-step ps-1]
+  [meta [#
+note: array / sequence / map literals take the same postfix — `.key` on
+note: a map literal, @attr distribution over a sequence literal.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[pair {a: 5, b: {c: 6}}.b.c [report ([row v=1], [row v=2])@v]]
+#]]
+  [out-text [#
+[pair 6 [report (1, 2)]]
+#]]
+ ]
+
+ [case id=program-callstep-012-axis-on-directive-result-refused level=core
+  [tags directive path-step negative ps-1 bp-1]
+  [meta [#
+note: the ONE BP-1 refusal, inherited by construction on every new head.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $x 1] $x]/ancestor::y
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+
+ [case id=program-conc-041-try-send-reaches-a-fan-out-subscriber level=concurrency
+  [tags channel try-send fan-out regression silent-loss]
+  [meta [#
+note: REGRESSION — [?try-send] onto a fan-out channel (sharing=independent)
+note: answered [ok] while the value sat in the GROUP queue, where no
+note: subscriber ever looks: a SILENT LOSS. [?send] and the [?select] send
+note: case both split on sharing; try-send did not. A fan-out send never
+note: blocks and is never buffer-bound (the window is retention, not flow),
+note: so there is no timeout path on this arm. Same class as the scheduler's
+note: dead tick wire (SUP-1e, conformance/stdlib/sched.cxd sched-039).
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ch [?channel name="ts-fan" sharing=independent retention=window keep=3]]
+[= $sub [?subscribe from=$ch]]
+[= $a [?send [ev 1] to=$ch]]
+[= $b [?try-send [ev 2] to=$ch]]
+[= $r1 [?receive from=$sub]]
+[= $r2 [?receive from=$sub max=5 deadline=0]]
+  ($a, $b, $r1, $r2)]
+#]]
+  [out-text [#
+([ok], [ok], [ev 1], ([ev 2]))
+#]]
+ ]
+
+
+ [case id=program-array-042-discrete-token-array level=core
+  [tags array literal separator asp-2 issue-903 data-reading]
+  [meta [#
+note: RULED ASP-2 (#903) — a comma-less DATA bracket whose 2+ ws-delimited
+note: tokens are all discrete values (typed scalars, quoted strings, holes,
+note: `[…]` nodes, `(…)` sequences, map-shaped `{…}`) is an ARRAY of those
+note: values. Before ASP-2 the `(`/`{` tokens fell to the comma path, whose
+note: slot reader glued the run into ONE nested item and mangled the leading
+note: value per type: the int 1 became the STRING '1 ' (trailing space and
+note: all), a quoted string lost its quoting, `[1 (2)]` refused outright.
+note: Every wrong shape was SILENT and round-tripped stably, so
+note: canonicalization could not reveal it. The canonical rendering is the
+note: sharpest pin: each shape must come back as separate comma-joined items
+note: with its leading value's TYPE intact (`[1, (2, 3)]`, not
+note: `[('1 ', (2, 3))]`). `g` pins the glued exception: a span NOT
+note: ws-delimited on both sides is not a token, so `[(1, 2)[0]]` keeps its
+note: historical one-item mixed reading (the same "glued runs are one item"
+note: rule that keeps CXPath kind tests `$c/node()` parsing, fmt-013).
+note: `h` pins the element guard: a name-shaped first token keeps the
+note: element reading, so `[true (2, 3)]` is the ELEMENT `true`.
+note:
+note: The subject is the DATA reader. The PROGRAM reader is deliberately NOT
+note: covered: there a bracket is an array only when it carries a top-level
+note: comma, because it must also disambiguate patterns, calls and elements
+note: — `[1 2 3]` in program position is not an array literal and still
+note: refuses. A reader difference by design, recorded so it is not
+note: mistaken for drift.
+#]]
+  [in-cx [#
+[doc [a [1 (2, 3)]] [b [1 (2)]] [c [(1) (2)]] [d [1 2 3]] [e [1 {a: 1}]] [f [{a: 1} {b: 2}]] [g [(1, 2)[0]]] [h [true (2, 3)]]]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[doc [a [1, (2, 3)]] [b [1, (2)]] [c [(1), (2)]] [d [1, 2, 3]] [e [1, {a: 1}]] [f [{a: 1}, {b: 2}]] [g [((1, 2), [0])]] [h [true (2, 3)]]]
+#]]
+ ]
+
+ [case id=program-array-043-element-body-discrete-children level=core
+  [tags element body typed-list separator asp-3 issue-909 data-reading]
+  [meta [#
+note: RULED ASP-3 (#909) — the ASP-2 discrete-token rule extends to ELEMENT
+note: BODIES: a comma-less body whose 2+ ws-delimited tokens are all discrete
+note: values (typed scalars, quoted strings, holes, `[…]` nodes, `(…)`
+note: sequences, map-shaped `{…}`) yields those values as DISCRETE CHILDREN.
+note: Before ASP-3 such a body fell to the prose lane, which restringified
+note: the leading scalar: `[k 1 (2, 3)]` came back `[k '1' (2, 3)]` (the int
+note: became the STRING '1 ', trailing space and all); bools and atoms
+note: corrupted the same way. The mangled shape is ENGINE OUTPUT — stdlib
+note: ux-016 renders `[list false (verb, label, …) …]`, so the engine's own
+note: output failed its own re-parse (the #704 class), invisibly, because no
+note: gate re-reads rendered output. `l` pins that ux-016 shape re-reading as
+note: a bool child plus two sequences. `p` pins the bareword guard: any
+note: bareword keeps the WHOLE body its historical prose/mixed reading,
+note: byte-identically. `g` pins the glued exception: a span not ws-delimited
+note: on both sides is not a token. Unlike the HEADLESS position (case 042
+note: `h`), there is NO name-shaped first-token guard here — an element body
+note: has no element reading to protect, and ux-016's own body starts with
+note: the name-shaped bool `false`.
+#]]
+  [in-cx [#
+[doc [k 1 (2, 3)] [l false (verb, label, target) (label, open, url)] [m {a: 1} {b: 2}] [p weight (kg, lbs) shown] [g (1, 2)[0]]]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[doc [k 1 (2, 3)] [l false (verb, label, target) (label, open, url)] [m {a: 1} {b: 2}] [p 'weight' (kg, lbs) ' shown'] [g (1, 2) [0]]]
+#]]
+ ]
+
 ]

@@ -1,4 +1,4 @@
-[test-suite name=locale
+[test-suite name=locale ring=1
   [doc [#
 conformance fixtures for cx-stdlib/locale (spec/std-lib/locale.md §6).
 
@@ -335,7 +335,7 @@ cx-err:CXER3501
  # ── §3.3 Date / time formatting ────────────────────────────────────────────
 
  # §3.3 example: fr-FR "EEEE d MMMM yyyy" on 2026-05-26 → "mardi 26 mai 2026".
- [case id=locale-022-format-date-fr level=core
+ [case id=locale-022-format-date-fr level=core packs=time
   [tags locale format-date fr-FR ldml]
   [in-cx [#
 [empty]
@@ -351,7 +351,7 @@ cx-err:CXER3501
  ]
 
  # §6: ICU "yyyy-MM-dd" canonical pattern.
- [case id=locale-023-format-date-iso-canonical level=core
+ [case id=locale-023-format-date-iso-canonical level=core packs=time
   [tags locale format-date en-US canonical]
   [in-cx [#
 [empty]
@@ -367,7 +367,7 @@ cx-err:CXER3501
  ]
 
  # §5 CXER3502: unparseable ICU date pattern.
- [case id=locale-024-format-date-pattern-invalid level=core
+ [case id=locale-024-format-date-pattern-invalid level=core packs=time
   [tags locale format-date CXER3502]
   [in-cx [#
 [empty]
@@ -382,7 +382,7 @@ cx-err:CXER3502
 #]]
  ]
 
- [case id=locale-025-format-date-tag-invalid level=core
+ [case id=locale-025-format-date-tag-invalid level=core packs=time
   [tags locale format-date CXER3501]
   [in-cx [#
 [empty]
@@ -398,7 +398,7 @@ cx-err:CXER3501
  ]
 
  # §3.3 LDML tokens with a datetime: time component formats too.
- [case id=locale-026-format-datetime-en-us level=core
+ [case id=locale-026-format-datetime-en-us level=core packs=time
   [tags locale format-datetime en-US ldml]
   [in-cx [#
 [empty]
@@ -413,7 +413,7 @@ cx-err:CXER3501
 #]]
  ]
 
- [case id=locale-027-format-datetime-pattern-invalid level=core
+ [case id=locale-027-format-datetime-pattern-invalid level=core packs=time
   [tags locale format-datetime CXER3502]
   [in-cx [#
 [empty]
@@ -429,7 +429,7 @@ cx-err:CXER3502
  ]
 
  # §3.3 / §6: style :full en-US → "Tuesday, May 26, 2026".
- [case id=locale-028-format-date-style-full-en level=core
+ [case id=locale-028-format-date-style-full-en level=core packs=time
   [tags locale format-date-style en-US full]
   [in-cx [#
 [empty]
@@ -445,7 +445,7 @@ cx-err:CXER3502
  ]
 
  # §3.3: style :short en-US → "5/26/26".
- [case id=locale-029-format-date-style-short-en level=core
+ [case id=locale-029-format-date-style-short-en level=core packs=time
   [tags locale format-date-style en-US short]
   [in-cx [#
 [empty]
@@ -461,7 +461,7 @@ cx-err:CXER3502
  ]
 
  # §6: style :full ja-JP → "2026年5月26日火曜日".
- [case id=locale-030-format-date-style-full-ja level=core
+ [case id=locale-030-format-date-style-full-ja level=core packs=time
   [tags locale format-date-style ja-JP full unicode]
   [in-cx [#
 [empty]
@@ -476,7 +476,7 @@ cx-err:CXER3502
 #]]
  ]
 
- [case id=locale-031-format-date-style-tag-invalid level=core
+ [case id=locale-031-format-date-style-tag-invalid level=core packs=time
   [tags locale format-date-style CXER3501]
   [in-cx [#
 [empty]
@@ -1025,6 +1025,25 @@ cx-err:CXER3501
 #]]
   [out-err [#
 cx-err:CXER3500
+#]]
+ ]
+
+# 828-1a: default-locale READS AN ENVIRONMENT VARIABLE ($LANG / LC_ALL), and
+ # env.md §7 states the rule flatly — "Environment-variable reads require
+ # `env`". The capability-free carve-out there covers only the ambient process
+ # basics "intrinsic to the running process"; an env-var read is not one, and
+ # hostname/username are gated "in the same spirit". LANG not being a secret
+ # does not exempt it: security.md §2.1 is a closed EFFECT-POINT table.
+ # (This case carries no grant=, so the runner installs the EMPTY cap set.)
+ [case id=locale-069-default-locale-requires-env level=core gate=enforced rule=EV-EFFECT-SET
+  [tags locale default-locale capability env CXER0271 828]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:default-locale]
+#]]
+  [out-err [#
+cx-err:CXER0271
 #]]
  ]
 ]

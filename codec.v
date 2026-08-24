@@ -36,8 +36,10 @@ pub mut:
 	// emit: tree → text. `lossless` requests the codec's lossless image where
 	// one exists (XML's `<cx:T>` typing); ignored by codecs without one.
 	emit        ?fn (ParseResult, bool) !string
-	// emit_bytes: tree → binary output (binary codecs).
-	emit_bytes  ?fn (Document) []u8
+	// emit_bytes: tree → binary output (binary codecs). Fallible —
+	// binary emitters refuse unencodable input loudly (#807: e.g.
+	// out-of-range integer cells at CXCol encode).
+	emit_bytes  ?fn (Document) ![]u8
 	// lossless marks codecs whose text emitter honors the lossless flag
 	// (#416/#444/#475): cx (inherently lossless), xml (`cx:` markers), json
 	// and yaml (the `$tag` structure envelope + `cx:type` sidecar / `!!cx:T`
@@ -181,9 +183,15 @@ fn build_codec_table() map[string]Codec {
 	t['ast'] = Codec{
 		name:        'ast'
 		parse_bytes: bin_to_doc
-		emit_bytes:  emit_ast_bin
+		emit_bytes:  emit_ast_bin_bytes
 	}
 	return t
+}
+
+// emit_ast_bin_bytes adapts the infallible ast_bin emitter to the
+// fallible emit_bytes registry shape (binary emitters MAY refuse).
+fn emit_ast_bin_bytes(doc Document) ![]u8 {
+	return emit_ast_bin(doc)
 }
 
 // codec_names returns every registered codec name — the registry-driven
@@ -216,6 +224,106 @@ pub fn codec_lookup(name string) ?Codec {
 // `parse → emit` path that `convert()` and the CLI `--from/--to` dispatch
 // share (codec.md §6 / §7). Errors if either name is unknown or the codec
 // lacks the requested text half.
+// first_map_declaration_key walks a node tree for a declaration-only map
+// entry `{k: ::T}` (RULED: MSS-4 #917) and returns `k (::T)` for the first
+// one found. Lossy targets have no absent-field image (`null` would
+// conflate — check-null-absence-conflation), so the ANC-1 seams refuse a
+// document that carries one.
+pub fn first_map_declaration_key(n Node) ?string {
+	match n {
+		MapNode {
+			for entry in n.entries {
+				if entry.decl_kind != '' {
+					return '${scalar_value_str(entry.key_value)} (::${entry.decl_kind})'
+				}
+				if hit := first_map_declaration_key(entry.value) {
+					return hit
+				}
+			}
+		}
+		Element {
+			// A `__cx_map__` envelope ENTRY carries its declaration on
+			// meta.decl_kind (program-lane representation, MSS-4).
+			if n.meta != unsafe { nil } {
+				if dk := n.meta.decl_kind {
+					if dk != '' {
+						return '${n.name} (::${dk})'
+					}
+				}
+			}
+			if td := n.table_opt() {
+				for row in td.rows {
+					for cell in row {
+						if cell is MapNode {
+							if hit := first_map_declaration_key(Node(cell)) {
+								return hit
+							}
+						}
+					}
+				}
+			}
+			for it in n.items {
+				if hit := first_map_declaration_key(it) {
+					return hit
+				}
+			}
+		}
+		CXDirectiveNode {
+			for it in n.items {
+				if hit := first_map_declaration_key(it) {
+					return hit
+				}
+			}
+		}
+		EvalDirectiveNode {
+			for it in n.items {
+				if hit := first_map_declaration_key(it) {
+					return hit
+				}
+			}
+		}
+		SequenceNode {
+			for it in n.items {
+				if hit := first_map_declaration_key(it) {
+					return hit
+				}
+			}
+		}
+		ArrayNode {
+			for it in n.items {
+				if hit := first_map_declaration_key(it) {
+					return hit
+				}
+			}
+		}
+		IteratorNode {
+			for it in n.memo {
+				if hit := first_map_declaration_key(it) {
+					return hit
+				}
+			}
+		}
+		else {}
+	}
+	return none
+}
+
+// document_map_declaration returns the first declaration-only entry in a
+// Document, prolog included — the convert/emit seam guard (MSS-4).
+pub fn document_map_declaration(d Document) ?string {
+	for n in d.prolog {
+		if hit := first_map_declaration_key(n) {
+			return hit
+		}
+	}
+	for n in d.elements {
+		if hit := first_map_declaration_key(n) {
+			return hit
+		}
+	}
+	return none
+}
+
 pub fn convert_by_name(src string, from string, to string, lossless bool) !string {
 	from_codec := codec_lookup(from) or { return error('unknown source format: ${from}') }
 	to_codec := codec_lookup(to) or { return error('unknown target format: ${to}') }
@@ -227,7 +335,43 @@ pub fn convert_by_name(src string, from string, to string, lossless bool) !strin
 	if lossless && !to_codec.lossless {
 		return error('--lossless is not supported for --to=${to}; supported: ${lossless_codec_names().join(', ')}')
 	}
-	res := parse_fn(src)!
+	mut res := parse_fn(src)!
+	// ANC-1 (ast.md "Parse AST vs. Resolved AST", 2026-08-20): a LOSSY
+	// projection emits the SEMANTIC document — aliases expanded, merges
+	// applied — matching strict canonical's resolved form, so a consumer
+	// without a CX reader never sees an inert `[*name]` or a merge that
+	// inherited nothing. The lossless lanes keep the authored carry: `cx`
+	// (fmt / round-trip), `xml` (the cx:* attribute carry, conversions.md),
+	// and any target under --lossless (the bijective sidecar modes).
+	// RULED: MSS-4 (#917): declaration-only map entries carry through the
+	// cx / round-trip-xml lanes and the BIJECTIVE --lossless sidecar modes
+	// (the `cx:decl` sidecar, twin of `cx:key-type`) — every LOSSY target
+	// has no absent-field image, so the seam REFUSES (the ANC-1
+	// precedent), never nulls or drops.
+	if !lossless && to != 'cx' && to != 'xml' {
+		if s := res.single {
+			if hit := document_map_declaration(s) {
+				return error('declaration-only map entry `${hit}` has no lossy ${to} image — declarations carry through cx, xml, and the --lossless sidecar modes (cx-err:CXER0100)')
+			}
+		} else if m := res.multi {
+			for d in m {
+				if hit := document_map_declaration(d) {
+					return error('declaration-only map entry `${hit}` has no lossy ${to} image — declarations carry through cx, xml, and the --lossless sidecar modes (cx-err:CXER0100)')
+				}
+			}
+		}
+	}
+	if !lossless && to != 'cx' && to != 'xml' {
+		if s := res.single {
+			res.single = resolve_document(s)!
+		} else if m := res.multi {
+			mut rm := []Document{cap: m.len}
+			for d in m {
+				rm << resolve_document(d)!
+			}
+			res.multi = rm
+		}
+	}
 	return emit_fn(res, lossless)!
 }
 
@@ -318,6 +462,14 @@ fn parse_doc_to_value_node(doc Document) Node {
 pub fn codec_emit_node(name string, n Node, lossless bool) !string {
 	c := codec_lookup(name) or { return error('unknown codec: ${name}') }
 	ef := c.emit or { return error('codec ${name} has no text emitter') }
+	// RULED: MSS-4 (#917): the in-program codec surface takes the same
+	// lossy-lane refusal as convert_by_name — declarations carry through
+	// cx, xml, and the --lossless sidecar modes.
+	if !lossless && name != 'cx' && name != 'xml' {
+		if hit := first_map_declaration_key(n) {
+			return error('declaration-only map entry `${hit}` has no lossy ${name} image — declarations carry through cx, xml, and the --lossless sidecar modes (cx-err:CXER0100)')
+		}
+	}
 	doc := node_to_doc(n)
 	return ef(ParseResult{
 		single:   doc
@@ -341,7 +493,7 @@ pub fn codec_parse_bytes_node(name string, b []u8) !Node {
 pub fn codec_emit_bytes_node(name string, n Node) ![]u8 {
 	c := codec_lookup(name) or { return error('unknown codec: ${name}') }
 	if ebf := c.emit_bytes {
-		return ebf(node_to_doc(n))
+		return ebf(node_to_doc(n))!
 	}
 	return codec_emit_node(name, n, false)!.bytes()
 }

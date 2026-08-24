@@ -1,0 +1,3 @@
+flowchart TD
+  def_greet["def greet"]
+  def_main["def main"]

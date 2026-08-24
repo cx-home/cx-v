@@ -1,0 +1,5 @@
+sequenceDiagram
+  participant hello
+  participant client
+  client ->>+ hello : GET /
+  hello -->>- client : response

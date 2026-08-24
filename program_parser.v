@@ -213,7 +213,13 @@ fn (mut p ProgramParser) parse_atom() !ProgramNode {
 	k := p.peek_kind()
 	match k {
 		.directive_name {
-			return p.parse_directive()!
+			// Directive-result postfix steps (RULED PS-1, #886): a glued
+			// [135a] step run after the directive's closing `]` applies to
+			// the directive RESULT — `[?let …]/name`, `[?if …]@attr` — for
+			// EVERY directive shape (special forms, the [?for] family,
+			// [?element], [?cx], [?str], module directives): this arm is the
+			// one expression-position dispatch, so they inherit it uniformly.
+			return p.attach_postfix_result_steps(p.parse_directive()!)!
 		}
 		.dollar {
 			binding := p.parse_binding_with_path()!
@@ -248,10 +254,14 @@ fn (mut p ProgramParser) parse_atom() !ProgramNode {
 			return p.parse_bracket(.expression)!
 		}
 		.lparen {
-			return p.parse_paren_or_sequence()!
+			// Sequence-literal postfix steps (RULED PS-1): `(1, 2)/x` — a
+			// paren form always parses to a sequence_lit (a one-item paren
+			// included), so the collection-literal rule covers it whole.
+			return p.attach_postfix_result_steps(ProgramNode(p.parse_paren_or_sequence()!))!
 		}
 		.lbrace {
-			return p.parse_map_literal()!
+			// Map-literal postfix steps (RULED PS-1): `{a: 1}.a`.
+			return p.attach_postfix_result_steps(ProgramNode(p.parse_map_literal()!))!
 		}
 		.string_lit {
 			t := p.advance()
@@ -261,8 +271,53 @@ fn (mut p ProgramParser) parse_atom() !ProgramNode {
 				pos:     t.pos
 			}
 		}
+		.bare_value {
+			// #935: a glued-residue body run (`0.0.0.0`, a vA.B.C version
+			// string, `1-2`) —
+			// read as the data reading reads the same bytes: one auto-typed
+			// value, the STRING when nothing auto-types.
+			return bare_run_literal(p.advance())
+		}
 		.number_lit {
 			t := p.advance()
+			// Postfix ascription in expression position (#776; stream 11
+			// §3/§10 — RULED): a BYTE-ADJACENT `::TYPE` after a number
+			// literal coerces from the ORIGINAL token text (the L50 rule —
+			// the annotation overrides §9 auto-typing), sharing the data
+			// reading's coercion so the #466 hex-under-exact refusal and
+			// the decimal scale normalization agree across both readings.
+			// Commit to the ascription reading ONLY when the full shape is
+			// present (adjacent `::` + adjacent KNOWN type name) — `::` is
+			// also slice syntax (`$xs[5::2]`), which must keep parsing as
+			// before when this is not an ascription.
+			if p.peek_kind() == .double_colon
+				&& p.peek().pos.offset == t.pos.offset + t.text.len {
+				tt := p.peek_at(1)
+				if tt.kind == .ident && tt.pos.offset == p.peek().pos.offset + 2
+					&& is_valid_type_tag(tt.text) {
+					p.advance() // '::'
+					p.advance() // the type name
+					// #933: the CHECKED shared core (coerce_scalar_strict),
+					// not the base10-verbatim helper — that helper refused hex
+					// for EVERY kind (wrong for ::bytes, whose shipped carrier
+					// IS 0x-hex, #457) and fell through to UNCHECKED coercion
+					// for the rest (`5::bool` invented false at rc=0, the
+					// MSS-3 item 1 class in expression position). The strict
+					// core keeps the #466 hex-under-decimal/bigint refusal and
+					// checks every arm, identically to the data reading.
+					sn := coerce_scalar_strict(tt.text, t.text) or {
+						return ParseError{
+							message: err.msg()
+							pos:     t.pos
+						}
+					}
+					return ProgramLiteral{
+						kind: .node_lit
+						node: Node(sn)
+						pos:  t.pos
+					}
+				}
+			}
 			return parse_number_literal(t)!
 		}
 		.bool_lit {
@@ -616,7 +671,16 @@ fn (mut p ProgramParser) parse_path_step(implicit_axis ProgramPathAxis) !Program
 	mut name := ''
 	mut ns_kind := ProgramPathNsKind.none
 	mut ns_prefix := ''
-	if p.peek_kind() == .star {
+	// Kind tests are checked FIRST: `node()` and friends are whole
+	// NodeTests, so the name branch below must never see their leading
+	// ident. try_take_kind_test consumes nothing unless the full
+	// `Name '(' ')'` spelling is present byte-adjacent.
+	kind_test := p.try_take_kind_test()!
+	if kind_test != .none {
+		// Kind test consumed; `name`/`ns_kind`/`ns_prefix` stay empty.
+		// Fall through to the shared bind-annotation + predicate tail so
+		// `//user/text()[1]` filters exactly like a named step.
+	} else if p.peek_kind() == .star {
 		p.advance()
 		if p.colon_glues_qname() {
 			// '*:' LocalName — match any namespace, specific local name.
@@ -719,10 +783,54 @@ fn (mut p ProgramParser) parse_path_step(implicit_axis ProgramPathAxis) !Program
 		name:          name
 		ns_kind:       ns_kind
 		ns_prefix:     ns_prefix
+		kind_test:     kind_test
 		predicates:    preds
 		bind:          step_bind
 		pos:           start
 	}
+}
+
+// try_take_kind_test consumes a grammar [131b] kind test standing in
+// NodeTest position and returns which one; `.none` (consuming nothing)
+// when the cursor does not hold one.
+//
+// The spelling is `Name '(' ')'` with all three tokens BYTE-ADJACENT.
+// Adjacency is what keeps the retired paren-call surface ([132]–[134])
+// from colliding with kind tests: a space-separated `//admin (1, 2)` is
+// a path followed by a separate sequence-literal operand and must stay
+// that way, and a glued non-empty `//admin(1, 2)` likewise falls
+// through — only the empty `()` pair is a kind-test spelling.
+//
+// A glued empty pair whose name is NOT one of the four IS an error:
+// `//bogus()` used to misparse silently as the path `//bogus` plus an
+// empty sequence literal. That is the same refusal the DATA-side reader
+// (path_parser.v finish_node_test) already raises, so both readers now
+// admit exactly the closed set.
+fn (mut p ProgramParser) try_take_kind_test() !ProgramPathKindTest {
+	if p.peek_kind() != .ident || p.peek_kind_at(1) != .lparen
+	   || p.peek_kind_at(2) != .rparen {
+		return ProgramPathKindTest.none
+	}
+	name_tok := p.peek()
+	lp := p.peek_at(1)
+	rp := p.peek_at(2)
+	if lp.pos.offset != name_tok.pos.offset + name_tok.text.len {
+		return ProgramPathKindTest.none
+	}
+	if rp.pos.offset != lp.pos.offset + lp.text.len {
+		return ProgramPathKindTest.none
+	}
+	kt := program_path_kind_test_from_name(name_tok.text)
+	if kt == .none {
+		return ParseError{
+			message: "unknown kind-test `${name_tok.text}()` in CXPath NodeTest; grammar [131b] admits node(), text(), element() and attribute()"
+			pos:     name_tok.pos
+		}
+	}
+	p.advance() // Name
+	p.advance() // '('
+	p.advance() // ')'
+	return kt
 }
 
 // axis_from_name maps the surface axis name (per grammar [131a]) to the
@@ -842,6 +950,7 @@ fn (mut p ProgramParser) parse_path_predicate() !ProgramPathPredicate {
 					attr_name:  pa.name
 					attr_op:    pa.op
 					attr_value: pa.value
+					type_name:  pa.type_name
 					pos:        start
 				}
 			}
@@ -900,12 +1009,13 @@ fn (mut p ProgramParser) parse_path_predicate_general(start Position) !ProgramPa
 				pos:  start
 			}
 		}
-		// `[axis::name]` step existence — binding-paths do not carry
-		// XPath axes yet ([135a] subset), so the desugar target
-		// `[$exists $_/axis::name]` has no evaluable form. Precise error.
+		// `[axis::name]` step existence — binding paths carry no explicit
+		// axis steps BY DESIGN ([135a], BP-1): the desugar target
+		// `[$exists $_/axis::name]` is itself outside the binding-path
+		// surface. Precise refusal, aligned with the step-arm wording.
 		if k == .ident && p.peek_kind_at(1) == .double_colon {
 			return ParseError{
-				message: 'axis-qualified step-existence predicate `[${p.peek().text}::…]` is not yet supported (binding paths carry no axis steps); restructure with an explicit path'
+				message: 'explicit axis step `[${p.peek().text}::…]` is not binding-path surface (grammar [135a], BP-1): binding paths carry the value-meaningful compact steps only (`/name`, `//name`, `@attr`, `..`) — lateral and ancestor axes have no referent on a detached value; root the query at the document (`//…/${p.peek().text}::name`), where all twelve axes apply'
 				pos:     p.peek().pos
 			}
 		}
@@ -979,9 +1089,15 @@ fn (mut p ProgramParser) parse_path_predicate_general(start Position) !ProgramPa
 			if p.peek_kind() == .ident && p.peek_kind_at(1) == .eq {
 				arg_name_tok := p.advance()
 				p.advance() // '='
-				args << p.parse_expr() or {
-					p.predicate_depth--
-					return err
+				// #923: a bare RUN named-arg value re-reads as the
+				// expression the pre-run grammar saw (bare_run_expr_value).
+				if p.peek_kind() == .bare_value {
+					args << bare_run_expr_value(p.advance())
+				} else {
+					args << p.parse_expr() or {
+						p.predicate_depth--
+						return err
+					}
 				}
 				arg_labels << arg_name_tok.text
 				continue
@@ -1081,9 +1197,22 @@ fn parse_number_literal(t ProgramToken) !ProgramLiteral {
 		}
 		return number_literal_as_string(t)
 	}
-	// Decimal int / float — strip `_` separators ([L20b]/[L20c]) before parsing.
+	// Decimal int / fraction — strip `_` separators ([L20b]/[L20c]) before parsing.
 	cleaned := strip_underscores(t.text) or { return number_literal_as_string(t) }
 	if cleaned.contains('.') || cleaned.contains('e') || cleaned.contains('E') {
+		// I1 stream 11 (owner ruling 2b): a FIXED-POINT fraction is a
+		// DECIMAL — exact, scale preserved; exponent form stays float.
+		// Mirrors the data reading's try_autotype arm exactly.
+		if !cleaned.contains('e') && !cleaned.contains('E') {
+			if norm := normalize_decimal_token(t.text) {
+				return ProgramLiteral{
+					kind:    .decimal_lit
+					str_val: norm
+					src:     t.text
+					pos:     t.pos
+				}
+			}
+		}
 		return ProgramLiteral{
 			kind:    .float_lit
 			flt_val: cleaned.f64()
@@ -1215,13 +1344,82 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 			}
 		}
 	}
+	steps := p.parse_postfix_path_steps()!
+	return ProgramBinding{
+		name: bname
+		path: steps
+		pos:  dollar.pos
+	}
+}
+
+// attach_postfix_result_steps parses an optional glued [135a] step run after
+// a bracketed value form's closing bracket and attaches it to the node's
+// RESULT path (RULED PS-1, 2026-08-20, #886): the postfix-step surface that
+// BP-1 ruled for bindings and CRS-1 extended to the two call forms applies
+// to EVERY program-position bracketed value form — directive results,
+// operator forms, element / collection / slice literals. The SAME shared
+// step loop does the parsing (byte-adjacency gate + BP-1 axis refusals
+// inherited by construction); this helper only decides which AST carrier
+// receives the run. Calls never reach here with steps (their parsers attach
+// internally, CRS-1); patterns are structural-only and take no steps.
+fn (mut p ProgramParser) attach_postfix_result_steps(node ProgramNode) !ProgramNode {
+	steps := p.parse_postfix_path_steps()!
+	if steps.len == 0 {
+		return node
+	}
+	match node {
+		ProgramLiteral {
+			return ProgramLiteral{ ...node, path: steps }
+		}
+		ProgramDirective {
+			return ProgramDirective{ ...node, path: steps }
+		}
+		ProgramForComp {
+			return ProgramForComp{ ...node, path: steps }
+		}
+		ProgramSliceLiteral {
+			return ProgramSliceLiteral{ ...node, path: steps }
+		}
+		else {
+			// Defensive: no other node type is routed through this helper
+			// with a non-empty step run.
+			return ParseError{
+				message: 'internal: postfix result steps on an unexpected node shape'
+				pos:     p.peek().pos
+			}
+		}
+	}
+}
+
+// try_take_computed_step_name (#925, RULED: PYE-1a/PYE-1b): a `$name`
+// binding in step-NAME position — `$m.$k`, `$x/$k`, `$x//$k`, `$x@$k` (and
+// `/@$k`). Consumes `$` + ident and returns the binding name; none when the
+// cursor is not on that shape. The computed name is a BARE binding — no
+// inner path, no QName fold — so `$m.$k/foo` is a computed member step then
+// a child step `foo`.
+fn (mut p ProgramParser) try_take_computed_step_name() ?string {
+	if p.peek_kind() != .dollar || p.peek_kind_at(1) != .ident {
+		return none
+	}
+	p.advance() // '$'
+	n := p.advance()
+	return n.text
+}
+
+// parse_postfix_path_steps parses the [135a] BindingStep run — the shared
+// postfix-step surface for `$binding` heads AND call results (RULED CRS-1,
+// 2026-08-20, #862): the step loop lifted verbatim out of
+// parse_binding_with_path so `[$first $h]@v` and `$h@v` are ONE grammar,
+// including the BP-1 explicit-axis refusals. Returns the (possibly empty)
+// step list; the caller decides what the steps apply to.
+fn (mut p ProgramParser) parse_postfix_path_steps() ![]ProgramPathStep {
 	mut steps := []ProgramPathStep{}
 	for {
 		// PROTOTYPE (gap-α): a path-step token (`/`, `//`, `@`, `.`) binds to
-		// the binding ONLY when byte-adjacent (no whitespace) to the preceding
-		// token — mirroring the predicate-`[` and qualified-`/` adjacency
-		// rules. A space-separated step token is a separate operand, so
-		// `[$count //*]` parses as head `$count` + arg `//*`.
+		// the preceding value ONLY when byte-adjacent (no whitespace) to the
+		// preceding token — mirroring the predicate-`[` and qualified-`/`
+		// adjacency rules. A space-separated step token is a separate operand,
+		// so `[$count //*]` parses as head `$count` + arg `//*`.
 		sk0 := p.peek_kind()
 		if (sk0 == .slash || sk0 == .double_slash || sk0 == .at || sk0 == .dot)
 		   && !p.cur_adjacent_to_prev() {
@@ -1232,6 +1430,8 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 		// trailing `[…]` predicates.
 		mut step_kind := PathStepKind.child
 		mut step_name := ''
+		mut step_computed := ''
+		mut step_kind_test := ProgramPathKindTest.none
 		mut have_step := true
 		match p.peek_kind() {
 			.double_slash {
@@ -1245,12 +1445,27 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 					// fall through to break the step loop
 				} else {
 					p.advance()
-					if p.peek_kind() == .star {
+					kt := p.try_take_kind_test()!
+					if kt != .none {
+						// `$x//node()` — descendant axis, kind test.
+						step_kind = .descendant
+						step_kind_test = kt
+					} else if p.peek_kind() == .star {
 						p.advance()
 						step_kind = .descendant_wildcard
 						step_name = '*'
+					} else if cn := p.try_take_computed_step_name() {
+						// #925 (RULED: PYE-1b): `$x//$k` — computed name.
+						step_kind = .descendant
+						step_computed = cn
 					} else {
 						n := p.expect(.ident, 'name after //')!
+						if p.peek_kind() == .double_colon {
+							return ParseError{
+								message: 'explicit axis step `${n.text}::…` is not binding-path surface (grammar [135a], BP-1): binding paths carry the value-meaningful compact steps only (`/name`, `//name`, `@attr`, `..`) — lateral and ancestor axes have no referent on a detached value; root the query at the document (`//…/${n.text}::name`), where all twelve axes apply'
+								pos:     p.peek().pos
+							}
+						}
 						step_kind = .descendant
 						step_name = p.fold_binding_step_prefix(n.text)!
 					}
@@ -1258,16 +1473,27 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 			}
 			.slash {
 				p.advance()
-				if p.peek_kind() == .star {
+				kt := p.try_take_kind_test()!
+				if kt != .none {
+					// `$x/node()` — child axis, kind test.
+					step_kind = .child
+					step_kind_test = kt
+				} else if p.peek_kind() == .star {
 					p.advance()
 					step_kind = .wildcard_children
 					step_name = '*'
 				} else if p.peek_kind() == .at {
 					// `/@name` — XPath 3.1 attribute-axis short form.
 					p.advance()
-					n := p.expect(.ident, 'name after /@')!
-					step_kind = .attr
-					step_name = p.fold_binding_step_prefix(n.text)!
+					if cn := p.try_take_computed_step_name() {
+						// #925 (RULED: PYE-1b): `/@$k` — computed name.
+						step_kind = .attr
+						step_computed = cn
+					} else {
+						n := p.expect(.ident, 'name after /@')!
+						step_kind = .attr
+						step_name = p.fold_binding_step_prefix(n.text)!
+					}
 				} else if p.peek_kind() == .dot && p.peek_kind_at(1) == .dot {
 					// `/..` — parent axis (G2). Lexer emits
 					// `.dot` per byte, so two consecutive `.dot` tokens
@@ -1276,8 +1502,18 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 					p.advance() // second dot
 					step_kind = .parent
 					step_name = ''
+				} else if cn := p.try_take_computed_step_name() {
+					// #925 (RULED: PYE-1b): `$x/$k` — computed name.
+					step_kind = .child
+					step_computed = cn
 				} else {
 					n := p.expect(.ident, 'name after /')!
+					if p.peek_kind() == .double_colon {
+						return ParseError{
+							message: 'explicit axis step `${n.text}::…` is not binding-path surface (grammar [135a], BP-1): binding paths carry the value-meaningful compact steps only (`/name`, `//name`, `@attr`, `..`) — lateral and ancestor axes have no referent on a detached value; root the query at the document (`//…/${n.text}::name`), where all twelve axes apply'
+							pos:     p.peek().pos
+						}
+					}
 					step_kind = .child
 					step_name = p.fold_binding_step_prefix(n.text)!
 				}
@@ -1302,9 +1538,15 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 					}
 				}
 				p.advance()
-				n := p.expect(.ident, 'name after @')!
-				step_kind = .attr
-				step_name = p.fold_binding_step_prefix(n.text)!
+				if cn := p.try_take_computed_step_name() {
+					// #925 (RULED: PYE-1b): `$x@$k` — computed name.
+					step_kind = .attr
+					step_computed = cn
+				} else {
+					n := p.expect(.ident, 'name after @')!
+					step_kind = .attr
+					step_name = p.fold_binding_step_prefix(n.text)!
+				}
 			}
 			.dot {
 				// `.foo` path step — distinguished from member access in
@@ -1312,9 +1554,16 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 				// the lexer guarantees `.5` lexes as a number, so `.` here
 				// is unambiguously a path step.
 				p.advance()
-				n := p.expect(.ident, 'name after .')!
-				step_kind = .member
-				step_name = n.text
+				if cn := p.try_take_computed_step_name() {
+					// #925 (RULED: PYE-1a): `$m.$k` — computed member name;
+					// the lookup is by the full (kind, image) key identity.
+					step_kind = .member
+					step_computed = cn
+				} else {
+					n := p.expect(.ident, 'name after .')!
+					step_kind = .member
+					step_name = n.text
+				}
 			}
 			else {
 				have_step = false
@@ -1352,16 +1601,14 @@ fn (mut p ProgramParser) parse_binding_with_path() !ProgramBinding {
 			preds << p.parse_path_predicate()!
 		}
 		steps << ProgramPathStep{
-			kind:       step_kind
-			name:       step_name
-			predicates: preds
+			kind:          step_kind
+			name:          step_name
+			computed_name: step_computed
+			kind_test:     step_kind_test
+			predicates:    preds
 		}
 	}
-	return ProgramBinding{
-		name: bname
-		path: steps
-		pos:  dollar.pos
-	}
+	return steps
 }
 
 // ── slice-postfix on $binding ────────────────────────────────────
@@ -1929,7 +2176,13 @@ fn (mut p ProgramParser) parse_dollar_call_from_inside(start Position) !ProgramN
 		if p.peek_kind() == .ident && p.peek_kind_at(1) == .eq {
 			arg_name_tok := p.advance()
 			p.advance() // '='
-			args << p.parse_expr()!
+			// #923: a bare RUN named-arg value re-reads as the expression
+			// the pre-run grammar saw (bare_run_expr_value).
+			if p.peek_kind() == .bare_value {
+				args << bare_run_expr_value(p.advance())
+			} else {
+				args << p.parse_expr()!
+			}
 			arg_labels << arg_name_tok.text
 		} else {
 			args << p.parse_expr()!
@@ -1944,6 +2197,13 @@ fn (mut p ProgramParser) parse_dollar_call_from_inside(start Position) !ProgramN
 		.bang { must_succeed = true; p.advance() }
 		else {}
 	}
+	// Call-result postfix steps (RULED CRS-1, grammar [125]): a
+	// byte-adjacent [135a] step run after the closing `]` (or `?`/`!`)
+	// applies to the call RESULT — `[$first $h]@v` — via the SAME shared
+	// step loop the binding read uses (BP-1 axis refusals included). The
+	// adjacency gate inside parse_postfix_path_steps keeps a whitespace-
+	// separated `/…` / `@…` a separate operand, exactly as for bindings.
+	path := p.parse_postfix_path_steps()!
 	return ProgramCall{
 		name:          head.name
 		args:          args
@@ -1951,6 +2211,7 @@ fn (mut p ProgramParser) parse_dollar_call_from_inside(start Position) !ProgramN
 		fallible:      fallible
 		must_succeed:  must_succeed
 		explicit_call: true
+		path:          path
 		pos:           start
 	}
 }
@@ -2004,7 +2265,13 @@ fn (mut p ProgramParser) parse_qualified_call_from_inside(start Position) !Progr
 		if p.peek_kind() == .ident && p.peek_kind_at(1) == .eq {
 			arg_name_tok := p.advance()
 			p.advance() // '='
-			args << p.parse_expr()!
+			// #923: a bare RUN named-arg value re-reads as the expression
+			// the pre-run grammar saw (bare_run_expr_value).
+			if p.peek_kind() == .bare_value {
+				args << bare_run_expr_value(p.advance())
+			} else {
+				args << p.parse_expr()!
+			}
 			arg_labels << arg_name_tok.text
 		} else {
 			args << p.parse_expr()!
@@ -2019,6 +2286,9 @@ fn (mut p ProgramParser) parse_qualified_call_from_inside(start Position) !Progr
 		.bang { must_succeed = true; p.advance() }
 		else {}
 	}
+	// Call-result postfix steps (RULED CRS-1) — the qualified-call form
+	// shares the [125] postfix; see parse_dollar_call_from_inside.
+	path := p.parse_postfix_path_steps()!
 	return ProgramCall{
 		name:          head_name
 		args:          args
@@ -2026,6 +2296,7 @@ fn (mut p ProgramParser) parse_qualified_call_from_inside(start Position) !Progr
 		fallible:      fallible
 		must_succeed:  must_succeed
 		explicit_call: true
+		path:          path
 		pos:           start
 	}
 }
@@ -2056,11 +2327,13 @@ fn (mut p ProgramParser) parse_bracket(mode BracketMode) !ProgramNode {
 	// Empty []
 	if p.peek_kind() == .rbrack {
 		p.advance()
-		return ProgramLiteral{
+		// PS-1: even the empty array's bracket takes a glued step run —
+		// one rule, no carve-outs (kind-driven at eval: yields empty).
+		return p.attach_postfix_result_steps(ProgramNode(ProgramLiteral{
 			kind:  .array_lit
 			items: []
 			pos:   start
-		}
+		}))!
 	}
 	// first-class Slice literal. A bracketed body with
 	// unambiguously slice-shape (leading `:` / `::`, leading lone `*`,
@@ -2074,7 +2347,9 @@ fn (mut p ProgramParser) parse_bracket(mode BracketMode) !ProgramNode {
 	// below. Multi-axis only appears after a `$binding` postfix
 	// (ProgramSliceAccess),.
 	if is_slice_literal_body_here(p) {
-		return p.parse_slice_literal_from_inside(start)!
+		// PS-1: the slice literal is a bracketed value form — its closing
+		// `]` takes the same glued step run as every other.
+		return p.attach_postfix_result_steps(p.parse_slice_literal_from_inside(start)!)!
 	}
 	// Pattern-shape leading tokens (only in expression mode if the
 	// leading token is unambiguously a pattern marker — $, **, or
@@ -2092,7 +2367,8 @@ fn (mut p ProgramParser) parse_bracket(mode BracketMode) !ProgramNode {
 		// positional arguments: `[$fn a b]`. A top-level comma still marks
 		// an array literal whose first item is the binding (`[$x, $y]`),
 		if p.contains_top_level_comma_before_rbrack() {
-			return p.parse_array_or_element_with_commas(start)!
+			// PS-1: an array literal regardless of its first item's shape.
+			return p.attach_postfix_result_steps(p.parse_array_or_element_with_commas(start)!)!
 		}
 		return p.parse_dollar_call_from_inside(start)!
 	}
@@ -2101,7 +2377,8 @@ fn (mut p ProgramParser) parse_bracket(mode BracketMode) !ProgramNode {
 			return p.parse_pattern_body_from_inside(start)!
 		}
 		// Comma present → array literal containing binding/expr items.
-		return p.parse_array_or_element_with_commas(start)!
+		// PS-1: array literals take the glued postfix step run.
+		return p.attach_postfix_result_steps(p.parse_array_or_element_with_commas(start)!)!
 	}
 	if k0 == .colon && p.peek_kind_at(1) == .ident {
 		return p.parse_pattern_body_from_inside(start)!
@@ -2130,16 +2407,21 @@ fn (mut p ProgramParser) parse_bracket(mode BracketMode) !ProgramNode {
 		// Element-shape head; the cx-element parser handles body
 		// items including commas (the body is a sequence of
 		// expressions, not a comma-separated array).
-		return p.parse_cx_element_from_inside(start)!
+		//
+		// PS-1 (#886): element literals AND operator forms (`[+ …]` —
+		// operator heads are element-shaped) take the glued postfix
+		// step run on their closing `]`.
+		return p.attach_postfix_result_steps(ProgramNode(p.parse_cx_element_from_inside(start)!))!
 	}
 	// Heuristic: scan ahead for an unenclosed comma before the closing
 	// `]`. Commas inside nested brackets/parens/braces don't count.
+	// PS-1: array literals take the glued postfix step run.
 	if p.contains_top_level_comma_before_rbrack() {
-		return p.parse_array_or_element_with_commas(start)!
+		return p.attach_postfix_result_steps(p.parse_array_or_element_with_commas(start)!)!
 	}
 	// Single-item bracket with non-element-head first token:
 	// treat as a one-element array.
-	return p.parse_array_or_element_with_commas(start)!
+	return p.attach_postfix_result_steps(p.parse_array_or_element_with_commas(start)!)!
 }
 
 // is_element_head_token reports whether a token kind is admissible as
@@ -2322,6 +2604,23 @@ fn (mut p ProgramParser) parse_cx_element_from_inside(start Position) !ProgramLi
 	// Namespace-qualified head `prefix:local` ([L11]/[7a]) — fold a byte-
 	// adjacent `:local` into the head (not an atom child).
 	head_name = p.fold_qualified_colon_name(name_tok, head_name)
+	// The `cx:` namespace is reserved for the serializer's canonical image
+	// and may not be authored — the SAME refusal the data reader raises,
+	// through the SAME authority (#820, RULED: 820-1a). Enforced HERE, at
+	// construction, rather than at emit: a refusal on the way out would let
+	// the bad node exist and be operated on first, and would point the
+	// diagnostic at the emit site instead of at the name the author wrote.
+	//
+	// Without this the program reader constructed `[cx:x 1]` happily and
+	// emitted a document the data reader then refused to read back — output
+	// failing its own re-parse, the #704 class, reached through a door
+	// beside the wall.
+	if msg := reserved_prefix_refusal(head_name) {
+		return ParseError{
+			message: msg
+			pos:     name_tok.pos
+		}
+	}
 	// Glued head TypeAnnotation `::T` / `::T[]` / `::[]` (lexicon §7 [L50],
 	// §9 [L25d]). Must be byte-adjacent to the head (no space before `::`).
 	mut head_dt := ''
@@ -2456,7 +2755,7 @@ fn (p &ProgramParser) at_table_block_body(head_name string, head_tok ProgramToke
 // literals are dynamic / non-scalar and are rejected at the seam.
 fn program_attr_is_scalar_literal(n ProgramNode) bool {
 	if n is ProgramLiteral {
-		return n.kind in [.string_lit, .int_lit, .bigint_lit, .float_lit, .bool_lit,
+		return n.kind in [.string_lit, .int_lit, .bigint_lit, .decimal_lit, .float_lit, .bool_lit,
 			.duration_lit, .period_lit, .date_lit, .datetime_lit, .atom_lit]
 	}
 	return false
@@ -2531,11 +2830,122 @@ fn (mut p ProgramParser) reparse_table_element_as_node(start Position) !ProgramL
 // typed `name::T=value` attribute productions in both the static element
 // literal and the [?element] body.
 fn (mut p ProgramParser) parse_attr_value(attr_name string) !ProgramNode {
+	// #923 (RULED: BC-1): a bare attr-value RUN reads as the data reading
+	// reads it — the whole ws-delimited token, auto-typed through the data
+	// core; a run that is not a literal is the STRING. The lexer emits the
+	// run as ONE bare_value token (see scan_bare_attr_value for the lanes
+	// that stay expressions).
+	if p.peek_kind() == .bare_value {
+		return bare_run_literal(p.advance())
+	}
 	if p.peek_kind() == .ident && p.peek_kind_at(1) != .lparen {
 		ident_tok := p.advance()
 		return p.fold_bare_attr_value(attr_name, ident_tok)!
 	}
 	return p.parse_atom()!
+}
+
+// bare_run_literal materializes a lexer bare-value run (#923, RULED: BC-1)
+// through the DATA reading's own auto-typing (try_autotype — the same core
+// read_attr_value_typed uses), so the two readings agree on every bare
+// attribute value by construction: `host=0.0.0.0` is the string '0.0.0.0',
+// `port=8080` is the int, `when=2026-01-01` is the date, `flag=null` is the
+// null scalar. The result uses the NATIVE ProgramLiteral kinds (never a
+// node_lit wrapper) so every downstream consumer — the program↔XML codec,
+// directive-modifier validators, ascription_source_text — sees exactly the
+// literal shapes the pre-run grammar produced. `src` keeps the verbatim run
+// so a typed attribute's ascription (`h::bytes=0x3a7bd3e2`) coerces from
+// the original spelling.
+fn bare_run_literal(t ProgramToken) ProgramNode {
+	if sn := try_autotype(t.text) {
+		match sn.data_type {
+			.int_type {
+				if sn.value is i64 {
+					return ProgramLiteral{ kind: .int_lit, int_val: sn.value as i64, src: t.text, pos: t.pos }
+				}
+			}
+			.bigint_type {
+				if sn.value is string {
+					return ProgramLiteral{ kind: .bigint_lit, str_val: sn.value as string, src: t.text, pos: t.pos }
+				}
+			}
+			.decimal_type {
+				if sn.value is string {
+					return ProgramLiteral{ kind: .decimal_lit, str_val: sn.value as string, src: t.text, pos: t.pos }
+				}
+			}
+			.float_type {
+				if sn.value is f64 {
+					return ProgramLiteral{ kind: .float_lit, flt_val: sn.value as f64, src: t.text, pos: t.pos }
+				}
+			}
+			.bool_type {
+				if sn.value is bool {
+					return ProgramLiteral{ kind: .bool_lit, bool_val: sn.value as bool, src: t.text, pos: t.pos }
+				}
+			}
+			.duration_type {
+				return ProgramLiteral{ kind: .duration_lit, dur_val: t.text, pos: t.pos }
+			}
+			.period_type {
+				return ProgramLiteral{ kind: .period_lit, dur_val: t.text, pos: t.pos }
+			}
+			.date_type {
+				return ProgramLiteral{ kind: .date_lit, str_val: t.text, src: t.text, pos: t.pos }
+			}
+			.datetime_type {
+				return ProgramLiteral{ kind: .datetime_lit, str_val: t.text, src: t.text, pos: t.pos }
+			}
+			.null_type {
+				// the homoiconic bare-value rule (bare_attr_value_literal):
+				// `a=null` is the null scalar, spelled as the null call.
+				return ProgramCall{ name: 'null', args: [], explicit_call: false, pos: t.pos }
+			}
+			else {
+				// kinds try_autotype cannot produce from a bare run
+				// (atom, bytes, …): carry the typed node verbatim.
+				return ProgramLiteral{ kind: .node_lit, node: ?Node(Node(sn)), src: t.text, pos: t.pos }
+			}
+		}
+	}
+	return ProgramLiteral{
+		kind:    .string_lit
+		str_val: t.text
+		src:     t.text
+		pos:     t.pos
+	}
+}
+
+// bare_run_is_lone_ident reports whether a bare-value run is exactly ONE
+// ident token — the shape the pre-#923 directive-modifier grammar read as
+// a string scalar (element-attr homoiconicity). `true`/`5s`/`0.0.0.0` are
+// not lone idents and take the expression / string lanes.
+fn bare_run_is_lone_ident(text string) bool {
+	toks := tokenize(text) or { return false }
+	return toks.len == 2 && toks[0].kind == .ident && toks[0].text == text
+}
+
+// bare_run_expr_value re-reads a bare-value run as the EXPRESSION the
+// pre-#923 grammar saw. Named call arguments and directive modifiers are
+// expression surface (not data-attr surface): `timeout=2ms` must stay the
+// duration LITERAL the [?await]/[?try-send] validators sniff, `x=g` must
+// stay a reference. A run the old grammar could not read as ONE whole
+// expression — the shapes that used to garble or refuse (`host=0.0.0.0`)
+// — becomes the STRING, the data-parity fallback.
+fn bare_run_expr_value(t ProgramToken) ProgramNode {
+	fallback := ProgramNode(ProgramLiteral{
+		kind:    .string_lit
+		str_val: t.text
+		src:     t.text
+		pos:     t.pos
+	})
+	toks := tokenize(t.text) or { return fallback }
+	mut sub := ProgramParser{ tokens: toks, source: t.text }
+	expr := sub.parse_expr() or { return fallback }
+	if sub.peek_kind() != .eof {
+		return fallback
+	}
+	return expr
 }
 
 // attr_ascription_ahead reports whether the cursor sits at a GLUED typed
@@ -2938,7 +3348,12 @@ fn (mut p ProgramParser) parse_pattern_attr() !ProgramPatternAttr {
 			// attribute, not a binding/call named `keep`. Typed and
 			// referenced RHS forms ($binding, number, bool, quoted string,
 			// paren-group) keep their normal expression parse.
-			val := if p.peek_kind() == .ident {
+			// #923 (RULED: BC-1): a bare RUN after `=` arrives as one
+			// bare_value token and auto-types like the data attr it tests
+			// against (`@host=0.0.0.0` tests the STRING '0.0.0.0').
+			val := if p.peek_kind() == .bare_value {
+				bare_run_literal(p.advance())
+			} else if p.peek_kind() == .ident {
 				tok := p.advance()
 				ProgramNode(ProgramLiteral{
 					kind:    .string_lit
@@ -2980,7 +3395,10 @@ fn (mut p ProgramParser) parse_pattern_attr() !ProgramPatternAttr {
 fn (mut p ProgramParser) parse_plain_pattern_attr() !ProgramPatternAttr {
 	n := p.expect(.ident, 'plain attribute name')!
 	p.expect(.eq, "'=' after plain attribute name")!
-	val := if p.peek_kind() == .ident {
+	// #923 (RULED: BC-1): bare runs auto-type like the data attr they test.
+	val := if p.peek_kind() == .bare_value {
+		bare_run_literal(p.advance())
+	} else if p.peek_kind() == .ident {
 		tok := p.advance()
 		ProgramNode(ProgramLiteral{
 			kind:    .string_lit
@@ -3173,6 +3591,7 @@ fn (mut p ProgramParser) parse_map_pattern() !ProgramNode {
 	start := p.peek().pos
 	p.expect(.lbrace, "'{' (opening map pattern)")!
 	mut keys := []string{}
+	mut key_kinds := []string{}
 	mut items := []ProgramNode{}
 	for p.peek_kind() != .rbrace && p.peek_kind() != .eof {
 		if keys.len > 0 {
@@ -3180,17 +3599,25 @@ fn (mut p ProgramParser) parse_map_pattern() !ProgramNode {
 		}
 		if p.peek_kind() == .star {
 			keys << ''
+			key_kinds << ''
 			items << p.parse_rest_bind()!
 			continue
 		}
 		key_tok := p.peek()
+		// #777 (RULED: 777-1a): a pattern names the same key kinds a literal
+		// can write — the grammar admission and the kind carriage are the
+		// same rule on both sides, or a bool-keyed map would be writable and
+		// unmatchable.
 		key := match key_tok.kind {
 			.string_lit { p.advance().text }
 			.ident      { p.advance().text }
 			.number_lit { p.advance().text }
+			.bool_lit   { p.advance().text }
+			.date_lit   { p.advance().text }
+			.datetime_lit { p.advance().text }
 			else {
 				return ParseError{
-					message: "expected map pattern key (string/ident/number), got '${key_tok.text}'"
+					message: "expected map pattern key (string/ident/number/bool/date/datetime), got '${key_tok.text}'"
 					pos:     key_tok.pos
 				}
 			}
@@ -3198,14 +3625,16 @@ fn (mut p ProgramParser) parse_map_pattern() !ProgramNode {
 		p.expect(.colon, "':' after map pattern key")!
 		val := p.parse_match_pattern()!
 		keys << key
+		key_kinds << if key_tok.kind in [.string_lit, .ident] { 'string' } else { '' }
 		items << val
 	}
 	p.expect(.rbrace, "'}' (closing map pattern)")!
 	return ProgramLiteral{
-		kind:  .map_lit
-		keys:  keys
-		items: items
-		pos:   start
+		kind:      .map_lit
+		keys:      keys
+		key_kinds: key_kinds
+		items:     items
+		pos:       start
 	}
 }
 
@@ -3449,7 +3878,22 @@ fn (mut p ProgramParser) parse_directive_slot(directive_name string) !ProgramSlo
 	if p.peek_kind() == .ident && p.peek_kind_at(1) == .eq {
 		name_tok := p.advance()
 		p.advance() // '='
-		value := if p.peek_kind() == .ident && p.peek_kind_at(1) != .lparen {
+		// #923 (RULED: BC-1): a bare RUN modifier value re-reads as the
+		// expression the pre-run grammar saw (`timeout=2ms` stays the
+		// duration LITERAL the directive validators sniff, `max=3` the
+		// int); an ident-shaped run keeps the string rule below, and a
+		// run the old grammar could not read whole (`host=0.0.0.0`)
+		// becomes the STRING instead of the old silent garble.
+		value := if p.peek_kind() == .bare_value && bare_run_is_lone_ident(p.peek().text) {
+			ident_tok := p.advance()
+			ProgramNode(ProgramLiteral{
+				kind:    .string_lit
+				str_val: ident_tok.text
+				pos:     ident_tok.pos
+			})
+		} else if p.peek_kind() == .bare_value {
+			bare_run_expr_value(p.advance())
+		} else if p.peek_kind() == .ident && p.peek_kind_at(1) != .lparen {
 			ident_tok := p.advance()
 			ProgramNode(ProgramLiteral{
 				kind:    .string_lit
@@ -4452,8 +4896,17 @@ fn (mut p ProgramParser) parse_modify_action_operands(label_tok ProgramToken) !P
 // (an `=` head, not a keyword).
 const for_clause_keywords = [
 	'in', 'where', 'yield', 'yield-array', 'yield-map', 'order-by',
-	'group-by', 'limit', 'take', 'drop', 'takewhile', 'dropwhile',
-	'on-error', 'par', 'stream', 'ordered',
+	'group-by', 'limit', 'take', 'drop', 'take-while', 'drop-while',
+	// 'takewhile' / 'dropwhile' are RETIRED SPELLINGS (stream 13, L55:
+	// the vocabulary's kebab rule — they were its only non-kebab
+	// multi-word names). They stay in this list so their arms can
+	// tombstone-error LOUDLY: dropping them entirely would silently
+	// re-read `[takewhile P]` as a pattern-generator (a meaning change,
+	// never acceptable).
+	'takewhile', 'dropwhile',
+	// 'stream' is a RETIRED SPELLING too (U1.1a, #763: renamed [lazy] —
+	// 'stream' is the delivery concept's name). Same tombstone rule.
+	'on-error', 'par', 'lazy', 'stream', 'ordered', 'fail-fast',
 ]
 
 fn is_for_clause_keyword(s string) bool {
@@ -4679,15 +5132,31 @@ fn (mut p ProgramParser) parse_for_comp_body(start Position, outer_form ProgramF
 							p.expect(.rbrack, "']' (closing [drop …])")!
 							clauses << ProgramForClause{ kind: .drop, expr: e }
 						}
-						'takewhile' {
+						'take-while' {
 							e := p.parse_expr()!
-							p.expect(.rbrack, "']' (closing [takewhile …])")!
+							p.expect(.rbrack, "']' (closing [take-while …])")!
 							clauses << ProgramForClause{ kind: .takewhile, expr: e }
 						}
-						'dropwhile' {
+						'drop-while' {
 							e := p.parse_expr()!
-							p.expect(.rbrack, "']' (closing [dropwhile …])")!
+							p.expect(.rbrack, "']' (closing [drop-while …])")!
 							clauses << ProgramForClause{ kind: .dropwhile, expr: e }
+						}
+						'takewhile' {
+							// RETIRED SPELLING (stream 13, L55). Tombstone
+							// error, no dual-accept.
+							return ParseError{
+								message: '[takewhile] is renamed — spell it [take-while …] (stream 13 naming rule: kebab-case multi-word names)'
+								pos:     p.peek().pos
+							}
+						}
+						'dropwhile' {
+							// RETIRED SPELLING (stream 13, L55). Tombstone
+							// error, no dual-accept.
+							return ParseError{
+								message: '[dropwhile] is renamed — spell it [drop-while …] (stream 13 naming rule: kebab-case multi-word names)'
+								pos:     p.peek().pos
+							}
 						}
 						'on-error' {
 							// RETIRED (SAP C3c, spec §9.3): per-iteration
@@ -4751,13 +5220,30 @@ fn (mut p ProgramParser) parse_for_comp_body(start Position, outer_form ProgramF
 							p.advance() // consume ]
 							clauses << ProgramForClause{ kind: .par, par_width: pw, par_max: pmax }
 						}
+						'lazy' {
+							p.expect(.rbrack, "']' (closing [lazy])")!
+							clauses << ProgramForClause{ kind: .lazy }
+						}
 						'stream' {
-							p.expect(.rbrack, "']' (closing [stream])")!
-							clauses << ProgramForClause{ kind: .stream }
+							// RETIRED SPELLING (U1.1a, #763). Tombstone
+							// error, no dual-accept.
+							return ParseError{
+								message: '[stream] is renamed — spell it [lazy] (U1.1a: `stream` is the delivery concept\'s name; the [?for] hint means lazy evaluation)'
+								pos:     p.peek().pos
+							}
 						}
 						'ordered' {
 							p.expect(.rbrack, "']' (closing [ordered])")!
 							clauses << ProgramForClause{ kind: .ordered }
+						}
+						'fail-fast' {
+							// Grammar [129r] (stream-2 W1, #711 item 3): the
+							// clause previously fell through to the
+							// pattern-generator shortcut and silently
+							// mis-parsed as a search for elements named
+							// `fail-fast`.
+							p.expect(.rbrack, "']' (closing [fail-fast])")!
+							clauses << ProgramForClause{ kind: .fail_fast }
 						}
 						else {
 							return ParseError{
@@ -4812,21 +5298,21 @@ fn (mut p ProgramParser) parse_for_comp_body(start Position, outer_form ProgramF
 			pos:     start
 		}
 	}
-	// Spec §7.4: `:stream` MUST NOT be combined with `:order-by` or
-	// `:group-by`. Materialising clauses contradict lazy evaluation;
+	// Spec §7.4: `[lazy]` MUST NOT be combined with `[order-by]` or
+	// `[group-by]`. Materialising clauses contradict lazy evaluation;
 	// the spec mandates a parse-time `cx-err:CXER0100`.
-	mut has_stream := false
+	mut has_lazy := false
 	mut has_materialiser := false
 	for c in clauses {
 		match c.kind {
-			.stream                { has_stream = true }
+			.lazy                  { has_lazy = true }
 			.order_by, .group_by   { has_materialiser = true }
 			else                   {}
 		}
 	}
-	if has_stream && has_materialiser {
+	if has_lazy && has_materialiser {
 		return ParseError{
-			message: "cx-err:CXER0100 — `:stream` MUST NOT be combined with `:order-by` or `:group-by` (spec/code.md §7.4)"
+			message: "cx-err:CXER0100 — `[lazy]` MUST NOT be combined with `[order-by]` or `[group-by]` (spec/code.md §7.4)"
 			pos:     start
 		}
 	}
@@ -4899,7 +5385,14 @@ fn (mut p ProgramParser) parse_map_literal() !ProgramLiteral {
 	start := p.peek().pos
 	p.expect(.lbrace, "'{'")!
 	mut keys := []string{}
+	mut key_kinds := []string{}
+	mut decl_kinds := []string{}
 	mut items := []ProgramNode{}
+	// #920 (MSS-3 item 7 parity): the program reading dup-checks literal
+	// map keys exactly as the data reading does (W014, identity =
+	// (kind, canonical image), NFC for string keys) — it used to admit
+	// `{1: a, 1::int: c}` silently while `cx --from=cx` refused it.
+	mut seen_keys := map[string]bool{}
 	for p.peek_kind() != .rbrace && p.peek_kind() != .eof {
 		// Computed-key map entry `[?entry KEY-EXPR VAL]` (grammar [127u];
 		// spec/code.md §6.4.2). Stored as an item carrying the [?entry]
@@ -4908,6 +5401,8 @@ fn (mut p ProgramParser) parse_map_literal() !ProgramLiteral {
 		if p.peek_kind() == .directive_name && p.peek().text == 'entry' {
 			ent := p.parse_computed_entry_subform()!
 			keys << computed_entry_key_marker
+			key_kinds << ''
+			decl_kinds << ''
 			items << ent
 			if p.peek_kind() == .comma {
 				p.advance()
@@ -4915,20 +5410,227 @@ fn (mut p ProgramParser) parse_map_literal() !ProgramLiteral {
 			continue
 		}
 		key_tok := p.peek()
-		key := match key_tok.kind {
+		// #777 (RULED: 777-1a): the program map grammar admits the key kinds
+		// the DATA reading already accepts. Restricting it to string/ident/
+		// number did not refuse a bool- or date-keyed literal — it pushed the
+		// WHOLE map out of the `__cx_map__` envelope into the data reading, so
+		// the lane a map landed in was decided by its key's token kind, and
+		// the two lanes carry different canonical rules. Every CXDM scalar
+		// kind but `atom` is admissible in key position (cxdm.md §2.3).
+		mut key := match key_tok.kind {
 			.string_lit { p.advance().text }
 			.ident      { p.advance().text }
 			.number_lit { p.advance().text }
+			.bool_lit   { p.advance().text }
+			.date_lit   { p.advance().text }
+			.datetime_lit { p.advance().text }
 			else {
 				return ParseError{
-					message: "expected map key (string/ident/number), got '${key_tok.text}'"
+					message: "expected map key (string/ident/number/bool/date/datetime), got '${key_tok.text}'"
 					pos:     key_tok.pos
 				}
 			}
 		}
-		p.expect(.colon, "':' after map key")!
-		val := p.parse_expr()!
+		// The kind is recorded only when it does NOT follow from the image:
+		// a bare `7`/`true`/`2026-08-16` is self-identifying and stays
+		// unstamped, while a STRING key carries `string` so a name- or
+		// number-shaped image (`'true'`, `'7'`) renders QUOTED instead of
+		// re-parsing as a bool/int key.
+		//
+		// A bare IDENT key is a STRING key too — lexicon.ebnf [L87]:
+		// "Bare-Ident key == quoted-string key" — so it takes the SAME kind,
+		// and `{yes: v}` / `{'yes': v}` stay ONE key (identical kind and
+		// image). Stamping only the quoted spelling would have split one key
+		// into two, which [L87] forbids.
+		mut key_kind := if key_tok.kind in [.string_lit, .ident] { 'string' } else { '' }
+		// Ascribed numeric map keys (#776; stream 11 §8 — RULED:
+		// `{1:} ≠ {1::bigint:} ≠ {1.0:}`, three distinct keys): key
+		// identity is canonical-form identity. #777 (RULED: 777-1a) moves
+		// the ascription OUT of the key text and into the key's KIND: the
+		// text form made the three distinct in the AST but not across the
+		// round trip — `{1::bigint: v}` rendered `{'1::bigint': v}`, a
+		// STRING key, because the name carried a `:` and quoted. The kind
+		// keeps them distinct AND re-parsing as themselves. Validated with
+		// the same coercion as the expression form (hex-under-exact
+		// refuses).
+		mut key_marker := ''
+		if p.peek_kind() == .double_colon && p.map_key_glue_ok(key_tok) {
+			dc := p.advance()
+			tt := p.peek()
+			if tt.kind != .ident || tt.pos.offset != dc.pos.offset + 2
+				|| !is_valid_type_tag(tt.text) {
+				return ParseError{
+					message:           'malformed type ascription on map key `${key}`'
+					pos:               dc.pos
+					program_committed: true
+				}
+			}
+			p.advance()
+			// RULED: MSS-3 item 7 (#917): the ascription is admitted on ANY
+			// key kind and coerce-CHECKED identically in both readers (the
+			// shared strict core) — `{'k'::int: 5}` refuses, `{a::string: 5}`
+			// normalizes, exactly as the data reading.
+			sn := coerce_scalar_strict(tt.text, key) or {
+				// Same teaching as the data reader: the slip is usually a
+				// typed-FIELD intent (#917 UX).
+				return ParseError{
+					message:           '${err.msg()} — a key ascription types the KEY (`{1.10::decimal: x}`); to type this field\'s VALUE write `${key}: ::${tt.text} 30` (or `${key}: 30::${tt.text}`), to declare it valueless write `${key}: ::${tt.text}`'
+					pos:               key_tok.pos
+					program_committed: true
+				}
+			}
+			if sn.data_type !in [.int_type, .float_type, .string_type, .bool_type,
+				.date_type, .datetime_type, .bytes_type, .decimal_type, .bigint_type] {
+				return ParseError{
+					message:           '${scalar_type_name(sn.data_type)} is not a valid map key (cx-err:CXERMAP-BADKEY)'
+					pos:               key_tok.pos
+					program_committed: true
+				}
+			}
+			key_kind = tt.text
+			key_marker = '${scalar_type_name(sn.data_type)}:${scalar_value_str(sn.value)}'
+		} else if p.peek_kind() == .double_colon {
+			// RULED: MSS-3 item 3 (#917): a SPACED `::` after a map key is
+			// never the separator — same loud guidance as the data reader.
+			return ParseError{
+				message:           'a type annotation must be glued — write `k::T: v` to type the key, `k: ::T v` or `k: v::T` to type the value, `k: ::T` to declare the field, or `k: :name` for an atom value'
+				pos:               p.peek().pos
+				program_committed: true
+			}
+		}
+		if key_marker == '' {
+			// Plain key: identity is (kind, image) — an ident/quoted key IS
+			// a string key regardless of its image ([L87]: {'7':} and {7:}
+			// are TWO keys), and a self-identifying image takes its own
+			// kind (a bare `7` is an int key). String keys compare NFC.
+			kind_name := if key_kind == 'string' { 'string' } else { cx_autotype_kind_name(key) }
+			if kind_name == 'string' {
+				key_marker = 'string:${cx_nfc_name(key)}'
+			} else {
+				ksn := coerce_scalar_strict(kind_name, key) or {
+					ScalarNode{ data_type: .string_type, value: ScalarValue(key) }
+				}
+				key_marker = '${scalar_type_name(ksn.data_type)}:${scalar_value_str(ksn.value)}'
+			}
+		}
+		if key_marker in seen_keys {
+			return ParseError{
+				message:           'W014: duplicate map key (cx-err:CXERMAP-DUPKEY)'
+				pos:               key_tok.pos
+				program_committed: true
+			}
+		}
+		seen_keys[key_marker] = true
+		if p.peek_kind() != .colon {
+			// Rebuilt rather than expect()-rewrapped: storing err.msg()
+			// double-rendered the code and position ('cx-err:CXER0100: …
+			// at line 1:29 at line 1:29' — the #880 class, playground
+			// report 2026-08-22). The common intent behind a stray token
+			// here is a typed field, so the refusal teaches the spelling.
+			return ParseError{
+				message:           "expected ':' after map key, got ${p.peek().text} — a map value is ONE expression (a typed value is `k: ::int 30` or `k: 30::int`)"
+				pos:               p.peek().pos
+				program_committed: true
+			}
+		}
+		p.advance()
+		// RULED: MSS-4 (#917): `k: ::T` — a prefix annotation as the sole
+		// value DECLARES the field (kind T, value ABSENT). Typed values stay
+		// postfix, so a value after the annotation remains a parse error.
+		if p.peek_kind() == .double_colon {
+			dc := p.advance()
+			tt := p.peek()
+			if tt.kind != .ident || tt.pos.offset != dc.pos.offset + 2 {
+				return ParseError{
+					message:           'expected a type name glued to `::` in a map-entry declaration'
+					pos:               dc.pos
+					program_committed: true
+				}
+			}
+			p.advance()
+			mut tag := tt.text
+			if p.peek_kind() == .lbrack && p.peek().pos.offset == tt.pos.offset + tt.text.len {
+				p.advance()
+				if p.peek_kind() != .rbrack {
+					return ParseError{
+						message:           "expected ']' closing the array-kind suffix"
+						pos:               p.peek().pos
+						program_committed: true
+					}
+				}
+				p.advance()
+				tag += '[]'
+			}
+			if !is_valid_kind_tag(tag) {
+				return ParseError{
+					message:           'unknown kind `${tag}` in map-entry declaration — the vocabulary is [157] KindName (cx-err:CXER0107 E_UNKNOWN_TYPE_TAG)'
+					pos:               tt.pos
+					program_committed: true
+				}
+			}
+			// RULED: MSS-7 (#917, owner "1a"): a scalar VALUE token after
+			// the prefix types it — `{age: ::int 30}` — through the shared
+			// strict core; the coerced scalar rides the node_lit seam (the
+			// program reading of a typed scalar IS the data reading). A
+			// token followed by `:` is the NEXT ENTRY's key and the entry
+			// stays a declaration.
+			cand := p.peek()
+			cand_is_lit := cand.kind in [.number_lit, .string_lit, .bool_lit, .date_lit,
+				.datetime_lit, .duration_lit, .ident]
+			cand_is_key := p.pos + 1 < p.tokens.len && p.tokens[p.pos + 1].kind == .colon
+			if cand_is_lit && !cand_is_key {
+				if !is_valid_type_tag(tag) {
+					return ParseError{
+						message:           'kind `${tag}` declares only — it cannot coerce a value; scalar tags type values (`k: ::int 30`) (cx-err:CXER0290)'
+						pos:               cand.pos
+						program_committed: true
+					}
+				}
+				p.advance()
+				vsn := if tag == 'string' && cand.kind == .string_lit {
+					ScalarNode{ data_type: .string_type, value: ScalarValue(cand.text) }
+				} else {
+					coerce_scalar_strict(tag, cand.text) or {
+						return ParseError{
+							message:           err.msg()
+							pos:               cand.pos
+							program_committed: true
+						}
+					}
+				}
+				keys << key
+				key_kinds << key_kind
+				decl_kinds << ''
+				items << ProgramNode(ProgramLiteral{ kind: .node_lit, node: ?Node(Node(vsn)) })
+				if p.peek_kind() == .comma {
+					p.advance()
+				}
+				continue
+			}
+			keys << key
+			key_kinds << key_kind
+			decl_kinds << tag
+			items << ProgramNode(ProgramLiteral{ kind: .string_lit })
+			if p.peek_kind() == .comma {
+				p.advance()
+			}
+			continue
+		}
+		val := p.parse_expr() or {
+			// RULED: MSS-3 item 6 (#917): a failed parse inside a map literal
+			// is PROGRAM intent — it must surface, never be silently re-read
+			// through the data lane.
+			if err is ParseError {
+				return ParseError{
+					...err
+					program_committed: true
+				}
+			}
+			return err
+		}
 		keys << key
+		key_kinds << key_kind
+		decl_kinds << ''
 		items << val
 		if p.peek_kind() == .comma {
 			p.advance()
@@ -4936,9 +5638,33 @@ fn (mut p ProgramParser) parse_map_literal() !ProgramLiteral {
 	}
 	p.expect(.rbrace, "'}'")!
 	return ProgramLiteral{
-		kind:  .map_lit
-		keys:  keys
-		items: items
-		pos:   start
+		kind:       .map_lit
+		keys:       keys
+		key_kinds:  key_kinds
+		decl_kinds: decl_kinds
+		items:      items
+		pos:        start
 	}
+}
+
+// map_key_glue_ok reports whether the `::` at the cursor is GLUED to the
+// map key token (RULED: MSS-3 item 3 — glue is the ascription discipline).
+// For quoted keys the decoded text length cannot recover the source span
+// (quotes, escapes), so glue is judged by the byte before the `::`: it must
+// be the key's closing quote. Token-only legacy callers (no source) stay
+// permissive.
+fn (p &ProgramParser) map_key_glue_ok(key_tok ProgramToken) bool {
+	dc := p.peek()
+	if key_tok.kind == .string_lit {
+		if p.source.len == 0 {
+			return true
+		}
+		off := dc.pos.offset
+		if off <= 0 || off >= p.source.len {
+			return false
+		}
+		prev := p.source[off - 1]
+		return prev == `'` || prev == `"`
+	}
+	return dc.pos.offset == key_tok.pos.offset + key_tok.text.len
 }

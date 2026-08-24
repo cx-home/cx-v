@@ -1,0 +1,9 @@
+%%cx:Wz9tYXRjaCAkbm9kZSBbdXNlciBAYWN0aXZlPXRydWUgJHVdIFt5aWVsZCBbYWN0aXZlLWNhcmQgW25hbWUgJHUvbmFtZV1dXV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3{"match $node"}
+    n4["[?match] result"]
+    n3 --> n4
+    n1 --> n4
+    n4 --> n2

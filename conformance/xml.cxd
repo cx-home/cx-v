@@ -1,4 +1,4 @@
-[test-suite name=xml
+[test-suite name=xml ring=0
   [doc [#
 # CX Conformance — XML Input Tests
 # Version: 1.0 — 2026-04-19
@@ -674,6 +674,24 @@
 #]]
  ]
 
+ [; #878 (ENT-1 rider): adjacent bare body items are whitespace-SEPARATED
+    in CX source (whitespace is structure between items), and the XML
+    emitter must print that separator back — 'Cheese &amp; Pepper' used
+    to emit as 'Cheese&amp;Pepper'. The separator is inserted only when
+    neither side already carries boundary whitespace, so XML-parsed
+    TextNodes (which preserve their spaces) never double up — cases
+    013/018 pin that half. ]
+
+ [case id=026-bare-items-entity-ref-separator level=core
+  [tags xml entity-ref separator issue-878]
+  [in-cx [#
+[note Cheese &amp; Pepper]
+#]]
+  [out-xml [#
+<note>Cheese &amp; Pepper</note>
+#]]
+ ]
+
  [case id=024-cx-arr-round-trip-emit-import level=core
   [tags xml round-trip collection-carrier issue-392]
   [in-cx [#
@@ -742,14 +760,14 @@
 #]]
   [out-xml [#
 <t cx:type="table" cx:cols="name::string score::float ok::bool note::string">
-  <cx:row><cx:cell>Ada Lovelace</cx:cell><cx:cell>99.5</cx:cell><cx:cell>true</cx:cell><cx:cell/></cx:row>
-  <cx:row><cx:cell>bob</cx:cell><cx:cell>12.5</cx:cell><cx:cell>false</cx:cell><cx:cell><cx:null/></cx:cell></cx:row>
+  <cx:row><cx:cell>Ada Lovelace</cx:cell><cx:cell>9.95e1</cx:cell><cx:cell>true</cx:cell><cx:cell/></cx:row>
+  <cx:row><cx:cell>bob</cx:cell><cx:cell>1.25e1</cx:cell><cx:cell>false</cx:cell><cx:cell><cx:null/></cx:cell></cx:row>
 </t>
 #]]
   [out-cx [#
 [t [table[name::string score::float ok::bool note::string]]
-  'Ada Lovelace' 99.5 true ''
-  bob 12.5 false null
+  'Ada Lovelace' 9.95e1 true ''
+  bob 1.25e1 false null
 ]
 #]]
  ]

@@ -1,0 +1,7 @@
+%%cx:Wz9yZXRyeSBtYXg9MyBbP3RpbWVvdXQgNTAwbXMKICAgICAgICAgICAgWz9hc3luYyBbP2h0dHAtY2xpZW50IHRhcmdldD0kdXJsXV1dXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?retry] :max 3"]]
+    n1 --> n3
+    n3 --> n2

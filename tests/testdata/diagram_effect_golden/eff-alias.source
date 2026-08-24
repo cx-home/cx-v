@@ -1,0 +1,2 @@
+[?lib 'cx-stdlib/io' as=fs]
+[$fs:read-file "/etc/hosts"]

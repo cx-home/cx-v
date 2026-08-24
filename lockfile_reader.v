@@ -94,6 +94,18 @@ pub mut:
 	schema_version   string
 	modules          []ModuleLock
 	transitive_graph []TransitiveEdge
+	schemas          []SchemaLock
+}
+
+// SchemaLock carries one `[schema]` pin inside the optional
+// `[schemas]` block (stream 16 W4): a module-level name → schema
+// content-hash binding. `name` is the literal lookup key;
+// `hash` is the hex SHA-256 of the schema's strict-canonical text
+// (schema_content_hash) — names are hints, hashes are identity.
+pub struct SchemaLock {
+pub mut:
+	name string
+	hash string
 }
 
 // ModuleLock carries one `[module]` entry per spec/lockfile.md §4.
@@ -214,6 +226,19 @@ pub fn parse_lockfile_text(src string) !Lockfile {
 					lf.transitive_graph << te
 				}
 			}
+			'schemas' {
+				for pin_item in child.items {
+					pin_el := match pin_item {
+						Element { pin_item }
+						else { continue }
+					}
+					if pin_el.name != 'schema' {
+						return error('CXLOCK_PARSE: unexpected child of [schemas]: `${pin_el.name}` (expected `schema`)')
+					}
+					sl := lockfile_parse_schema_pin(pin_el)!
+					lf.schemas << sl
+				}
+			}
 			else {
 				// Unknown top-level child — informational only at parse
 				// time. Future schema versions may add new children;
@@ -223,14 +248,36 @@ pub fn parse_lockfile_text(src string) !Lockfile {
 		}
 	}
 
-	if lf.modules.len == 0 {
-		return error('CXLOCK_PARSE: cx.lock contains no [module] entries')
+	if lf.modules.len == 0 && lf.schemas.len == 0 {
+		return error('CXLOCK_PARSE: cx.lock contains no [module] entries (and no [schemas] pins)')
 	}
 
 	return lf
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+fn lockfile_parse_schema_pin(el Element) !SchemaLock {
+	mut name := ''
+	mut hash := ''
+	for attr in el.attrs {
+		match attr.name {
+			'name' { name = lockfile_attr_str(attr.value) }
+			'hash' { hash = lockfile_attr_str(attr.value) }
+			else {}
+		}
+	}
+	if name == '' {
+		return error('CXLOCK_PARSE: [schema] pin missing :name attribute')
+	}
+	if hash == '' {
+		return error('CXLOCK_PARSE: [schema] pin `${name}` missing :hash attribute')
+	}
+	return SchemaLock{
+		name: name
+		hash: hash
+	}
+}
 
 fn lockfile_parse_module(el Element) !ModuleLock {
 	mut name := ''

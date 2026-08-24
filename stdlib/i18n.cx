@@ -41,7 +41,7 @@
   [sig """-> element"""]
   [summary """Build a catalog element from a map of key to per-locale MessageFormat strings."""]
   [example [code """[?lib 'cx-stdlib/i18n']
-[$i18n:catalog-locales [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}]]"""] [expect """('en', 'fr')"""]]
+[$i18n:catalog-locales [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}]]"""] [expect """(en, fr)"""]]
 ]
 [fn-doc name=load-catalog scope=public purity=impure
   [sig """-> element"""]
@@ -65,13 +65,13 @@
   [sig """-> [sequence string]"""]
   [summary """List the distinct locales present across a catalog's entries."""]
   [example [code """[?lib 'cx-stdlib/i18n']
-[$i18n:catalog-locales [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}]]"""] [expect """('en', 'fr')"""]]
+[$i18n:catalog-locales [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}]]"""] [expect """(en, fr)"""]]
 ]
 [fn-doc name=catalog-keys scope=public purity=pure
   [sig """-> [sequence string]"""]
   [summary """List the message keys defined in a catalog."""]
   [example [code """[?lib 'cx-stdlib/i18n']
-[$i18n:catalog-keys [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}, "farewell": {"en": "Bye, {name}!"}}]]"""] [expect """('greeting', 'farewell')"""]]
+[$i18n:catalog-keys [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}, "farewell": {"en": "Bye, {name}!"}}]]"""] [expect """(greeting, farewell)"""]]
 ]
 [fn-doc name=message scope=public purity=pure
   [sig """-> string"""]

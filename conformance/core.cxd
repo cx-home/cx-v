@@ -1,4 +1,4 @@
-[test-suite name=core
+[test-suite name=core ring=0
   [doc [#
 # CX Conformance — Core Tests
 # Version: 1.0 — 2026-04-19
@@ -34,6 +34,29 @@
 #]]
   [out-cx [#
 [br]
+#]]
+ ]
+
+ [case id=831-collection-item-string-stays-program-readable level=core
+  [tags canonical collection map sequence issue-831 L11]
+  [in-cx [#
+[m {k: 'a b', j: 'a.b', u: 'https://a.com', ok: 'x', p: 'a/b'} [note a b]]
+#]]
+  [out-cx [#
+[m
+  {k: 'a b', j: 'a.b', u: 'https://a.com', ok: x, p: a/b}
+  [note a b]
+]
+#]]
+ ]
+
+ [case id=831-sequence-item-string-stays-program-readable level=core
+  [tags canonical sequence issue-831]
+  [in-cx [#
+[s ('x', 'a b', 'a.b')]
+#]]
+  [out-cx [#
+[s (x, 'a b', 'a.b')]
 #]]
  ]
 
@@ -1141,7 +1164,7 @@ scalar-only
     repros across out-cx (lossless), out-canonical (strict), and out-json. ]
 
  [case id=042-attr-after-comment-child level=core
-  [tags parser attribute comment trivia issue-455]
+  [tags parser attribute comment trivia issue-455 issue-829]
   [in-cx [#
 [config
  [; c ]
@@ -1149,9 +1172,16 @@ scalar-only
  [server host=localhost]
 ]
 #]]
+  [; RE-BLESSED (issue-829 remainder). The comment sits in the ELEMENT-META
+     zone BEFORE `env=dev`, and the emit put it after — meta-zone comments
+     were retained by prepending them to items, and attributes are written
+     before items, so the comment was hoisted past every attribute it came
+     before. It now carries a presentation-only `meta_attr_index` (the
+     attribute count it sat after) and is written back into the meta run.
+     out-canonical is UNCHANGED: canonical strips comments, so no hash
+     moves — which is the constraint #469 imposed and this respects. ]
   [out-cx [#
-[config env=dev
-  [; c ]
+[config [; c ] env=dev
   [server host=localhost]
 ]
 #]]
@@ -1199,13 +1229,26 @@ scalar-only
 ]
 #]]
   [out-cx [#
-[config env=dev]
+[config [; c ] env=dev]
 #]]
-  [; The comment does not survive the lossless emit HERE because a
-     child-free element emits inline, and inline positions have no
-     canonical home for a comment (pre-existing fmt policy, pinned in
-     fmt_lossless_test.v). The #455 point this case pins is the attr
-     reading: env=dev stays an ATTRIBUTE in every lane. ]
+  [; RE-BLESSED TWICE, and the second one closes the defect the first one
+     exposed.
+     (issue-825) It used to read `[config env=dev]` on the stated policy
+     that "inline positions have no canonical home for a comment". That
+     justification was false for the BLOCK form: `[; … ]` is
+     self-delimiting and composes beside any sibling, which is what the
+     multiline lane had been doing all along. canonical.md §1.1 requires
+     lossless canonical to preserve every node, so the drop was a
+     limitation wearing a policy's clothes. It then read
+     `[config env=dev [; c ]]` — preserved but MISPLACED, recorded here as
+     the separate, now-visible issue-829.
+     (issue-829 remainder) Placement is now correct. The comment carries a
+     presentation-only `meta_attr_index` — how many attributes preceded it
+     — and the emitter writes it back into the meta run. The node itself
+     does not move and canonical still strips comments, so out-canonical
+     is unchanged and no hash moves (the #469 constraint).
+     The #455 point this case pins is unchanged: env=dev stays an
+     ATTRIBUTE in every lane. ]
   [out-canonical [#
 [config env=dev]
 #]]
@@ -1231,11 +1274,14 @@ scalar-only
 [config a [; c ] b]
 #]]
   [; The comment interrupts a bare text run: the run reads as ONE text node
-     ("a b", exactly the comment-free reading). The comment is retained on
-     the element for fmt, but an inline emit has no canonical home for it
-     (the pre-existing policy case 044 pins), so out-cx is comment-free. ]
+     ("a b", exactly the comment-free reading) — that part is unchanged.
+     RE-BLESSED (issue-829, RULED 829-1c): the comment now also keeps its
+     POSITION. It rides the run as a presentation-only run_offset, so the
+     lossless emitter re-places it by splitting the rendered TEXT while the
+     run stays ONE node — the #469 hash-inertness this case pins is intact
+     (see the canonical umbrella's hash-inert assertions). ]
   [out-cx [#
-[config a b]
+[config a [; c ] b]
 #]]
   [out-canonical [#
 [config a b]
@@ -1253,8 +1299,17 @@ scalar-only
  b
 ]
 #]]
+  [; RE-BLESSED (issue-825). A LINE comment has no inline spelling — §2.9
+     keeps `# text` terminated at end of line rather than converting it to
+     block form — so its element takes the MULTILINE lane and the leaves
+     get the same indent their siblings get. The text run still reads as
+     ONE node ("a b"); only the layout carrying it changed. Placement is
+     leading here for the issue-829 reason case 044 records. ]
   [out-cx [#
-[config a b]
+[config
+  # c
+  a b
+]
 #]]
   [out-canonical [#
 [config a b]

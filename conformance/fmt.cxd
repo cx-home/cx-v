@@ -1,0 +1,423 @@
+[test-suite name=fmt ring=1
+  [doc [#
+# CX Conformance — cx fmt (spec/03-approved/core/formatting.md)
+# Authored at the I3 open (partition corpus audit gap G6): formatting.md
+# previously had ZERO fixtures; its §1 purity invariant ("never changes
+# the data") was tested only by vcx/tests/fmt_lossless_test.v. Ring 1:
+# fmt is a Ring-1 verb (cx_partition.md §2); the suite exercises
+# code.fmt_source — the program-faithful, fail-closed formatter behind
+# `cx fmt FILE` — via tests/runners/fmt/fmt_conform.v.
+#
+# The runner asserts THREE things per positive case:
+#   1. byte-pinned output   — fmt(in_cx) == out_fmt exactly;
+#   2. §1 purity            — cx_text_canonical(fmt(in_cx)) ==
+#                             cx_text_canonical(in_cx) (same tree in,
+#                             same tree out; presentation only);
+#   3. §7 idempotence       — fmt(fmt(in_cx)) == fmt(in_cx) (the
+#                             canonical-profile output is a fixed point).
+# A case with out-err instead pins the fail-closed lane: fmt_source
+# refuses unparsable input with the given error code (never emits text
+# for a tree it could not faithfully read — the cx fmt data-loss guard).
+#
+# CORPUS-FORMAT LIMIT (deliberate): content containing the raw-block
+# TERMINATOR (a hash immediately followed by a closing bracket) cannot
+# appear inside a .cxd raw section — it would close the section itself.
+# So hash-raw-block byte-exactness through fmt stays covered by
+# vcx/tests/fmt_lossless_test.v; comment preservation is fixtured here
+# via the [; …] note form and the trailing hash-comment (own-line)
+# behavior instead.
+#
+# SCOPE NOTE (deliberate): formatting.md admits the §2/§3 profile MODEL;
+# the apply surfaces (`cx fmt --profile`, [$format …] profiles) are
+# marked forthcoming in the spec itself. (A `[?cx format=NAME]` pragma
+# would need a CXP-1 registry ruling — the [?cx] key set is closed.) These
+# fixtures pin the ONE shipped profile (the `canonical`-layout default
+# of fmt_source) — the profile-parameterized surfaces gain their fixture
+# families when those surfaces land, against this suite.
+#]]
+
+ [case id=fmt-001-fixed-point level=core
+  [tags fmt idempotence fixed-point]
+  [in-cx [#
+[a x=1]
+#]]
+  [out-fmt [#
+[a x=1]
+#]]
+ ]
+
+ [case id=fmt-002-whitespace-normalization level=core
+  [tags fmt layout whitespace indent]
+  [in-cx [#
+[server host=localhost   port=8080
+   [db    name=main]]
+#]]
+  [out-fmt [#
+[server host=localhost port=8080
+  [db name=main]
+]
+#]]
+ ]
+
+ [case id=fmt-003-blank-lines-collapse level=core
+  [tags fmt layout blank-lines]
+  [in-cx [#
+[config
+[a x=1]
+      [b y=2]
+
+
+[c z=3]]
+#]]
+  [out-fmt [#
+[config
+  [a x=1]
+  [b y=2]
+  [c z=3]
+]
+#]]
+ ]
+
+ [case id=fmt-004-short-element-stays-inline level=core
+  [tags fmt layout inline]
+  [in-cx [#
+[server   host=x]
+#]]
+  [out-fmt [#
+[server host=x]
+#]]
+ ]
+
+ [case id=fmt-005-quote-styles-preserved level=core
+  [tags fmt quoting presentation]
+  [in-cx [#
+[msg text='hello world' note="it's here"]
+#]]
+  [out-fmt [#
+[msg text='hello world' note="it's here"]
+#]]
+ ]
+
+ [case id=fmt-006-note-comment-preserved level=core
+  [tags fmt comments presentation]
+  [in-cx [#
+[; top note ]
+[server   host=x]
+#]]
+  [out-fmt [#
+[; top note ]
+[server host=x]
+#]]
+ ]
+
+ [case id=fmt-007-trailing-comment-own-line level=core
+  [tags fmt comments presentation]
+  [in-cx [#
+[a 1] # keep me
+#]]
+  [out-fmt [#
+[a 1]
+# keep me
+#]]
+ ]
+
+ [case id=fmt-008-scalars-as-written level=core
+  [tags fmt numbers datetimes presentation]
+  [in-cx [#
+[a n=1.50 m=007 d=2026-08-06T10:00:00+02:00]
+#]]
+  [out-fmt [#
+[a n=1.50 m=007 d=2026-08-06T10:00:00+02:00]
+#]]
+ ]
+
+ [case id=fmt-009-long-child-list-one-per-line level=core
+  [tags fmt layout wrap]
+  [in-cx [#
+[items [a v=1] [b v=2] [c v=3] [d v=4] [e v=5] [f v=6] [g v=7] [h v=8] [i v=9] [j v=10] [k v=11]]
+#]]
+  [out-fmt [#
+[items
+  [a v=1]
+  [b v=2]
+  [c v=3]
+  [d v=4]
+  [e v=5]
+  [f v=6]
+  [g v=7]
+  [h v=8]
+  [i v=9]
+  [j v=10]
+  [k v=11]
+]
+#]]
+ ]
+
+ [case id=fmt-010-program-let-faithful level=core
+  [tags fmt program program-faithful]
+  [in-cx [#
+[?let [= $a 1]
+  [sum   value=$a]]
+#]]
+  [out-fmt [#
+[?let [= $a 1] [sum value=$a]]
+#]]
+ ]
+
+ [case id=fmt-011-program-multi-form level=core
+  [tags fmt program multi-doc program-faithful]
+  [in-cx [#
+[?def [greet name] [msg hello=$name]]
+[?do [$emit [$greet name=world]]]
+#]]
+  [out-fmt [#
+[?def [greet name] [msg hello=$name]]
+[?do [$emit [$greet name=world]]]
+#]]
+ ]
+
+ [case id=fmt-012-parse-error-fail-closed level=core
+  [tags fmt negative fail-closed CXER0100]
+  [in-cx [#
+[unclosed
+#]]
+  [out-err [#
+CXER0100
+#]]
+ ]
+
+ [case id=fmt-014-body-position-alias-survives level=core
+  [tags fmt alias lossless round-trip issue-736]
+  [meta [#
+note: canonical.md §1.1 — lossless canonical "preserves every node in
+note: the source: comments, anchors, aliases, …". The inline element-body
+note: emit lane dropped AliasNode outright, so `[b [*n]]` formatted to
+note: `[b]` (issue-736): a canonical form that cannot re-parse to the
+note: document it came from. Top-level `[*def]` (extended.cxd 018) and
+note: the MULTILINE body lane always round-tripped, which is what made
+note: the loss look positional rather than lane-shaped.
+note:
+note: The runner also asserts §1 purity and §7 idempotence per case, so
+note: this pins that the restored alias survives a SECOND format too.
+note: (The anchor is REQUIRED for a positive case: the purity check runs
+note: strict canonical, which resolves aliases and refuses a dangling one
+note: per §2.8 — so a bare `[b [*n]]` cannot be fixtured here.)
+#]]
+  [in-cx [#
+[a &n 1]
+[b [*n]]
+#]]
+  [out-fmt [#
+[a &n 1]
+[b [*n]]
+#]]
+ ]
+
+ [case id=fmt-015-body-alias-beside-anchor-definition level=core
+  [tags fmt alias anchor lossless round-trip issue-736]
+  [meta [#
+note: the second issue-736 shape — with the anchor DEFINED in a sibling,
+note: the alias node was dropped and `[b [*n]]` formatted to a bare `[b]`,
+note: silently discarding the reference to `&n`. Two references in one
+note: body pin that the arm emits per item, not once.
+#]]
+  [in-cx [#
+[x [a &n 1] [b [*n] [*n]]]
+#]]
+  [out-fmt [#
+[x
+  [a &n 1]
+  [b [*n] [*n]]
+]
+#]]
+ ]
+
+ [case id=fmt-016-block-comment-survives-an-inline-body level=core
+  [tags fmt comment lossless issue-825]
+  [title A block comment in an inline element body survives the round trip]
+  [meta [#
+note: issue-825. The inline body lane matched a fixed set of node kinds
+note: and ended in a bare else, so a comment in a body with no child
+note: ELEMENTS was discarded outright — canonical.md §1.1 requires
+note: lossless canonical to preserve "every node in the source: comments,
+note: anchors, aliases, …" and §2.9 adds "comment placement preserved
+note: relative to nodes".
+note:
+note: The BLOCK form is safe inline: `[; … ]` is self-delimiting, so it
+note: composes beside any sibling on one line. The line form is not — see
+note: fmt-017.
+#]]
+  [in-cx [#
+[a [;note] text]
+#]]
+  [out-fmt [#
+[a [;note] text]
+#]]
+ ]
+
+ [case id=fmt-017-line-comment-forces-the-multiline-lane level=core
+  [tags fmt comment lossless layout issue-825]
+  [title A line comment in a body forces the element multiline and keeps its own line]
+  [meta [#
+note: issue-825. §2.9 keeps a line comment as `# text` "terminated at end
+note: of line, not converted to block form", so it has NO inline spelling:
+note: emitting one beside a sibling would swallow that sibling into the
+note: comment. Its element therefore takes the multiline lane whatever
+note: else the body holds.
+note:
+note: That made the multiline lane reachable for a TEXT-bearing body for
+note: the first time, and cx_emit_node writes the leaf kinds with neither
+note: indent nor newline — correct for the inline lane it was written
+note: for, ragged here — so the leaves now get the layout their siblings
+note: get. The runner also asserts §7 idempotence, which is what pins the
+note: layout as a fixed point rather than merely parseable.
+#]]
+  [in-cx [#
+[a
+# note
+text]
+#]]
+  [out-fmt [#
+[a
+  # note
+  text
+]
+#]]
+ ]
+
+ [case id=fmt-018-trailing-body-comment-keeps-its-position level=core
+  [tags fmt comment placement lossless issue-829]
+  [title A comment after a text run stays after it]
+  [meta [#
+note: issue-829. §2.9 requires "comment placement preserved relative to
+note: nodes". It was not: the body loop accumulates a bare text run in a
+note: buffer and flushes it LATE (at a child element or end of body),
+note: while a comment went straight into items — so the comment did not
+note: move forward, the text arrived late, and `[a text [;note]]` parsed
+note: as [Comment, Text].
+note:
+note: A comment seen while the run is still buffered is now HELD and
+note: released after the text node. If more text arrives first the
+note: comment is MID-RUN and is released in its historical leading
+note: position instead: placing that one correctly needs the run SPLIT,
+note: and #469 forbids exactly that because splitting moves the
+note: strict-canonical hash. So the trailing and leading shapes are
+note: correct and the mid-run shape is unchanged — no Tier-1 exposure.
+note:
+note: The runner's §1 purity check is what proves that: it compares
+note: strict canonical before and after, and strict canonical strips
+note: comments, so this case also pins that the fix did not disturb the
+note: hash.
+#]]
+  [in-cx [#
+[a text [;note]]
+#]]
+  [out-fmt [#
+[a text [;note]]
+#]]
+ ]
+
+ [case id=fmt-019-mid-run-comment-keeps-its-position level=core
+  [tags fmt comment placement lossless issue-829 469]
+  [title A comment inside a text run stays inside it]
+  [meta [#
+note: issue-829 (RULED: 829-1c). #825 stopped the inline lane dropping
+note: body comments; ab978098 then fixed the TRAILING shape. The MID-RUN
+note: shape stayed wrong -- `[config a [; c ] b]` emitted
+note: `[config [; c ] a b]` -- because placing it looked like it needed
+note: the text run SPLIT into two nodes, and #469 closed exactly that:
+note: splitting moves the strict-canonical hash.
+note:
+note: It does not need a split. The run stays ONE TextNode and the
+note: comment carries a presentation-only `run_offset` (like `pos`,
+note: #792), so the LOSSLESS emitter re-places it by splitting the
+note: rendered TEXT while the node -- and therefore the hash -- is
+note: untouched. The companion case below pins that inertness directly.
+note:
+note: The interleave is declined when a fragment would not round-trip
+note: (it would need quoting, or would auto-type), and the historical
+note: leading placement is kept there. The oracle for that is the
+note: parser's own try_autotype, NOT cx_would_autotype, which
+note: deliberately over-reports.
+#]]
+  [in-cx [#
+[config a [; c ] b [; d ] e]
+#]]
+  [out-fmt [#
+[config a [; c ] b [; d ] e]
+#]]
+ ]
+
+ [case id=fmt-020-meta-zone-comment-keeps-its-position level=core
+  [tags fmt comment placement lossless issue-829 469]
+  [title A comment among an element's attributes stays among them]
+  [meta [#
+note: issue-829, the remainder left open by 829-1c. The mid-run fix gave
+note: comments a `run_offset`, which reaches a comment sitting INSIDE a
+note: text run. A comment in the ELEMENT-META zone has no run to offset
+note: into: `[config [; c ] env=dev]` re-emitted as
+note: `[config env=dev [; c ]]`, because meta-zone comments are retained
+note: by PREPENDING them to the element's items and the emitter writes
+note: attributes before items. So the comment was hoisted past every
+note: attribute it came before -- the same S2.9 violation, one zone over.
+note:
+note: The carrier is `meta_attr_index`: how many attributes preceded it.
+note: Presentation-only on exactly the terms `run_offset` is -- the node
+note: does not move, canonical strips comments, so no hash sees it, and
+note: only the CX emitter reads the stamp to write the comment back
+note: between the attributes. The `[; ... ]` form is self-delimiting, so
+note: it composes inside the meta run as it does beside any sibling.
+note:
+note: Stamped ONLY when an attribute actually follows. A meta-zone
+note: comment with nothing after it already round-trips as a leading body
+note: item -- which in the multiline lane is its own line, the shape #825
+note: landed -- and that is left alone. A LINE comment never qualifies
+note: either: S2.9 terminates `# text` at end of line, so writing one
+note: into the meta run would swallow the attributes after it.
+note:
+note: The runner's S1 purity check re-proves the inertness per case: it
+note: compares strict canonical before and after, and strict canonical
+note: strips comments.
+#]]
+  [in-cx [#
+[config [; c ] env=dev port=80]
+#]]
+  [out-fmt [#
+[config [; c ] env=dev port=80]
+#]]
+ ]
+
+ [case id=fmt-021-meta-zone-comment-between-two-attrs level=core
+  [tags fmt comment placement lossless issue-829]
+  [title A comment between two attributes stays between them]
+  [meta [#
+note: issue-829 remainder, the interior position -- the stamp records an
+note: attribute COUNT, not merely "leading", so a comment between two
+note: attributes lands between them rather than in front of both.
+#]]
+  [in-cx [#
+[config env=dev [; c ] port=80]
+#]]
+  [out-fmt [#
+[config env=dev [; c ] port=80]
+#]]
+ ]
+
+ [case id=fmt-013-cxpath-kind-tests-keep-their-parens level=core
+  [tags fmt cxpath kind-test canonical issue-809]
+  [meta [#
+note: canonical.md §2.12.4 — "kind tests retain their parentheses on
+note: output". Both path surfaces are covered: the rooted PathExpr
+note: ([130]) and the $binding path ([135a]), on both the child and the
+note: descendant axis, with an explicit axis and a predicate. The
+note: emitted source is REPARSED by the dispatcher bridges, so a lost
+note: or mangled paren pair is a data-loss bug, not a cosmetic one.
+#]]
+  [in-cx [#
+[?for [in $c //c] [yield ($c/node(), $c//text(), //a/text()[1], //c/attribute::attribute())]]
+#]]
+  [out-fmt [#
+[?for [in $c //c] [yield ($c/node(), $c//text(), //a/text()[1], //c/attribute::attribute())]]
+#]]
+ ]
+]

@@ -1,4 +1,4 @@
-[test-suite name=adjudicate
+[test-suite name=adjudicate ring=2
   [doc [#
 Conformance fixtures for cx-x/adjudicate — the out-of-band agent adjudicator for
 the similar review band (spec/03-approved/x/adjudicate.md; cx-private #376, the

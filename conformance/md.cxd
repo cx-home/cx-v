@@ -1,4 +1,4 @@
-[test-suite name=md
+[test-suite name=md ring=0
   [doc [#
 # CX Conformance — Markdown Tests
 # Version: 1.0 — 2026-04-19

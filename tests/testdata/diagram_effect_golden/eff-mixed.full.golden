@@ -1,0 +1,37 @@
+flowchart TD
+  classDef entry fill:#e8f5e9,stroke:#1b5e20;
+  classDef effect fill:#e8eaf6,stroke:#1a237e;
+  classDef cap fill:#ffebee,stroke:#b71c1c;
+  classDef unknown fill:#fff8e1,stroke:#ff6f00;
+  prog(["program"])
+  def_load["def load"]
+  def_publish["def publish"]
+  def_audit["def audit"]
+  eff_io_read_file[["io-read-file"]]
+  eff_http_post[["http-post"]]
+  eff_io_append_file[["io-append-file"]]
+  eff_env_var[["env-var"]]
+  cap_read{{"read --allow-read"}}
+  cap_write{{"write --allow-write"}}
+  cap_net{{"net --allow-net"}}
+  cap_env{{"env --allow-env"}}
+  def_load --> eff_io_read_file
+  def_publish --> eff_http_post
+  def_audit --> eff_io_append_file
+  prog --> eff_env_var
+  prog -.->|"call"| def_publish
+  prog -.->|"call"| def_load
+  prog -.->|"call"| def_audit
+  eff_io_read_file --> cap_read
+  eff_http_post --> cap_net
+  eff_io_append_file --> cap_write
+  eff_env_var --> cap_env
+  class prog entry;
+  class eff_io_read_file effect;
+  class eff_http_post effect;
+  class eff_io_append_file effect;
+  class eff_env_var effect;
+  class cap_read cap;
+  class cap_write cap;
+  class cap_net cap;
+  class cap_env cap;

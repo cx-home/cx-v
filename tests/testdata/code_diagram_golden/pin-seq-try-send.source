@@ -1,0 +1,1 @@
+[?worker name="w" body=[?try-send "m" to=$ch]]

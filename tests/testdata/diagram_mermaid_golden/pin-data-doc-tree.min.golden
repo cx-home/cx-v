@@ -1,0 +1,13 @@
+%%cx:W3NlcnZlciBob3N0PTAuMC4wLjAgdGxzPXRydWUKICBbcG9ydCA4MDgwXQogIFt3b3JrZXJzIDRdCiAgW2xvZ2dpbmcgW2xldmVsIGluZm9dIFtyb3RhdGUgZGFpbHldXV0=%%
+flowchart TD
+    n1["[server …]"]
+    n2["[port …]"]
+    n1 --> n2
+    n3["[workers …]"]
+    n1 --> n3
+    n4["[logging …]"]
+    n1 --> n4
+    n5["[level …]"]
+    n4 --> n5
+    n6["[rotate …]"]
+    n4 --> n6

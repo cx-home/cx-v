@@ -1,0 +1,3 @@
+%%cx:Wz9zZWxlY3QKICAgW2Nhc2UgW2Zyb20gJGNoLWEgJG1zZ10gW2hhbmRsZWQtYSBtc2c9JG1zZ11dCiAgIFtjYXNlIFtmcm9tICRjaC1iICRtc2ddIFtoYW5kbGVkLWIgbXNnPSRtc2ddXQogICBbY2FzZSBbdGltZW91dCA1MDBtc10gW3RpbWVkLW91dF1dXQ==%%
+sequenceDiagram
+    Note over Caller: [?select]

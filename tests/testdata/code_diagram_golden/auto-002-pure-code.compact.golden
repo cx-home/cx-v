@@ -1,0 +1,9 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  lh{{"for $x :in /items"}}
+  lb["$x"]
+  lb --> lh
+  lh -- "binds $x" --> lb
+  start --> lh
+  lh --> done

@@ -1,0 +1,8 @@
+sequenceDiagram
+  participant a
+  participant main
+  alt msg from a
+    a ->> main : msg
+  else timeout (50ms)
+    main ->> main : timeout (50ms)
+  end

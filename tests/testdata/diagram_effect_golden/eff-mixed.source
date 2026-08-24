@@ -1,0 +1,4 @@
+[?def load ($p) [$io:read-file $p]]
+[?def publish ($b) [$http:post "https://api/x" $b]]
+[?def audit ($e) [$io:append-file "/var/log/a" $e]]
+[?if [$env:var "PUBLISH"] [then [$publish [$load "/etc/app.cx"]]] [else [$audit "skipped"]]]

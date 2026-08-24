@@ -1,0 +1,7 @@
+%%cx:Wz90aW1lb3V0IDUwMG1zIFtjYWxsIGVuZHBvaW50PSR1cmxdXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?timeout] 500ms"]]
+    n1 --> n3
+    n3 --> n2

@@ -1,0 +1,13 @@
+erDiagram
+  DOCUMENT {
+    int node_count "6"
+    int type_count "6"
+    int max_depth "1"
+  }
+  rec {
+    int i
+    float f
+    bool b
+    string s
+    atom a
+  }

@@ -1,0 +1,7 @@
+%%cx:Wz9yZXRyeSBtYXg9MyBiYWNrb2ZmPWV4cG9uZW50aWFsIGRlbGF5PTEwMG1zIFtjYWxsIGVuZHBvaW50PSR1cmxdXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?retry] :max 3 :backoff 'exponential' …"]]
+    n1 --> n3
+    n3 --> n2

@@ -1,0 +1,1 @@
+[?let [= $ch [?channel name="jobs" buffer=4]] [?let [= $_ [?worker name="producer" [?send 1 to=$ch]]] [?worker name="consumer" [?receive from=$ch]]]]

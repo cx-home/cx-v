@@ -51,17 +51,13 @@
   [sig """-> string"""]
   [summary """Emit a sequence of record rows as CSV using the default dialect, quoting and escaping per RFC 4180."""]
   [example [code """[?lib 'cx-stdlib/csv']
-[$csv:emit ({a: "1", b: "2"})]"""] [expect """'a,b
-1,2
-'"""]]
+[$csv:emit ({a: "1", b: "2"})]"""] [expect """'a,b\n1,2\n'"""]]
 ]
 [fn-doc name=emit-with-dialect scope=public purity=pure
   [sig """-> string"""]
   [summary """Emit record rows as CSV/TSV using a named or fully-specified dialect."""]
   [example [code """[?lib 'cx-stdlib/csv']
-[$csv:emit-with-dialect ({a: "1", b: "2"}) [dialect [name "tsv"]]]"""] [expect """'a	b
-1	2
-'"""]]
+[$csv:emit-with-dialect ({a: "1", b: "2"}) [dialect [name "tsv"]]]"""] [expect """'a\tb\n1\t2\n'"""]]
 ]
 [fn-doc name=dialects-builtin scope=public purity=pure
   [sig """-> map"""]

@@ -1,0 +1,1 @@
+[?worker name="w" [?select [case [from $ch1 $msg] [ok]] [case [timeout 50ms] [skip]]]]

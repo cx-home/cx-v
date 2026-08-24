@@ -1,0 +1,9 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  lh{{"for $u :in /users"}}
+  lb["$u"]
+  lb --> lh
+  lh -- "binds $u" --> lb
+  start --> lh
+  lh --> done

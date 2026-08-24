@@ -1,0 +1,7 @@
+erDiagram
+  a ||--|| b : has
+  a {
+  }
+  b {
+    string c
+  }

@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  cap_net{{"net"}}
+  prog --x|"denied by [?with-caps]"| cap_net

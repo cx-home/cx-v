@@ -1,0 +1,4 @@
+sequenceDiagram
+  participant svc
+  participant client
+  Note over svc : no routes

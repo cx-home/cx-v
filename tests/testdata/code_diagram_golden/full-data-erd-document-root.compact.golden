@@ -1,0 +1,7 @@
+erDiagram
+  users ||--|| user : has
+  users {
+  }
+  user {
+    int id "@"
+  }

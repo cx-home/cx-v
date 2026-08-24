@@ -1,0 +1,14 @@
+%%cx:Wz9mYWxsYmFjayBib2R5PVs/aHR0cC1jbGllbnQgZ2V0PSJodHRwczovL2EuZXhhbXBsZS94Il0gcmVjb3Zlci13aXRoPVs/aHR0cC1jbGllbnQgZ2V0PSJodHRwczovL2IuZXhhbXBsZS95Il1d%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?fallback]"]]
+    n4["[?fallback] result"]
+    n5[["[?http-client] GET https://a.example/x"]]
+    n3 --> n5
+    n5 --> n4
+    n6[["[?http-client] GET https://b.example/y"]]
+    n5 -- "err" --> n6
+    n6 --> n4
+    n1 --> n4
+    n4 --> n2

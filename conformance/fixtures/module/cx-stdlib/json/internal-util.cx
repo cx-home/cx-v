@@ -1,7 +1,0 @@
-[; This file is declared :private in cx.pkg, so it MUST NOT be ]
-[; reachable via [?lib 'cx-stdlib/json/internal-util'].          ]
-
-[?def shouldnt-leak
-  :scope public
-  ()
-  :leaked]

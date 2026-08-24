@@ -961,20 +961,25 @@ fn csv_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		// Generic map-key accessor used by the csv conformance fixtures
 		// (`[$keys $row]`, `[$keys [$csv:dialects-builtin]]`). Not a
 		// language-core builtin; reached here only when core invoke_builtin
-		// declines, and only meaningful on a `__cx_map__` value.
+		// declines, and only meaningful on a map value.
+		// #936: delegates to the ONE typed materialization (map_native_keys,
+		// #925) — the old arm emitted key IMAGES as strings, so two distinct
+		// keys ({1: a, '1': b}) yielded identical items (the #927 class in
+		// the reader lane). String-keyed maps (every csv consumer) are
+		// unchanged by construction.
 		'keys' {
 			if args.len != 1 {
 				return none
 			}
-			keys, _, ok := csv_map_entries(args[0])
+			_, _, ok := csv_map_entries(args[0])
 			if !ok {
 				return none
 			}
-			mut out := []cx.Node{}
-			for k in keys {
-				out << csv_str(k)
+			r := map_native_keys(args)
+			if is_err_node(r) {
+				return none
 			}
-			return csv_seq(out)
+			return r
 		}
 		else {
 			return none

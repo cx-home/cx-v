@@ -57,7 +57,9 @@ fn emit_node(n cx.ProgramNode, mut sb strings.Builder, depth int) {
 			if n.deep { sb.write_string('"**"') } else { sb.write_string('"*"') }
 		}
 		cx.ProgramCall {
-			emit_object_start(mut sb, '${n.name}()', depth)
+			// CRS-1: a call-result step run renders after the call label
+			// (`first()@v`), mirroring the binding label's step rendering.
+			emit_object_start(mut sb, '${n.name}()${path_steps_label(n.path)}', depth)
 			for i, a in n.args {
 				emit_array_item_prefix(mut sb, i, depth + 1)
 				emit_node(a, mut sb, depth + 1)
@@ -122,11 +124,16 @@ fn path_expr_label(p cx.ProgramPathExpr) string {
 		// NodeTest surface form per grammar [131b]. The namespace-wildcard
 		// forms re-assemble the source surface (`*:local`, `prefix:*`,
 		// `prefix:local`) from the (name, ns_kind, ns_prefix) triple.
-		match step.ns_kind {
-			.none             { s += step.name }
-			.any_ns           { s += '*:' + step.name }
-			.prefix_any_local { s += step.ns_prefix + ':*' }
-			.prefix_local     { s += step.ns_prefix + ':' + step.name }
+		// A kind test IS the whole NodeTest and outranks the triple.
+		if step.kind_test != .none {
+			s += step.kind_test.spelling()
+		} else {
+			match step.ns_kind {
+				.none             { s += step.name }
+				.any_ns           { s += '*:' + step.name }
+				.prefix_any_local { s += step.ns_prefix + ':*' }
+				.prefix_local     { s += step.ns_prefix + ':' + step.name }
+			}
 		}
 		for pred in step.predicates {
 			s += path_predicate_render(pred)
@@ -183,9 +190,9 @@ fn path_predicate_attr_label(p cx.ProgramPathPredicate) string {
 			return '@' + p.attr_name + p.attr_op + node_label(val)
 		}
 		.type_test {
-			// Path predicates never carry a value-kind test; the branch
-			// exists for exhaustiveness over the shared attr-kind enum.
-			return '@' + p.attr_name
+			// `[@name::T]` — #772: the predicate position carries the
+			// §5.2 rule-14 value-kind test too.
+			return '@' + p.attr_name + '::' + p.type_name
 		}
 	}
 }
@@ -208,14 +215,28 @@ fn node_label(n cx.ProgramNode) string {
 }
 
 fn binding_label(b cx.ProgramBinding) string {
-	mut s := '$' + b.name
-	for step in b.path {
+	return '$' + b.name + path_steps_label(b.path)
+}
+
+// path_steps_label renders a [135a] step run — shared by binding labels
+// and the CRS-1 call-result postfix label.
+fn path_steps_label(path []cx.ProgramPathStep) string {
+	mut s := ''
+	for step in path {
+		nt := if step.kind_test != .none {
+			step.kind_test.spelling()
+		} else if step.computed_name != '' {
+			// #925 (PYE-1a/1b): computed steps label as their binding.
+			'\$' + step.computed_name
+		} else {
+			step.name
+		}
 		match step.kind {
-			.attr               { s += '@' + step.name }
-			.child              { s += '/' + step.name }
-			.member             { s += '.' + step.name }
+			.attr               { s += '@' + nt }
+			.child              { s += '/' + nt }
+			.member             { s += '.' + nt }
 			.wildcard_children  { s += '/*' }
-			.descendant         { s += '//' + step.name }
+			.descendant         { s += '//' + nt }
 			.descendant_wildcard { s += '//*' }
 			.parent             { s += '/..' }
 		}
@@ -279,7 +300,9 @@ fn emit_attr(a cx.ProgramPatternAttr, mut sb strings.Builder, depth int) {
 }
 
 fn emit_directive(d cx.ProgramDirective, mut sb strings.Builder, depth int) {
-	emit_object_start(mut sb, '?' + d.name, depth)
+	// PS-1: a directive-result step run renders after the label
+	// (`?let/name`), mirroring the CRS-1 call-label step rendering.
+	emit_object_start(mut sb, '?' + d.name + path_steps_label(d.path), depth)
 	for i, slot in d.slots {
 		emit_array_item_prefix(mut sb, i, depth + 1)
 		emit_slot(slot, mut sb, depth + 1)
@@ -303,16 +326,40 @@ fn emit_slot(s cx.ProgramSlot, mut sb strings.Builder, depth int) {
 fn emit_for_comp(f cx.ProgramForComp, mut sb strings.Builder, depth int) {
 	// emit head per outer-container form and use the
 	// matching yield-form label.
-	head := match f.outer_form {
+	mut head := match f.outer_form {
 		.sequence { '?for' }
 		.array    { '?for-array' }
 		.map      { '?for-map' }
 	}
+	// PS-1: the result step run renders after the head label.
+	head += path_steps_label(f.path)
+	// Child nodes come from THE ONE traversal (L100, program_for_walk.v);
+	// the clause rows supply only metadata (labels, bind names, direction).
+	// The walk emits a generator's source before its expr, so first-wins
+	// preserves the source-outranks-expr payload rule.
+	mut payloads := []?cx.ProgramNode{len: f.clauses.len, init: ?cx.ProgramNode(none)}
+	mut yield_node := f.yield
+	mut yield_value := ?cx.ProgramNode(none)
+	for item in cx.for_comp_children(f) {
+		match item.role {
+			.clause_source, .clause_expr {
+				if payloads[item.clause_idx] == none {
+					payloads[item.clause_idx] = item.node
+				}
+			}
+			.yield_node {
+				yield_node = item.node
+			}
+			.yield_value {
+				yield_value = item.node
+			}
+		}
+	}
 	emit_object_start(mut sb, head, depth)
 	mut idx := 0
-	for c in f.clauses {
+	for i, c in f.clauses {
 		emit_array_item_prefix(mut sb, idx, depth + 1)
-		emit_for_clause(c, mut sb, depth + 1)
+		emit_for_clause(c, payloads[i], mut sb, depth + 1)
 		idx++
 	}
 	emit_array_item_prefix(mut sb, idx, depth + 1)
@@ -323,10 +370,10 @@ fn emit_for_comp(f cx.ProgramForComp, mut sb strings.Builder, depth int) {
 	}
 	emit_object_start(mut sb, yield_label, depth + 1)
 	emit_array_item_prefix(mut sb, 0, depth + 2)
-	emit_node(f.yield, mut sb, depth + 2)
+	emit_node(yield_node, mut sb, depth + 2)
 	mut yield_items := 1
 	if f.yield_form == .map {
-		if val_expr := f.yield_value {
+		if val_expr := yield_value {
 			emit_array_item_prefix(mut sb, 1, depth + 2)
 			emit_node(val_expr, mut sb, depth + 2)
 			yield_items = 2
@@ -339,7 +386,7 @@ fn emit_for_comp(f cx.ProgramForComp, mut sb strings.Builder, depth int) {
 	emit_object_end(mut sb, depth)
 }
 
-fn emit_for_clause(c cx.ProgramForClause, mut sb strings.Builder, depth int) {
+fn emit_for_clause(c cx.ProgramForClause, payload ?cx.ProgramNode, mut sb strings.Builder, depth int) {
 	mut label := match c.kind {
 		.generator { ':in \$' + c.bind }
 		.filter    { ':where' }
@@ -348,15 +395,16 @@ fn emit_for_clause(c cx.ProgramForClause, mut sb strings.Builder, depth int) {
 		.group_by  { ':group-by' }
 		.limit     { ':limit' }
 		.par       { ':par' }
-		.stream    { ':stream' }
+		.lazy      { ':lazy' }
 		.ordered   { ':ordered' }
 		.take      { ':take' }
 		.drop      { ':drop' }
-		.takewhile { ':takewhile' }
-		.dropwhile { ':dropwhile' }
+		.takewhile { ':take-while' }
+		.dropwhile { ':drop-while' }
+		.fail_fast { ':fail-fast' }
 	}
-	// Pick the relevant payload — generator uses source, others use expr
-	payload := if e := c.source { ?cx.ProgramNode(e) } else if e := c.expr { ?cx.ProgramNode(e) } else { ?cx.ProgramNode(none) }
+	// The payload node arrives from the ONE walk (source-first for a
+	// generator, expr otherwise) — never read off the clause row here.
 	v := payload or {
 		sb.write_string('"')
 		sb.write_string(escape_string(label))
@@ -371,6 +419,25 @@ fn emit_for_clause(c cx.ProgramForClause, mut sb strings.Builder, depth int) {
 }
 
 fn emit_literal(l cx.ProgramLiteral, mut sb strings.Builder, depth int) {
+	// PS-1: a stepped literal (`[1, 2]/x`, `{a: 1}.a`, `(1, 2)/x`) wraps
+	// its rendering in an object labeled by the shape marker + the step
+	// run, so the tree-view shows where the steps apply — mirroring the
+	// call/binding label convention. The cx_element kind carries the run
+	// on its own name label below; step-less literals render unchanged.
+	if l.path.len > 0 && l.kind != .cx_element {
+		marker := match l.kind {
+			.array_lit    { '[]' }
+			.sequence_lit { '()' }
+			.map_lit      { '{}' }
+			else          { 'lit' }
+		}
+		emit_object_start(mut sb, marker + path_steps_label(l.path), depth)
+		emit_array_item_prefix(mut sb, 0, depth + 1)
+		emit_literal(cx.ProgramLiteral{ ...l, path: []cx.ProgramPathStep{} }, mut sb, depth + 1)
+		emit_array_end(mut sb, depth, 1)
+		emit_object_end(mut sb, depth)
+		return
+	}
 	match l.kind {
 		.string_lit {
 			sb.write_string('"')
@@ -383,6 +450,9 @@ fn emit_literal(l cx.ProgramLiteral, mut sb strings.Builder, depth int) {
 		.bigint_lit {
 			// over-i64 integer: emit the verbatim digit string (unquoted —
 			// it is numeric, not a string literal).
+			sb.write_string(l.str_val)
+		}
+		.decimal_lit {
 			sb.write_string(l.str_val)
 		}
 		.float_lit {
@@ -427,7 +497,16 @@ fn emit_literal(l cx.ProgramLiteral, mut sb strings.Builder, depth int) {
 				sb.write_string('"')
 				sb.write_string(escape_string(k))
 				sb.write_string('": ')
-				emit_node(l.items[i], mut sb, depth + 1)
+				// RULED: MSS-4 (#917): a declaration-only entry projects as
+				// its `::T` image — never the inert placeholder (which would
+				// read as a null VALUE, conflating absent with null).
+				if i < l.decl_kinds.len && l.decl_kinds[i] != '' {
+					sb.write_string('"::')
+					sb.write_string(escape_string(l.decl_kinds[i]))
+					sb.write_string('"')
+				} else {
+					emit_node(l.items[i], mut sb, depth + 1)
+				}
 				if i < l.keys.len - 1 { sb.write_string(',\n') } else { sb.write_string('\n') }
 			}
 			emit_indent(mut sb, depth)
@@ -435,7 +514,8 @@ fn emit_literal(l cx.ProgramLiteral, mut sb strings.Builder, depth int) {
 		}
 		.cx_element {
 			total := l.items.len + l.slots.len
-			emit_object_start(mut sb, l.name, depth)
+			// PS-1: the result step run renders after the element name.
+			emit_object_start(mut sb, l.name + path_steps_label(l.path), depth)
 			mut idx := 0
 			for it in l.items {
 				emit_array_item_prefix(mut sb, idx, depth + 1)

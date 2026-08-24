@@ -1,0 +1,1957 @@
+[test-suite name=ux ring=2
+  [doc [#
+Conformance fixtures for cx-x/ux — the SEMANTIC CORE of the UX projection
+(#787). NB cx-x/ux is an EXPERIMENTAL x/-TIER module (D3): bundled + gated but
+exempt from the frozen-std stability promise, because #787's DP1 is an explicit
+go/kill. Programs name the tier via [?lib 'cx-x/ux'].
+
+Normative source: design/787/787-phase0-spec.md, owner-RULED 2026-08-17. Each
+case names the [P0-n] clause it pins.
+
+THIS MODULE CONTAINS NO RENDERER. W1-W4 kept the HTML lowering beside the
+vocabulary and htmx concepts duly climbed into it — `target=`, `swap=`, `oob=`,
+`ext=`, `subscribe=`, `on=`, one of them carrying a literal CSS selector. P0-20
+(R5) claims the vocabulary is renderable by a non-browser renderer; that claim
+was false, and a comment cannot make it true. The renderers now live in
+cx-x/ux-web and cx-x/ux-tui, and the six leaked attributes are REFUSED here.
+
+The load-bearing properties, and why each is a fixture rather than a comment:
+
+  IDENTITY (P0-8/P0-9). A fragment address is exactly (route, feature instance,
+  element path). Theme, template, locale, actor, session and data are inputs to
+  a fragment's CONTENT, never its IDENTITY.
+
+  DERIVED IDS (P0-11, Q-B). The DOM id is `cx-` + the first 16 hex chars of the
+  sha2-256 of the address's strict canonical bytes. `frag-id-of` derives the
+  same id from an already-computed canonical form, byte-identically — the
+  optimization is pinned so it cannot drift into a second identity.
+
+  NEUTRALITY (P0-20). A semantic element carrying a renderer-private attribute
+  is refused. This is the fixture that keeps the vocabulary honest; the module
+  boundary is the structure, and this is the check.
+
+  HONEST KEYING (P0-10). A row keys by its collection's DECLARED key. An
+  unkeyed row gets NO address rather than a positional one.
+
+  THE PATCH ALGEBRA (P0-44). Live frames lower onto insert/update/remove/
+  repaint over a keyed collection addressed by ELEMENT PATH — never onto a
+  renderer's swap syntax.
+
+  THE CONTENT NORMAL FORM. What two renderings are asserted to agree on. It
+  normalizes sequence nesting away, because a projected tree and its
+  hand-authored twin are the same content and structure.
+
+Every expected output below was re-derived by RUNNING the program against the
+shipped binary (cx <file> — the single oracle).
+#]]
+
+ [# The address is a CX value whose STRICT CANONICAL BYTES are the identity; the
+    Tier-1 address is tagged sha2-256:<hex> like every other address in the suite,
+    and the DOM id is the first 16 hex chars of it. Both are stated functions of
+    the same bytes — never a second identity. #]
+ [case id=ux-001-fragment-address-and-dom-id level=core
+  [tags ux frag identity dom-id P0-9 P0-11]
+  [title 'fragment address and its derived hash16 DOM id']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let [= $f [$ux:frag "/orders/o-1041" "orders" "/open-orders/status"]]
+  [list [$ux:frag-address $f] [$ux:frag-id $f]]]
+#]]
+  [out-text [#
+[list 'sha2-256:e1029934ea3a0804f9d5aab65a3933242fb692cbf15eeac4b7bb83c6899025d6' 'cx-e1029934ea3a0804']
+#]]
+ ]
+
+ [# P0-8: the identity inputs are EXACTLY the triple. Same triple, same id; a
+    different feature INSTANCE is a different fragment even on the same route with
+    the same path — which is why composing one feature twice on a route without
+    distinct instance names is a refusal. #]
+ [case id=ux-002-identity-is-exactly-the-triple level=core
+  [tags ux frag identity P0-8]
+  [title 'equal triples address equally; a different instance does not']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let [= $a [$ux:frag "/orders" "orders" "/open"]]
+      [= $b [$ux:frag "/orders" "orders" "/open"]]
+      [= $c [$ux:frag "/orders" "orders-b" "/open"]]
+  [list [= [$ux:frag-id $a] [$ux:frag-id $b]] [= [$ux:frag-id $a] [$ux:frag-id $c]]]]
+#]]
+  [out-text [#
+[list true false]
+#]]
+ ]
+
+ [# P0-10: a declared row key yields a row step; NO key yields absence, not a
+    positional index. Absence-in, absence-out. #]
+ [case id=ux-003-row-and-path-steps level=core
+  [tags ux path row-key keying P0-10]
+  [title 'element-path steps, and absence for an unkeyed collection']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [$ux:row-step "/open" "o-1041"] [$ux:row-step "/open" ()] [$ux:path-step "/" "grid"] [$ux:path-step "/open" "grid"]]
+#]]
+  [out-text [#
+[list '/open/row[o-1041]' () '/grid' '/open/grid']
+#]]
+ ]
+
+ [# An addressed element needs BOTH the DOM id and the readable form, and computing
+    them independently canonicalizes the same value twice — measured at 56 us vs
+    30 us per element. `frag-id-of` derives the id from the repr instead. Sound
+    because [$cx:hash] IS "sha2-256:" followed by the sha2-256 of exactly those
+    bytes. Pinned here so an optimization can never become a second identity. #]
+ [case id=ux-004-frag-id-of-is-the-same-identity level=core
+  [tags ux frag identity perf P0-11]
+  [title 'the id derived from a computed repr is byte-identical to the id derived from the address']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let [= $f [$ux:frag "/orders" "orders" "/open"]]
+  [list [$ux:frag-id $f] [$ux:frag-id-of [$ux:frag-repr $f]]
+        [= [$ux:frag-id $f] [$ux:frag-id-of [$ux:frag-repr $f]]]]]
+#]]
+  [out-text [#
+[list 'cx-2905217911f2a7e8' 'cx-2905217911f2a7e8' true]
+#]]
+ ]
+
+ [# P0-20 rules the DISCIPLINE, not the final list — members are added by ruling,
+    never by convenience. `ux:filter` is the one W5 addition (owner, 2026-08-17):
+    a filter is a QUERY, with no effect, nothing committed and nothing journaled,
+    so it cannot ride [ux:form] without lying about what invoking it does. #]
+ [case id=ux-010-the-semantic-vocabulary level=core
+  [tags ux vocabulary neutrality P0-20]
+  [title 'the semantic element set, and the renderer-private attributes it refuses']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [$ux:vocabulary] [$ux:renderer-private-attrs] [$ux:tones]]
+#]]
+  [out-text [#
+[list ('ux:region', 'ux:card', 'ux:heading', 'ux:text', 'ux:field', 'ux:badge', 'ux:list', 'ux:item', 'ux:table', 'ux:columns', 'ux:column', 'ux:rows', 'ux:row', 'ux:cell', 'ux:nav', 'ux:nav-item', 'ux:link', 'ux:action', 'ux:form', 'ux:input', 'ux:hidden', 'ux:submit', 'ux:error', 'ux:notice', 'ux:filter', 'ux:select', 'ux:option', 'ux:group', 'ux:media', 'ux:grid', 'ux:param', 'ux:steps', 'ux:step', 'ux:quantity', 'ux:breadcrumb', 'ux:crumb', 'ux:pager', 'ux:page-link', 'ux:facet', 'ux:facet-value', 'ux:sort', 'ux:sort-option', 'ux:aside', 'ux:status', 'ux:panel') (oob, target, swap, ext, subscribe, on, include) (ok, warn, danger, info, neutral)]
+#]]
+ ]
+
+ [# THE NEUTRALITY GATE. Each of these was a real attribute on a real semantic
+    element in W1-W4, and `oob=` carried a literal CSS selector — a terminal
+    renderer handed such a tree would have had to parse htmx swap syntax to learn
+    what the author meant. What they MEANT is now said semantically (`live=`,
+    `affects=`) with the transport in the render context. #]
+ [case id=ux-011-renderer-private-attrs-are-refused level=core
+  [tags ux neutrality refusal P0-20 R5]
+  [title 'the six htmx attributes that leaked into the vocabulary are now refusals']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $bad ([ux:region feature=o oob="innerHTML:#x"],
+           [ux:region feature=o ext=sse],
+           [ux:region feature=o subscribe="/stream"],
+           [ux:region feature=o on=changed],
+           [ux:action verb=v target="#x"],
+           [ux:action verb=v swap=outerHTML],
+           [ux:action verb=v include="#f"])]
+  [?for [in $e $bad] [yield [$ux:refusals-of $e]]]]
+#]]
+  [out-text [#
+[ux-refusal code=ux-renderer-private-attr element=ux:region attr=oob]
+[ux-refusal code=ux-renderer-private-attr element=ux:region attr=ext]
+[ux-refusal code=ux-renderer-private-attr element=ux:region attr=subscribe]
+[ux-refusal code=ux-renderer-private-attr element=ux:region attr=on]
+[ux-refusal code=ux-renderer-private-attr element=ux:action attr=target]
+[ux-refusal code=ux-renderer-private-attr element=ux:action attr=swap]
+[ux-refusal code=ux-renderer-private-attr element=ux:action attr=include]
+#]]
+ ]
+
+ [# The replacements are not spellings of the same thing: `live=` names a LOGICAL
+    FEED (a name, not an endpoint) and `affects=` names an ELEMENT PATH (an
+    address, not a selector). Both are resolvable by any renderer. #]
+ [case id=ux-012-semantic-declarations-are-accepted level=core
+  [tags ux neutrality P0-20]
+  [title 'live= and affects= are semantic, and pass the gate the six do not']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let [= $t [ux:region feature=orders path="/live" live=orders
+                [ux:action verb=place-order affects="/live/new" label="Go"]
+                [ux:filter name=q affects="/live/open/rows"]]]
+  [; asserting the ABSENCE of refusals and nothing else is a golden that stays
+     green if the gate is deleted — so the surviving declarations are asserted
+     too, positively. ]
+  [= $act [$first $t//ux:action]]
+  [= $flt [$first $t//ux:filter]]
+  [list [$exists [$ux:refusals-of $t]] [$string $t@live] [$string $act@affects] [$string $flt@affects]]]
+#]]
+  [out-text [#
+[list false 'orders' '/live/new' '/live/open/rows']
+#]]
+ ]
+
+ [# Every refusal is collected BEFORE lowering, so the lowering is total and an
+    [err] can never end up spliced into a rendered page as if it were content. #]
+ [case id=ux-013-semantic-tree-refusals level=core
+  [tags ux refusal validation]
+  [title 'the per-member payload rules, collected before any lowering']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $bad ([ux:nope], [ux:heading level=9 "x"], [ux:badge tone=purple "x"],
+           [ux:action label=x], [ux:form], [ux:input], [ux:region],
+           [ux:link id=nope href="/x"], [ux:filter name=q])]
+  [?for [in $e $bad] [yield [$ux:refusals-of $e]]]]
+#]]
+  [out-text [#
+[ux-refusal code=ux-unknown-element element=ux:nope]
+[ux-refusal code=ux-bad-heading-level element=ux:heading level='9']
+[ux-refusal code=ux-bad-tone element=ux:badge tone=purple]
+[ux-refusal code=ux-action-no-verb element=ux:action]
+[err code=cx-err:CXER0100 message='cx-err:CXER0100: missing required argument source']
+[ux-refusal code=ux-input-no-name element=ux:input]
+[ux-refusal code=ux-region-no-feature element=ux:region]
+[ux-refusal code=ux-id-not-addressable element=ux:link id=nope]
+[ux-refusal code=ux-unknown-attr element=ux:link attr=id]
+[ux-refusal code=ux-filter-no-affects element=ux:filter]
+#]]
+ ]
+
+ [# Mixed content is refused so the lowering can assume exactly one of the two
+    shapes applies to any given element — which is what lets `content-leaf` be
+    total in all three modules. #]
+ [case id=ux-014-mixed-content-is-refused level=core
+  [tags ux refusal validation]
+  [title 'an element carrying both element children and text is refused']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let [= $m [ux:card [ux:text "a"] "loose text"]] [$ux:refusals-of $m]]
+#]]
+  [out-text [#
+[ux-refusal code=ux-mixed-content element=ux:card]
+#]]
+ ]
+
+ [# P0-98 (RULED 2026-08-18, audit letter 3a). The demonstration bug: [ux:action
+    disabled=true reason=...] passed the gate and both renderers ignored it —
+    the same silent-acceptance family as the campaign's three language traps.
+    Also pinned: the store's own aside name= (read by nobody, the first thing
+    the closure caught), a row id= (a row addresses by key=, so an id on it was
+    silently discarded), and the dead W1-era filter over=. #]
+ [case id=ux-015-unknown-attributes-are-refused level=core
+  [tags ux refusal attribute-closure P0-98]
+  [title 'an attribute no clause grants to its member is a refusal, not a silence']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $bad ([ux:action verb=v label=x disabled=true reason="out"],
+           [ux:aside label=Basket name=basket],
+           [ux:row id=r1 [ux:cell "x"]],
+           [ux:filter name=q affects="/rows" over="id status"])]
+  [?for [in $e $bad] [yield [$ux:refusals-of $e]]]]
+#]]
+  [out-text [#
+[ux-refusal code=ux-unknown-attr element=ux:action attr=disabled]
+[ux-refusal code=ux-unknown-attr element=ux:aside attr=name]
+[ux-refusal code=ux-unknown-attr element=ux:row attr=id]
+[ux-refusal code=ux-unknown-attr element=ux:filter attr=over]
+#]]
+ ]
+
+ [# The closure's other half: everything a clause grants or the shared layer
+    honors stays admitted — including the projection-emitted attributes a
+    table derived from the content normal form alone would have refused
+    (prominence on an action, repeat/help/add-label on a group, value/step on
+    a quantity). The action and aside rows of the table are pinned explicitly:
+    an attribute added to a member without a ruling should move this golden. #]
+ [case id=ux-016-the-attribute-grant-table level=core
+  [tags ux vocabulary attribute-closure P0-98]
+  [title 'granted attributes pass, and the per-member grant table is pinned']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $t [ux:region feature=browse path="/"
+          [ux:card id=hero
+            [ux:heading level=2 "Pans"]
+            [ux:field label=Price format=money currency=USD "1200.50"]
+            [ux:grid density=comfortable
+              [ux:item [ux:media src="/a.svg" alt="a pan" kind=illustration tone=neutral]]]
+            [ux:action verb=add-to-basket label="Add" prominence=primary affects="/hero"
+              [ux:param name=sku value=FK-0119]]
+            [ux:group name=lines label=Lines repeat=true add-label="Add a line"
+              [ux:input name=qty kind=int help="How many"]]
+            [ux:quantity name=qty label=Quantity verb=set-quantity value=2 min=1 max=9 step=1]
+            [ux:aside label="Your basket" open=true dismiss-href="/x"]]]]
+  [list [$exists [$ux:refusals-of $t]]
+        [$ux:allowed-attrs "ux:action"] [$ux:allowed-attrs "ux:aside"] [$ux:allowed-attrs "ux:row"]]]
+#]]
+  [out-text [#
+[list false (verb, label, affects, confirm, confirm-href, prominence, available, reason) (label, open, dismiss-href, id, live) (key)]
+#]]
+ ]
+
+ [# The seven renderer-private names are recognized mistakes with their own
+    refusal code naming the kind of mistake; the closure must not ALSO refuse
+    them as unknown. One mistake, one refusal, the more precise name. #]
+ [case id=ux-017-one-mistake-one-refusal level=core
+  [tags ux refusal attribute-closure P0-98 P0-20]
+  [title 'a renderer-private attribute refuses ONCE, with its own code, never twice']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $r [$ux:refusals-of [ux:action verb=v target="#x"]]]
+  [= $f [$first $r]]
+  [list [$count $r] [$string $f@code]]]
+#]]
+  [out-text [#
+[list 1 'ux-renderer-private-attr']
+#]]
+ ]
+
+ [# Found by the P0-98 attribute inventory: three members carry a tone and only
+    two checked it, so [ux:notice tone=sparkly] passed. Same closed set (2.5),
+    same refusal code. #]
+ [case id=ux-018-notice-tone-joins-the-closed-set level=core
+  [tags ux refusal validation tone]
+  [title 'ux:notice validates its tone against the closed set, as badge and status always did']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [$ux:refusals-of [ux:notice tone=sparkly "hi"]]
+      [$ux:refusals-of [ux:notice tone=ok "saved"]]]
+#]]
+  [out-text [#
+[list ([ux-refusal code=ux-bad-tone element=ux:notice tone=sparkly]) ()]
+#]]
+ ]
+
+ [# P0-99 (RULED 2026-08-18, audit letter 2a). A disabled control with no stated
+    why is a locked door with no sign on it: available=false REQUIRES reason=,
+    available= is boolean-shaped and closed (the tone precedent), and the normal
+    form carries both verbatim — an inert act whose why one face drops is two
+    stores telling different truths. confirm= became presence-boolean in the
+    same entry (the audit's H5 blemish: confirm='' made 'no confirm' and 'empty
+    confirm' indistinguishable), and a confirming act carries NO verb: its web
+    rendering is a link to the confirmation view and the verb lives there. #]
+ [case id=ux-019-an-unavailable-act-says-so-and-says-why level=core
+  [tags ux refusal availability P0-99 P0-47]
+  [title 'available=false requires reason=; both are content; capability absence stays P0-47']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $noreason [$ux:refusals-of [ux:action verb=buy label=B available=false]]]
+  [= $badval   [$ux:refusals-of [ux:action verb=buy label=B available=maybe reason=x]]]
+  [= $ok       [$ux:refusals-of [ux:action verb=buy label=B available=false reason="Out of stock"]]]
+  [list [?splice $noreason] [?splice $badval] [$exists $ok]
+        [$ux:content-of [ux:action verb=buy label=B available=false reason="Out of stock"
+                          [ux:param name=sku value=X-1]]]
+        [$ux:content-of [ux:action verb=buy label=B]]
+        [$ux:content-of [ux:action verb=empty label=E confirm="Removes everything." confirm-href="/x/empty"]]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-unavailable-no-reason element=ux:action verb=buy] [ux-refusal code=ux-bad-available element=ux:action available=maybe] false [c:action verb=buy label=B available='false' reason='Out of stock' [c:param name=sku value=X-1]] [c:action verb=buy label=B] [c:action label='E' confirm='true']]
+#]]
+ ]
+
+ [# Audit H6 / register L5: equivalence proves agreement, not completeness — the
+    product page had no buy control for three waves and every fixture certified
+    both faces rendered the absence identically. act-verbs takes the feature's
+    effect=act verbs (the P0-17 tools-projection discriminator); control-verbs
+    takes the deduped verbs a tree offers as controls (actions — available or
+    not — forms, quantitys); verbs-uncovered diffs a route's declared offers
+    against them; verbs-unaccounted holds the whole surface to the feature. #]
+ [case id=ux-022-verb-coverage-is-mechanical level=core
+  [tags ux coverage completeness H6 P0-17 P0-86 W16]
+  [title 'invokable verbs diff against emitted controls; absence refuses unless declared']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $f [feature name=shop
+          [verbs
+            [verb name=buy effect=act [summary "x"]]
+            [verb name=cancel effect=act [summary "y"]]
+            [verb name=return effect=act [summary "z"]]
+            [verb name=browse effect=observe]]]]
+  [= $t [ux:region feature=shop path="/"
+          [ux:action verb=buy label=B [ux:param name=sku value=X]]
+          [ux:action verb=buy label=B2 available=false reason="Out of stock"
+            [ux:param name=sku value=Y]]
+          [ux:form verb=cancel [ux:input name=id] [ux:submit "Go"]]]]
+  [list [$ux:act-verbs $f] [$ux:control-verbs $t]
+        [?splice [$ux:verbs-uncovered ("buy", "cancel") $t]]
+        [?splice [$ux:verbs-uncovered ("buy", "return") $t]]
+        [?splice [$ux:verbs-unaccounted $f ("buy", "cancel") ("return")]]
+        [?splice [$ux:verbs-unaccounted $f ("buy") ()]]]]
+#]]
+  [out-text [#
+[list ('buy', 'cancel', 'return') (buy, cancel) [ux-refusal code=ux-verb-uncovered verb=return] [ux-refusal code=ux-verb-unaccounted verb=cancel] [ux-refusal code=ux-verb-unaccounted verb=return]]
+#]]
+ ]
+
+ [# A region that renders correctly once and then silently never updates is the
+    precise failure class 5.4 exists to exclude — it passes every server-side
+    gate. Checked in the CORE, over the tree and its context, because it is a
+    property of neither HTML nor a terminal. #]
+ [case id=ux-020-an-unbound-feed-is-refused level=core
+  [tags ux liveness binding refusal P0-44]
+  [title 'a region naming a feed the render context does not bind refuses, on every renderer']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $rctx [ux:render-ctx [feed name=orders endpoint="/stream" event="orders-changed"]]]
+  [= $ok  [ux:region feature=orders path="/live" live=orders]]
+  [= $bad [ux:region feature=orders path="/live" live=invoices]]
+  [list [$ux:binding-refusals $ok $rctx] [$ux:binding-refusals $bad $rctx]
+        [$ux:feed-binding $rctx "orders"]]]
+#]]
+  [out-text [#
+[list () ([ux-refusal code=ux-unbound-feed feed=invoices]) ([feed name=orders endpoint='/stream' event=orders-changed])]
+#]]
+ ]
+
+ [# The ONE genuinely web-shaped entry in the render context, and deliberately
+    left as such: the terminal renderer never reads it. A renderer-specific hint
+    another renderer IGNORES is the right shape; one another renderer must PARSE
+    is what the neutrality work removed from the vocabulary. #]
+ [case id=ux-021-swap-mode-resolution level=core
+  [tags ux render-context web-hint]
+  [title 'swap modes resolve per affects path, then the default, then outerHTML']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $r [ux:render-ctx [swap default=morph] [swap affects="/a/b" mode=innerHTML]]]
+  [= $e [ux:render-ctx]]
+  [list [$ux:swap-mode $r "/a/b"] [$ux:swap-mode $r "/other"] [$ux:swap-mode $e "/x"]]]
+#]]
+  [out-text [#
+[list 'innerHTML' 'morph' 'outerHTML']
+#]]
+ ]
+
+ [# The subject of the equivalence claim. Each renderer supplies a readback from
+    the tree it actually emits to THIS form, and the three canonical bytes are
+    compared. `kind=` is deliberately absent: the tree carries a CX TYPE and each
+    renderer maps it to its own control many-to-one, so asserting on it would
+    assert that two renderers make the same widget choice. #]
+ [case id=ux-030-content-normal-form level=core
+  [tags ux equivalence normal-form R5]
+  [title 'the common content normal form: content and structure, presentation stripped']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let [= $t [ux:card
+                [ux:heading level=2 "Open orders"]
+                [ux:field label="Customer" "Ada"]
+                [ux:field label="Status" [ux:badge tone=warn "late"]]
+                [ux:input name=qty kind=int required=true]
+                [ux:action verb=place-order label="Place order"]]]
+  [$ux:content-repr $t]]
+#]]
+  [out-text [#
+"[c:card\n  [c:heading level='2' Open orders]\n  [c:field label=Customer Ada]\n  [c:field label=Status\n    [c:badge tone=warn late]\n  ]\n  [c:input name=qty label=Qty required='true' error='' '']\n  [c:action verb=place-order label='Place order']\n]\n"
+#]]
+ ]
+
+ [# A hand-authored list has element children; the SAME list built by a projection
+    has one sequence-valued child holding them. Both are the same content and the
+    same structure, and a normal form that distinguished them would report every
+    projected tree as unequal to its hand-authored twin — which is the comparison
+    W5 exists to make. #]
+ [case id=ux-031-sequence-nesting-is-normalized-away level=core
+  [tags ux equivalence normal-form]
+  [title 'a projected collection and its hand-authored twin have the same normal form']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $hand [ux:list [ux:item "a"] [ux:item "b"]]]
+  [= $proj [ux:list [?for [in $x ("a","b")] [yield [ux:item $x]]]]]
+  [list [= [$ux:content-repr $hand] [$ux:content-repr $proj]] [$ux:content-repr $proj]]]
+#]]
+  [out-text [#
+[list true '[c:list\n  [c:item a]\n  [c:item b]\n]\n']
+#]]
+ ]
+
+ [# Which elements own an address is a property of the SEMANTIC TREE, not of a
+    renderer, so it is stated once and both renderers mint from it. Until W5 this
+    lived in the web emitter over the lowered HTML tree — which left the terminal
+    renderer with no duplicate check at all while minting its focus ring from the
+    same ids. #]
+ [case id=ux-040-minted-addresses level=core
+  [tags ux addressing P0-11 P0-16]
+  [title 'every (DOM id, readable address) a semantic tree will mint, from the semantic tree']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $t [ux:region feature=orders path="/live"
+          [ux:card id=open [ux:heading level=2 "Open"]]
+          [ux:form verb=place-order [ux:submit label="Go"]]]]
+  [?for [in $p [$ux:address-pairs $t {route: "/orders", feature: "orders", path: "/"}]]
+    [yield [$string $p@id]]]]
+#]]
+  [out-text [#
+'cx-b9aa0e4902fe6a43'
+'cx-70c02252bf05598f'
+'cx-25ff65bbcc985af2'
+#]]
+ ]
+
+ [# TWO causes, reported distinctly because they send an implementer to different
+    places: ux-id-collision is the hash16 TRUNCATION collision P0-11 names, and
+    ux-address-reused is the projection producing two fragments that claim to be
+    the same fragment — an element path that failed to distinguish them. W3 found
+    the second for real. #]
+ [case id=ux-041-a-reused-address-is-refused level=core
+  [tags ux addressing refusal P0-11]
+  [title 'two placed elements minting the same address refuse; distinct ones do not']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $ctx {route: "/o", feature: "f", path: "/"}]
+  [= $dup [ux:region feature=f path="/r" [ux:card id=same [ux:text "a"]] [ux:card id=same [ux:text "b"]]]]
+  [= $ok  [ux:region feature=f path="/r" [ux:card id=one [ux:text "a"]] [ux:card id=two [ux:text "b"]]]]
+  [list [$ux:address-collisions $dup $ctx] [$ux:address-collisions $ok $ctx]]]
+#]]
+  [out-text [#
+[list ([ux-refusal code=ux-address-reused id=cx-bfb773fba6d60c77]) ()]
+#]]
+ ]
+
+ [# Columns derive from the ROW SCHEMA, so a table needs no column list and nothing
+    that could drift from the data. The row container carries an id so a live
+    patch has a real address to append into — W4b's feed fell back to wiping the
+    whole region for want of one. #]
+ [case id=ux-050-table-projection level=core
+  [tags ux table projection keying P0-10 P0-17]
+  [title 'columns derive from the row schema; the row container is addressed']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $rows
+     ([order id=o-1041 customer="Ada Lovelace" total=42.50 status=late
+        [line-items [line sku=ESC-18 qty=2 price=15.00] [line sku=MSP-4 qty=1 price=12.50]]],
+      [order id=o-1042 customer="Lin Wu" total=7.00 status=on-time
+        [line-items [line sku=BAL-9 qty=1 price=7.00]]])]
+  [= $types ([row-type name=order key=id], [row-type name=line key=sku])]
+  [$ux:table $rows {id: "open", types: $types}]]
+#]]
+  [out-text [#
+[ux:table id=open [ux:columns [ux:column 'Customer'] [ux:column 'Id'] [ux:column 'Status'] [ux:column 'Total'] [ux:column 'Line items']] [ux:rows id=rows [ux:row key=o-1041 [ux:cell 'Ada Lovelace'] [ux:cell 'o-1041'] [ux:cell 'late'] [ux:cell '42.50'] [ux:cell [ux:table id=line-items [ux:columns [ux:column 'Price'] [ux:column 'Qty'] [ux:column 'Sku']] [ux:rows id=rows [ux:row key=ESC-18 [ux:cell '15.00'] [ux:cell '2'] [ux:cell 'ESC-18']] [ux:row key=MSP-4 [ux:cell '12.50'] [ux:cell '1'] [ux:cell 'MSP-4']]]]]] [ux:row key=o-1042 [ux:cell 'Lin Wu'] [ux:cell 'o-1042'] [ux:cell 'on-time'] [ux:cell '7.00'] [ux:cell [ux:table id=line-items [ux:columns [ux:column 'Price'] [ux:column 'Qty'] [ux:column 'Sku']] [ux:rows id=rows [ux:row key=BAL-9 [ux:cell '7.00'] [ux:cell '1'] [ux:cell 'BAL-9']]]]]]]]
+#]]
+ ]
+
+ [# An `id` attribute is not treated as identity because it is spelled `id`: that
+    would be a naming convention masquerading as a keying rule. Declaring the key
+    is what earns per-row addresses; absence is answered with absence. #]
+ [case id=ux-051-unkeyed-rows-get-no-address level=core
+  [tags ux keying honesty P0-10]
+  [title 'a collection with no declared key gets no per-row addresses, honestly']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $rows ([order id=o-1 customer="Ada"], [order id=o-2 customer="Lin"])]
+  [$ux:table $rows {id: "open"}]]
+#]]
+  [out-text [#
+[ux:table id=open [ux:columns [ux:column 'Customer'] [ux:column 'Id']] [ux:rows id=rows [ux:row [ux:cell 'Ada'] [ux:cell 'o-1']] [ux:row [ux:cell 'Lin'] [ux:cell 'o-2']]]]
+#]]
+ ]
+
+ [# Drill-down is NAVIGATION, which the vocabulary already had — so it needed no
+    new member, unlike filtering, which is a query. The web renderer makes the
+    link an anchor; the terminal renderer activates it from the focused row. Only
+    the key column, and only when a key is declared: a row with no identity has
+    nothing to drill into. #]
+ [case id=ux-052-drill-down-needs-no-new-vocabulary level=core
+  [tags ux drill-down navigation W5]
+  [title 'a detail route puts an ordinary link in the key column, and only there']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $rows ([order id=o-1 customer="Ada"])]
+  [= $types ([row-type name=order key=id])]
+  [list [$ux:table $rows {id: "open", types: $types, detail-route: "/orders"}]
+        [$ux:table $rows {id: "open", detail-route: "/orders"}]]]
+#]]
+  [out-text [#
+[list [ux:table id=open [ux:columns [ux:column 'Customer'] [ux:column 'Id']] [ux:rows id=rows [ux:row key=o-1 [ux:cell 'Ada'] [ux:cell [ux:link href='/orders/o-1' 'o-1']]]]] [ux:table id=open [ux:columns [ux:column 'Customer'] [ux:column 'Id']] [ux:rows id=rows [ux:row [ux:cell 'Ada'] [ux:cell 'o-1']]]]]
+#]]
+ ]
+
+ [# Clause PRESENCE is the whole discriminator (stream 6), zero-item included —
+    never an item count, never a name convention. Required is the non-defaulted
+    POSITIONALS, exactly the rule the tools projection uses, so the two faces of
+    one command agree on what a caller must supply. Labels degrade to
+    name-derived; the tools face fails loud there and this one does not, because
+    human-facing defaults are presentational. #]
+ [case id=ux-060-form-projection-from-a-command-def level=core
+  [tags ux form projection P0-17 P0-18]
+  [title 'a [?def] with an [effects] clause projects onto a semantic form']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $src """
+[?def place-order scope=public impure [effects [write]] [returns element]
+  ($customer::string $qty::int $note::string="")
+  [ordered customer=$customer]]
+[fn-doc name=place-order scope=public purity=impure
+  [summary '''Place a customer order.''']
+  [param-doc name=customer '''Who the order is for.''']]
+"""]
+  [$ux:form $src "place-order" {affects: "/live/new"}]]
+#]]
+  [out-text [#
+[ux:form verb=place-order affects='/live/new' [ux:heading level=2 'Place a customer order.'] () [ux:input name=customer kind=string required='true' help='Who the order is for.'] [ux:input name=qty kind=int required='true'] [ux:input name=note kind=string required='false'] [ux:submit label='Place order']]
+#]]
+ ]
+
+ [# The command layer enforces the rule once; the projection renders whatever it
+    returned. The error CODE is deliberately not rendered — the message is what
+    the command layer chose to disclose, and a code is structure the refused
+    actor has no claim on. #]
+ [case id=ux-061-a-refusal-carries-its-own-words level=core
+  [tags ux form-error P0-17]
+  [title 'the UX layer never restates a rule']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[$ux:form-error "a customer and a quantity of at least 1 are required"]
+#]]
+  [out-text [#
+[ux:error [ux:text 'a customer and a quantity of at least 1 are required']]
+#]]
+ ]
+
+ [# A form for a command that does not exist would post to an intent wire that
+    cannot dispatch it. #]
+ [case id=ux-062-no-such-command-refuses level=core
+  [tags ux form refusal]
+  [title 'projecting a verb the source does not define is a refusal']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[$ux:form "[?def other pure [returns int] () 1]" "place-order" {}]
+#]]
+  [out-text [#
+[err code=ux-refused ([ux-refusal code=ux-no-such-command verb=place-order])]
+#]]
+ ]
+
+ [# A NAMED COLUMN IS NEVER DROPPED. Columns the claim omits keep their derived
+    order and follow the named ones, so a stale claim — one written against an
+    older schema that has since gained a field — degrades to "the fields I named
+    first, then the rest" rather than silently hiding data. A presentation claim
+    must never be able to make a value disappear. #]
+ [case id=ux-070-order-hint-never-drops-a-column level=core
+  [tags ux hints claims P0-21 P0-7]
+  [title 'a partial order claim reorders what it names and keeps the rest']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $rows
+     ([order id=o-1041 customer="Ada Lovelace" total=42.50 status=late
+        [line-items [line sku=ESC-18 qty=2 price=15.00] [line sku=MSP-4 qty=1 price=12.50]]],
+      [order id=o-1042 customer="Lin Wu" total=7.00 status=on-time
+        [line-items [line sku=BAL-9 qty=1 price=7.00]]])]
+  [= $types ([row-type name=order key=id], [row-type name=line key=sku])]
+  [= $addr [$ux:schema-address [$cx:parse "[schema [order [attr id::text] [attr customer::text]]]"]]]
+  [= $hints ([ux:hint order="status id" [schema $addr] [path "/"]])]
+  [= $t [$ux:table $rows {id: "open", types: $types, hints: $hints}]]
+  [?for [in $c $t//ux:column] [yield [$string $c]]]]
+#]]
+  [out-text [#
+'Customer'
+'Id'
+'Status'
+'Total'
+'Line items'
+'Price'
+'Qty'
+'Sku'
+'Price'
+'Qty'
+'Sku'
+#]]
+ ]
+
+ [# P0-4's composite string form is the tagged address immediately followed by the
+    CXPath — unambiguous by construction, because the address grammar admits no
+    `/` and every CXPath starts with one. A DERIVED SPELLING of the pair, never a
+    third identity. Absence is a normal answer: cosmetics fail open (P0-7). #]
+ [case id=ux-071-hint-resolution-and-the-claim-key level=core
+  [tags ux hints claims P0-4 P0-6]
+  [title 'hints resolve by (schema address, CXPath); the composite key is a derived spelling']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $hints ([ux:hint view=cards [schema "sha2-256:abc"] [path "/items"]])]
+  [list [$ux:claim-key "sha2-256:abc" "/items"]
+        [$ux:claim-key "sha2-256:abc" "/"]
+        [$ux:hint-for $hints "sha2-256:abc" "/items" "view"]
+        [$ux:hint-for $hints "sha2-256:abc" "/items" "order"]
+        [$ux:hint-for $hints "sha2-256:zzz" "/items" "view"]]]
+#]]
+  [out-text [#
+[list 'sha2-256:abc/items' 'sha2-256:abc/' 'cards' () ()]
+#]]
+ ]
+
+ [# RULED 1a. Deriving the address from a sample was tried and is wrong:
+    [$cx:schema-of] bakes INFERRED cardinality into the schema text, so an order
+    with two line items and an order with one produce different addresses for the
+    same shape — and a claim written against one silently stops applying to the
+    other. Silently, because cosmetic claims fail open, which is the worst
+    combination. #]
+ [case id=ux-072-claim-subjects-are-declared-schemas level=core
+  [tags ux hints claims identity RULED-1a]
+  [title 'a schema address is taken from a SCHEMA, never inferred from a sample value']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $one [order id=o-1 [line-items [line sku=A]]]]
+  [= $two [order id=o-2 [line-items [line sku=A] [line sku=B]]]]
+  [= $inferred-1 [$ux:schema-address [$cx:parse [$cx:schema-of $one]]]]
+  [= $inferred-2 [$ux:schema-address [$cx:parse [$cx:schema-of $two]]]]
+  [list [= $inferred-1 $inferred-2]]]
+#]]
+  [out-text [#
+[list false]
+#]]
+ ]
+
+ [# P0-17 rules the subject as a [?def] with an [effects] clause. The in-family
+    reference estate does not define commands that way — its domain is XAP FEATURE
+    DOCUMENTS — so W5 could not project the reference app until this was ruled.
+    The premise is one definition, three faces; if the estate's definitions are
+    feature documents, the third face projects THOSE. Fields come from the noun
+    the verb [writes]; the [summary] titles it, degrading exactly as the [?def]
+    lane degrades.
+
+    WHAT THIS GRAMMAR DOES NOT CARRY, and is therefore not invented here:
+    optionality. A [field] declares a name, a type and sometimes a doc — there is
+    no required/optional marker, so nothing is marked required. #]
+ [case id=ux-080-feature-form-projects-the-xap-grammar level=core
+  [tags ux feature-grammar projection RULED W5 P0-17]
+  [title 'an ACT verb of a feature document projects onto a semantic form']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $f [feature name=commerce
+             [nouns
+               [noun name=order [field name=id type=text] [field name=package type=text]
+                                [field name=buyer type=did doc="who is buying"]]
+               [noun name=price [field name=amount type=money]]]
+             [verbs
+               [verb name=place-order effect=act [summary "Place an order"] [writes order]]
+               [verb name=quote effect=observe [reads price]]]]]
+  [$ux:feature-form $f "place-order" {affects: "/live/new"}]]
+#]]
+  [out-text [#
+[ux:form verb=place-order affects='/live/new' [ux:heading level=2 'Place an order'] [ux:input name=id label=Id kind=text value=''] [ux:input name=package label=Package kind=text value=''] [ux:input name=buyer label=Buyer kind=did value='' help='who is buying'] [ux:submit label='Place order']]
+#]]
+ ]
+
+ [# The declaration order is the domain author's order, so unlike the
+    inferred-schema lane there is nothing alphabetical to correct with an `order`
+    hint. FLAT: an earlier form nested one level, because a [?for] in an element
+    body yields one sequence-valued child. A caller reading columns should not
+    have to know that, so the carrier flattens it here.
+
+    It reads its fields through `child-elements` rather than `$n/field`, because
+    a named child step ATOMIZES on a single match — a noun with exactly one field
+    would otherwise hand back the field's TEXT instead of the element, and the
+    reference estate has such nouns. #]
+ [case id=ux-081-feature-columns-is-flat level=core
+  [tags ux feature-grammar projection W5]
+  [title 'a noun’s fields come back as a flat column list, in the author’s declaration order']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $f [feature name=commerce
+             [nouns
+               [noun name=order [field name=id type=text] [field name=package type=text]
+                                [field name=buyer type=did doc="who is buying"]]
+               [noun name=price [field name=amount type=money]]]
+             [verbs
+               [verb name=place-order effect=act [summary "Place an order"] [writes order]]
+               [verb name=quote effect=observe [reads price]]]]]
+  [list [$ux:feature-columns $f "order"]
+        [$ux:feature-columns $f "price"]
+        [$ux:feature-columns $f "nonesuch"]]]
+#]]
+  [out-text [#
+[list ('id', 'package', 'buyer') ('amount') ()]
+#]]
+ ]
+
+ [# Same posture as the [?def] lane: a form for a verb that does not exist would
+    post to an intent wire that cannot dispatch it. #]
+ [case id=ux-082-an-unknown-verb-refuses level=core
+  [tags ux feature-grammar refusal W5]
+  [title 'projecting a verb the feature does not declare is a refusal']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $f [feature name=commerce
+             [nouns
+               [noun name=order [field name=id type=text] [field name=package type=text]
+                                [field name=buyer type=did doc="who is buying"]]
+               [noun name=price [field name=amount type=money]]]
+             [verbs
+               [verb name=place-order effect=act [summary "Place an order"] [writes order]]
+               [verb name=quote effect=observe [reads price]]]]]
+  [$ux:feature-form $f "cancel-order" {}]]
+#]]
+  [out-text [#
+[err code=ux-refused ([ux-refusal code=ux-no-such-verb verb=cancel-order])]
+#]]
+ ]
+
+ [# W4b lowered these straight onto htmx `hx-swap-oob` values — `beforeend:#id`,
+    `delete`, `innerHTML:#id` — which put swap syntax and CSS selectors inside the
+    value a feed publishes. A terminal renderer would have had to parse it. They
+    now lower onto a SEMANTIC PATCH ALGEBRA addressed by ELEMENT PATH, and each
+    renderer lowers that for itself.
+
+    The container is a PATH, not a DOM id, so a renderer derives the id exactly as
+    it derived the one it first rendered and the two cannot drift. #]
+ [case id=ux-090-delta-frames-lower-to-a-patch-algebra level=core
+  [tags ux liveness delta patch P0-44 P0-10]
+  [title 'insert, regroup, retract and recompute become semantic operations over a keyed collection']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $rows ([order id=o-1 customer="Ada"], [order id=o-2 customer="Lin"])]
+  [= $ctx {route: "/orders", feature: "orders", path: "/open"}]
+  [= $opts {types: ([row-type name=order key=id]), container: "/open/rows"}]
+  [= $frames ([insert pos=2 [order id=o-3 customer="Wu"]], [regroup pos=0 [order id=o-1 customer="Ada"]], [retract pos=0], [recompute reason=refresh])]
+  [ops [?splice [$ux:feed-ops $frames $rows $ctx $opts]]]]
+#]]
+  [out-text [#
+[ops [ux:op kind=insert container='/open/rows' [ux:row key=o-3 [ux:cell 'Wu'] [ux:cell 'o-3']]] [ux:op kind=update container='/open/rows' [ux:row key=o-1 [ux:cell 'Ada'] [ux:cell 'o-1']]] [ux:op kind=remove container='/open/rows' key=o-1] [ux:op kind=repaint container='/open/rows' [ux:rows id=rows [ux:row key=o-1 [ux:cell 'Ada'] [ux:cell 'o-1']] [ux:row key=o-2 [ux:cell 'Lin'] [ux:cell 'o-2']]]]]
+#]]
+ ]
+
+ [# P0-10's honest consequence at the liveness layer: with no declared key there
+    are no row addresses, so there is nothing for a targeted operation to name.
+    Not a limitation being routed around — minting a positional address to make
+    per-row updates possible would break on the first insertion.
+
+    The repaint CARRIES THE ROWS. W4b's emitted an empty region with an innerHTML
+    swap, which would have wiped the region it meant to refresh; the demo hid it
+    by publishing a separately-rendered region and dropping the op on the floor.
+    An operation nobody could consume was the tell. #]
+ [case id=ux-091-unkeyed-feeds-collapse-to-repaint level=core
+  [tags ux liveness row-key honesty P0-44 P0-10]
+  [title 'without a declared key every frame becomes a repaint carrying the rows']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $rows ([order id=o-1 customer="Ada"])]
+  [= $ctx {route: "/orders", feature: "orders", path: "/open"}]
+  [= $frames ([insert pos=1 [order id=o-2 customer="Lin"]], [retract pos=0])]
+  [ops [?splice [$ux:feed-ops $frames $rows $ctx {container: "/open/rows"}]]]]
+#]]
+  [out-text [#
+[ops [ux:op kind=repaint container='/open/rows' [ux:rows id=rows [ux:row [ux:cell 'Ada'] [ux:cell 'o-1']]]] [ux:op kind=repaint container='/open/rows' [ux:rows id=rows [ux:row [ux:cell 'Ada'] [ux:cell 'o-1']]]]]
+#]]
+ ]
+
+ [# One declaration reaches a browser (one SSE connection per page, never polling)
+    and a terminal (one held-open connection, likewise never polling) without
+    either transport being spelled in the tree. #]
+ [case id=ux-092-a-feed-names-a-logical-feed level=core
+  [tags ux liveness P0-44 R5]
+  [title 'the live region names a feed, not an endpoint']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[$ux:feed "orders" "/open-orders/live" "orders" [ux:text "live"]]
+#]]
+  [out-text [#
+[ux:region feature=orders path='/open-orders/live' live=orders [ux:text 'live']]
+#]]
+ ]
+
+ [# A filter narrows a collection by re-fetching just that collection, so a surface
+    has endpoints that serve a REGION instead of a route. Declaring them under
+    their route keeps them inside the correspondence check rather than exempt from
+    it — an unrouted fragment endpoint is as much a page outside the composition
+    as an unrouted page is. #]
+ [case id=ux-100-surface-routes-and-fragment-endpoints level=core
+  [tags ux surface routing P0-24 P0-25]
+  [title 'a surface document’s route table, and the fragment endpoints declared under it']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $s [surface admin
+          [route path="/products" [feature xap=catalog as=catalog]]
+          [route path="/orders" [feature xap=orders as=orders] [fragment path="/orders/rows"]]]]
+  [list [$ux:routes-of $s] [$ux:fragment-paths $s]]]
+#]]
+  [out-text [#
+[list ([ux:route [path '/products'] [feature 'catalog'] [instance 'catalog'] [template 'default']], [ux:route [path '/orders'] [feature 'orders'] [instance 'orders'] [template 'default']]) ('/orders/rows')]
+#]]
+ ]
+
+ [# No silent ordinals, no first-wins: the instance name is an identity input to
+    every fragment address on that route. #]
+ [case id=ux-101-duplicate-instances-refuse level=core
+  [tags ux surface refusal P0-9]
+  [title 'composing one feature twice on a route without distinct instance names is a compose-time refusal']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $dup [surface a [route path="/o" [feature xap=orders]] [route path="/o" [feature xap=orders]]]]
+  [= $ok  [surface a [route path="/o" [feature xap=orders]] [route path="/o" [feature xap=orders as=second]]]]
+  [list [$ux:duplicate-instances $dup] [$ux:duplicate-instances $ok]]]
+#]]
+  [out-text [#
+[list ([ux-refusal code=ux-duplicate-instance path='/o' instance=orders]) ()]
+#]]
+ ]
+
+ [# [?http-service] collects its resources as static program literals, so a route
+    table cannot be computed into it — which is exactly why the correspondence is
+    CHECKED rather than generated. There is no second router. The third argument
+    is the composed feature documents (W16-b); a surface composing none passes
+    the empty sequence and asserts nothing about verbs. #]
+ [case id=ux-102-route-resource-drift-both-ways level=core
+  [tags ux surface routing P0-25]
+  [title 'a route with no resource and a resource with no route are both refusals']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $s [surface a [route path="/o" [feature xap=orders] [fragment path="/o/rows"]]]]
+  ([$ux:check-surface $s ("/o", "/o/rows") ()],
+   [$ux:check-surface $s ("/o") ()],
+   [$ux:check-surface $s ("/o", "/o/rows", "/stray") ()])]
+#]]
+  [out-text [#
+(true, [err code=ux-refused ([ux-refusal code=ux-route-unserved path='/o/rows'])], [err code=ux-refused ([ux-refusal code=ux-resource-unrouted path='/stray'])])
+#]]
+ ]
+
+ [# The static half of verb coverage, priced at compose time (DP4 letter e).
+    Three polarities in one case: a fully accounted surface composes; a surface
+    missing a verb refuses with the RULED code (ux-verb-unaccounted); and a
+    [not-offered] with no why= does not account for its verb — a reasoned
+    absence is a state the surface can be held to, an unreasoned one is the
+    hole with a label on it, so the refusal keeps the ruled code and names the
+    sharper cause in a note. #]
+ [case id=ux-103-an-unaccounted-verb-refuses-at-compose-time level=core
+  [tags ux surface refusal verb-coverage W16]
+  [title 'an act verb no route offers and no reasoned not-offered accounts for refuses the composition']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $f [feature name=shop version="1"
+          [nouns [noun name=order [field name=id type=text]]]
+          [verbs
+           [verb name=sell effect=act [intent [do :sell [id]]] [writes order]]
+           [verb name=refund effect=act [intent [do :refund [id]]] [writes order]]
+           [verb name=audit effect=act [intent [do :audit [id]]] [writes order]]
+           [verb name=browse effect=observe [intent [do :browse]] [reads order]]]]]
+  [= $ok  [surface a [route path="/o" [feature xap=shop] [offer verb=sell]]
+            [not-offered verb=refund why="No payments rail on this surface."]
+            [not-offered verb=audit why="The audit trail is the journal itself."]]]
+  [= $missing [surface a [route path="/o" [feature xap=shop] [offer verb=sell]]
+                [not-offered verb=refund why="No payments rail on this surface."]]]
+  [= $bare [surface a [route path="/o" [feature xap=shop] [offer verb=sell]]
+             [not-offered verb=refund why="No payments rail on this surface."]
+             [not-offered verb=audit]]]
+  ([$ux:check-surface $ok ("/o") ($f)],
+   [$ux:check-surface $missing ("/o") ($f)],
+   [$ux:check-surface $bare ("/o") ($f)])]
+#]]
+  [out-text [#
+(true, [err code=ux-refused ([ux-refusal code=ux-verb-unaccounted verb=audit])], [err code=ux-refused ([ux-refusal code=ux-verb-unaccounted verb=audit note='declared not-offered without a why'])])
+#]]
+ ]
+
+ [# DP4 letter (c): eleven-plus members minted id= addresses the web face never
+    painted — the address existed, participated in collision checks, and reached
+    no swap, no anchor and no reader. The invariant is minted ⊆ painted, held
+    here over the recoverable half (data-cx-frag): structural members paint id
+    AND data-cx-frag (box-x's pattern); form controls paint data-cx-frag only,
+    because their DOM id is the label-binding id and an id is a derived
+    rendering of the address, never a second identity. #]
+ [case id=ux-104-minted-addresses-are-painted level=core
+  [tags ux addressing web DP4-c]
+  [title 'every address the walk mints for a placed element reaches the web DOM']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-stdlib/strings' :as strings]
+[?let
+  [= $t [ux:region feature=f path="/probe"
+          [ux:heading id=h1 level=1 "Probe"]
+          [ux:text id=t1 "prose"]
+          [ux:card id=c1
+            [ux:media id=m1 src="/x.svg" alt="a thing" kind=illustration]
+            [ux:field id=f1 label="Price" "9.00"]
+            [ux:badge id=b1 tone=ok "Fine"]]
+          [ux:panel name=narrow
+            [ux:facet id=fc1 name=material label="Material"
+              [ux:facet-value id=fv1 value=iron label="Iron" count="3" href="/x?f=iron"]]]
+          [ux:sort id=so1 name=sort label="Sort by"
+            [ux:sort-option id=sp1 value=price label="Price" href="/x?s=price" selected=false]]
+          [ux:list id=ls1 [ux:item id=it1 "one"]]
+          [ux:table id=tb1 [ux:column id=co1 "Name"] [ux:row key=r1 [ux:cell id=ce1 "v"]]]
+          [ux:form verb=save
+            [ux:input id=in1 name=q label="Q"]
+            [ux:hidden id=hd1 name=h value=v]
+            [ux:select id=se1 name=s label="S" [ux:option id=op1 value=a label="A"]]
+            [ux:submit id=su1 label="Save"]]
+          [ux:quantity id=q1 name=qty label="Quantity" verb=set-qty value="1" min="1" max="9"]
+          [ux:steps id=st1 name=flow current=one
+            [ux:step id=sp2 name=one label="One" state=current]]
+          [ux:breadcrumb id=bc1 [ux:crumb id=cr1 label="Home" href="/"]]
+          [ux:pager id=pg1 ordered=true page="1" pages="2" total="30" prev-href="" next-href="/x?p=2"
+            [ux:page-link id=pl1 n="1" href="/x?p=1" current=true]]
+          [ux:status id=ss1 tone=ok "done"]
+          [ux:notice id=no1 tone=info "note"]
+          [ux:aside id=as1 label="Aside" open=false dismiss-href="/x"]]]
+  [= $ctx {route: "/probe", feature: "f", path: "/"}]
+  [= $minted [?for [in $p [$ux:address-pairs $t $ctx]] [yield [$string $p@frag]]]]
+  [= $html [$web:render $t $ctx]]
+  [= $painted [?for [in $seg [$strings:split $html "data-cx-frag=\""]]
+                [where [$strings:contains $seg "[frag"]]
+                [yield [$strings:replace [$first [$strings:split $seg "\""]] "&#10;" "\n"]]]]
+  [= $missing [?for [in $m $minted]
+                [where [not [$exists [?for [in $p $painted] [where [= $p $m]] [yield $p]]]]]
+                [yield $m]]]
+  [list [$count $minted] [$count $missing] $missing]]
+#]]
+  [out-text [#
+[list 34 0 ()]
+#]]
+ ]
+
+ [# THE GATE A USER FOUND BY CLICKING. `affects=` exists so a renderer derives
+    its target from a semantic address rather than carrying a hand-written
+    selector — but the PATH was still hand-written, and one that names nothing
+    yields a target id for an element that does not exist. The swap then lands
+    nowhere: the commit succeeds, the feed publishes, and the page silently does
+    not update until a manual refresh, which looks like a caching problem.
+
+    Every other address mistake here already refuses. This one did not. #]
+ [case id=ux-105-a-dangling-affects-is-refused level=core
+  [tags ux addressing refusal affects W5]
+  [title 'an affects= naming a path nothing mints refuses instead of silently doing nothing']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $ctx {route: "/orders", feature: "orders", path: "/"}]
+  [= $ok  [ux:region feature=orders path="/live"
+            [ux:filter name=q affects="/live/open/rows"]
+            [ux:table id=open [ux:rows id=rows [ux:row key=r1 [ux:cell "a"]]]]]]
+  [= $bad [ux:region feature=orders path="/live"
+            [ux:filter name=q affects="/live/typo/rows"]
+            [ux:table id=open [ux:rows id=rows [ux:row key=r1 [ux:cell "a"]]]]]]
+  [list [$ux:dangling-affects $ok $ctx] [$ux:dangling-affects $bad $ctx]]]
+#]]
+  [out-text [#
+[list () ([ux-refusal code=ux-dangling-affects element=ux:filter affects='/live/typo/rows'])]
+#]]
+ ]
+
+ [# A CX AUTHORING TRAP, pinned because it passed every two-row test. `$el/name` is
+    a FIELD READ and atomizes on a single match, so [$first $li/a] returns the
+    STRING for a one-anchor list item and the ELEMENT for a two-anchor one. Every
+    fixture with two rows passes. `child-elements` goes through `/*` instead. #]
+ [case id=ux-110-a-named-child-step-atomizes level=core
+  [tags ux cx-trap child-axis]
+  [title 'child-elements walks where a named step would hand back text']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $one [li [a href="/p" "Products"]]]
+  [= $two [li [a href="/p" "Products"] [a href="/q" "More"]]]
+  [list [$cx:canonical [$first $one/a]]
+        [$cx:canonical [$ux:first-child $one "a"]]
+        [$count [$ux:child-elements $two "a"]]
+        [$ux:absent [$ux:first-child $one "zz"]]
+        [$ux:absent [$ux:first-child $one "a"]]]]
+#]]
+  [out-text [#
+[list 'Products\n' '[a href=/p Products]\n' 2 true false]
+#]]
+ ]
+
+ [# P0-17 ruled that a reference-typed field projects against the referenced
+    query. Nothing had built it, so the projection asked operators to type a
+    catalogue id from memory. The options are the CALLER's half — only the
+    caller can run the query behind the reference — and the control is the
+    projection's. #]
+ [case id=ux-036-a-reference-typed-field-projects-a-chooser level=core
+  [tags ux form reference select P0-17 W6]
+  [title 'a field whose type names another noun becomes a CHOOSER, not a text box']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $feature [$cx:parse "[feature name=shop [nouns [noun name=product [field name=sku type=text] [field name=name type=text]] [noun name=line [field name=sku type=product label='Product' doc='chosen, never typed'] [field name=qty type=int label='Qty']] [noun name=order [field name=customer type=text label='Customer'] [field name=lines type=line repeats=true add-label='Add a line']]] [verbs [verb name=place-order [summary 'Place an order.'] [intent [do :place-order [customer] [lines]]] [writes order]]]]"]]
+  [= $opts {options: ([options for=product [option value=ESC-18 label="Escapement"] [option value=BAL-9 label="Balance wheel"]]),
+            affects: "/f/entry", group-endpoint: true, group-affects: "/f/entry/place-order/lines"}]
+  [= $f [$ux:feature-form $feature "place-order" $opts]]
+  [$cx:canonical [$first $f//ux:select]]]
+#]]
+  [out-text [#
+"[ux:select name=lines.0.sku label=Product required='true' value=''\n  [ux:option value=ESC-18 Escapement]\n  [ux:option value=BAL-9 Balance wheel]\n]\n"
+#]]
+ ]
+
+ [# The nested WRITE case. Every nested-case ruling in the spec is read-side; an
+    order with two lines could be displayed and never entered. Instances are
+    indexed in their control names because a form posts a flat key/value list
+    and two instances under a bare name collapse to one. #]
+ [case id=ux-037-a-repeating-field-projects-a-group level=core
+  [tags ux form nested-write group W6]
+  [title 'a repeating field projects a GROUP whose controls are indexed']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $feature [$cx:parse "[feature name=shop [nouns [noun name=product [field name=sku type=text] [field name=name type=text]] [noun name=line [field name=sku type=product label='Product' doc='chosen, never typed'] [field name=qty type=int label='Qty']] [noun name=order [field name=customer type=text label='Customer'] [field name=lines type=line repeats=true add-label='Add a line']]] [verbs [verb name=place-order [summary 'Place an order.'] [intent [do :place-order [customer] [lines]]] [writes order]]]]"]]
+  [= $opts {options: ([options for=product [option value=ESC-18 label="Escapement"] [option value=BAL-9 label="Balance wheel"]]),
+            affects: "/f/entry", group-endpoint: true, group-affects: "/f/entry/place-order/lines"}]
+  [= $f [$ux:feature-form $feature "place-order" $opts]]
+  [$cx:canonical [$first $f//ux:group]]]
+#]]
+  [out-text [#
+"[ux:group name=lines repeat='true' affects=/f/entry/place-order/lines add-label='Add a line'\n  [ux:card\n    [ux:select name=lines.0.sku label=Product required='true' value=''\n      [ux:option value=ESC-18 Escapement]\n      [ux:option value=BAL-9 Balance wheel]\n    ]\n    [ux:input name=lines.0.qty label=Qty kind=int value='']\n  ]\n]\n"
+#]]
+ ]
+
+ [# A form that loses your input on an error is unusable, and it is the DEFAULT
+    outcome of the obvious design: the command refuses, the handler renders the
+    refusal, everything typed is gone. So the values are a render input, and
+    the message rides the control the command layer named rather than a banner
+    the operator has to hunt through. #]
+ [case id=ux-038-a-refusal-keeps-what-was-typed level=core
+  [tags ux form validation values W7]
+  [title 'a re-projected form carries the operator’s input and the message on the field it belongs to']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $feature [$cx:parse "[feature name=shop [nouns [noun name=product [field name=sku type=text] [field name=name type=text]] [noun name=line [field name=sku type=product label='Product' doc='chosen, never typed'] [field name=qty type=int label='Qty']] [noun name=order [field name=customer type=text label='Customer'] [field name=lines type=line repeats=true add-label='Add a line']]] [verbs [verb name=place-order [summary 'Place an order.'] [intent [do :place-order [customer] [lines]]] [writes order]]]]"]]
+  [= $opts {options: ([options for=product [option value=ESC-18 label="Escapement"] [option value=BAL-9 label="Balance wheel"]]),
+            affects: "/f/entry", group-endpoint: true, group-affects: "/f/entry/place-order/lines"}]
+  [= $vals ([val name=customer text=""], [val name="lines.0.sku" text="BAL-9"], [val name="lines.0.qty" text="2"])]
+  [= $errs ([field-error name=customer message="who is this order for?"])]
+  [= $f [$ux:feature-form $feature "place-order" [$cx:merge $opts {values: $vals, errors: $errs}]]]
+  [$cx:canonical [$first $f//ux:input]]]
+#]]
+  [out-text [#
+"[ux:input name=customer label=Customer kind=text value='' error='who is this order for?']\n"
+#]]
+ ]
+
+ [# Drop the first of two lines and the survivor is `lines.1`. Re-render "two
+    instances" as 0 and 1 and the survivor's typed values are looked up under
+    `lines.0`, find nothing, and come back blank — the same data loss the
+    values were threaded through the projection to prevent. Indices are the
+    instance's identity on the wire, so indices are what is preserved. #]
+ [case id=ux-039-instances-are-preserved-by-index-not-by-count level=core
+  [tags ux form group indices W7]
+  [title 'removing a line re-renders the SURVIVOR, not a renumbered blank']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $feature [$cx:parse "[feature name=shop [nouns [noun name=product [field name=sku type=text] [field name=name type=text]] [noun name=line [field name=sku type=product label='Product' doc='chosen, never typed'] [field name=qty type=int label='Qty']] [noun name=order [field name=customer type=text label='Customer'] [field name=lines type=line repeats=true add-label='Add a line']]] [verbs [verb name=place-order [summary 'Place an order.'] [intent [do :place-order [customer] [lines]]] [writes order]]]]"]]
+  [= $opts {options: ([options for=product [option value=ESC-18 label="Escapement"] [option value=BAL-9 label="Balance wheel"]]),
+            affects: "/f/entry", group-endpoint: true, group-affects: "/f/entry/place-order/lines"}]
+  [= $vals ([val name="lines.1.sku" text="BAL-9"], [val name="lines.1.qty" text="3"])]
+  [= $f [$ux:feature-form $feature "place-order" [$cx:merge $opts {values: $vals}]]]
+  [= $g [$first $f//ux:group]]
+  [list [$count $g] [$string [$first [?for [in $s $g//ux:select] [yield $s@name]]]]]]
+#]]
+  [out-text [#
+[list 1 'lines.1.sku']
+#]]
+ ]
+
+ [# Found by a bug. [$concat] was handed a node-set; the builtin's refusal came
+    back as an [err] ELEMENT, the renderer treated it as an ordinary child, and
+    it serialized into the page as content with a 200. Every gate passed,
+    because none was looking for a refusal that had stopped being a refusal and
+    become a node. Refusals travel on the [err] CHANNEL; one that has been
+    spliced into a document has already lost what made it a refusal. #]
+ [case id=ux-042-an-err-in-the-tree-refuses-the-render level=core
+  [tags ux refusal err-in-tree W7 §5.4]
+  [title 'an [err] anywhere in a tree destined for a surface refuses the whole render']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $t [ux:card [ux:text "fine"] [err code=cx-err:CXER0100 message="concat: bad argument"]]]
+  [$cx:canonical [ux-refusals [?splice [$ux:err-refusals $t]]]]]
+#]]
+  [out-text [#
+"[ux-refusals\n  [ux-refusal code=ux-err-in-tree element=cx-err:CXER0100 affects='concat: bad argument']\n]\n"
+#]]
+ ]
+
+ [# `label-of-name` turns `promised-at` into "Promised at", which is right when
+    the document says nothing. When the document DOES say — `label='Product'`
+    on a field named `sku` — the derivation is a worse answer than the one the
+    author already gave. #]
+ [case id=ux-043-a-grammar-supplied-label-wins-over-the-derived-one level=core
+  [tags ux form labels grammar W7]
+  [title 'a field’s label comes from the grammar when the grammar states one']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $feature [$cx:parse "[feature name=shop [nouns [noun name=product [field name=sku type=text] [field name=name type=text]] [noun name=line [field name=sku type=product label='Product' doc='chosen, never typed'] [field name=qty type=int label='Qty']] [noun name=order [field name=customer type=text label='Customer'] [field name=lines type=line repeats=true add-label='Add a line']]] [verbs [verb name=place-order [summary 'Place an order.'] [intent [do :place-order [customer] [lines]]] [writes order]]]]"]]
+  [= $opts {options: ([options for=product [option value=ESC-18 label="Escapement"] [option value=BAL-9 label="Balance wheel"]]),
+            affects: "/f/entry", group-endpoint: true, group-affects: "/f/entry/place-order/lines"}]
+  [= $f [$ux:feature-form $feature "place-order" $opts]]
+  [?for [in $c $f//*] [where [$exists $c@label]] [yield [$string $c@label]]]]
+#]]
+  [out-text [#
+'Customer'
+'Product'
+'Qty'
+'Place order'
+#]]
+ ]
+
+ [# An undescribed depiction is a refusal, not a rendering with an empty
+    attribute; decorative art says alt='' explicitly, so 'described as
+    decorative' and 'nobody wrote it' are distinguishable states (P0-95). #]
+ [case id=ux-060-media level=core
+  [tags ux member media refusal content P0-54 P0-95 W10]
+  [title 'a depiction requires src and alt; alt=’’ is a stated decoration; kind/tone are not content']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:media alt="a pan"]]]
+      [?splice [$ux:refusals-of [ux:media src="/a.svg"]]]
+      [$exists [$ux:refusals-of [ux:media src="/a.svg" alt=""]]]
+      [$ux:content-of [ux:media src="/a.svg" alt="a pan" kind=illustration tone=neutral]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-media-no-src element=ux:media] [ux-refusal code=ux-media-no-alt element=ux:media src='/a.svg'] false [c:media src='/a.svg' alt='a pan']]
+#]]
+ ]
+
+ [# A table's members are rows of one shape compared field by field; a grid's
+    are whole things compared as wholes — a difference in what the reader is
+    doing, not in appearance (P0-55). A column count is never a member
+    attribute, because the vocabulary has no viewport. #]
+ [case id=ux-061-grid level=core
+  [tags ux member grid content P0-55 W10]
+  [title 'a grid is peers compared as wholes; density is a hint, never content']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [$exists [$ux:refusals-of [ux:grid density=comfortable [ux:item "a"] [ux:item "b"]]]]
+      [$ux:content-of [ux:grid density=compact [ux:item "a"] [ux:item "b"]]]]
+#]]
+  [out-text [#
+[list false [c:grid [c:item 'a'] [c:item 'b']]]
+#]]
+ ]
+
+ [# A parameter with no value posts an empty string and the command layer then
+    blames the customer for the projection's bug (P0-56). Refusing at
+    projection puts the error where the mistake is. #]
+ [case id=ux-062-param level=core
+  [tags ux member param refusal content P0-56 W10]
+  [title 'a parameter needs a name and a value; both are content']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:param value=x]]]
+      [?splice [$ux:refusals-of [ux:param name=sku]]]
+      [$ux:content-of [ux:param name=sku value=FK-0119]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-input-no-name element=ux:param] [ux-refusal code=ux-param-no-value element=ux:param param=sku] [c:param name=sku value=FK-0119]]
+#]]
+ ]
+
+ [# The name scopes the sequence's address; current is content because 'where
+    you are' is the member's whole meaning. #]
+ [case id=ux-063-steps level=core
+  [tags ux member steps refusal content P0-57 W10]
+  [title 'a step sequence is named, and says which step is current']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:steps current=address]]]
+      [$ux:content-of [ux:steps name=checkout current=shipping
+                        [ux:step name=address state=done href="/checkout/address" label="Address"]
+                        [ux:step name=shipping state=current label="Shipping"]]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-input-no-name element=ux:steps] [c:steps name=checkout current=shipping [c:step name=address state=done href='/checkout/address' 'Address'] [c:step name=shipping state=current href='' 'Shipping']]]
+#]]
+ ]
+
+ [# 'You cannot go back and change the address you already typed' is the most
+    commonly lost property of a checkout, and its loss is silent — the one
+    place a UX pattern is enforced by the vocabulary rather than by review. #]
+ [case id=ux-064-step level=core
+  [tags ux member step refusal content P0-57 P0-89 W10]
+  [title 'a done step MUST carry an href; a state outside the trichotomy refuses']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:step name=a state=done label=A]]]
+      [?splice [$ux:refusals-of [ux:step name=a state=someday label=A]]]
+      [$exists [$ux:refusals-of [ux:step name=a state=done href="/checkout/a" label=A]]]
+      [$ux:content-of [ux:step name=a state=ahead label="Address"]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-step-not-editable element=ux:step step=a] [ux-refusal code=ux-bad-step-state element=ux:step state=someday] false [c:step name=a state=ahead href='' 'Address']]
+#]]
+ ]
+
+ [# Act mode: each change is a real intent (P0-82); at a bound the affordance is
+    disabled, never absent (P0-58). FIELD mode (W23, audit2 letter (i)): no verb,
+    the value rides the enclosing form's post and the shell steps it locally —
+    the content states verb empty, so no face can silently disagree about which
+    mode it renders. #]
+ [case id=ux-065-quantity level=core
+  [tags ux member quantity refusal content P0-58 P0-102 W10 W23]
+  [title 'a bounded quantity needs a name; with a verb every step is an intent, without one it is the enclosing form’s field']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:quantity verb=set-quantity]]]
+      [$exists [$ux:refusals-of [ux:quantity name=qty]]]
+      [$ux:content-of [ux:quantity name=qty label=Quantity verb=set-quantity value=2 min=1 max=9
+                        [ux:param name=sku value=FK-0119]]]
+      [$ux:content-of [ux:quantity name=qty label=Quantity value=2 min=1 max=9]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-input-no-name element=ux:quantity] false [c:quantity name=qty label=Quantity verb=set-quantity value='2' min='1' max='9' [c:param name=sku value=FK-0119]] [c:quantity name=qty label=Quantity verb='' value='2' min='1' max='9']]
+#]]
+ ]
+
+ [# No payload rule of its own — the rules live on the crumbs — but the member
+    must survive the normal form or a face could drop the trail silently. #]
+ [case id=ux-066-breadcrumb level=core
+  [tags ux member breadcrumb content P0-59 W10]
+  [title 'where you are, as structure; the crumbs are its content']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [$exists [$ux:refusals-of [ux:breadcrumb [ux:crumb href="/" label=ORIEL] [ux:crumb current=true label=Pans]]]]
+      [$ux:content-of [ux:breadcrumb [ux:crumb href="/" label=ORIEL] [ux:crumb current=true label=Pans]]]]
+#]]
+  [out-text [#
+[list false [c:breadcrumb [c:crumb href='/' current='false' 'ORIEL'] [c:crumb href='' current='true' 'Pans']]]
+#]]
+ ]
+
+ [# A link to where you already are is a lie about what activating it does, and
+    in a terminal it is a focus stop that does nothing. #]
+ [case id=ux-067-crumb level=core
+  [tags ux member crumb refusal content P0-59 W10]
+  [title 'the current crumb carries no href; every crumb carries a label']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:crumb current=true href="/here" label=Here]]]
+      [?splice [$ux:refusals-of [ux:crumb href="/x"]]]
+      [$ux:content-of [ux:crumb href="/c/kitchen" label=Kitchen]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-crumb-current-href element=ux:crumb] [ux-refusal code=ux-crumb-no-label element=ux:crumb] [c:crumb href='/c/kitchen' current='false' 'Kitchen']]
+#]]
+ ]
+
+ [# The same request twice may return overlapping pages and omit rows entirely,
+    and no client can detect it — so the collection has to SAY it is ordered;
+    silence is refused rather than assumed (P0-60). #]
+ [case id=ux-068-pager level=core
+  [tags ux member pager refusal content P0-60 W10]
+  [title 'paging an unordered collection is a lottery, and is refused']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:pager page=1 pages=3 total=61]]]
+      [?splice [$ux:refusals-of [ux:pager ordered=true pages=3]]]
+      [$ux:content-of [ux:pager ordered=true page=2 pages=3 total=61
+                        prev-href="/c/x?p=1" next-href="/c/x?p=3"]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-pager-unordered element=ux:pager] [ux-refusal code=ux-pager-no-page element=ux:pager] [c:pager page='2' pages='3' total='61' prev-href='/c/x?p=1' next-href='/c/x?p=3']]
+#]]
+ ]
+
+ [# Same rule as every navigation member: an affordance that leads nowhere is
+    inert-but-rendered, the failure class that survives every server-side gate. #]
+ [case id=ux-069-page-link level=core
+  [tags ux member page-link refusal content P0-60 W10]
+  [title 'a page link is a place; without an href it is a trap']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:page-link n=2]]]
+      [$ux:content-of [ux:page-link n=2 href="/c/x?p=2" current=true]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-link-no-href element=ux:page-link] [c:page-link n='2' href='/c/x?p=2' current='true']]
+#]]
+ ]
+
+ [# The counts are the whole difference from ux:filter — a filter tells you
+    nothing until you use it (P0-61). #]
+ [case id=ux-070-facet level=core
+  [tags ux member facet refusal content P0-61 W10]
+  [title 'a facet is named; its label and values are its content']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:facet label=Brand]]]
+      [$ux:content-of [ux:facet name=brand label=Brand
+                        [ux:facet-value value=farrow label=Farrow count=12 href="/c/x?brand=farrow"]]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-input-no-name element=ux:facet] [c:facet name=brand label=Brand [c:facet-value value=farrow count='12' href='/c/x?brand=farrow' selected='false' 'Farrow']]]
+#]]
+ ]
+
+ [# A dead-end affordance leads to an empty page; it is admitted only when
+    SELECTED, because then it is the only way back out of the empty page you
+    are already looking at. #]
+ [case id=ux-071-facet-value level=core
+  [tags ux member facet-value refusal content P0-61 W10]
+  [title 'a zero-count value is a trap with a label on it — unless it is the way back out']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:facet-value value=x label=X count=0 href="/c?f=x"]]]
+      [$exists [$ux:refusals-of [ux:facet-value value=x label=X count=0 selected=true href="/c"]]]
+      [?splice [$ux:refusals-of [ux:facet-value value=x label=X count=3]]]
+      [$ux:content-of [ux:facet-value value=farrow label=Farrow count=12 selected=true href="/c/x?brand=farrow"]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-facet-dead-end element=ux:facet-value value=x] false [ux-refusal code=ux-link-no-href element=ux:facet-value] [c:facet-value value=farrow count='12' href='/c/x?brand=farrow' selected='true' 'Farrow']]
+#]]
+ ]
+
+ [# W7 deferred it web-first and the parity ruling brought it back in both
+    faces at once (P0-62). #]
+ [case id=ux-072-sort level=core
+  [tags ux member sort refusal content P0-62 W10]
+  [title 'a sort is named; the chosen order is a URL, not a client state']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:sort label="Sort by"]]]
+      [$ux:content-of [ux:sort name=sort label="Sort by"
+                        [ux:sort-option value=rating label="Customer rating" selected=true href="/c/x?sort=rating"]]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-input-no-name element=ux:sort] [c:sort name=sort label='Sort by' [c:sort-option value=rating href='/c/x?sort=rating' selected='true' 'Customer rating']]]
+#]]
+ ]
+
+ [# Choosing an order is a navigation — the ordered collection is a different
+    meaningful state, and a meaningful state is a URL (P0-78). #]
+ [case id=ux-073-sort-option level=core
+  [tags ux member sort-option refusal content P0-62 W10]
+  [title 'a sort option is a place; value, selection and label are content']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:sort-option value=rating label=Rating]]]
+      [$ux:content-of [ux:sort-option value=rating label=Rating selected=false href="/c/x?sort=rating"]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-link-no-href element=ux:sort-option] [c:sort-option value=rating href='/c/x?sort=rating' selected='false' 'Rating']]
+#]]
+ ]
+
+ [# Its open state is a URL and its dismissal is a NAVIGATION — admitted over
+    its own objection (DP2 letter c), and the dismiss rule is why the
+    objection lost. #]
+ [case id=ux-074-aside level=core
+  [tags ux member aside refusal content P0-63 W10]
+  [title 'an aside is labelled; open without a way out is a trap']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:aside open=true dismiss-href="/x"]]]
+      [?splice [$ux:refusals-of [ux:aside label=Basket open=true]]]
+      [$exists [$ux:refusals-of [ux:aside label=Basket open=false]]]
+      [$ux:content-of [ux:aside label="Your basket" open=true dismiss-href="/basket?b=closed"
+                        [ux:text "Empty."]]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-aside-no-label element=ux:aside] [ux-refusal code=ux-aside-no-dismiss element=ux:aside label=Basket] false [c:aside label='Your basket' open='true' dismiss-href='/basket?b=closed' [c:text 'Empty.']]]
+#]]
+ ]
+
+ [# Before this member a screen-reader user got silence on every swap; and a
+    live region inserted at the same moment as its first message is not
+    announced, so an EMPTY status is the correct first paint (P0-93). #]
+ [case id=ux-075-status level=core
+  [tags ux member status refusal content P0-64 P0-93 W10]
+  [title 'an announcement carries a tone from the closed set; empty is a legal first paint']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:status tone=sparkly "x"]]]
+      [$exists [$ux:refusals-of [ux:status tone=ok "Added to basket"]]]
+      [$ux:content-of [ux:status tone=ok "Added to basket"]]
+      [$ux:content-of [ux:status tone=info ""]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-bad-tone element=ux:status tone=sparkly] false [c:status tone=ok 'Added to basket'] [c:status tone=info '']]
+#]]
+ ]
+
+ [# 'These blocks are peers, and the group has a name' is a statement about the
+    content's structure — the argument that admitted ux:group for writes.
+    Peers of peers is a hierarchy, and a hierarchy is what regions and cards
+    already are, so nesting refuses (ux-panel-nested). The label defaults
+    from the name and the grouping is CONTENT: a face that dropped it would
+    flatten a case file's parties and timeline into one undifferentiated run. #]
+ [case id=ux-076-panel level=core
+  [tags ux member panel refusal content P0-101 DP4]
+  [title 'a panel is a named group of peers; unnamed refuses, a panel in a panel refuses']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[list [?splice [$ux:refusals-of [ux:panel [ux:text "x"]]]]
+      [?splice [$ux:refusals-of [ux:panel name=a [ux:card [ux:panel name=b [ux:text "x"]]]]]]
+      [$exists [$ux:refusals-of [ux:panel name=narrow [ux:facet name=brand label=Brand
+                                   [ux:facet-value value=v label=V count=2 href="/c?b=v"]]]]]
+      [$ux:content-of [ux:panel name=narrow [ux:text "x"]]]
+      [$ux:content-of [ux:panel name=parties label="The parties" [ux:field label=Claimant "Ada"]]]]
+#]]
+  [out-text [#
+[list [ux-refusal code=ux-input-no-name element=ux:panel] [ux-refusal code=ux-panel-nested element=ux:panel panel=a] false [c:panel name=narrow label=Narrow [c:text 'x']] [c:panel name=parties label='The parties' [c:field label=Claimant 'Ada']]]
+#]]
+ ]
+
+ [# ── §13: the layout-command engine (W26, the studio; P0-105…P0-108) ─────────
+    The five commands applied to an arrangement-as-data layout document. Pure:
+    the journal entry, the actor stamp and the SSE publish are the serving
+    boundary's, which is what makes every refusal class a fixture. #]
+
+ [# P0-26/P0-105: a move rearranges ONLY what it addresses — the unaddressed
+    sibling keeps its place, its attributes and (absent) surface hints. #]
+ [case id=ux-105-layout-move-untouched level=core
+  [tags ux layout studio move P0-26 P0-105 W26]
+  [title 'a move touches the addressed element and nothing else']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero], [component name=departments], [component name=promo], [component name=group container=true])]
+  [= $l0 [ux:layout [placed id=hero component=hero] [placed id=promo component=promo] [placed id=depts component=departments]]]
+  [= $l1 [$ux:layout-apply $l0 [ux:move id=depts parent="" before=hero] $comps]]
+  [list [$cx:canonical $l1] [$ux:layout-hint $l1 promo tone]]]
+#]]
+  [out-text [#
+[list '[ux:layout\n  [placed id=depts component=departments]\n  [placed id=hero component=hero]\n  [placed id=promo component=promo]\n]\n' '']
+#]]
+ ]
+
+ [# P0-28: an address miss is a REFUSAL, not a no-op — silence would hide a
+    lost update. #]
+ [case id=ux-106-layout-address-miss level=core
+  [tags ux layout studio refusal P0-28 W26]
+  [title 'a command addressing an id that does not exist refuses']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero])]
+  [= $l0 [ux:layout [placed id=hero component=hero]]]
+  [= $r [$ux:layout-apply $l0 [ux:move id=ghost parent="" before=""] $comps]]
+  [$cx:canonical ($r)]]
+#]]
+  [out-text [#
+"([err code=ux-refused '([ux-refusal code=ux-layout-address-miss id=ghost])']\n)\n"
+#]]
+ ]
+
+ [# P0-105/P0-16: place inserts under an author-assigned id, uniqueness checked
+    at apply (collision refuses); placeable is a cascade-resolvable component
+    name, never raw markup (unknown component refuses). #]
+ [case id=ux-107-layout-place-collision-and-unknown-component level=core
+  [tags ux layout studio place refusal P0-16 P0-105 W26]
+  [title 'place inserts; a colliding id refuses; an unresolvable component refuses']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero], [component name=promo])]
+  [= $l0 [ux:layout [placed id=hero component=hero]]]
+  [= $l1 [$ux:layout-apply $l0 [ux:place id=promo component=promo parent="" before=hero] $comps]]
+  [= $r1 [$ux:layout-apply $l1 [ux:place id=promo component=promo parent="" before=""] $comps]]
+  [= $r2 [$ux:layout-apply $l1 [ux:place id=x component=nonesuch parent="" before=""] $comps]]
+  [list [$cx:canonical $l1] [$cx:canonical ($r1)] [$cx:canonical ($r2)]]]
+#]]
+  [out-text [#
+[list '[ux:layout\n  [placed id=promo component=promo]\n  [placed id=hero component=hero]\n]\n' "([err code=ux-refused '([ux-refusal code=ux-layout-id-collision id=promo])']\n)\n" "([err code=ux-refused '([ux-refusal code=ux-layout-unknown-component component=nonesuch])']\n)\n"]
+#]]
+ ]
+
+ [# P0-106: remove takes the addressed element's OWN subtree — children are
+    its content; the unaddressed sibling survives. The remove-inverse is the
+    P0-27 batch that reconstructs the subtree in place: the place, its
+    surface hint, its child's place — in that order. #]
+ [case id=ux-108-layout-remove-takes-its-subtree level=core
+  [tags ux layout studio remove inverse P0-106 P0-108 W26]
+  [title 'remove drops the addressed subtree, spares siblings, and its inverse reconstructs it']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero], [component name=promo], [component name=group container=true])]
+  [= $l0 [ux:layout
+           [placed id=rail component=group [hint name=density value=compact]
+             [placed id=promo component=promo]]
+           [placed id=hero component=hero]]]
+  [= $l1 [$ux:layout-apply $l0 [ux:remove id=rail] $comps]]
+  [list [$cx:canonical $l1] [$cx:canonical [x [?splice [$ux:layout-inverse $l0 [ux:remove id=rail]]]]]]]
+#]]
+  [out-text [#
+[list '[ux:layout\n  [placed id=hero component=hero]\n]\n' "[x\n  [ux:place id=rail component=group parent='' before=hero]\n  [ux:set-hint id=rail hint=density value=compact]\n  [ux:place id=promo component=promo parent=rail before='']\n]\n"]
+#]]
+ ]
+
+ [# THE LENSED-EDITOR CASE (P0-26/P0-29), the fixture §7 names highest-value:
+    the full document holds three placed elements; the editor's lens withheld
+    `featured`; the move the editor emits — computed from what they saw — is
+    applied against the FULL document server-side, and the withheld element
+    survives untouched, still in sequence. #]
+ [case id=ux-109-layout-lensed-editor level=core
+  [tags ux layout studio lens P0-26 P0-29 W26]
+  [title 'an editor under a reduced projection edits what it sees; withheld elements survive']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero], [component name=featured], [component name=departments])]
+  [= $full [ux:layout [placed id=hero component=hero] [placed id=featured component=featured] [placed id=depts component=departments]]]
+  [= $l1 [$ux:layout-apply $full [ux:move id=depts parent="" before=hero] $comps]]
+  [list [$cx:canonical $l1]
+        [$ux:found [$ux:layout-find $l1 featured]]
+        [$ux:layout-successor $l1 hero]]]
+#]]
+  [out-text [#
+[list '[ux:layout\n  [placed id=depts component=departments]\n  [placed id=hero component=hero]\n  [placed id=featured component=featured]\n]\n' true 'featured']
+#]]
+ ]
+
+ [# P0-105/P0-29 validity, judged against the full document server-side: wrap
+    mints a container standing where the target stood; a cycle refuses; a
+    non-container wrapper component refuses; a non-container parent refuses. #]
+ [case id=ux-110-layout-wrap-and-validity level=core
+  [tags ux layout studio wrap refusal cycle P0-29 P0-105 W26]
+  [title 'wrap wraps in place; cycles and non-containers refuse']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero], [component name=promo], [component name=group container=true])]
+  [= $l0 [ux:layout [placed id=hero component=hero] [placed id=promo component=promo]]]
+  [= $l1 [$ux:layout-apply $l0 [ux:wrap id=hero wrapper=g1 component=group] $comps]]
+  [= $r1 [$ux:layout-apply $l1 [ux:move id=g1 parent=g1 before=""] $comps]]
+  [= $r2 [$ux:layout-apply $l0 [ux:wrap id=hero wrapper=g2 component=promo] $comps]]
+  [= $r3 [$ux:layout-apply $l0 [ux:move id=hero parent=promo before=""] $comps]]
+  [list [$cx:canonical $l1] [$cx:canonical ($r1)] [$cx:canonical ($r2)] [$cx:canonical ($r3)]]]
+#]]
+  [out-text [#
+[list '[ux:layout\n  [placed id=g1 component=group\n    [placed id=hero component=hero]\n  ]\n  [placed id=promo component=promo]\n]\n' "([err code=ux-refused '([ux-refusal code=ux-layout-cycle id=g1 parent=g1])']\n)\n" "([err code=ux-refused '([ux-refusal code=ux-layout-not-container component=promo])']\n)\n" "([err code=ux-refused '([ux-refusal code=ux-layout-not-container id=promo])']\n)\n"]
+#]]
+ ]
+
+ [# P0-108, THE INVERSE-PAIR TABLE, round-tripped whole: for each of the five
+    commands, apply then apply-the-inverse restores the original document
+    byte-identically. The wrap inverse is the ruled P0-27 batch (move the
+    child back, THEN remove the empty wrapper); the remove inverse is the
+    reconstructing place batch. #]
+ [case id=ux-111-layout-inverse-pairs level=core
+  [tags ux layout studio inverse undo P0-27 P0-108 W26]
+  [title 'every command round-trips through its inverse to byte-identical bytes']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero], [component name=featured], [component name=promo], [component name=group container=true])]
+  [= $l0 [ux:layout [placed id=hero component=hero] [placed id=featured component=featured]]]
+  [= $rt [?fn ($cmd)
+           [?let [= $inv [$ux:layout-inverse $l0 $cmd]]
+             [= [$cx:canonical [$ux:layout-apply-batch [$ux:layout-apply $l0 $cmd $comps] $inv $comps]]
+                [$cx:canonical $l0]]]]]
+  [list [$rt [ux:move id=featured parent="" before=hero]]
+        [$rt [ux:set-hint id=hero hint=tone value=info]]
+        [$rt [ux:place id=promo component=promo parent="" before=""]]
+        [$rt [ux:wrap id=hero wrapper=g1 component=group]]
+        [$rt [ux:remove id=hero]]]]
+#]]
+  [out-text [#
+[list true true true true true]
+#]]
+ ]
+
+ [# P0-107: a set-hint lands at the SURFACE level (the placed element's own
+    hint children); value="" clears it and the inherited resolution applies
+    again — the document returns to its pre-hint bytes. #]
+ [case id=ux-112-layout-set-hint-surface-level level=core
+  [tags ux layout studio set-hint P0-107 W26]
+  [title 'set-hint writes and clears at the surface level']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=departments])]
+  [= $l0 [ux:layout [placed id=depts component=departments]]]
+  [= $l1 [$ux:layout-apply $l0 [ux:set-hint id=depts hint=density value=compact] $comps]]
+  [= $l2 [$ux:layout-apply $l1 [ux:set-hint id=depts hint=density value=""] $comps]]
+  [list [$ux:layout-hint $l0 depts density] [$ux:layout-hint $l1 depts density]
+        [$cx:canonical $l2]]]
+#]]
+  [out-text [#
+[list '' 'compact' '[ux:layout\n  [placed id=depts component=departments]\n]\n']
+#]]
+ ]
+
+ [# P0-27: a batch is atomic — one journal entry, all-or-nothing. A refusal of
+    any member refuses the batch whole; the first member's edit is not kept. #]
+ [case id=ux-113-layout-batch-atomic level=core
+  [tags ux layout studio batch refusal P0-27 W26]
+  [title 'a batch with a refusing member refuses whole']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero])]
+  [= $l0 [ux:layout [placed id=hero component=hero]]]
+  [= $r [$ux:layout-apply-batch $l0 ([ux:set-hint id=hero hint=tone value=info], [ux:remove id=ghost]) $comps]]
+  [$cx:canonical ($r)]]
+#]]
+  [out-text [#
+"([err code=ux-refused '([ux-refusal code=ux-layout-address-miss id=ghost])']\n)\n"
+#]]
+ ]
+
+ [# P0-111 (W27, the designer's studio): set-param joins the closed command
+    set — content params on placed elements, declared by the registry (an
+    undeclared param refuses: the registry IS the closed editing surface,
+    P0-113), value="" returning to the default, the inverse restoring the
+    prior, and the remove-inverse reconstructing params with the subtree. #]
+ [case id=ux-114-set-param-content-surface level=core
+  [tags ux layout studio set-param P0-111 P0-113 W27]
+  [title 'a content param writes, refuses undeclared names, and round-trips its inverse']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?let
+  [= $comps ([component name=hero [param name=heading default="Everyday things." carrier=ux-heading]],
+             [component name=promo [param name=text default="A note." carrier=ux-text]])]
+  [= $l0 [ux:layout [placed id=hero component=hero] [placed id=promo component=promo]]]
+  [= $c1 [ux:set-param id=hero param=heading value="Made properly."]]
+  [= $l1 [$ux:layout-apply $l0 $c1 $comps]]
+  [= $r1 [$ux:layout-apply $l0 [ux:set-param id=hero param=nonesuch value=x] $comps]]
+  [= $inv [$ux:layout-inverse $l0 $c1]]
+  [= $l2 [$ux:layout-apply-batch $l1 $inv $comps]]
+  [list [$cx:canonical $l1]
+        [$ux:layout-param $l1 hero heading]
+        [$cx:canonical ($r1)]
+        [= [$cx:canonical $l2] [$cx:canonical $l0]]
+        [$cx:canonical [x [?splice [$ux:layout-inverse $l1 [ux:remove id=hero]]]]]]]
+#]]
+  [out-text [#
+[list "[ux:layout\n  [placed id=hero component=hero\n    [param name=heading value='Made properly.']\n  ]\n  [placed id=promo component=promo]\n]\n" 'Made properly.' "([err code=ux-refused '([ux-refusal code=ux-layout-unknown-param id=hero param=nonesuch])']\n)\n" true "[x\n  [ux:place id=hero component=hero parent='' before=promo]\n  [ux:set-param id=hero param=heading value='Made properly.']\n]\n"]
+#]]
+ ]
+]

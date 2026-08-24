@@ -97,7 +97,7 @@ fn ft_lookup(id int) ?&FtIndex {
 	return reg.indexes[id] or { return none }
 }
 
-fn ft_index_of(n cx.Node) ?&FtIndex {
+pub fn ft_index_of(n cx.Node) ?&FtIndex {
 	if n is cx.Element && n.name == 'ft-index' {
 		for a in n.attrs {
 			if a.name == 'handle' {
@@ -318,7 +318,8 @@ fn ft_is_digit_rune(r rune) bool {
 	return r >= `0` && r <= `9`
 }
 
-struct FtPipeline {
+pub struct FtPipeline {
+pub:
 	language       string
 	case_sensitive bool
 	stem_lang      string // "en" | "none"
@@ -362,7 +363,7 @@ fn ft_run_pipeline(raw []string, p FtPipeline) []string {
 }
 
 // ft_tokenize_full = segment + pipeline (the §3.5 tokenize surface).
-fn ft_tokenize_full(text string, p FtPipeline) []string {
+pub fn ft_tokenize_full(text string, p FtPipeline) []string {
 	return ft_run_pipeline(ft_segment(text), p)
 }
 
@@ -881,7 +882,7 @@ fn ft_collect_text(n cx.Node) string {
 }
 
 // FtBuildOpts carries the resolved index-with-opts configuration.
-struct FtBuildOpts {
+pub struct FtBuildOpts {
 mut:
 	language        string = 'en'
 	case_sensitive  bool
@@ -907,7 +908,7 @@ fn (o FtBuildOpts) pipeline() FtPipeline {
 }
 
 // ft_build_index constructs an FtIndex from the doc sequence + opts.
-fn ft_build_index(docs []cx.Node, opts FtBuildOpts) cx.Node {
+pub fn ft_build_index(docs []cx.Node, opts FtBuildOpts) cx.Node {
 	mut idx := &FtIndex{
 		df:             map[string]int{}
 		language:       opts.language
@@ -1927,7 +1928,7 @@ fn ft_collect_positive_terms(nodes []FtQueryNode, p FtPipeline, mut out []string
 
 // ft_query_arg accepts the canonical [query …] element argument; none
 // for any other shape (the caller raises CXER1205).
-fn ft_query_arg(n cx.Node) ?cx.Node {
+pub fn ft_query_arg(n cx.Node) ?cx.Node {
 	if n is cx.Element {
 		if (n as cx.Element).name == 'query' {
 			return n
@@ -1939,7 +1940,7 @@ fn ft_query_arg(n cx.Node) ?cx.Node {
 // ft_query_shape_err is the CXER1205 for a non-[query] argument — the
 // string format is a data format consumed only by [$ft:parse-query]
 // (ft.md §2.2/§3.2a).
-fn ft_query_shape_err(n cx.Node) cx.Node {
+pub fn ft_query_shape_err(n cx.Node) cx.Node {
 	got := if n is cx.ScalarNode { 'a string (use [\$ft:parse-query])' } else { 'a non-[query] value' }
 	return mk_err('cx-err:CXER1205',
 		'E_FT_QUERY_SHAPE: search takes the canonical [query …] element, got ${got}')
@@ -1947,8 +1948,8 @@ fn ft_query_shape_err(n cx.Node) cx.Node {
 
 // ── search ────────────────────────────────────────────────────────────
 
-struct FtSearchOpts {
-mut:
+pub struct FtSearchOpts {
+pub mut:
 	limit           int = 10
 	offset          int
 	scoring         string = 'tf-idf'
@@ -1960,7 +1961,7 @@ mut:
 	proximity_boost f64 = 0.25 // §5.3 β; 0.0 disables
 }
 
-fn ft_search_impl(idx &FtIndex, query cx.Node, opts FtSearchOpts) cx.Node {
+pub fn ft_search_impl(idx &FtIndex, query cx.Node, opts FtSearchOpts) cx.Node {
 	// §3.2 compatibility check: a language / case-sensitive mismatch raises
 	// CXER1203.
 	if opts.lang_present && opts.language != idx.language {
@@ -2366,9 +2367,6 @@ fn ft_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			}
 			return ft_search_impl(idx, query, so)
 		}
-		'ft-search-store' {
-			return ft_search_store(args)
-		}
 		'ft-snippet' {
 			doc := args[0]
 			query := ft_query_arg(args[1]) or { return ft_query_shape_err(args[1]) }
@@ -2576,7 +2574,7 @@ fn ft_nodes_equal(a cx.Node, b cx.Node) bool {
 	return at == bt
 }
 
-fn ft_int_arg(n cx.Node, def int) int {
+pub fn ft_int_arg(n cx.Node, def int) int {
 	if n is cx.ScalarNode {
 		v := n.value
 		if v is i64 {
@@ -2590,31 +2588,11 @@ fn ft_int_arg(n cx.Node, def int) int {
 }
 
 // ── store integration ─────────────────────────────────────────────────
-
-// ft_search_store builds an index from a Store's docs and searches it
-// (§3.3). Resolves the Store handle directly through the shared store
-// registry rather than re-entering CX.
-fn ft_search_store(args []cx.Node) ?cx.Node {
-	ms, errn, ok := store_get_open(args[0])
-	if !ok {
-		return errn
-	}
-	query := ft_query_arg(args[1]) or { return ft_query_shape_err(args[1]) }
-	limit := if args.len > 2 { ft_int_arg(args[2], 10) } else { 10 }
-	mut docs := []cx.Node{}
-	for h in ms.doc_order {
-		// Route through the doc abstraction so full-text search works on EVERY
-		// backend — the object-graph stores (cxpack/cxobj/mem-subtree) keep docs in
-		// the object graph, not the flat `docs` map (which is empty for them).
-		text := store_doc_text(ms, h) or { continue }
-		docs << store_decode_doc(text)
-	}
-	idx_node := ft_build_index(docs, FtBuildOpts{})
-	idx := ft_index_of(idx_node) or { return none }
-	return ft_search_impl(idx, query, FtSearchOpts{
-		limit: limit
-	})
-}
+// ft_search_store (the §3.3 store-coupled surface) lives on the Ring-2
+// side (store_ft.v) since the I3 split — it resolves Store handles, so
+// it cannot stay in the Ring-1 ft pack. Its verb name dispatches via
+// the I3 registry (ring2_register.v), which the stdlib chain probes
+// BEFORE this pack.
 
 // ── env-aware hook (custom tokenizer) ─────────────────────────────────
 

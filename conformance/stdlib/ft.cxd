@@ -1,4 +1,4 @@
-[test-suite name=ft
+[test-suite name=ft ring=1
   [doc [#
 conformance fixtures for cx-stdlib/ft (spec/std-lib/ft.md §6/§8).
 
@@ -85,7 +85,7 @@ conformance fixtures for cx-stdlib/ft (spec/std-lib/ft.md §6/§8).
   [$ft:doc-ids [$ft:search $idx [$ft:parse-query "database"] 10]]]
 #]]
   [out-text [#
-('d1')
+(d1)
 #]]
  ]
 
@@ -126,7 +126,7 @@ cx-err:CXER1200
 #]]
   [in-code [#
 [?lib 'cx-stdlib/ft']
-[?let [= $idx [$ft:index-with-opts ([doc [title "Database design"] [body "schemas and indexes"]]) {"fields" ("title")}]]
+[?let [= $idx [$ft:index-with-opts ([doc [title "Database design"] [body "schemas and indexes"]]) {fields: ("title")}]]
   [$ft:search $idx [$ft:parse-query "body:schemas"] 10]]
 #]]
   [out-err [#
@@ -145,7 +145,7 @@ cx-err:CXER1202
   [$ft:doc-ids [$ft:search $idx [$ft:parse-query "title:database"] 10]]]
 #]]
   [out-text [#
-('d1')
+(d1)
 #]]
  ]
 
@@ -156,7 +156,7 @@ cx-err:CXER1202
 #]]
   [in-code [#
 [?lib 'cx-stdlib/ft']
-[$ft:index-with-opts ([doc "database design"]) {"language" "zz-not-a-language"}]
+[$ft:index-with-opts ([doc "database design"]) {language: "zz-not-a-language"}]
 #]]
   [out-err [#
 cx-err:CXER1201
@@ -170,7 +170,7 @@ cx-err:CXER1201
 #]]
   [in-code [#
 [?lib 'cx-stdlib/ft']
-[$ft:index-with-opts ([doc "database design"]) {"tokenizer" [?fn ($text) 42]}]
+[$ft:index-with-opts ([doc "database design"]) {tokenizer: [?fn ($text) 42]}]
 #]]
   [out-err [#
 cx-err:CXER1204
@@ -203,7 +203,7 @@ cx-err:CXER1204
   [$ft:doc-ids [$ft:search-with-opts $idx [$ft:parse-query "database"] {scoring: "bm25"}]]]
 #]]
   [out-text [#
-('d1')
+(d1)
 #]]
  ]
 
@@ -215,7 +215,7 @@ cx-err:CXER1204
   [in-code [#
 [?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design"])]]
-  [$ft:search-with-opts $idx [$ft:parse-query "\"unterminated"] {"limit" 10}]]
+  [$ft:search-with-opts $idx [$ft:parse-query "\"unterminated"] {limit: 10}]]
 #]]
   [out-err [#
 cx-err:CXER1200
@@ -402,7 +402,7 @@ true
 #]]
  ]
 
- [case id=ft-026-search-store-integration level=core
+ [case id=ft-026-search-store-integration level=core ring=2
   [tags ft search-store store impure integration]
   [in-cx [#
 [empty]
@@ -415,7 +415,7 @@ true
   [$ft:doc-ids [$ft:search-store $store [$ft:parse-query "database"] 10]]]
 #]]
   [out-text [#
-('d1')
+(d1)
 #]]
  ]
 
@@ -463,7 +463,7 @@ true
   [$ft:doc-ids [$ft:search $idx [$ft:parse-query "beta"] 10]]]
 #]]
   [out-text [#
-('d1')
+(d1)
 #]]
  ]
 
@@ -476,7 +476,7 @@ true
   [$ft:doc-ids [$ft:search $idx [query [phrase slop=1 "customer support"]] 10]]]
 #]]
   [out-text [#
-('d1')
+(d1)
 #]]
  ]
 
@@ -502,7 +502,7 @@ true
   [$ft:doc-ids [$ft:search $idx [query [phrase slop=0 "customer support"]] 10]]]
 #]]
   [out-text [#
-('d1')
+(d1)
 #]]
  ]
 
@@ -530,7 +530,7 @@ true
   [$ft:doc-ids [$ft:search $idx [query [near n=2 [term "acme"] [term "plumbing"]]] 10]]]
 #]]
   [out-text [#
-('hit')
+(hit)
 #]]
  ]
 
@@ -642,7 +642,7 @@ true
   [$ft:doc-ids [$ft:search $idx [query [all [term "alpha"] [term "beta"]]] 10]]]
 #]]
   [out-text [#
-('tight', 'loose')
+(tight, loose)
 #]]
  ]
 

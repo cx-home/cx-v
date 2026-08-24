@@ -1,5 +1,0 @@
-[?def encode
-  :scope public
-  :returns string
-  (v)
-  [json-emit v]]

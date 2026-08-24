@@ -1,0 +1,9 @@
+flowchart TD
+  prog(["program"])
+  unk_call[/"unresolved callee"/]
+  prog ==> unk_call
+  unk_lib[/"[?lib] — module body not in the image"/]
+  prog ==> unk_lib
+  any{{"any granted capability"}}
+  unk_call ==> any
+  unk_lib ==> any

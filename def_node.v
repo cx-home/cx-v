@@ -148,6 +148,17 @@ pub mut:
 // D11. Defaults to `.pure_` when neither modifier is supplied
 // (D11.1). Identity-relevant: same-body different-purity DefNodes
 // are NOT equal and hash to different values.
+// DefEffectItem is one `[CAP scope*]` item of an `[effects …]` clause
+// (grammar [152f′], stream 6 L109). `cap` is the capability name
+// (validated against the closed security.md §2 list at REGISTRATION,
+// not here — the parser is below the capability layer); `scopes` are
+// the C4 canonical scope literals, carried at v1.
+pub struct DefEffectItem {
+pub mut:
+	cap    string
+	scopes []string
+}
+
 pub struct DefNode {
 pub mut:
 	name                string
@@ -157,8 +168,34 @@ pub mut:
 	returns_type_expr   ?TypeExpr // structural :returns T       — Phase 2.16
 	scope               ?string
 	purity              Purity = .pure_
+	// purity_explicit records whether `pure`/`impure` was SPELLED on the
+	// def (vs the pure default). Load-bearing for the §12.2.7 command
+	// contract: explicit `pure` + non-empty [effects] is the CXER0239
+	// contradiction, while an UNANNOTATED def with non-empty [effects]
+	// is impure by implication (declaring effects IS declaring impurity
+	// — the parser resolves the default; stream-6 R5).
+	purity_explicit     bool
 	source              ?string // verbatim source-text snippet of the full [?def …] form (advisory)
 	loc                 ?DefLoc // source position (advisory)
+	// ── Command clauses (grammar [152d–h], stream 6 L109/L110) ──
+	// A def carrying `[effects]` IS a command — `has_effects` is THE
+	// discriminator (clause PRESENCE; a zero-item clause still makes a
+	// command). All five are OUTSIDE the Tier-2 hash (S0
+	// excluded-by-default) — normalize_def_node never reads them.
+	has_effects   bool
+	effects       []DefEffectItem
+	requires      []string // [requires …] items, verbatim (cap: address strings / capability barewords)
+	preconditions []string // [preconditions …] predicate exprs, verbatim source
+	is_idempotent bool
+	idem_window   string // verbatim [window DUR] duration ('' = none declared)
+	compensates   string // [compensates NAME] target ('' = none)
+	// [requires-at stream= seq= hash=] — the stream-10 cross-stream
+	// precondition PIN (a B3 admission input at the commit point; like
+	// every command clause it sits OUTSIDE the Tier-2 hash).
+	has_requires_at    bool
+	requires_at_stream string
+	requires_at_seq    i64
+	requires_at_hash   string
 }
 
 // ── Constructors ──────────────────────────────────────────────────────────────
@@ -423,31 +460,43 @@ pub fn def_node_hash(d DefNode) string {
 
 // ── JSON projection ───────────────────────────────────────────────────────────
 
-// def_node_to_json returns the AST-JSON projection of a DefNode.
-// The shape:
+// def_node_to_json returns the AST-JSON projection of a DefNode
+// (ast.md "DefNode" shape + the [152d–h] command clauses). The shape:
 //
 //   {
-//     "type":    "ProgramDefExpr",
+//     "type":    "DefNode",
 //     "name":    "<NAME>",
-//     "params":  [ { "name": ..., "type": ..., "named": bool, "rest": bool, "default": ... }, ... ],
+//     "params":  [ { "kind": "positional"|"named"|"rest",
+//                    "name": ..., "type": ..., "default": ... }, ... ],
 //     "body":    "<src>",
 //     "returns": "<src>",                       // omit when none
 //     "scope":   "public" | "private",          // omit when none
 //     "purity":  "pure" | "impure",             // always emitted
+//     "effects": [ { "cap": "write", "scopes": [...] }, ... ],
+//                                               // present iff the [effects]
+//                                               // clause is present — an empty
+//                                               // array IS the zero-item
+//                                               // clause (clause presence is
+//                                               // THE command discriminator,
+//                                               // stream 6); omitted entirely
+//                                               // when the def has no clause
+//     "requires": ["cap:…", …],                 // omit when empty
+//     "preconditions": ["<src>", …],            // omit when empty
+//     "idempotent": true,                       // omit when false
+//     "idempotent_window": "<DUR>",             // omit when none
+//     "compensates": "<NAME>",                  // omit when none
+//     "requires_at": {"stream": …, "seq": N, "hash": …},
+//                                               // present iff declared
 //     "source":  "<src>",                       // omit when none
 //     "loc":     { "start": N, "end": M }       // omit when none
 //   }
 //
 // Each param projects with:
+//   - "kind"    : always present — "positional" | "named" | "rest"
+//                 (the ast.md discriminator)
 //   - "name"    : always present (the parameter identifier)
 //   - "type"    : present when the parameter has a `:T` annotation; omitted otherwise
-//   - "named"   : present + true for `:name` keyword params; omitted for positional / rest
-//   - "rest"    : present + true for `:rest name` variadic; omitted otherwise
 //   - "default" : present when a named-param default is supplied; omitted otherwise
-//
-// "ProgramDefExpr" is the parser-internal JSON `type` tag; at the
-// AST-bin boundary the projection will collapse to `"DefNode"` per
-// the spec when the wire slot lands.
 //
 // Phase 2.12 Part 1 leaves body / type_expr / default / returns_type
 // as verbatim source strings; the Phase 2.16 graft replaces these
@@ -455,7 +504,7 @@ pub fn def_node_hash(d DefNode) string {
 // breaking it.
 pub fn def_node_to_json(d DefNode) string {
 	mut pairs := []string{}
-	pairs << '"type":"ProgramDefExpr"'
+	pairs << '"type":"DefNode"'
 	pairs << '"name":${json_str(d.name)}'
 	mut params_json := []string{cap: d.params.len}
 	for p in d.params {
@@ -477,6 +526,34 @@ pub fn def_node_to_json(d DefNode) string {
 		.impure_ { 'impure' }
 	}
 	pairs << '"purity":${json_str(purity_str)}'
+	// Command clauses ([152d–h], stream 6). `effects` is emitted on
+	// clause PRESENCE, not item count — `[effects]` with zero items
+	// still marks the def as a command.
+	if d.has_effects {
+		mut eff_json := []string{cap: d.effects.len}
+		for e in d.effects {
+			eff_json << def_effect_to_json(e)
+		}
+		pairs << '"effects":[${eff_json.join(',')}]'
+	}
+	if d.requires.len > 0 {
+		pairs << '"requires":[${json_str_list(d.requires)}]'
+	}
+	if d.preconditions.len > 0 {
+		pairs << '"preconditions":[${json_str_list(d.preconditions)}]'
+	}
+	if d.is_idempotent {
+		pairs << '"idempotent":true'
+		if d.idem_window != '' {
+			pairs << '"idempotent_window":${json_str(d.idem_window)}'
+		}
+	}
+	if d.compensates != '' {
+		pairs << '"compensates":${json_str(d.compensates)}'
+	}
+	if d.has_requires_at {
+		pairs << '"requires_at":{"stream":${json_str(d.requires_at_stream)},"seq":${d.requires_at_seq},"hash":${json_str(d.requires_at_hash)}}'
+	}
 	if src := d.source {
 		pairs << '"source":${json_str(src)}'
 	}
@@ -488,6 +565,14 @@ pub fn def_node_to_json(d DefNode) string {
 
 fn def_param_to_json(p DefParam) string {
 	mut pairs := []string{}
+	kind := if p.is_rest {
+		'rest'
+	} else if p.is_named {
+		'named'
+	} else {
+		'positional'
+	}
+	pairs << '"kind":${json_str(kind)}'
 	pairs << '"name":${json_str(p.name)}'
 	if t := p.type_expr_source {
 		pairs << '"type":${json_str(t)}'
@@ -495,16 +580,27 @@ fn def_param_to_json(p DefParam) string {
 	if te := p.type_expr {
 		pairs << '"type_expr":${type_expr_to_json(te)}'
 	}
-	if p.is_named {
-		pairs << '"named":true'
-	}
-	if p.is_rest {
-		pairs << '"rest":true'
-	}
 	if def_val := p.default {
 		pairs << '"default":${json_str(def_val)}'
 	}
 	return '{${pairs.join(',')}}'
+}
+
+fn def_effect_to_json(e DefEffectItem) string {
+	mut pairs := []string{}
+	pairs << '"cap":${json_str(e.cap)}'
+	if e.scopes.len > 0 {
+		pairs << '"scopes":[${json_str_list(e.scopes)}]'
+	}
+	return '{${pairs.join(',')}}'
+}
+
+fn json_str_list(items []string) string {
+	mut out := []string{cap: items.len}
+	for s in items {
+		out << json_str(s)
+	}
+	return out.join(',')
 }
 
 // ── Binary codec hook (DEFERRED) ──────────────────────────────────────────────

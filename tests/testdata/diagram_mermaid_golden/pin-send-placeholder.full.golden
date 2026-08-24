@@ -1,0 +1,9 @@
+%%cx:Wz9zZW5kICJtIiB0bz0kY2hd%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["send 'm'"]
+    n4[/"channel $ch"/]
+    n3 -- "'m'" --> n4
+    n1 --> n4
+    n4 --> n2

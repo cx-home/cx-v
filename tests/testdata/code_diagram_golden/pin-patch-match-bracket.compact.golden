@@ -1,0 +1,11 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  m{"match 12"}
+  a1["'small'"]
+  m -- "< 13" --> a1
+  a1 --> done
+  a2["'big'"]
+  m -- "else" --> a2
+  a2 --> done
+  start --> m

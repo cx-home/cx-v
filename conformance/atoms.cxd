@@ -1,4 +1,4 @@
-[test-suite name=atoms
+[test-suite name=atoms ring=0
   [doc [#
 # CX Conformance — Atom scalar kind
 # Version: 1.1 — 2026-05-29

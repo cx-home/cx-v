@@ -1,0 +1,13 @@
+# conformance/tools-export/refund_order.cx — the offline-lane golden module
+# (stream 18, #690; agent_tool_projection.md §4). `make tools-export-gate`
+# runs `cx tools export` over this module and diffs the output against
+# refund_order.tools.json — the golden that pins the whole projection chain
+# (cx-x/tools descriptors → cx-x/mcp-server tool-json-of → JSON emission)
+# for the M5 worked example. Regenerate the golden ONLY via the verb itself
+# after a deliberate, ledgered projection change.
+[fn-doc name=refund-order scope=public purity=impure
+  [sig '''($order-id::string $amount::decimal) -> element''']
+  [summary '''Refund an order via the payment provider.''']
+  [param-doc name=order-id '''The order identifier.''']
+  [param-doc name=amount '''The refund amount (decimal string).''']]
+[?def refund-order scope=public impure [effects [write] [net]] [requires cap:orders/refund] [returns element] ($order-id::string $amount::decimal) [refunded $order-id]]

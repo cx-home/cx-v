@@ -1,0 +1,80 @@
+[; cx-stdlib/map — map operations (#925, RULED: PYE-1).
+
+   Full surface per spec/03-approved/std-lib/map.md. Every [?def] body
+   bottoms out in a native primitive (vcx/code/stdlib_map.v, `map-`-
+   prefixed names so they never clash with a language-core builtin).
+   Key identity everywhere is the (kind, image) pair (cxdm §2.6/§5.1):
+   an int key 1 and a string key '1' are two keys. Maps are immutable —
+   every constructor returns a NEW map.
+
+   NOTE: this const and stdlib/map.cx are the same source — edit both. ]
+
+[; §3 read ]
+[?def get      scope=public pure [returns any]  ($m::map $k::any)          [$map-get $m $k]]
+[?def keys     scope=public pure [returns any]  ($m::map)                  [$map-keys $m]]
+[?def size     scope=public pure [returns int]  ($m::map)                  [$map-size $m]]
+[?def contains scope=public pure [returns bool] ($m::map $k::any)          [$map-contains $m $k]]
+
+[; §3 construct ]
+[?def put      scope=public pure [returns map]  ($m::map $k::any $v::any)  [$map-put $m $k $v]]
+[?def entry    scope=public pure [returns map]  ($k::any $v::any)          [$map-entry $k $v]]
+[?def merge    scope=public pure [returns map]  ($maps::any)               [$map-merge $maps]]
+[?def remove   scope=public pure [returns map]  ($m::map $k::any)          [$map-remove $m $k]]
+
+[; §3 traverse ]
+[?def for-each scope=public pure [returns any]  ($m::map $fn::any)         [$map-for-each $m $fn]]
+
+[fn-doc name=get scope=public purity=pure
+  [sig """(m::map, k::any) -> any"""]
+  [summary """The value bound to key k, or the empty sequence when the key is absent — key identity is the (kind, image) pair, so an int 1 never finds a string '1'."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:get {port: 8080} 'port']"""] [expect """8080"""]]
+]
+[fn-doc name=keys scope=public purity=pure
+  [sig """(m::map) -> any"""]
+  [summary """The sequence of keys in insertion order, each carrying its own kind."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:keys {a: 1, b: 2}]"""] [expect """(a, b)"""]]
+]
+[fn-doc name=size scope=public purity=pure
+  [sig """(m::map) -> int"""]
+  [summary """The entry count, declaration entries included."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:size {a: 1, b: 2}]"""] [expect """2"""]]
+]
+[fn-doc name=contains scope=public purity=pure
+  [sig """(m::map, k::any) -> bool"""]
+  [summary """Whether the key is bound, under (kind, image) key identity."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:contains {a: 1} 'a']"""] [expect """true"""]]
+]
+[fn-doc name=put scope=public purity=pure
+  [sig """(m::map, k::any, v::any) -> map"""]
+  [summary """A new map with k bound to v — replacing in place when the key exists, appended last when new."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:put {a: 1} 'b' 2]"""] [expect """{a: 1, b: 2}"""]]
+]
+[fn-doc name=entry scope=public purity=pure
+  [sig """(k::any, v::any) -> map"""]
+  [summary """The single-entry map holding k bound to v."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:entry 'a' 1]"""] [expect """{a: 1}"""]]
+]
+[fn-doc name=merge scope=public purity=pure
+  [sig """(maps::any) -> map"""]
+  [summary """A sequence of maps folded left to right into one map; later bindings win on key collision, first occurrence fixes an entry's position."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:merge ({a: 1, b: 2}, {b: 9, c: 3})]"""] [expect """{a: 1, b: 9, c: 3}"""]]
+]
+[fn-doc name=remove scope=public purity=pure
+  [sig """(m::map, k::any) -> map"""]
+  [summary """A new map without the key; a miss is the identity."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:remove {a: 1, b: 2} 'a']"""] [expect """{b: 2}"""]]
+]
+[fn-doc name=for-each scope=public purity=pure
+  [sig """(m::map, fn::any) -> any"""]
+  [summary """Apply a two-parameter function to each (key, value) pair in insertion order; the sequence of results."""]
+  [example [code """[?lib 'cx-stdlib/map']
+[$map:for-each {a: 1, b: 2} [?fn ($k $v) $v]]"""] [expect """(1, 2)"""]]
+]

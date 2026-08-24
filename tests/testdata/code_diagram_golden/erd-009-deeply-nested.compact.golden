@@ -1,0 +1,13 @@
+erDiagram
+  para ||--|| span : has
+  section ||--|| para : has
+  doc ||--|| section : has
+  doc {
+  }
+  section {
+  }
+  para {
+  }
+  span {
+    int id "@"
+  }

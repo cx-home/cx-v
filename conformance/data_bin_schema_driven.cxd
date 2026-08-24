@@ -1,4 +1,4 @@
-[test-suite name=data-bin-schema-driven
+[test-suite name=data-bin-schema-driven ring=0
   [doc [#
 # CX Conformance — data_bin schema-driven encoding round-trips
 # Version: 0.2 — 2026-05-10 (V core impl shipped in Phase 7.73)
@@ -7,15 +7,15 @@
 # Section types used:
 #
 #   schema_cxs               — schema source text
-#   sd_ref_form              — "hash" | "inline" | "hash_with_name"
-#                              (default "hash")
+#   sd_ref_form              — "hash" | "inline" | "hash_with_name" |
+#                              "multihash" (default "hash")
 #   sd_name_hint             — name string for hash_with_name form
 #   sd_assert_round_trip     — "1" asserts encode → decode succeeds
 #   sd_expected_decoded_cx   — exact CX text after decode (optional;
 #                              compared only when present)
 #   sd_assert_flag_bit_1     — "1" asserts CXCol header flag bit 1 is set
 #   sd_assert_ref_tag        — expected first byte of schema reference
-#                              ("0x10" / "0x11" / "0x12")
+#                              ("0x10" / "0x11" / "0x12" / "0x13")
 #   sd_expected_emit_error   — expected substring of encode error message
 #                              (skips round-trip if encode rejects)
 #   schema_cxs_a / schema_cxs_b + sd_assert_hash_equal:
@@ -34,7 +34,7 @@
  [case id=sd-001-content-hash-only-reference level=extended
   [tags data_bin schema_driven content_hash]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 [server
   [body elem]
   [attr host::string [req]]
@@ -65,7 +65,7 @@ hash
  [case id=sd-002-inline-schema-reference level=extended
   [tags data_bin schema_driven inline]
   [schema-cxs [#
-[?cx schema-of port-only]
+[schema of=port-only]
 [port-only
   [body u16]
 ]
@@ -90,7 +90,7 @@ inline
  [case id=sd-003-content-hash-with-name-hint level=extended
   [tags data_bin schema_driven hash_with_hint]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 [server
   [body elem]
   [attr host::string [req]]
@@ -122,7 +122,7 @@ server.cxs
  [case id=sd-004-partial-schema-open-mode-mixed-tags level=extended
   [tags data_bin schema_driven partial open_mode]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 [server
   [body elem]
   [attr host::string [req]]
@@ -149,8 +149,7 @@ server.cxs
  [case id=sd-005-closed-mode-rejects-undeclared level=extended
   [tags data_bin schema_driven closed_mode error]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx schema-mode closed]
+[schema of=server mode=closed]
 [server
   [body elem]
   [attr host::string [req]]
@@ -167,14 +166,14 @@ S012: unknown attribute 'region'
  [case id=sd-006-hash-stable-across-source-formatting level=extended
   [tags data_bin schema_driven canonical]
   [schema-cxs-a [#
-[?cx schema-of server]
+[schema of=server]
 [server
   [body elem]
   [attr host::string [req]]
 ]
 #]]
   [schema-cxs-b [#
-[?cx schema-of server]
+[schema of=server]
 
 [; a comment that does not change semantics ]
 [server [body elem] [attr host::string [req]] ]
@@ -198,14 +197,14 @@ expected schema-ref tag
  [case id=sd-008-content-hash-mismatch-rejected level=extended
   [tags data_bin schema_driven error hash_mismatch]
   [schema-cxs [#
-[?cx schema-of server]
+[schema of=server]
 [server [body elem] [attr host::string [opt]]]
 #]]
   [in-cx [#
 [server host=localhost]
 #]]
   [sd-decode-with-alt-schema [#
-[?cx schema-of server]
+[schema of=server]
 [server [body elem] [attr host::string [opt]] [attr port::int [opt]]]
 #]]
   [sd-expected-decode-error [#
@@ -216,8 +215,7 @@ D002
  [case id=sd-009-encoding-validation-decoupled level=extended
   [tags data_bin schema_driven decoupled]
   [schema-cxs [#
-[?cx schema-of server]
-[?cx schema-mode open]
+[schema of=server mode=open]
 [server
   [body elem]
   [attr host::string [req]]
@@ -234,6 +232,71 @@ D002
 #]]
   [sd-expected-decoded-cx [#
 [server host=localhost extra=42]
+#]]
+ ]
+
+ [case id=sd-010-multihash-reference level=extended
+  [tags data_bin schema_driven multihash crypto_agility]
+  [doc [#
+I1 crypto-agility §4 (L34): the 0x13 schema-ref form carries a true
+varint multihash — uvarint(code) ‖ uvarint(len) ‖ digest — so the
+reference self-describes its hash algorithm (sha2-256 = 0x12, 32 bytes).
+#]]
+  [schema-cxs [#
+[schema of=server]
+[server
+  [body elem]
+  [attr host::string [req]]
+  [attr port::u16 [req]]
+]
+#]]
+  [in-cx [#
+[server host=localhost port=8080]
+#]]
+  [sd-ref-form [#
+multihash
+#]]
+  [sd-assert-flag-bit-1 [#
+1
+#]]
+  [sd-assert-ref-tag [#
+0x13
+#]]
+  [sd-assert-round-trip [#
+1
+#]]
+  [sd-expected-decoded-cx [#
+[server host=localhost port=8080]
+#]]
+ ]
+
+ [case id=sd-011-multihash-unknown-code-rejected level=extended
+  [tags data_bin schema_driven multihash error crypto_agility]
+  [doc [#
+A multihash schema-ref naming an unregistered multicodec (0x99 here,
+varint 99 01) must refuse loud — fail-closed, never a fall-through.
+#]]
+  [in-data-bin-hex [#
+43 58 43 6F 6C 01 03 40 00 00 00 00       # CXCol v1, LE, schema-driven
+13 99 01                                   # 0x13 ref, uvarint code 0x99
+#]]
+  [sd-expected-decode-error [#
+unrecognized multicodec
+#]]
+ ]
+
+ [case id=sd-012-multihash-length-mismatch-rejected level=extended
+  [tags data_bin schema_driven multihash error crypto_agility]
+  [doc [#
+A multihash whose declared digest length contradicts the registry row
+(sha2-256 is 32 bytes; 16 declared here) must refuse loud.
+#]]
+  [in-data-bin-hex [#
+43 58 43 6F 6C 01 03 40 00 00 00 00       # CXCol v1, LE, schema-driven
+13 12 10                                   # 0x13 ref, sha2-256, len 16
+#]]
+  [sd-expected-decode-error [#
+does not match sha2-256
 #]]
  ]
 ]

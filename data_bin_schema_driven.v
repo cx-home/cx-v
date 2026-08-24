@@ -15,14 +15,15 @@ import strconv
 // This module ships:
 //   - SchemaModel parsing (root type + body kind + per-attr types
 //     + nested element types + `[?cx schema-mode <mode>]` directive)
-// Schema content-hash: SHA-256 over
-//     emit_data_bin(parse(schema_text)) (the strict-canonical CXCol
-//     form of the parsed schema)
+// Schema content-hash: SHA-256 over the schema's strict CANONICAL TEXT
+//     bytes — the same bytes `cx hash` covers (I1, E2/L82; the former
+//     CXCol-encoding basis is superseded, #724). See schema_content_hash.
 //   - Schema-driven encoder + decoder for the most common shapes:
 //     elements with declared attrs, scalar bodies, and nested
 //     declared elements
-//   - Three schema-reference forms per §3.13.1: 0x10 content-hash,
-//     0x11 inline schema (recursive CXCol blob), 0x12 hash + name hint
+//   - Four schema-reference forms per §3.13.1: 0x10 content-hash,
+//     0x11 inline schema (recursive CXCol blob), 0x12 hash + name hint,
+//     0x13 varint multihash (self-describing algorithm; I1, L34)
 //
 // Reader-side decode walks the schema cursor in lockstep with the
 // data; undeclared scopes (open mode) fall through to self-describing
@@ -31,11 +32,47 @@ import strconv
 
 // ── Tags / constants ─────────────────────────────────────────────────────────
 
+// schema_dialect_version is THE schema-dialect semver this implementation
+// accepts (S020 rejects any other declared version) — the single source
+// for the S020 check AND the `schema-dialect` field of the stream-5
+// computation-identity environment record ([$cx:env], L103): the two can
+// never drift (derive, don't multiply).
+pub const schema_dialect_version = '0.8'
+
+// schema_dialect_accepts implements schema.md §2's version='<semver>'
+// honestly (stream 21, #716 item 4 — the former check was hard string
+// equality, so a spec-conformant '0.8.0' aborted with S020): the dialect
+// identity is MAJOR.MINOR — a dialect patch is clarification-only
+// (governance §9.1) — so 0.8 ≡ 0.8.0 ≡ 0.8.N; any other or non-semver
+// declaration stays the loud S020.
+fn schema_dialect_accepts(ver string) bool {
+	parts := ver.split('.')
+	if parts.len < 2 || parts.len > 3 {
+		return false
+	}
+	for p in parts {
+		if p.len == 0 {
+			return false
+		}
+		for c in p {
+			if c < `0` || c > `9` {
+				return false
+			}
+		}
+	}
+	dp := schema_dialect_version.split('.')
+	return parts[0] == dp[0] && parts[1] == dp[1]
+}
+
 const cxcol_flags_schema_driven = u8(0x02)            // header flags bit 1
 
 const tag_schema_ref_hash      = u8(0x10)
 const tag_schema_ref_inline    = u8(0x11)
 const tag_schema_ref_hash_name = u8(0x12)
+// I1 crypto-agility §4 (L34): self-describing multihash reference —
+// uvarint(code) ‖ uvarint(len) ‖ digest (the 0x13–0x1F reserved range
+// exists for exactly this). Additive: 0x10/0x11/0x12 are unchanged.
+const tag_schema_ref_multihash = u8(0x13)
 
 // ── Schema model ─────────────────────────────────────────────────────────────
 
@@ -68,6 +105,11 @@ pub mut:
 	// clauses ([req] / [opt] / [default V]) take precedence over the
 	// fragment.  Empty when no alias is referenced.
 	alias_target string
+	// (stream 16 W2, L66) — `[or T…]` scalar-union member texts (the only
+	// composite satisfiable in attr position — attrs are strictly scalar,
+	// cxdm §2.4 / CXER1603; container/tuple/record attr declarations are
+	// schema-load diagnostics).
+	members []string
 	// (v1.1) — attribute-position container productions.
 	// Same shape as BodyRule.item_kind / .key_kind. Attribute values
 	// that are collection literals (`name=[a, b, c]` for arr, etc.)
@@ -102,6 +144,9 @@ pub mut:
 	range_max string
 	len_min   string
 	len_max   string
+	// (stream 16 W2, L66) — algebraic composites: `[or T…]` / `[tuple T…]`
+	// member type texts, validated recursively (schema.md §4).
+	members []string
 	// (v1.1) — container productions `arr[T]` / `seq[T]`
 	// `map[K, V]`. When `kind` is 'arr' or 'seq', `item_kind` carries the
 	// element kind ('u16', 'string', or a nested `arr[float]` / `map[…]`
@@ -158,12 +203,11 @@ pub mut:
 
 // parse_schema parses a `.cxs` schema source into a SchemaModel.
 //
-// The schema text is parsed via the standard CX parser (which now
-// accepts positional directive args like `[?cx schema-of server]`).
-// We then walk the AST extracting the root name from the schema-of
-// directive, the mode from any schema-mode directive, and the per-
-// type body / attr / elem declarations from each `[<type-name> ...]`
-// element. Per, declarations carry the type via a
+// The schema text is parsed via the standard CX parser. We then read
+// the `[schema of=… mode=… name=… version=…]` header element (the
+// FIRST top-level element, spec/schema.md §2) and the per-type
+// body / attr / elem declarations from each `[<type-name> ...]`
+// element. Declarations carry the type via a
 // `name::T` glued ascription in the first body TextNode and the
 // constraints as `[clause …]` child Elements (`[req]`, `[default V]`,
 // `[range M N]`, …).  See the §6.f section below.
@@ -172,26 +216,43 @@ pub fn parse_schema(schema_text string) !SchemaModel {
 		return error('S009: schema parse failure: ${err.msg()}')
 	}
 	mut sm := SchemaModel{ src: schema_text }
-	// Pass 1 — directive application (schema-of / schema-mode /
-	// schema-version) and standalone-fragment registration.
+	// Retired-spelling rejection (I5 stream 1, spec/schema.md §2):
+	// schema metadata is BODY data — the `[schema …]` header element.
+	// The pre-I5 `[?cx schema-*]` / `[?cx frag]` pragmas leaked schema
+	// content out of the hashed bytes (strict canonical strips
+	// directives; I1 ledger entry 25) and are rejected loudly wherever
+	// they appear.
 	for n in doc.prolog {
+		if n is CXDirectiveNode { reject_retired_schema_directive(n)! }
+	}
+	for n in doc.elements {
 		if n is CXDirectiveNode {
-			schema_directive_apply(n, mut sm)!
-			register_frag_directive(n, mut sm)!
+			reject_retired_schema_directive(n)!
+		} else if n is Element {
+			walk_reject_retired_schema_directives(n)!
 		}
 	}
-	for n in doc.elements {
+	// Pass 1 — the header element: the FIRST top-level element, named
+	// `schema` (spec/schema.md §2). `of` is required; `mode` / `name` /
+	// `version` are optional. A schema supplied explicitly (API /
+	// --schema=) may omit the header entirely — root then defaults to
+	// the first declared type (standalone-fragment schemas).
+	mut header_idx := -1
+	for i, n in doc.elements {
 		if n is Element {
-			schema_directive_walk_for_mode(n, mut sm)!
-		} else if n is CXDirectiveNode {
-			schema_directive_apply(n, mut sm)!
-			register_frag_directive(n, mut sm)!
+			if n.name == 'schema' {
+				apply_schema_header(n, mut sm)!
+				header_idx = i
+			}
+			break
 		}
 	}
-	// Pass 2 — build type declarations and register anchored types as
-	// fragments (an anchor on a type-decl element makes the type itself
-	// a reusable fragment per spec/schema.md §8).
-	for n in doc.elements {
+	// Pass 2 — build type declarations (skipping the header) and
+	// register anchored types as fragments (an anchor on a type-decl
+	// element makes the type itself a reusable fragment per
+	// spec/schema.md §8).
+	for i, n in doc.elements {
+		if i == header_idx { continue }
 		if n is Element {
 			st := schema_type_from_element(n)!
 			sm.types[st.name] = st
@@ -205,11 +266,11 @@ pub fn parse_schema(schema_text string) !SchemaModel {
 		}
 	}
 	if sm.root == '' && sm.types.len == 0 && sm.frags.len == 0 {
-		return error('S009: schema has no schema-of directive and no type declarations (malformed)')
+		return error('S009: schema has no [schema of=…] header and no type declarations (malformed)')
 	}
 	if sm.root == '' {
-		// If no schema-of directive was present, default to the first
-		// declared type. This keeps standalone fragment schemas usable.
+		// If no header was present, default to the first declared
+		// type. This keeps standalone fragment schemas usable.
 		for k, _ in sm.types {
 			sm.root = k
 			break
@@ -237,22 +298,78 @@ pub fn parse_schema(schema_text string) !SchemaModel {
 	return sm
 }
 
-// register_frag_directive recognizes `[?cx frag &name [body T [clause …]]]`
-// (spec/schema.md §8 standalone fragment form shape).
-// The directive's first positional attr name must be `frag`; the
-// directive carries the fragment anchor in `.anchor` and the fragment
-// body declarations in `.items`.
-fn register_frag_directive(d CXDirectiveNode, mut sm SchemaModel) ! {
-	if d.attrs.len == 0 || d.attrs[0].name != 'frag' { return }
-	anc := d.anchor or {
-		return error('S009: `[?cx frag ...]` directive missing required `&anchor`')
+// apply_schema_header consumes the `[schema of=… mode=… name=…
+// version=…]` header element (spec/schema.md §2 — the FIRST top-level
+// element of a schema document). `of` is required; an unknown `mode`
+// value is a schema-load error (fail-closed: a typo must never
+// silently weaken validation to `open`); an unsupported `version` is
+// S020. Every header attribute is ordinary body data and therefore
+// rides in the schema's canonical text and content-hash (§13.1,
+// I1 ledger entry 25 resolution).
+fn apply_schema_header(e Element, mut sm SchemaModel) ! {
+	mut of := ''
+	for a in e.attrs {
+		match a.name {
+			'of' {
+				of = a.str_value()
+			}
+			'name' {
+				sm.name = a.str_value()
+			}
+			'mode' {
+				m := a.str_value()
+				sm.mode = match m {
+					'open'   { SchemaMode.open }
+					'strict' { SchemaMode.strict }
+					'closed' { SchemaMode.closed }
+					else {
+						return error('S009: unknown schema mode \'${m}\' in the [schema …] header (expected open, strict, or closed)')
+					}
+				}
+			}
+			'version' {
+				ver := a.str_value()
+				if !schema_dialect_accepts(ver) {
+					return error('S020: schema version \'${ver}\' is not supported (this implementation supports dialect ${schema_dialect_version})')
+				}
+			}
+			else {}
+		}
 	}
-	if anc in sm.frags {
-		return error('S014: duplicate fragment anchor \'&${anc}\'')
+	if of == '' {
+		return error('S009: the [schema …] header is missing its required of= attribute (spec/schema.md §2)')
 	}
-	mut st := SchemaType{ name: anc }
-	collect_decls(d.items, mut st)!
-	sm.frags[anc] = st
+	sm.root = of
+}
+
+// reject_retired_schema_directive fails schema load on the pre-I5
+// `[?cx schema-of/-name/-mode/-version]` and `[?cx frag]` pragma
+// spellings (retired: schema metadata and fragments are body data —
+// strict canonical strips `[?cx …]` directives, so the pragma forms
+// leaked schema content out of the hashed bytes; I1 ledger entry 25).
+fn reject_retired_schema_directive(d CXDirectiveNode) ! {
+	if d.attrs.len == 0 { return }
+	verb := d.attrs[0].name
+	if verb == 'schema-of' || verb == 'schema-name' || verb == 'schema-mode'
+		|| verb == 'schema-version' {
+		return error('S009: retired spelling `[?cx ${verb} …]` — schema metadata is body data; use the [schema of=… mode=… name=… version=…] header element (spec/schema.md §2)')
+	}
+	if verb == 'frag' {
+		return error('S009: retired spelling `[?cx frag &name …]` — declare the fragment as an anchored top-level type declaration instead (spec/schema.md §8)')
+	}
+}
+
+// walk_reject_retired_schema_directives recursively rejects retired
+// schema pragmas that landed inside element bodies (pre-I5 some
+// authors put `[?cx schema-mode …]` after the first declaration).
+fn walk_reject_retired_schema_directives(e Element) ! {
+	for n in e.items {
+		if n is CXDirectiveNode {
+			reject_retired_schema_directive(n)!
+		} else if n is Element {
+			walk_reject_retired_schema_directives(n)!
+		}
+	}
 }
 
 // resolve_aliases inlines `*frag` references at schema-load time per
@@ -405,66 +522,6 @@ fn default_value_coerces(raw string, declared string) bool {
 	}
 }
 
-// directive_arg_text reads one positional directive argument as text.
-// Bareword args are stored in the attr `name` (value empty); quoted
-// args (e.g. `[?cx schema-name 'Book schema v1']`) are stored in `value`
-// with an empty name. This normalizes both forms to their text.
-fn directive_arg_text(a Attribute) string {
-	if a.name != '' { return a.name }
-	return a.str_value()
-}
-
-// schema_directive_apply consumes a `[?cx schema-of NAME]` /
-// `[?cx schema-mode MODE]` / `[?cx schema-version VER]` directive
-// (positional form). S020 fail-fasts on unsupported version.
-fn schema_directive_apply(d CXDirectiveNode, mut sm SchemaModel) ! {
-	if d.attrs.len == 0 { return }
-	first := d.attrs[0].name
-	match first {
-		'schema-of' {
-			if d.attrs.len >= 2 { sm.root = d.attrs[1].name }
-		}
-		'schema-name' {
-			// Human-readable name; quoted positional arg lands in `value`
-			// (empty name), bareword in `name`. Diagnostic-only per §2.
-			if d.attrs.len >= 2 { sm.name = directive_arg_text(d.attrs[1]) }
-		}
-		'schema-mode' {
-			if d.attrs.len >= 2 {
-				mode := d.attrs[1].name
-				sm.mode = match mode {
-					'strict' { SchemaMode.strict }
-					'closed' { SchemaMode.closed }
-					else     { SchemaMode.open }
-				}
-			}
-		}
-		'schema-version' {
-			if d.attrs.len >= 2 {
-				ver := d.attrs[1].name
-				if ver != '0.8' {
-					return error('S020: schema-version \'${ver}\' is not supported (this implementation supports 0.8 only)')
-				}
-			}
-		}
-		else {}
-	}
-}
-
-// schema_directive_walk_for_mode looks for `[?cx schema-mode ...]`
-// directives that landed inside the document body (some authors put
-// the mode directive after the schema-of). We honor them at parse
-// time so the model reflects the final mode regardless of position.
-fn schema_directive_walk_for_mode(e Element, mut sm SchemaModel) ! {
-	for n in e.items {
-		if n is CXDirectiveNode {
-			schema_directive_apply(n, mut sm)!
-		} else if n is Element {
-			schema_directive_walk_for_mode(n, mut sm)!
-		}
-	}
-}
-
 // schema_type_from_element walks one type-declaration element and
 // produces a SchemaType under the unified model. Recognized children:
 //   [body kind [clause …]]               declares body kind / constraints
@@ -526,6 +583,11 @@ fn schema_type_from_v0_8_type_decl(e Element) !SchemaType {
 			if is_v0_8_clause_name(n.name) {
 				apply_v0_8_clause_to_body(n, mut st.body)
 			}
+			// (stream 16 W2) `[type addr::[record [attr …]…]]` — the
+			// inline record's declarations ARE this type's shape.
+			if n.name == 'record' {
+				collect_decls(n.items, mut st)!
+			}
 		}
 	}
 	collect_decls(e.items, mut st)!
@@ -580,14 +642,37 @@ fn apply_v0_8_type_str_to_body(typ string, mut br BodyRule) {
 				}
 				br.enum_vals = vals
 			}
-			'list', 'seq' {
+			'list' {
 				br.kind = 'arr'
+				if toks.len > 1 { br.item_kind = toks[1..].join(' ') }
+			}
+			'seq' {
+				br.kind = 'seq'
 				if toks.len > 1 { br.item_kind = toks[1..].join(' ') }
 			}
 			'map' {
 				br.kind = 'map'
 				if toks.len > 1 { br.key_kind = toks[1] }
 				if toks.len > 2 { br.item_kind = toks[2..].join(' ') }
+			}
+			'or', 'tuple' {
+				// (stream 16 W2) algebraic body shapes — validated
+				// recursively (schema.md §4).
+				br.kind = head
+				for v in toks[1..] {
+					vv := v.trim_space()
+					if vv != '' {
+						br.members << vv
+					}
+				}
+			}
+			'ref' {
+				// [ref Name] — the body validates against the NAMED type,
+				// resolved fail-closed at validation.
+				br.kind = 'typeref'
+				if toks.len > 1 {
+					br.item_kind = toks[1]
+				}
 			}
 			else {
 				// Unknown / opaque composite — leave kind empty.
@@ -664,15 +749,33 @@ fn body_rule_from_element(e Element) BodyRule {
 // (`arr[arr[float]]`) round-trip verbatim — the recursive parse runs
 // at validation time, not schema-load time.
 fn parse_container_kind(tok string) ?(string, string, string) {
-	for prefix in ['arr', 'seq', 'map'] {
-		if tok.len > prefix.len + 2 && tok[..prefix.len] == prefix && tok[prefix.len] == `[` && tok.ends_with(']') {
-			inner := tok[prefix.len + 1..tok.len - 1]
-			if prefix == 'map' {
-				k, v := split_map_kv(inner)
-				if k == '' || v == '' { return none }
-				return prefix, k, v
+	// (stream 16 W2, L66) the bracket-prefix spelling is THE spelling —
+	// `[list T]` / `[seq T]` / `[map K V]`, nesting recursively; the glued
+	// `arr[T]` forms are RETIRED (no dual-accept; zero fixtures ever
+	// pinned them). Nested member/item texts arrive as the verbatim
+	// bracket form.
+	t := tok.trim_space()
+	if t.starts_with('[') && t.ends_with(']') && t.len > 2 {
+		inner := t[1..t.len - 1].trim_space()
+		toks := split_ws_quote_bracket(inner)
+		if toks.len >= 2 {
+			match toks[0] {
+				'list' {
+					return 'arr', '', toks[1..].join(' ')
+				}
+				'seq' {
+					return 'seq', '', toks[1..].join(' ')
+				}
+				'map' {
+					if toks.len >= 3 {
+						return 'map', toks[1], toks[2..].join(' ')
+					}
+					return none
+				}
+				else {
+					return none
+				}
 			}
-			return prefix, '', inner.trim_space()
 		}
 	}
 	return none
@@ -740,20 +843,32 @@ fn decl_name_from_element(e Element) string {
 // Element is a constraint clause.
 fn body_rule_from_element_v0_8(e Element) BodyRule {
 	mut br := BodyRule{ declared: true }
-	// First text token is the kind (bareword or container literal).
+	// (stream 16 W2) a type-shaped ELEMENT child is the body type —
+	// `[body [list u16] [len 1..16]]` (the family-consistent child
+	// position; schema.md §4). Serialized back to its bracket text and
+	// applied through the one annotation path.
 	for n in e.items {
-		if n is TextNode {
-			toks := split_ws_quote_bracket(n.value.trim_space())
-			if toks.len == 0 { continue }
-			first := toks[0]
-			if k, kk, ik := parse_container_kind(first) {
-				br.kind = k
-				br.key_kind = kk
-				br.item_kind = ik
-			} else {
-				br.kind = first
-			}
+		if n is Element && n.name in ['list', 'seq', 'map', 'or', 'tuple', 'enum'] {
+			apply_v0_8_type_str_to_body(schema_type_child_text(n), mut br)
 			break
+		}
+	}
+	// First text token is the kind (bareword or container literal).
+	if br.kind == '' {
+		for n in e.items {
+			if raw := decl_text_of(n) {
+				toks := split_ws_quote_bracket(raw.trim_space())
+				if toks.len == 0 { continue }
+				first := toks[0]
+				if k, kk, ik := parse_container_kind(first) {
+					br.kind = k
+					br.key_kind = kk
+					br.item_kind = ik
+				} else {
+					br.kind = first
+				}
+				break
+			}
 		}
 	}
 	if is_scalar_kind(br.kind) || is_container_collection_kind(br.kind) {
@@ -788,10 +903,29 @@ fn decl_name_from_element_v0_8(e Element) string {
 // raw post-`::` ascription text — a bareword like 'string' or a balanced
 // `[list T]` / `[enum a b c]` / `[record …]` expression.  An untyped
 // decl returns (name, '').
+// decl_text_of extracts a decl-position item's text: the raw TextNode
+// value, or a string ScalarNode's value — #791 (RULED: 1a, the #795
+// batch): a canonicalized schema re-parses its quoted decl token
+// (`'sku::string '`) as a string SCALAR (the discrete self-delim-run
+// auto-typing), which the TextNode-only extractors silently DROPPED —
+// S002 enforcement vanished through the canonical lane. Both carriers
+// hold the same rule text; both are read.
+fn decl_text_of(n Node) ?string {
+	if n is TextNode {
+		return n.value
+	}
+	if n is ScalarNode {
+		if n.data_type == .string_type {
+			return scalar_value_str(n.value)
+		}
+	}
+	return none
+}
+
 fn split_v0_8_name_type(e Element) (string, string) {
 	for n in e.items {
-		if n is TextNode {
-			t := n.value.trim_space()
+		if raw := decl_text_of(n) {
+			t := raw.trim_space()
 			if t == '' { continue }
 			toks := split_ws_quote_bracket(t)
 			if toks.len == 0 { continue }
@@ -824,10 +958,11 @@ fn attr_rule_from_element_v0_8(e Element) AttrRule {
 	mut ar := AttrRule{ required: true }  // default
 	_, type_str := split_v0_8_name_type(e)
 	apply_v0_8_type_str_to_attr(type_str, mut ar)
-	// Scan first TextNode for a `*frag` alias token after the name.
+	// Scan the first decl-text item for a `*frag` alias token after the
+	// name (TextNode or string ScalarNode — decl_text_of, #791).
 	for n in e.items {
-		if n is TextNode {
-			toks := split_ws_quote_bracket(n.value.trim_space())
+		if raw := decl_text_of(n) {
+			toks := split_ws_quote_bracket(raw.trim_space())
 			for i, t in toks {
 				if i == 0 { continue }  // skip the name / name::T token
 				if t.starts_with('*') && t.len > 1 && ar.alias_target == '' {
@@ -868,19 +1003,24 @@ fn apply_v0_8_type_str_to_attr(typ string, mut ar AttrRule) {
 				ar.enum_vals = vals
 				ar.type_name = 'string'  // enum members are string atoms
 			}
-			'list', 'seq' {
-				ar.type_name = 'arr'
-				if toks.len > 1 { ar.item_kind = toks[1..].join(' ') }
-			}
-			'map' {
-				ar.type_name = 'map'
-				if toks.len > 1 { ar.key_kind = toks[1] }
-				if toks.len > 2 { ar.item_kind = toks[2..].join(' ') }
+			'list', 'seq', 'map' {
+				// unsatisfiable in attr position (attrs are strictly
+				// scalar, cxdm §2.4) — the container types live in body /
+				// [type] positions; marked for the load-time diagnostic.
+				ar.type_name = 'unsatisfiable:${head}'
 			}
 			'or' {
-				// We keep the union shape opaque; the validator
-				// will skip type-mismatch checking on union-typed attrs.
-				ar.type_name = ''
+				// (stream 16 W2) a scalar UNION — validated member-wise
+				// (S005 when the value matches no member). Container
+				// members are unsatisfiable in attr position and refuse
+				// at load.
+				ar.type_name = 'or'
+				for v in toks[1..] {
+					vv := v.trim_space()
+					if vv != '' {
+						ar.members << vv
+					}
+				}
 			}
 			'ref' {
 				// `[ref Name]` — reference to a named type / id.  Stored
@@ -889,10 +1029,9 @@ fn apply_v0_8_type_str_to_attr(typ string, mut ar AttrRule) {
 				if toks.len > 1 { ar.alias_target = toks[1] }
 			}
 			'record', 'tuple' {
-				// Composite shapes — kept opaque (full shape
-				// validation is future work).  Mark type_name so the
-				// schema-load default-coercion check skips.
-				ar.type_name = ''
+				// unsatisfiable in attr position (attrs are strictly
+				// scalar) — marked for the load-time diagnostic.
+				ar.type_name = 'unsatisfiable:${head}'
 			}
 			else {
 				// Unknown bracket-head — leave type opaque.
@@ -1099,24 +1238,18 @@ fn is_container_kind(dt string) bool {
 
 // ── Schema content-hash ────────────────────────────────────────
 
-// schema_content_hash returns the 32-byte SHA-256 of the schema's
-// CXCol strict-canonical encoding. This is the same primitive
-// `cx_hash` applies to data documents: parse → emit_data_bin → hash.
-// Comments and whitespace in the schema source are stripped by the
-// parse → emit_data_bin pipeline, so reformatted-but-semantically-
-// equivalent schemas hash identically (sd-006).
+// schema_content_hash returns the 32-byte SHA-256 of the schema's strict
+// CANONICAL TEXT bytes — the SAME bytes cx_text_hash covers, so a
+// schema's identity IS its Tier-1 document identity (I1 stream 1,
+// E2/L82, forced by S0 L19a). The former CXCol-encoding basis — and the
+// #724 framing ambiguity that rode it — is superseded; the 0x10/0x12
+// embedded digests move once, at I1, and the 0x13 multihash carries the
+// same digest self-described. Comments and whitespace normalize away in
+// canonical text, so reformatted-but-semantically-equivalent schemas
+// hash identically (sd-006).
 pub fn schema_content_hash(schema_text string) ![]u8 {
-	doc := parse(schema_text)!
-	bytes := emit_data_bin(doc)
-	// Strip the 4-byte framing prefix; the hash is over the CXCol
-	// payload (header + values), not the framing wrapper.
-	if bytes.len < 4 {
-		return error('schema content-hash: short emit')
-	}
-	digest := sha256.sum256(bytes[4..])
-	mut out := []u8{cap: 32}
-	for b in digest { out << b }
-	return out
+	canonical := cx_text_canonical(schema_text)!
+	return sha256.sum256(canonical.bytes())
 }
 
 // ── Schema-driven encoder (§3.13) ────────────────────────────────────────────
@@ -1125,6 +1258,7 @@ pub enum SchemaRefForm {
 	hash_only       // 0x10
 	inline_schema   // 0x11
 	hash_with_name  // 0x12
+	multihash       // 0x13 — self-describing varint multihash (I1, L34)
 }
 
 @[params]
@@ -1168,7 +1302,7 @@ fn encode_schema_reference(opts SchemaDrivenEmitOptions, _sm SchemaModel, mut bu
 		}
 		.inline_schema {
 			schema_doc := parse(opts.schema_text)!
-			schema_bytes := emit_data_bin(schema_doc)
+			schema_bytes := emit_data_bin(schema_doc)!
 			payload := schema_bytes[4..]  // strip framing prefix
 			buf << tag_schema_ref_inline
 			encode_uvarint(mut buf, u64(payload.len))
@@ -1181,6 +1315,14 @@ fn encode_schema_reference(opts SchemaDrivenEmitOptions, _sm SchemaModel, mut bu
 			name := opts.name_hint
 			encode_uvarint(mut buf, u64(name.len))
 			buf << name.bytes()
+		}
+		.multihash {
+			// Self-delimiting multihash (hash_registry.v bijection); the
+			// schema content-hash is sha2-256, the registry's default.
+			h := schema_content_hash(opts.schema_text)!
+			buf << tag_schema_ref_multihash
+			mh := cx_multihash_encode(cx_default_hash_algo, h)!
+			buf << mh
 		}
 	}
 }
@@ -1203,7 +1345,7 @@ fn encode_root_with_schema(doc Document, sm SchemaModel, mut buf []u8) ! {
 	}
 	// Fallback: emit as the standard wrapped keyed-collection map.
 	// Schema-driven applies only to recognized declared roots.
-	encode_keyed_collection(roots, mut buf)
+	encode_keyed_collection(roots, mut buf)!
 }
 
 // encode_element_with_schema emits one Element under the guidance of
@@ -1246,7 +1388,7 @@ fn encode_element_with_schema(e Element, st SchemaType, sm SchemaModel, mut buf 
 	}
 	// Fallback: self-describing.
 	dv := element_to_dataval(e)
-	encode_dataval(dv, mut buf)
+	encode_dataval(dv, mut buf)!
 }
 
 fn encode_attr_map_with_schema(attrs []Attribute, st SchemaType, mut buf []u8) ! {
@@ -1263,7 +1405,7 @@ fn encode_attr_map_with_schema(attrs []Attribute, st SchemaType, mut buf []u8) !
 		} else {
 			// Undeclared attr → self-describing fallback.
 			dv := scalar_value_to_dataval(a.value)
-			encode_dataval(dv, mut buf)
+			encode_dataval(dv, mut buf)!
 		}
 	}
 }
@@ -1325,7 +1467,7 @@ fn encode_typed_payload(v ScalarValue, declared_type string, mut buf []u8) ! {
 		else {
 			// Unknown declared type → emit self-describing as a safety net.
 			dv := scalar_value_to_dataval(v)
-			encode_dataval(dv, mut buf)
+			encode_dataval(dv, mut buf)!
 		}
 	}
 }
@@ -1495,8 +1637,35 @@ fn (mut r BinReader) read_schema_reference(schema_hint string) !SchemaModel {
 			}
 			return parse_schema(schema_hint)!
 		}
+		tag_schema_ref_multihash {
+			// I1 (L34): uvarint(code) ‖ uvarint(len) ‖ digest — the
+			// reference names its own hash algorithm. Fail closed on an
+			// unregistered code, a length contradicting the registry row,
+			// and any algorithm this decoder cannot recompute (the schema
+			// content-hash is sha2-256) — never a fall-through attempt.
+			code := r.read_uvarint()!
+			a := cx_hash_algo_by_code(u32(code)) or {
+				return error('D005: unrecognized multicodec 0x${code:x} in schema-ref (cx-err:CXER0131)')
+			}
+			dlen := r.read_uvarint()!
+			if dlen != u64(a.dlen) {
+				return error('D005: multihash length ${dlen} does not match ${a.name} (${a.dlen} bytes) (cx-err:CXER0132)')
+			}
+			if a.name != cx_default_hash_algo {
+				return error('D005: schema-ref hash algorithm `${a.name}` unsupported here (sha2-256 only) (cx-err:CXER0131)')
+			}
+			embedded := r.take(int(dlen))!
+			if schema_hint == '' {
+				return error('D001: schema multihash referenced but no schema hint provided')
+			}
+			actual := schema_content_hash(schema_hint)!
+			if !bytes_equal(embedded, actual) {
+				return error('D002: schema content-hash mismatch')
+			}
+			return parse_schema(schema_hint)!
+		}
 		else {
-			return error('D003: expected schema-ref tag (0x10/0x11/0x12) at offset ${r.pos - 1}, got 0x${tag:02x}')
+			return error('D003: expected schema-ref tag (0x10/0x11/0x12/0x13) at offset ${r.pos - 1}, got 0x${tag:02x}')
 		}
 	}
 }
@@ -1605,4 +1774,23 @@ fn bytes_equal(a []u8, b []u8) bool {
 		if a[i] != b[i] { return false }
 	}
 	return true
+}
+
+// schema_type_child_text renders a type-shaped schema element child
+// (`[list u16]`, `[map string [list u32]]`, …) back to its bracket-text
+// form so the ONE annotation-string application path handles both
+// spellings (stream 16 W2).
+fn schema_type_child_text(e Element) string {
+	mut parts := [e.name]
+	for n in e.items {
+		if raw := decl_text_of(n) {
+			t := raw.trim_space()
+			if t != '' {
+				parts << t
+			}
+		} else if n is Element {
+			parts << schema_type_child_text(n)
+		}
+	}
+	return '[' + parts.join(' ') + ']'
 }

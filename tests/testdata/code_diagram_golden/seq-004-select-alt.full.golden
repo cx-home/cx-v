@@ -1,0 +1,11 @@
+sequenceDiagram
+  participant INPUT
+  participant a
+  participant OUTPUT
+  participant main
+  alt msg from a
+    a ->> main : msg
+  else timeout (50ms)
+    main ->> main : timeout (50ms)
+  end
+  Note over INPUT : bind $ch1

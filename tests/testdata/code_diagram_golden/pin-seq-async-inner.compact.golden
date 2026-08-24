@@ -1,0 +1,6 @@
+sequenceDiagram
+  participant w
+  activate w
+  participant async-1
+  w ->> async-1 : start
+  deactivate w

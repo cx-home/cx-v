@@ -10,11 +10,11 @@
 # model, then compose via cx-x/run:
 #     [$run:invoke [?fn ($p) [$llm:complete $base $model $p]] "Hi"]
 #     [$run:pipe preprocess [?fn ($p) [$llm:complete $base $model $p]]]
-# (A dedicated `chat` factory that RETURNS this closure from the module is deferred:
-# a returned closure can't yet resolve unqualified module-siblings, and a captured
-# binding is lost when the closure is applied from another module — closure-scoping
-# gaps adjacent to #45. The lib-qualified call-site closure above sidesteps both and
-# is the supported composition idiom until that lands.)
+# (#45 — the closure-escape family that once blocked a returned `chat` factory —
+# is CLOSED (run.md §4.1): a returned closure resolves its defining module's
+# siblings wherever applied. The lib-qualified call-site closure above remains
+# the supported composition idiom; a `chat` factory ships when a consumer needs
+# one — never speculatively.)
 # Pure protocol shaping (chat-request / completion-of) is split from the effectful
 # call (complete) so the request/response CONTRACT is testable without a network;
 # `complete` composes the existing real cx-stdlib/http client + cx-stdlib/json codec
@@ -67,7 +67,7 @@
    cx-stdlib/http client + cx-stdlib/json codec — no new transport. Targets the
    Ollama /api/chat protocol (local, keyless; run under a scoped net grant). A
    dedicated chat Runnable-factory + stream (NDJSON token sequence) are deferred
-   (closure-scoping gap #45 / S10b respectively)."""]]
+   (S10b — NDJSON needs its own chunked-line reader; #45 itself is CLOSED)."""]]
 [fn-doc name=user-message scope=public purity=pure
   [sig """-> map"""]
   [summary """Build one chat turn {role:"user", content}."""]]

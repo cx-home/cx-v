@@ -219,6 +219,11 @@ fn accept_callback(listen_fd int, _events int, cb_arg voidptr) {
 		close_socket(accepted_fd) // Close fd on failure
 		return
 	}
+	// cx patch (#873): defensive recycle guard — whatever closed this fd
+	// number last, no SSE registry may still hold it when a fresh
+	// connection takes the number. No-op when nothing holds it.
+	cx_notify_sse_close(accepted_fd)
+	cx_release_fd(accepted_fd)
 	pv.add(accepted_fd, picoev_read, pv.timeout_secs, raw_callback)
 }
 
@@ -236,13 +241,13 @@ pub fn (mut pv Picoev) close_conn(fd int) {
 		}
 		return
 	}
-	// cx patch (§24): if this is a held-open SSE fd, notify the cx layer to drop
-	// it from its subscriber set (under the push lock) BEFORE the socket closes,
-	// so a concurrent push from another reactor can't write to a reused fd.
+	// cx patch (§24/#873): notify EVERY registered SSE registry to drop the fd
+	// (under their push locks) BEFORE the socket closes, so a concurrent push
+	// from another reactor can't write to a reused fd. Unconditional, not
+	// held-gated: the held mark and the subscriber sets are updated by
+	// different actors, and a subscribed-but-unmarked window would leak.
+	cx_notify_sse_close(fd)
 	if cx_is_held(fd) {
-		if cx_sse_on_close != unsafe { nil } {
-			cx_sse_on_close(fd)
-		}
 		cx_release_fd(fd)
 	}
 	if pv.delete(fd) != 0 {

@@ -87,7 +87,7 @@ stdlib `.cxd` files and run enforced under a least-privilege `grant=`.
 | `store:get-alias` HIT still returns the hash (present flows) | value | `sap-absence-store-02-alias-hit-value` | G |
 | `process:poll` / `wait-timeout` no-result → absence | absence (`()`) | manual-grant verification (real-spawn nondeterminism; deny-lane = `process-016-poll-cap-denied`, same discipline as the 27 process deny-lane cases) | G |
 
-The `check-null-absence-conflation` standing guard (`scripts/check_null_absence_conflation.py`,
+The `check-null-absence-conflation` standing guard (`scripts/check_null_absence_conflation.cx`,
 wired into `make test`) makes the no-conflation guarantee permanent: it fails on
 any `[returns [or T null]]` declared-optional-return in the stdlib def surface.
 
@@ -129,7 +129,7 @@ sequence/Maybe (`fp-001..006`), result railway (`fp-010/011`), E_NO_INSTANCE=CXE
   `program-find-*`→`program-for-*` drift (28 fixtures) corrected; both runners now
   check `out_err` against the rendered RETURN (§9.1.2 errors-are-values: an `[err]`
   is a value `eval_code` returns, not necessarily a raise — program-sap-pipe-08/09).
-- **§0.1 Tier-1-only docs guardrail** = `scripts/check_docs_tier1_guardrail.py`,
+- **§0.1 Tier-1-only docs guardrail** = `scripts/check_docs_tier1_guardrail.cx`,
   wired into `make test` (`TEST_TARGETS`): the beginner sections (quickstart §0 +
   intro §1) are Tier-1-only — no fp.md / monad / functor / typeclass. Standing
   gate (cross-linked from `readiness-rubric.md`).

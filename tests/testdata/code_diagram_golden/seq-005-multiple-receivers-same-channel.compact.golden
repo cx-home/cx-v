@@ -1,0 +1,12 @@
+sequenceDiagram
+  participant ch
+  participant wa
+  participant wb
+  activate wa
+  ch -->> wa : msg
+  Note over wa : [ok]
+  deactivate wa
+  activate wb
+  ch -->> wb : msg
+  Note over wb : [ok]
+  deactivate wb

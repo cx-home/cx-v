@@ -1883,7 +1883,7 @@ Two defects fixed:
    that re-derives expected-outputs through the production renderer, gated by
    `quote_only_diff` (adopts a change ONLY when the sole difference is
    string-quoting — never a structural/value change), with
-   `scripts/apply_blesses.py` doing the textual rewrite.
+   `scripts/apply_blesses.cx` doing the textual rewrite.
 
 **377 fixtures re-derived** (102 code.cxd + 275 stdlib across 23 files) — EVERY
 divergence was provably quote-only (zero structural/semantic changes), strongly

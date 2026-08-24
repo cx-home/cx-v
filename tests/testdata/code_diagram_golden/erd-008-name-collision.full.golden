@@ -1,0 +1,25 @@
+erDiagram
+  DOCUMENT {
+    int node_count "5"
+    int type_count "4"
+    int max_depth "2"
+  }
+  team ||--|| user : has
+  project ||--|| user : has
+  org ||--|| team : has
+  org ||--|| project : has
+  org {
+  }
+  team {
+    string name "@ 'alpha'"
+    string note "appears 1× depth 1"
+  }
+  user {
+    int id "@ 1, 2"
+    string name "@ 'alice', 'bob'"
+    string note "appears 2× depth 2"
+  }
+  project {
+    string name "@ 'beta'"
+    string note "appears 1× depth 1"
+  }

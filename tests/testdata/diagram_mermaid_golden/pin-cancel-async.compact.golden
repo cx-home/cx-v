@@ -1,0 +1,11 @@
+%%cx:Wz9jYW5jZWwgWz9hc3luYyBib2R5PVtsb25nLWpvYl1dXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?cancel]"]]
+    n4[["[?async] future"]]
+    n5["[long-job]"]
+    n4 -- "spawn" --> n5
+    n3 -- "cancel" --> n4
+    n1 --> n3
+    n3 --> n2

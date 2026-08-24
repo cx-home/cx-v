@@ -1,0 +1,13 @@
+flowchart TD
+  subgraph countdown
+    cs[/"def countdown"/]
+    ce([exit])
+  ci{"if [= $n 0]"}
+  ct["'done'"]
+  ci -- "true" --> ct
+  ct --> ce
+  cr["[countdown [- $n 1]]"]
+  ci -- "false" --> cr
+  cr --> cs
+  cs --> ci
+  end

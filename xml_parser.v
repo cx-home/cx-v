@@ -114,9 +114,13 @@ fn (mut p XmlParser) parse_xml_document() !Document {
 				// End tag — error at document level
 				return error(p.err('unexpected end tag at document level'))
 			} else {
-				// Element
+				// Element — #919: the §2.1 collection carriers decode at the
+				// DOCUMENT ROOT exactly as they decode in child position
+				// (a top-level `{…}`/`[…]`/`(…)` document emits a root
+				// <cx:map>/<cx:arr>/<cx:seq>, and the round-trip lane must
+				// invert it; only child carriers decoded before this).
 				n := p.parse_xml_element()!
-				elements << n
+				elements << xml_decode_collection_carrier(n)
 			}
 		} else if b == `&` {
 			n := p.parse_xml_ref()!
@@ -129,6 +133,7 @@ fn (mut p XmlParser) parse_xml_document() !Document {
 
 	mut doc := Document{ prolog: prolog, doctype: doctype, elements: elements }
 	resolve_namespaces(mut doc)
+	validate_reserved_ns_bindings(doc)!
 	// v3.4: mark attrs whose values match a declared
 	// xml:id (now hoisted to Element.id) as is_ref. Without an XML
 	// schema we can't disambiguate xs:IDREF from a plain string that
@@ -821,7 +826,13 @@ fn (mut p XmlParser) parse_xml_content(parent_name string, cx_type ?string, mut 
 			if text_buf.len > 0 {
 				tv := text_buf.bytestr()
 				text_buf = []u8{}
-				if tv.trim_space().len > 0 || items.len > 0 || items.any(it is Element) {
+				// I1 W-6 companion (owner-ruled 2026-08-05): XML LAYOUT
+				// whitespace strips at IMPORT — a whitespace-only text run
+				// from XML is pretty-printing, never a value (it used to
+				// survive into the tree and be hidden by the CX emitter's
+				// skip; that skip is gone, whitespace-only STRINGS are
+				// values in the CX lane).
+				if tv.trim_space().len > 0 {
 					if is_array {
 						// each token in text is a scalar
 						for tok in tv.split_any(' \t\r\n').filter(it.len > 0) {
@@ -1001,10 +1012,32 @@ fn (mut p XmlParser) xml_read_name() !string {
 	mut s := []u8{}
 	for !p.at_end() {
 		b := p.peek()
-		if is_name_char(b) { s << b; p.advance() } else { break }
+		if is_name_char(b) {
+			s << b
+			p.advance()
+		} else if b >= 0x80 {
+			// I1 L22: XML names share the [L10a]/[L10b] ranges (they ARE
+			// the XML NameChar set) — keeps CX⇄XML bijective for
+			// non-ASCII element names.
+			cp, sz := utf8_cp_at(p.src, p.pos)
+			if sz == 0 {
+				break
+			}
+			ok := if s.len == 0 { is_name_start_cp(cp) } else { is_name_char_cp(cp) }
+			if !ok {
+				break
+			}
+			for _ in 0 .. sz {
+				s << p.peek()
+				p.advance()
+			}
+		} else {
+			break
+		}
 	}
 	if s.len == 0 { return error(p.err('expected XML name')) }
-	return s.bytestr()
+	// I1 L23: XML names normalize NFC exactly like CX names.
+	return cx_nfc_name(s.bytestr())
 }
 
 fn (mut p XmlParser) xml_read_quoted() !string {
@@ -1062,6 +1095,20 @@ fn xml_decode_collection_carrier(n Node) Node {
 						key_str := find_attr_value(ee.attrs, 'cx:key') or { '' }
 						ktype := find_attr_value(ee.attrs, 'cx:key-type') or { 'string' }
 						key := coerce_scalar(ktype, key_str)
+						// RULED: MSS-4 (#917): cx:decl-kind restores a
+						// declaration-only entry (value ABSENT).
+						if dk := find_attr_value(ee.attrs, 'cx:decl-kind') {
+							entries << MapEntry{
+								key_type:  key.data_type
+								key_value: key.value
+								value:     Node(ScalarNode{
+									data_type: .null_type
+									value:     ScalarValue(NullValue{})
+								})
+								decl_kind: dk
+							}
+							continue
+						}
 						entries << MapEntry{
 							key_type:  key.data_type
 							key_value: key.value

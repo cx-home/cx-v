@@ -1,0 +1,13 @@
+%%cx:Wz9yZWR1Y2UgJHhzIHVzaW5nPVs/Zm4gKCRhICRiKSBbKyAkYSAkYl1dIGluaXQ9MF0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["$xs"]
+    n4{{"reduce :init 0"}}
+    n3 --> n4
+    n5[["fn(a,b) → [+ …]"]]
+    n4 -- ":using" --> n5
+    n6(["fold"])
+    n5 --> n6
+    n1 --> n6
+    n6 --> n2

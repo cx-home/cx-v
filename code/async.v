@@ -9,7 +9,10 @@ import time
 //   [?async EXPR]              — EAGER spawn (§10.5.1): the body runs on
 //                                its own V thread whether or not awaited
 //   [?await $f]                — barrier; propagate value/err
-//   [?await $f :timeout DUR]   — bound the wait; CXER0241 on expiry
+//   [?await $f timeout=DUR]    — bound the wait; CXER0241 on expiry
+//                                (a LABELED argument, code.md §10.5.2 —
+//                                `:timeout DUR` is a positional atom and
+//                                is refused, see await_check_args)
 //   [?await-all FUTURES]       — barrier; CXER0240 collects non-done causes
 //   [?await-any FUTURES]       — first done in source order
 //   [?await-race FUTURES]      — first terminal; cancels losers
@@ -24,11 +27,10 @@ import time
 // stays deterministic across threads: a mock sleep in a spawned body
 // PARKS (parked_until_ns) and the await barriers advance the shared
 // clock only when every runnable spawned future is parked, bounded by the
-// awaiter's own deadline (await_concurrent). CX_WORKER_THREADS=0 falls
-// back to the original LAZY substrate (body AST + bindings snapshot,
-// driven at first await via drive_future with the global
-// current_future_id) — the diagnostics/bisection escape hatch, same knob
-// as [?worker].
+// awaiter's own deadline (await_concurrent). The lazy drive-at-await
+// substrate (and its CX_WORKER_THREADS=0 selector) is RETIRED — rule
+// EV-ASYNC-SPAWN (code.md §14.4; the #707 residual, stream 22 W3):
+// CX_WORKER_THREADS is thread-pool SIZING only, never a semantics dial.
 
 fn mk_future_handle(id string) cx.Node {
 	// id (scalar) → attribute. The future handle also carries the nominal
@@ -159,16 +161,15 @@ fn eval_async(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	// asynchronous context and RETURNS IMMEDIATELY"; the body runs whether
 	// or not the future is ever awaited (fire-and-forget is legitimate).
 	// Rides the #58 worker-thread substrate (same vgc multi-mutator
-	// soundness lineage); CX_WORKER_THREADS=0 falls back to the original
-	// lazy drive-at-await substrate (diagnostics/bisection escape hatch,
-	// same knob as [?worker]).
-	if worker_threads_enabled() {
-		mut mrec := unsafe { rec }
-		mrec.concurrent = true
-		mrec.state = 'running'
-		spawn run_future_thread(rec, unsafe { env.state }, env.bindings.clone(),
-			env.closures.clone(), env.scope, env.dyn_context.clone(), body_node)
-	}
+	// soundness lineage). Spawn is UNCONDITIONAL — rule EV-ASYNC-SPAWN
+	// (code.md §14.4, stream 22 W3): no environment value may select a
+	// lazy substrate; the pre-W3 CX_WORKER_THREADS=0 drive-at-await
+	// fallback is RETIRED (the #707 residual).
+	mut mrec := unsafe { rec }
+	mrec.concurrent = true
+	mrec.state = 'running'
+	spawn run_future_thread(rec, unsafe { env.state }, env.bindings.clone(),
+		env.closures.clone(), env.scope, env.dyn_context.clone(), body_node)
 	return mk_future_handle(id)
 }
 
@@ -232,95 +233,8 @@ fn run_future_thread(rec_ptr &FutureRecord, state_ptr &ProgramState, binds map[s
 	st.future_publish(mut rec, 'done', result, empty)
 }
 
-// drive_future runs the future's body lazily, returning the terminal
-// state result. Honors the future's cancel_requested flag (sleep / check-
-// cancel observe via env.state.current_future_id) and the optional
-// caller-side await_deadline_ns.
-fn drive_future(mut fut FutureRecord, mut env MatchEnv) cx.Node {
-	if fut.state != 'pending' {
-		return future_state_to_result(fut)
-	}
-	// Restore the bindings snapshot so the body sees the closure scope
-	// it was registered with. Closures + state are shared via env.
-	mut frame := env.clone()
-	frame.bindings = map[string]cx.Node{}
-	for k, v in fut.bindings_snapshot {
-		frame.bindings[k] = v
-	}
-	saved_future := env.state.current_future_get()
-	env.state.current_future_set(fut.id)
-	defer { env.state.current_future_set(saved_future) }
-	// Cancellation revokes capabilities (spec/code.md §10.5.7.2): once a task
-	// is cancelled, its capability set is narrowed to EMPTY for the remainder
-	// of the task. So any raw capability-gated effect reached without passing
-	// an intervening cancellation point hits the revoked-cap backstop
-	// (CXER0271), while cancellation POINTS ([?check-cancel]/[?await]/[?sleep]/
-	// [?send]/[?receive]) observe cancellation first and report CXER0260 — the
-	// precedence is cancel-check ▷ cap-check (§10.5.7.2 ordering table). The
-	// caps are restored after the body via the saved snapshot.
-	mut caps_saved := unsafe { nil }
-	mut caps_narrowed := false
-	if fut.cancel_requested {
-		caps_saved = caps_snapshot()
-		caps_set_empty()
-		caps_narrowed = true
-	}
-	defer {
-		if caps_narrowed {
-			caps_restore(caps_saved)
-		}
-	}
-	result := eval_node(fut.body[0], mut frame) or {
-		// Hard EvalError. If it's the cancellation sentinel, mark as
-		// cancelled; if it's the await-timeout sentinel, leave the
-		// future pending (await re-evaluates next call). Otherwise
-		// mark as failed with the EvalError as the cause.
-		msg := err.msg()
-		if msg.contains('cx-err:CXER0260') {
-			fut.state = 'cancelled'
-			fut.cause = mk_err_with_slots('cx-err:CXER0260', [])
-			return future_state_to_result(fut)
-		}
-		if msg.contains('cx-err:CXER0241') {
-			// Caller's await_deadline tripped. Do not mark terminal;
-			// per §10.5.3 the deadline is on the caller, not the body.
-			return mk_err_with_slots('cx-err:CXER0241', [])
-		}
-		fut.state = 'failed'
-		fut.cause = mk_err('inner', msg)
-		return future_state_to_result(fut)
-	}
-	if is_err_value(result) {
-		// Body returned an [err] value: failed-state per §10.5.1.
-		// CXER0260 result means the body observed cancellation (e.g.
-		// sleep raised it as a value): mark cancelled.
-		if err_code_of(result) == 'cx-err:CXER0260' {
-			fut.state = 'cancelled'
-			fut.cause = result
-		} else if err_code_of(result) == 'cx-err:CXER0241' {
-			// Await-timeout returned as a value — do not mark terminal.
-			return result
-		} else {
-			fut.state = 'failed'
-			fut.cause = result
-		}
-		return future_state_to_result(fut)
-	}
-	fut.state = 'done'
-	// A future captures a VALUE. When the body's terminal value is the
-	// `name==''` multi-value wrapper (the "top-level program output"
-	// shape a `[?for]` comprehension produces), normalise it to a
-	// first-class sequence value (`__cx_seq__`) so it renders as a paren
-	// sequence `(a, b, c)` — consistent with `[?await-all]`, which
-	// returns `__cx_seq__` — rather than the newline-joined top-level
-	// form (program-async-013).
-	if result is cx.Element && result.name == '' && result.items.len > 1 {
-		fut.value = cx.Element{ name: '__cx_seq__', items: result.items }
-	} else {
-		fut.value = result
-	}
-	return future_state_to_result(fut)
-}
+// (drive_future — the lazy body driver — RETIRED at stream 22 W3
+// with the lazy substrate; EV-ASYNC-SPAWN.)
 
 fn future_state_to_result(fut FutureRecord) cx.Node {
 	match fut.state {
@@ -331,7 +245,7 @@ fn future_state_to_result(fut FutureRecord) cx.Node {
 	}
 }
 
-fn err_code_of(n cx.Node) string {
+pub fn err_code_of(n cx.Node) string {
 	// draft-3 — a failure outcome is `[result status=err …]`
 	// with code carried as an attribute (the legacy `[err …]` slot/attr
 	// child forms below are read transitionally).
@@ -365,10 +279,60 @@ fn err_code_of(n cx.Node) string {
 
 // ── [?await] family ───────────────────────────────────────────────────────
 
+// await_check_args refuses every argument the await family does not
+// define, instead of dropping it (#793). Silent tolerance turned a
+// spelling mistake into a behavior change: `[?await $f :timeout 2ms]`
+// parses as THREE positional slots, the trailing two were ignored, and
+// the bounded await the author wrote ran as an unbounded one — fail-open
+// at exactly the point a deadline was being asked for. Per code.md
+// §10.5.2 the whole family takes ONE positional (the future, or the
+// future sequence); only [?await] defines a label, `timeout=`.
+fn await_check_args(d cx.ProgramDirective, allowed []string) ! {
+	mut positional := 0
+	for s in d.slots {
+		if s.kind == .labeled {
+			if s.label in allowed {
+				continue
+			}
+			expected := if allowed.len == 0 {
+				'it takes no labeled arguments'
+			} else {
+				'the only labeled argument is `${allowed.join('=`, `')}=`'
+			}
+			return EvalError{
+				code:    'cx-err:CXER0100'
+				message: '[?${d.name}] has no `${s.label}=` argument — ${expected} (code.md §10.5.2)'
+			}
+		}
+		positional++
+		if positional > 1 {
+			return EvalError{
+				code:    'cx-err:CXER0100'
+				message: '[?${d.name}] takes exactly one positional argument (code.md §10.5.2), got ${positional}' +
+					await_label_hint(s.value, allowed)
+			}
+		}
+	}
+}
+
+// await_label_hint names the exact fail-open spelling the issue reports:
+// `:label value` written where `label=value` was meant. The atom lands as
+// a positional atom literal, so a positional whose name IS a defined
+// label is worth calling out by name rather than reporting a bare arity.
+fn await_label_hint(n cx.ProgramNode, allowed []string) string {
+	if n is cx.ProgramLiteral {
+		if n.kind == .atom_lit && n.str_val in allowed {
+			return ' — `:${n.str_val}` is a positional atom; write `${n.str_val}=…` for the labeled argument'
+		}
+	}
+	return ''
+}
+
 fn eval_await(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	if d.slots.len == 0 {
 		return EvalError{ code: 'cx-err:CXER0001', message: '[?await] requires a future' }
 	}
+	await_check_args(d, ['timeout'])!
 	fut := resolve_future(d.slots[0].value, mut env)!
 	deadline_ns := if dur_node := labeled_slot(d, 'timeout') {
 		if dur_node is cx.ProgramLiteral && (dur_node as cx.ProgramLiteral).kind == .duration_lit {
@@ -391,13 +355,10 @@ fn await_with_deadline(mut fut FutureRecord, deadline_ns i64,
 	if fut.concurrent {
 		return await_concurrent(mut fut, deadline_ns, mut env)
 	}
-	if fut.state != 'pending' {
-		return future_state_to_result(fut)
-	}
-	saved_deadline := env.state.await_deadline_get()
-	env.state.await_deadline_set(deadline_ns)
-	defer { env.state.await_deadline_set(saved_deadline) }
-	return drive_future(mut fut, mut env)
+	// Every [?async] future is concurrent (EV-ASYNC-SPAWN, W3 — the
+	// lazy substrate is retired); a non-concurrent record can only be
+	// terminal (defensive read).
+	return future_state_to_result(fut)
 }
 
 // await_concurrent is the eager-spawn await barrier (#541): block until
@@ -527,6 +488,10 @@ fn collect_future_args(d cx.ProgramDirective, mut env MatchEnv) ![]cx.Node {
 	if d.slots.len == 0 {
 		return error('[?await-*] requires a future sequence')
 	}
+	// The -all / -any / -race barriers take the future sequence and
+	// nothing else — no `timeout=` (they always await unbounded), so
+	// every label and every extra positional is refused here (#793).
+	await_check_args(d, [])!
 	first := d.slots[0].value
 	val := eval_node(first, mut env)!
 	mut out := []cx.Node{}

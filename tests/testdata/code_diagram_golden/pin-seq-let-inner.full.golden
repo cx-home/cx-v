@@ -1,0 +1,10 @@
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+  activate w
+  Note over w : 'x'
+  participant ch
+  w ->>+ ch : $m
+  deactivate w
+  Note over INPUT : bind $m

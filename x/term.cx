@@ -39,7 +39,7 @@
 [?def raw-mode     scope=public impure [returns null]    ()              [$term-raw-mode]]
 [?def cooked-mode  scope=public impure [returns null]    ()              [$term-cooked-mode]]
 [?def size         scope=public impure [returns element] ()              [$term-size]]
-[?def read-event   scope=public impure [returns element] ()              [$term-read-event]]
+[?def read-event   scope=public impure [returns element] ($timeout=-1)   [$term-read-event $timeout]]
 [?def select       scope=public impure [returns element] ($opts)         [$term-select $opts]]
 
 [fn-doc name=is-tty scope=public purity=impure
@@ -55,8 +55,8 @@
   [sig """-> element"""]
   [summary """Report the terminal window size as `[size rows=R cols=C]` (TIOCGWINSZ). Raises cx-err:CXER3450 on a non-tty. Needs the `read` capability."""]]
 [fn-doc name=read-event scope=public purity=impure
-  [sig """-> element"""]
-  [summary """Read and decode the next terminal event from raw stdin: `[key name=NAME mods=(:ctrl :alt :shift)]` for a keystroke (arrows, fn-keys, ctrl/alt-chords, printable), or `[timeout]`. Requires raw-mode. Needs the `read` capability."""]]
+  [sig """timeout=INT-MS -> element"""]
+  [summary """Read and decode the next terminal event from raw stdin: `[key name=NAME mods=(:ctrl :alt :shift)]` for a keystroke (arrows, fn-keys, ctrl/alt-chords, printable), or `[timeout]` when a `timeout=MS` bound expires first (#861, R7.1 — the wrapper forwards the primitive's optional duration; the default -1 blocks). For waiting on keystrokes AND live sources together, `[$term:select {keys: true timeout: MS}]` remains the primitive. Requires raw-mode. Needs the `read` capability."""]]
 [fn-doc name=select scope=public purity=impure
   [sig """{keys: bool sources: (handle …) timeout: int-ms} -> element"""]
   [summary """Wait for the FIRST ready of keystrokes (keys: true → raw stdin), any source handle's fd becoming readable (sources: a sequence of [socket]/[exchange]/SSE-stream handles), or the timer (timeout: milliseconds; omit/-1 to block). Returns the decoded `[key …]` for a keystroke, `[ready index=N <handle>]` when source N is readable (read it via its own module, e.g. http:sse-events — term stays decoupled from each source's framing), or `[timeout]`. The one primitive that unifies live-stream and interactive input in a single loop. Requires raw-mode for keystrokes. Needs the `read` capability."""]]

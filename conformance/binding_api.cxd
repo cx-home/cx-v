@@ -1,4 +1,4 @@
-[test-suite name=binding-api
+[test-suite name=binding-api ring=0
   [doc [#
 # Binding API Parity Fixtures — Layer-1 conformance contract
 #
@@ -64,7 +64,7 @@ doc.bytes()
 doc.hash()
 #]]
   [out-text [#
-"sha256:<deterministic-32-bytes-hex>"
+"sha2-256:<deterministic-32-bytes-hex>"
 #]]
  ]
 
@@ -80,15 +80,21 @@ true
 #]]
  ]
 
- [case id=binding-api-005-equals-attribute-order-irrelevant
+ [case id=binding-api-005-equals-attribute-order-significant
   [in-cx [#
 [user id=1 name="Alice"]
 #]]
   [call [#
+# bindings.md §4: equals = CANONICAL-BYTES equality, and canonical.md
+# ("Attribute order is never a normalization axis") preserves source
+# insertion order — so a reordered document is NOT equal. Corrected
+# 2026-08-05 during the G1 identity-hash fixture work: the original
+# expectation (true) contradicted both specs and predated any binding
+# implementation (0/49 verified).
 doc.equals(doc.parse('[user name="Alice" id=1]'))
 #]]
   [out-text [#
-true
+false
 
 # ═════════════════════════════════════════════════════════════════
 # §2. eval — wraps cx_code_eval
@@ -96,7 +102,7 @@ true
 #]]
  ]
 
- [case id=binding-api-010-eval-simple-literal
+ [case id=binding-api-010-eval-simple-literal ring=1
   [in-cx [#
 [root]
 #]]
@@ -108,7 +114,7 @@ doc.eval("42")
 #]]
  ]
 
- [case id=binding-api-011-eval-against-doc-binding
+ [case id=binding-api-011-eval-against-doc-binding ring=1
   [in-cx [#
 [users [user id=1 name="Alice"] [user id=2 name="Bob"]]
 #]]
@@ -120,7 +126,7 @@ doc.eval("count(//user)")
 #]]
  ]
 
- [case id=binding-api-012-eval-error-code-propagates
+ [case id=binding-api-012-eval-error-code-propagates ring=1
   [in-cx [#
 [root]
 #]]
@@ -136,7 +142,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=binding-api-020-select-all-basic
+ [case id=binding-api-020-select-all-basic ring=1
   [in-cx [#
 [users [user id=1] [user id=2] [user id=3]]
 #]]
@@ -150,7 +156,7 @@ doc.select_all("//user")
 #]]
  ]
 
- [case id=binding-api-021-select-all-with-predicate
+ [case id=binding-api-021-select-all-with-predicate ring=1
   [in-cx [#
 [users [user id=1 active=true] [user id=2 active=false] [user id=3 active=true]]
 #]]
@@ -163,7 +169,7 @@ doc.select_all("//user[= $_@active true]")
 #]]
  ]
 
- [case id=binding-api-022-select-all-attribute
+ [case id=binding-api-022-select-all-attribute ring=1
   [in-cx [#
 [users [user email="a@x.com"] [user email="b@x.com"]]
 #]]
@@ -176,7 +182,7 @@ doc.select_all("//user/@email")
 #]]
  ]
 
- [case id=binding-api-023-select-all-empty-result
+ [case id=binding-api-023-select-all-empty-result ring=1
   [in-cx [#
 [users]
 #]]
@@ -186,7 +192,7 @@ doc.select_all("//user")
   [out-text [##]]
  ]
 
- [case id=binding-api-024-select-all-axis-following-sibling
+ [case id=binding-api-024-select-all-axis-following-sibling ring=1
   [in-cx [#
 [doc [item n=1] [item n=2] [item n=3]]
 #]]
@@ -199,7 +205,7 @@ doc.select_all("//item[1]/following-sibling::item")
 #]]
  ]
 
- [case id=binding-api-025-select-all-positional-predicate
+ [case id=binding-api-025-select-all-positional-predicate ring=1
   [in-cx [#
 [doc [item n=1] [item n=2] [item n=3]]
 #]]
@@ -211,7 +217,7 @@ doc.select_all("//item[2]")
 #]]
  ]
 
- [case id=binding-api-026-select-all-malformed-cxpath
+ [case id=binding-api-026-select-all-malformed-cxpath ring=1
   [in-cx [#
 [root]
 #]]
@@ -227,7 +233,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=binding-api-030-select-first-match
+ [case id=binding-api-030-select-first-match ring=1
   [in-cx [#
 [users [user id=1 name="Alice"] [user id=2 name="Bob"]]
 #]]
@@ -239,7 +245,7 @@ doc.select("//user")
 #]]
  ]
 
- [case id=binding-api-031-select-no-match-returns-null
+ [case id=binding-api-031-select-no-match-returns-null ring=1
   [in-cx [#
 [users]
 #]]
@@ -255,7 +261,7 @@ doc.select("//user")
 #]]
  ]
 
- [case id=binding-api-040-modify-set
+ [case id=binding-api-040-modify-set ring=1
   [in-cx [#
 [users [user id=1 name="Alice"]]
 #]]
@@ -269,7 +275,7 @@ doc.modify("//user[= $_@id 1]/@name", cx.Set("Alpha")).bytes()
 #]]
  ]
 
- [case id=binding-api-041-modify-delete
+ [case id=binding-api-041-modify-delete ring=1
   [in-cx [#
 [users [user id=1] [user id=2 banned=true] [user id=3]]
 #]]
@@ -284,7 +290,7 @@ doc.modify("//user[= $_@banned true]", cx.Delete()).bytes()
 #]]
  ]
 
- [case id=binding-api-042-modify-rename
+ [case id=binding-api-042-modify-rename ring=1
   [in-cx [#
 [doc [widget a=1] [widget b=2]]
 #]]
@@ -299,7 +305,7 @@ doc.modify("//widget", cx.Rename("component")).bytes()
 #]]
  ]
 
- [case id=binding-api-043-modify-set-attr
+ [case id=binding-api-043-modify-set-attr ring=1
   [in-cx [#
 [doc [user id=1]]
 #]]
@@ -313,7 +319,7 @@ doc.modify("//user", cx.SetAttr("status", "verified")).bytes()
 #]]
  ]
 
- [case id=binding-api-044-modify-delete-attr
+ [case id=binding-api-044-modify-delete-attr ring=1
   [in-cx [#
 [doc [user id=1 temp="x"]]
 #]]
@@ -327,7 +333,7 @@ doc.modify("//user", cx.DeleteAttr("temp")).bytes()
 #]]
  ]
 
- [case id=binding-api-045-modify-append
+ [case id=binding-api-045-modify-append ring=1
   [in-cx [#
 [doc [section id="intro" [para "First."]]]
 #]]
@@ -344,7 +350,7 @@ doc.modify("//section", cx.Append('[para "Second."]')).bytes()
 #]]
  ]
 
- [case id=binding-api-046-modify-prepend
+ [case id=binding-api-046-modify-prepend ring=1
   [in-cx [#
 [doc [section id="intro" [para "Body."]]]
 #]]
@@ -361,7 +367,7 @@ doc.modify("//section", cx.Prepend('[para "Lead."]')).bytes()
 #]]
  ]
 
- [case id=binding-api-047-modify-insert-before
+ [case id=binding-api-047-modify-insert-before ring=1
   [in-cx [#
 [doc [item n=1] [item n=2]]
 #]]
@@ -377,7 +383,7 @@ doc.modify("//item[= $_@n 2]", cx.InsertBefore('[item n="1.5"]')).bytes()
 #]]
  ]
 
- [case id=binding-api-048-modify-insert-after
+ [case id=binding-api-048-modify-insert-after ring=1
   [in-cx [#
 [doc [item n=1] [item n=2]]
 #]]
@@ -393,7 +399,7 @@ doc.modify("//item[= $_@n 1]", cx.InsertAfter('[item n="1.5"]')).bytes()
 #]]
  ]
 
- [case id=binding-api-049-modify-replace
+ [case id=binding-api-049-modify-replace ring=1
   [in-cx [#
 [doc [user id=1 name="old"]]
 #]]
@@ -407,7 +413,7 @@ doc.modify("//user", cx.Replace('[user id=1 name="new" email="n@x.org"]')).bytes
 #]]
  ]
 
- [case id=binding-api-050-modify-zero-match-no-op
+ [case id=binding-api-050-modify-zero-match-no-op ring=1
   [in-cx [#
 [users [user id=1]]
 #]]
@@ -419,7 +425,7 @@ true
 #]]
  ]
 
- [case id=binding-api-051-modify-multi-match
+ [case id=binding-api-051-modify-multi-match ring=1
   [in-cx [#
 [users [user id=1] [user id=2] [user id=3]]
 #]]
@@ -435,7 +441,7 @@ doc.modify("//user", cx.SetAttr("seen", true)).bytes()
 #]]
  ]
 
- [case id=binding-api-052-modify-set-attr-on-attribute-focus-error
+ [case id=binding-api-052-modify-set-attr-on-attribute-focus-error ring=1
   [in-cx [#
 [doc [user id=1 name="A"]]
 #]]
@@ -447,7 +453,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=binding-api-053-modify-original-doc-unchanged
+ [case id=binding-api-053-modify-original-doc-unchanged ring=1
   [in-cx [#
 [users [user id=1 name="Alice"]]
 #]]
@@ -575,7 +581,7 @@ doc.root().kind()
 #]]
  ]
 
- [case id=binding-api-077-kind-on-selected-attribute
+ [case id=binding-api-077-kind-on-selected-attribute ring=1
   [in-cx [#
 [user id=1]
 #]]
@@ -591,7 +597,7 @@ doc.select("//user/@id").kind()
 #]]
  ]
 
- [case id=binding-api-080-select-then-attr
+ [case id=binding-api-080-select-then-attr ring=1
   [in-cx [#
 [users [user id=1 name="Alice"] [user id=2 name="Bob"]]
 #]]
@@ -603,7 +609,7 @@ doc.select("//user[= $_@id 2]").attr("name")
 #]]
  ]
 
- [case id=binding-api-081-modify-chain
+ [case id=binding-api-081-modify-chain ring=1
   [in-cx [#
 [doc [user id=1 name="old" banned=true]]
 #]]
@@ -617,7 +623,7 @@ doc.modify("//user/@name", cx.Set("new")).modify("//user", cx.DeleteAttr("banned
 #]]
  ]
 
- [case id=binding-api-082-select-all-count
+ [case id=binding-api-082-select-all-count ring=1
   [in-cx [#
 [doc [item n=1] [item n=2] [item n=3]]
 #]]
@@ -647,7 +653,7 @@ cx-err:CXER0100
 #]]
  ]
 
- [case id=binding-api-091-modify-using-type-mismatch
+ [case id=binding-api-091-modify-using-type-mismatch ring=1
   [in-cx [#
 [users [user id=1 name="Alice"]]
 #]]
@@ -675,15 +681,20 @@ doc.hash()
 #]]
  ]
 
- [case id=binding-api-101-hash-attribute-order-irrelevant
+ [case id=binding-api-101-hash-attribute-order-significant
   [in-cx [#
 [user id=1 name="Alice"]
 #]]
   [call [#
+# Same correction as binding-api-005: hash = SHA-256 over canonical
+# bytes (bindings.md §4), attribute order is never normalized
+# (canonical.md), so reordering CHANGES the digest. Verified against
+# the shipped cx_text_hash 2026-08-05 (the two documents produce
+# distinct digests). Pinned as a pair case in identity_hash.cxd too.
 doc.hash() == doc.parse('[user name="Alice" id=1]').hash()
 #]]
   [out-text [#
-true
+false
 
 # ═════════════════════════════════════════════════════════════════
 # §11. Init / thread registration sanity (negative tests)
@@ -691,7 +702,7 @@ true
 #]]
  ]
 
- [case id=binding-api-110-thread-register-required
+ [case id=binding-api-110-thread-register-required ring=1
   [in-cx [#
 [users [user id=1]]
 #]]
@@ -702,12 +713,43 @@ spawn { doc.select_all("//user") }
 [user id=1]
 
 # ═════════════════════════════════════════════════════════════════
-# End of binding API parity suite. 48 fixtures.
+# End of binding API parity suite. 49 fixtures (17 ring=0, 32 ring=1
+# per-case — evaluation-dependent select/modify/eval cases elevate; the
+# suite default stays ring=0 for the parse/emit/hash/equals/find/accessor
+# surface).
 #
-# Status at -dev fixture-authoring milestone: 0/48 verified
+# Status at -dev fixture-authoring milestone: 0/49 verified
 # against any binding (Phase 4.2 deliverable; needs Phase 2 V impl +
 # Phase 3 binding retargets).
 # ═════════════════════════════════════════════════════════════════
+#]]
+ ]
+
+# ═════════════════════════════════════════════════════════════════
+# §12. I1 promoted kinds (L48) — decimal scale + bigint survive Layer-1
+# ═════════════════════════════════════════════════════════════════
+
+ [case id=binding-api-111-decimal-bigint-emit
+  [in-cx [#
+[order price=19.99 qty=99999999999999999999999 note=1.50]
+#]]
+  [call [#
+doc.bytes()
+#]]
+  [out-text [#
+[order price=19.99 qty=99999999999999999999999 note=1.50]
+#]]
+ ]
+
+ [case id=binding-api-112-decimal-bigint-hash
+  [in-cx [#
+[order price=19.99 qty=99999999999999999999999 note=1.50]
+#]]
+  [call [#
+doc.hash()
+#]]
+  [out-text [#
+"sha2-256:93bb9787754a93d7118346336fc962eae5e87645452192623e3ae58a42c0c002"
 #]]
  ]
 ]

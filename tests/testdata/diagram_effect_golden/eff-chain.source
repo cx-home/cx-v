@@ -1,0 +1,3 @@
+[?def inner ($p) [$io:read-file $p]]
+[?def outer () [$inner "/etc/hosts"]]
+[$outer]

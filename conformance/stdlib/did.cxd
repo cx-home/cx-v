@@ -1,0 +1,419 @@
+[test-suite name=did ring=2
+  [doc [#
+conformance fixtures for cx-stdlib/did (spec/03-approved/std-lib/did.md).
+Authored at the I3 open (partition corpus audit gap G14): did.md previously
+had V-tests only; these fixtures pin the module surface itself. Ring 2 by
+the partition plan-row contract (did/vc underpin the Ring-2 single
+authority model, cx_partition.md §11) even though every fixtured lane here
+is pure/offline — see the I3 ledger census note N3.
+
+   DETERMINISM: keys are fixed literals, never generated. Golden material
+   (the same convention as vcx/tests/stdlib_did_test.v):
+     seed-1 = 0102…1f20 (bytes 1..32)
+       pub-1  = 79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664
+       did-1  = did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7
+     seed-2 = 4041…5e5f (bytes 0x40..0x5f)
+       pub-2  = 2543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559d
+       did-2  = did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG
+   ed25519-sign is deterministic, so signatures over fixed challenges pin.
+   Every case is offline (the air-gapped did:key/did:peer:0 posture, §6);
+   the ONE network-touching surface (resolve of did:web) is fixtured at its
+   capability-DENIAL lane only — no fixture grants net. Case 023 carries an
+   explicit grant="read": the denial arrives as an [err …] VALUE (rc=0), so
+   the harness three-way policy (which scans out-err for CXER0271) would
+   otherwise default to grant-all and the case would hit the live network.
+
+   SPEC-FINDINGS pinned as shipped (fixture-before-fix):
+   - document/key-of on a non-self-describing method reports
+     CXER-DID-NOT-SELF-DESCRIBING even for methods outside the §2 v1 set
+     (did:ion) — CXER-DID-METHOD-UNSUPPORTED fires only at resolve
+     (cases 014/022 pin both sides of that split).
+   - resolve of did:web under a net denial surfaces the CXER0271 denial
+     ITSELF (case 023). It used to arrive WRAPPED in a
+     CXER-DID-DOC-MISMATCH `message=panic` envelope, which claimed a
+     document-id mismatch when no document had been fetched at all and
+     buried the real cause. Fixed by #740: reaching the document and the
+     document being wrong about itself are different failures, so a fetch
+     that fails with its own typed err propagates that err unchanged, a
+     non-2xx / no-response becomes CXER-DID-RESOLVE-FAILED, and
+     CXER-DID-DOC-MISMATCH is reserved for a fetched document that
+     disagrees with its own DID.
+
+   Id ranges:
+     001-003  key-create (+ peer-create) construction + bad-length
+     004-008  parse (key/web/peer) + malformed negatives
+     009-010  method
+     011-014  document: did:key full shape, did:peer id, not-self-describing
+     015-017  key-of: round-trip, peer, non-Ed25519 multicodec
+     018-020  verify-control: pass, wrong signer, stale challenge
+     021-023  resolve: offline did:key, unsupported method, did:web denial
+     024-025  peer-create golden + key-of on did:web
+#]]
+
+ [case id=did-001-key-create-golden level=core gate=enforced
+  [tags did key-create multibase]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/bytes']
+[$did:key-create [$bytes:from-hex "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"]]
+#]]
+  [out-text [#
+'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'
+#]]
+ ]
+
+ [case id=did-002-key-create-second-key level=core gate=enforced
+  [tags did key-create determinism]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/bytes']
+[$did:key-create [$bytes:from-hex "2543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559d"]]
+#]]
+  [out-text [#
+'did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG'
+#]]
+ ]
+
+ [case id=did-003-key-create-bad-length level=core gate=enforced
+  [tags did key-create negative key-length]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/bytes']
+[$did:key-create [$bytes:from-hex "0102030405"]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-DID-KEY-UNSUPPORTED message='did/key-create: Ed25519 public key must be 32 bytes, got 5']
+#]]
+ ]
+
+ [case id=did-004-parse-did-key level=core gate=enforced
+  [tags did parse structural]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:parse "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]
+#]]
+  [out-text [#
+[did method=key id=z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7 raw=did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7]
+#]]
+ ]
+
+ [case id=did-005-parse-did-web-multisegment level=core gate=enforced
+  [tags did parse web]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:parse "did:web:example.com:agents:radar"]
+#]]
+  [out-text [#
+[did method=web id='example.com:agents:radar' raw='did:web:example.com:agents:radar']
+#]]
+ ]
+
+ [case id=did-006-parse-did-peer-0 level=core gate=enforced
+  [tags did parse peer numalgo-0]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:parse "did:peer:0z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]
+#]]
+  [out-text [#
+[did method=peer id='0z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7' raw='did:peer:0z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7']
+#]]
+ ]
+
+ [case id=did-007-parse-malformed level=core gate=enforced
+  [tags did parse negative CXER-DID-MALFORMED]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:parse "not-a-did"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-DID-MALFORMED message='did/parse: not a valid DID: not-a-did']
+#]]
+ ]
+
+ [case id=did-008-parse-missing-id level=core gate=enforced
+  [tags did parse negative CXER-DID-MALFORMED]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:parse "did:key"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-DID-MALFORMED message='did/parse: not a valid DID: did:key']
+#]]
+ ]
+
+ [case id=did-009-method-key level=core gate=enforced
+  [tags did method]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:method "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]
+#]]
+  [out-text [#
+'key'
+#]]
+ ]
+
+ [case id=did-010-method-web level=core gate=enforced
+  [tags did method web]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:method "did:web:example.com"]
+#]]
+  [out-text [#
+'web'
+#]]
+ ]
+
+ [case id=did-011-document-did-key-full-shape level=core gate=enforced
+  [tags did document did-document offline]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:document "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]
+#]]
+  [out-text [#
+[did-document [id 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [verification-method [vm id='did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7' type=Ed25519VerificationKey2020 controller=did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7 public-key-multibase=z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7]] [authentication 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [assertion-method 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7']]
+#]]
+ ]
+
+ [case id=did-012-document-did-peer-id level=core gate=enforced
+  [tags did document peer offline cxpath]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?let [= $d [$did:document "did:peer:0z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]] $d/id]
+#]]
+  [out-text [#
+'did:peer:0z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'
+#]]
+ ]
+
+ [case id=did-013-document-did-web-not-self-describing level=core gate=enforced
+  [tags did document negative CXER-DID-NOT-SELF-DESCRIBING]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:document "did:web:example.com"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-DID-NOT-SELF-DESCRIBING message='did/document: web is not self-describing — use resolve']
+#]]
+ ]
+
+ [case id=did-014-document-unsupported-method level=core gate=enforced
+  [tags did document negative spec-finding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:document "did:ion:abc123"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-DID-NOT-SELF-DESCRIBING message='did/document: ion is not self-describing — use resolve']
+#]]
+ ]
+
+ [case id=did-015-key-of-roundtrip level=core gate=enforced
+  [tags did key-of roundtrip]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$did:key-of "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]]
+#]]
+  [out-text [#
+'79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664'
+#]]
+ ]
+
+ [case id=did-016-key-of-did-peer level=core gate=enforced
+  [tags did key-of peer]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/bytes']
+[$bytes:to-hex [$did:key-of "did:peer:0z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]]
+#]]
+  [out-text [#
+'79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664'
+#]]
+ ]
+
+ [case id=did-017-key-of-non-ed25519 level=core gate=enforced
+  [tags did key-of negative CXER-DID-KEY-UNSUPPORTED]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:key-of "did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-DID-KEY-UNSUPPORTED message='did/key-of: cx-err:CXER-DID-KEY-UNSUPPORTED for did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme']
+#]]
+ ]
+
+ [case id=did-018-verify-control-pass level=core gate=enforced
+  [tags did verify-control proof-of-control offline]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $chal [$bytes:from-string-utf8 "nonce-42"]]
+  [= $sig [$crypto:ed25519-sign [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] $chal]]
+  [$did:verify-control "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $chal $sig]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=did-019-verify-control-wrong-signer level=core gate=enforced
+  [tags did verify-control negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $chal [$bytes:from-string-utf8 "nonce-42"]]
+  [= $sig [$crypto:ed25519-sign [$bytes:from-hex "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"] $chal]]
+  [$did:verify-control "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $chal $sig]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=did-020-verify-control-stale-challenge level=core gate=enforced
+  [tags did verify-control negative challenge-freshness]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/bytes']
+[?let [= $sig [$crypto:ed25519-sign [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] [$bytes:from-string-utf8 "nonce-OLD"]]]
+  [$did:verify-control "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-string-utf8 "nonce-42"] $sig]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=did-021-resolve-did-key-offline level=core gate=enforced
+  [tags did resolve offline cxpath]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?let [= $d [$did:resolve "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]] $d/id]
+#]]
+  [out-text [#
+'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'
+#]]
+ ]
+
+ [case id=did-022-resolve-unsupported-method level=core gate=enforced
+  [tags did resolve negative CXER-DID-METHOD-UNSUPPORTED]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:resolve "did:ion:abc123"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-DID-METHOD-UNSUPPORTED message='did/resolve: unsupported method ion']
+#]]
+ ]
+
+ [case id=did-023-resolve-did-web-net-denied level=core gate=enforced grant="read"
+  [tags did resolve web capability deny-lane spec-finding]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:resolve "did:web:example.com"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0271 message='E_CAP_DENIED: net capability required for example.com:443; none granted (grant via --allow-net)']
+#]]
+ ]
+
+ [case id=did-024-peer-create-golden level=core gate=enforced
+  [tags did peer-create numalgo-0]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[?lib 'cx-stdlib/bytes']
+[$did:peer-create [$bytes:from-hex "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"]]
+#]]
+  [out-text [#
+'did:peer:0z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'
+#]]
+ ]
+
+ [case id=did-025-key-of-did-web-not-self-describing level=core gate=enforced
+  [tags did key-of web negative CXER-DID-NOT-SELF-DESCRIBING]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/did']
+[$did:key-of "did:web:example.com"]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-DID-NOT-SELF-DESCRIBING message='did/key-of: cx-err:CXER-DID-NOT-SELF-DESCRIBING for did:web:example.com']
+#]]
+ ]
+]

@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  cap_write{{"write"}}
+  prog --> cap_write

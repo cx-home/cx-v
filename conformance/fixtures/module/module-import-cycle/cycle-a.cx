@@ -1,6 +1,0 @@
-[?lib './cycle-b.cx' :as b]
-
-[?def start
-  :scope public
-  ()
-  [b/back]]

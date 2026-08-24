@@ -1,5 +1,7 @@
 module code
 
+import cx
+
 // stdlib_bundle.v — bundled `cx-stdlib` sub-package skeleton (Phase 2.17).
 //
 // The `cx-stdlib` namespace is bundled with the CX binary
@@ -92,6 +94,16 @@ const stdlib_src_email = $embed_file('../stdlib/email.cx').to_string()
 
 // stdlib_src_hash lives in vcx/code/stdlib_hash.v (per-module ownership).
 
+// I4 (#651/#516): the env / random / sched embeds moved HERE from their
+// pack files — module-loader source embeds are DATA and profile-invariant
+// (the ring-2 store/journal/xap/fabric embeds below set the precedent at
+// seam H). In an artifact built without a pack (-d cx_no_pack_*), loading
+// the CX wrapper module still works; its bodies bottom out in builtins
+// that refuse as undefined callables.
+const stdlib_src_env = $embed_file('../stdlib/env.cx').to_string()
+const stdlib_src_random = $embed_file('../stdlib/random.cx').to_string()
+const stdlib_src_sched = $embed_file('../stdlib/sched.cx').to_string()
+
 // stdlib_src_env lives in vcx/code/stdlib_env.v (per-module ownership).
 
 const stdlib_src_test = $embed_file('../stdlib/test.cx').to_string()
@@ -125,6 +137,41 @@ const stdlib_src_jsonrpc = $embed_file('../stdlib/jsonrpc.cx').to_string()
 // jsonschema — JSON Schema 2020-12 validation (MCP-tool-schema subset; #6 S7).
 const stdlib_src_jsonschema = $embed_file('../stdlib/jsonschema.cx').to_string()
 
+// diagram — the §10.1.2 reference diagram renderer in pure CX (#758,
+// RULED DR-1…DR-11 2026-08-20; wave 1 = Mermaid + all-format extract).
+const stdlib_src_diagram = $embed_file('../stdlib/diagram.cx').to_string()
+
+// map + array (#925, RULED: PYE-1): the XPath 3.1 §17 operation families
+// over CXDM maps and arrays — the registered-but-sourceless gap this
+// bundle entry closes. Wrappers over the map-/arr- natives
+// (vcx/code/stdlib_map.v / stdlib_array.v).
+const stdlib_src_map = $embed_file('../stdlib/map.cx').to_string()
+
+const stdlib_src_array = $embed_file('../stdlib/array.cx').to_string()
+
+// live — the live modes over the one planar comprehension (campaign stream 3,
+// #675; live_modes.md L129 + pack spec spec/03-approved/std-lib/live.md). Like
+// store/journal, the CX surface is data; the native prims are the Ring-2
+// pack (vcx/platform/stdlib_live.v via ring2_register.v).
+const stdlib_src_live = $embed_file('../stdlib/live.cx').to_string()
+
+// supervise (SUP-1, #765): restart policies over monitored workers —
+// graduated + implemented 2026-08-20 with the module.
+const stdlib_src_supervise = $embed_file('../stdlib/supervise.cx').to_string()
+
+// store/journal/xap/fabric — these four consts historically lived beside
+// their native packs; relocated here at I3 seam H so this Ring-1 file
+// holds NO reference into a Ring-2 pack file (#651/#516 — the embedded CX
+// surface is data; the packs' NATIVE primitives register via
+// ring2_register.v, and an artifact without them refuses at call time).
+const stdlib_src_store = $embed_file('../stdlib/store.cx').to_string()
+
+const stdlib_src_journal = $embed_file('../stdlib/journal.cx').to_string()
+
+const stdlib_src_xap = $embed_file('../stdlib/xap.cx').to_string()
+
+const stdlib_src_fabric = $embed_file('../stdlib/fabric.cx').to_string()
+
 // ── x/ experimental tier (spec/03-approved/std-lib/README.md D3) ──────────
 // In-tree, bundled, gated — but EXEMPT from the frozen-`std` stability promise
 // (semver-breaking allowed; marked in the module header + the guide). Kept in a
@@ -155,6 +202,32 @@ const x_src_term = $embed_file('../x/term.cx').to_string()
 // adjudicate — out-of-band agent adjudicator for the similar review band
 // (#376; similar.md §5.3 ruling Q4 follow-up — produces resolutions-table rows).
 const x_src_adjudicate = $embed_file('../x/adjudicate.cx').to_string()
+
+// tools — the agent-tool projection: command defs → tool descriptors
+// (#690 stream 18; the ONE descriptor model both MCP and A2A adapters consume).
+const x_src_tools = $embed_file('../x/tools.cx').to_string()
+
+// ux — the SEMANTIC CORE of the THIRD projection of the typed surface (#787).
+// XSP projects [?def] commands onto the wire, cx-x/tools projects them to
+// agent tools, cx-x/ux projects them to a renderer-agnostic semantic tree:
+// the vocabulary, fragment addressing, the command/query/feature-grammar
+// projections, the hint claims, the patch algebra a live feed lowers onto,
+// and the surface document's routing correspondence. It contains NO renderer.
+// x/-tier because #787's DP1 is an explicit go/kill — the surface may not
+// claim frozen-std stability until it passes.
+const x_src_ux = $embed_file('../x/ux.cx').to_string()
+
+// ux-web / ux-tui — the TWO RENDERERS over that one vocabulary, peers rather
+// than a privileged one plus a fallback. ux-web lowers to HTML/htmx (sole
+// author of a pinned attribute subset, strict CSP, the token stylesheet, the
+// SRI-pinned kernel); ux-tui lowers to a full-screen terminal surface over
+// cx-x/term. R5's claim that the semantic vocabulary is renderable by a
+// non-browser renderer is TRUE only if the second one exists and agrees with
+// the first, which is what the module split and the equivalence fixtures make
+// checkable rather than asserted.
+const x_src_ux_web = $embed_file('../x/ux-web.cx').to_string()
+
+const x_src_ux_tui = $embed_file('../x/ux-tui.cx').to_string()
 
 // ── Public surface ──────────────────────────────────────────────────
 
@@ -205,6 +278,11 @@ pub fn bundled_stdlib_names() []string {
 		'cx-stdlib/xsp',
 		'cx-stdlib/jsonrpc',
 		'cx-stdlib/jsonschema',
+		'cx-stdlib/live',
+		'cx-stdlib/supervise',
+		'cx-stdlib/diagram',
+		'cx-stdlib/map',
+		'cx-stdlib/array',
 	]
 }
 
@@ -256,6 +334,11 @@ pub fn bundled_stdlib_source(name string) ?string {
 		'cx-stdlib/xsp'     { stdlib_src_xsp }
 		'cx-stdlib/jsonrpc' { stdlib_src_jsonrpc }
 		'cx-stdlib/jsonschema' { stdlib_src_jsonschema }
+		'cx-stdlib/live'    { stdlib_src_live }
+		'cx-stdlib/supervise' { stdlib_src_supervise }
+		'cx-stdlib/diagram' { stdlib_src_diagram }
+		'cx-stdlib/map'     { stdlib_src_map }
+		'cx-stdlib/array'   { stdlib_src_array }
 		else                { none }
 	}
 }
@@ -275,6 +358,10 @@ pub fn bundled_x_names() []string {
 		'cx-x/a2a-xap',
 		'cx-x/term',
 		'cx-x/adjudicate',
+		'cx-x/tools',
+		'cx-x/ux',
+		'cx-x/ux-web',
+		'cx-x/ux-tui',
 	]
 }
 
@@ -290,6 +377,10 @@ pub fn bundled_x_source(name string) ?string {
 		'cx-x/a2a-xap' { x_src_a2a_xap }
 		'cx-x/term' { x_src_term }
 		'cx-x/adjudicate' { x_src_adjudicate }
+		'cx-x/tools' { x_src_tools }
+		'cx-x/ux' { x_src_ux }
+		'cx-x/ux-web' { x_src_ux_web }
+		'cx-x/ux-tui' { x_src_ux_tui }
 		else       { none }
 	}
 }
@@ -398,7 +489,15 @@ pub fn new_seeded_module_table() ModuleTable {
 	// cx-fabric: likewise its OWN bundled package — platform eventing composed
 	// over journal/bus/store (spec/03-approved/xap/fabric.md, #518/#531).
 	t.register_source('cx-fabric', stdlib_src_fabric)
-	register_conformance_test_modules(mut t)
+	// The conformance fixture module sources are NOT registered here (#701):
+	// they carry file-path / HTTPS resolver keys, and resolve_lib gives
+	// registered sources precedence over disk — registering them in the
+	// production constructor made `[?lib './local-helpers.cx']` silently
+	// resolve to embedded fixture code instead of the user's own file.
+	// The conformance gate registers them EXPLICITLY per-env
+	// (register_conformance_test_modules, called by
+	// vcx/tests/code_eval_fixtures_test.v); the production pin is
+	// vcx/tests/module_loader_shadowing_test.v.
 	return t
 }
 
@@ -422,6 +521,12 @@ pub fn new_seeded_module_table() ModuleTable {
 
 // ./local-helpers.cx — module-lib-resolver-file: `greet(name)`.
 const testmod_src_local_helpers = '[?def greet scope=public ($name) [\$concat "hello, " \$name]]'
+
+// The L139 approval-binding pair (stream 18 W2) — same name/params/body
+// (⇒ same Tier-2), [effects] widened in v2 (⇒ different Tier-1 text).
+const testmod_src_cmd_v1 = '[?def refund-order scope=public impure [effects] [returns int] (\$order::string \$amount::int 10) \$amount]'
+
+const testmod_src_cmd_v2 = '[?def refund-order scope=public impure [effects [net]] [returns int] (\$order::string \$amount::int 10) \$amount]'
 
 // ./public-only-module.cx — module-visibility-public / -private:
 // one exported fn (identity) + one private helper (exists → CXER0216).
@@ -447,6 +552,22 @@ const testmod_src_level_c = '[?def call-through scope=public () from-level-c]'
 const testmod_src_regex_helpers = '[?def compile scope=public (\$p) [regex pattern=\$p]]
 [?def source scope=public (\$r) \$r/@pattern]
 [?def version scope=public () "1.2.3"]'
+
+// Phase 2.14 (register R3.12, RULED (b) 2026-08-09) — the tampered/unpinned
+// battery. The in-memory registry is the loader's TRANSPORT seam only; the
+// seeded lockfile below carries the pins, so verification runs for real:
+// module-https-fetch-sri-mismatch / module-lockfile-integrity-mismatch
+// register bytes that DIFFER from the pinned sri (one comment of drift) and
+// must refuse CXER0209; module-https-fetch-unpinned pins the direct module
+// but its dependency URL has NO lock entry — CXER0211 at the transitive
+// resolve, before any transport is consulted.
+const testmod_src_regex_helpers_tampered = '[?def compile scope=public (\$p) [regex pattern=\$p]]
+[?def source scope=public (\$r) \$r/@pattern]
+[?def version scope=public () "1.2.3"]
+[; tampered — one line of drift the SRI pin must catch ]'
+
+const testmod_src_needs_unpinned = '[?lib \'https://cdn.example.com/unpinned-dep-9.9.9.zip\' as=dep]
+[?def use-it scope=public () [\$dep:anything]]'
 
 // cx-stdlib/json/encoder — module-subpath-public: the manifest-declared
 // public sub-path re-exporting `encode`.
@@ -476,6 +597,14 @@ const testmod_src_scope_frames = '[?def offset () 7]
 // seeded table.
 pub fn register_conformance_test_modules(mut table ModuleTable) {
 	table.register_source('./local-helpers.cx', testmod_src_local_helpers)
+	// Stream-18 W2 (L139): the approval-binds-Tier-1 pair — two versions
+	// of the SAME command def (name/params/body identical → same Tier-2
+	// computes-as, cmd-011's clause-exclusion invariance) differing ONLY
+	// in the [effects] clause (OUTSIDE Tier-2 by S0). v1 declares the
+	// empty clause; v2 widens to [net]. An approval minted against v1's
+	// proposal must never admit v2 — Tier-1 def text is the trust key.
+	table.register_source('./cmd-v1.cx', testmod_src_cmd_v1)
+	table.register_source('./cmd-v2-widened.cx', testmod_src_cmd_v2)
 	table.register_source('./public-only-module.cx', testmod_src_public_only)
 	table.register_source('./mixed-module.cx', testmod_src_mixed)
 	table.register_source('github.com/example/level-a', testmod_src_level_a)
@@ -485,4 +614,22 @@ pub fn register_conformance_test_modules(mut table ModuleTable) {
 	table.register_source('https://cdn.example.com/regex-helpers-1.2.3.zip', testmod_src_regex_helpers)
 	table.register_source('cx-stdlib/json/encoder', testmod_src_json_encoder)
 	table.register_source('./scope-frames-module.cx', testmod_src_scope_frames)
+	// Phase 2.14 transport-seam bytes for the pin-verification battery.
+	table.register_source('https://cdn.example.com/regex-helpers-tampered.zip', testmod_src_regex_helpers_tampered)
+	table.register_source('https://cdn.example.com/needs-unpinned-dep.zip', testmod_src_needs_unpinned)
+	table.register_source('https://cdn.example.com/tampered-helpers-1.0.0.zip', testmod_src_regex_helpers_tampered)
+	// The seeded lockfile — the pins the loader now REQUIRES for every
+	// HTTPS-resolved module (code.md §12.1.3). SRIs are computed here from
+	// the true sources (never hardcoded), so the seed can't drift; the two
+	// tampered entries deliberately pin the UNTAMPERED bytes' sri.
+	sri_true := make_sri('sha384', testmod_src_regex_helpers) or { '' }
+	sri_needs := make_sri('sha384', testmod_src_needs_unpinned) or { '' }
+	lock_text := '[cx.lock version=1
+  [modules
+    [module name="https://cdn.example.com/regex-helpers-1.2.3.zip" resolved="https://cdn.example.com/regex-helpers-1.2.3.zip" sri="${sri_true}"]
+    [module name="https://cdn.example.com/regex-helpers-tampered.zip" resolved="https://cdn.example.com/regex-helpers-tampered.zip" sri="${sri_true}"]
+    [module name="https://cdn.example.com/needs-unpinned-dep.zip" resolved="https://cdn.example.com/needs-unpinned-dep.zip" sri="${sri_needs}"]
+    [module name="github.com/example/tampered-helpers" resolved="https://cdn.example.com/tampered-helpers-1.0.0.zip" sri="${sri_true}"]]]'
+	table.lockfile = cx.parse_lockfile_text(lock_text) or { cx.Lockfile{} }
+	table.lock_probed = true
 }

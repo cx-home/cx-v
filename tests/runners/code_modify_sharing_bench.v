@@ -41,6 +41,7 @@
 module main
 
 import code
+import platform as _
 import cx
 import os
 import strings
@@ -161,7 +162,8 @@ fn main() {
 	// Force GC, sample, run, sample.
 	gc_collect_force()
 	before_single := gc_memory_use()
-	mut prog_single := cx.parse_program('[?modify $doc //leaf[1] :set-attr v 999]') or {
+	// #710 item 4: the programs carried the retired `:set-attr` slot form.
+	mut prog_single := cx.parse_program('[?modify $doc //leaf[= $_@v 1] [set-attr v 999]]') or {
 		eprintln('gate-30.5 FAIL — single-modify parse: ${err}')
 		exit(1)
 	}
@@ -192,7 +194,7 @@ fn main() {
 	// parses cleanly path/modifier-keyword
 	// disambiguation (task #37 closed at a5fb65f9). Previous form was
 	// `//leaf[@v]` to work around the pre-fix ambiguity.
-	mut prog_thousand := cx.parse_program('[?modify $doc //leaf :set-attr touched true]') or {
+	mut prog_thousand := cx.parse_program('[?modify $doc //leaf [set-attr touched true]]') or {
 		eprintln('gate-30.5 FAIL — thousand-modify parse: ${err}')
 		exit(1)
 	}

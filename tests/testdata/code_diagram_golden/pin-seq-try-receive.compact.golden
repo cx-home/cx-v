@@ -1,0 +1,6 @@
+sequenceDiagram
+  participant w
+  activate w
+  participant ch
+  ch -->> w : msg (try, 50ms)
+  deactivate w

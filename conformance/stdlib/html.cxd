@@ -1,4 +1,4 @@
-[test-suite name=html
+[test-suite name=html ring=1
   [doc [#
 Conformance fixtures for cx-stdlib/html (spec/std-lib/html.md §6).
 

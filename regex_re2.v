@@ -225,10 +225,286 @@ pub fn re2_unsupported_feature(pattern string) bool {
 	return false
 }
 
+// ── Unicode shorthand rewrite (spec §5, #924 / RULED: PYE-4) ─────────────
+//
+// With unicode=true the Perl shorthands carry Unicode semantics:
+// \d = \p{Nd}, \w = \p{L}+\p{Nd}+_, \s = \s+\p{Z} (and the negated
+// \D/\W/\S as complements). RE2's own shorthands are ASCII-only, so the
+// pattern is rewritten before compile.
+//
+// OUTSIDE a character class each shorthand substitutes to an equivalent
+// class expression (unchanged since the original rewrite; byte-identical).
+//
+// INSIDE `[...]` textual substitution is wrong — classes do not nest — and
+// was defect #924 ([\s] / [\w] / [^\S\n] silently matched nothing). There:
+//   - positive shorthands splice as class ITEMS (\d → \p{Nd} etc.);
+//   - NEGATED shorthands are complement SETS, which a class item list
+//     cannot express, so they expand to explicit codepoint ranges computed
+//     by interval arithmetic (union → complement) over the engine's own
+//     group tables (regex_re2_unicode_tables.v, generated from the pinned
+//     third_party/re2 unicode_groups.cc).
+// Only five fixed sets are involved: \p{Nd}, \p{L}, \p{Z}, perl \s, `_`.
+
+// Re2CpRange is one inclusive codepoint interval [lo, hi].
+struct Re2CpRange {
+	lo u32
+	hi u32
+}
+
+// perl \s per the engine (third_party/re2/re2/perl_groups.cc, code2):
+// {\t, \n, \f, \r, space} — 0x0B is NOT included.
+const re2_perl_s_flat = [u32(0x09), 0x0a, 0x0c, 0x0d, 0x20, 0x20]
+
+// UTF-16 surrogates — unencodable in UTF-8, folded into every union before
+// complementing so negated-set expansions never name them.
+const re2_surrogates_flat = [u32(0xd800), 0xdfff]
+
+// Precomputed class-item expansions for the two shorthands whose sets are
+// complements of a union (inexpressible as positive class items):
+// \S = ¬(\s ∪ \p{Z}), \W = ¬(\p{L} ∪ \p{Nd} ∪ {_}). Computed once at init.
+const re2_class_not_s_items = re2_class_items_for(re2_complement_ranges(re2_union_ranges([
+	re2_ranges_from_flat(re2_perl_s_flat),
+	re2_ranges_from_flat(re2_ucd_z),
+	re2_ranges_from_flat(re2_surrogates_flat),
+])))
+const re2_class_not_w_items = re2_class_items_for(re2_complement_ranges(re2_union_ranges([
+	re2_ranges_from_flat(re2_ucd_l),
+	re2_ranges_from_flat(re2_ucd_nd),
+	re2_ranges_from_flat([u32(0x5f), 0x5f]),
+	re2_ranges_from_flat(re2_surrogates_flat),
+])))
+
+// re2_ranges_from_flat converts a flat [lo, hi, lo, hi, ...] table into
+// interval structs.
+fn re2_ranges_from_flat(flat []u32) []Re2CpRange {
+	mut out := []Re2CpRange{cap: flat.len / 2}
+	for i := 0; i + 1 < flat.len; i += 2 {
+		out << Re2CpRange{
+			lo: flat[i]
+			hi: flat[i + 1]
+		}
+	}
+	return out
+}
+
+// re2_union_ranges merges interval lists into one sorted, coalesced list
+// (overlapping or adjacent intervals fuse).
+fn re2_union_ranges(lists [][]Re2CpRange) []Re2CpRange {
+	mut all := []Re2CpRange{}
+	for l in lists {
+		all << l
+	}
+	all.sort_with_compare(fn (a &Re2CpRange, b &Re2CpRange) int {
+		if a.lo < b.lo {
+			return -1
+		}
+		if a.lo > b.lo {
+			return 1
+		}
+		return 0
+	})
+	mut out := []Re2CpRange{cap: all.len}
+	for r in all {
+		if out.len > 0 && u64(r.lo) <= u64(out.last().hi) + 1 {
+			if r.hi > out.last().hi {
+				out[out.len - 1] = Re2CpRange{
+					lo: out.last().lo
+					hi: r.hi
+				}
+			}
+			continue
+		}
+		out << r
+	}
+	return out
+}
+
+// re2_complement_ranges complements a sorted, coalesced interval list over
+// the codepoint space [0, 0x10FFFF].
+fn re2_complement_ranges(sorted []Re2CpRange) []Re2CpRange {
+	mut out := []Re2CpRange{}
+	mut next := u32(0)
+	for r in sorted {
+		if r.lo > next {
+			out << Re2CpRange{
+				lo: next
+				hi: r.lo - 1
+			}
+		}
+		if r.hi >= 0x10ffff {
+			return out
+		}
+		next = r.hi + 1
+	}
+	out << Re2CpRange{
+		lo: next
+		hi: 0x10ffff
+	}
+	return out
+}
+
+// re2_cp_hex renders a codepoint as minimal lowercase hex (no padding —
+// deterministic input for RE2's \x{...} parser).
+fn re2_cp_hex(cp u32) string {
+	if cp == 0 {
+		return '0'
+	}
+	digits := '0123456789abcdef'
+	mut rev := []u8{}
+	mut v := cp
+	for v > 0 {
+		rev << digits[v & 0xf]
+		v >>= 4
+	}
+	mut out := []u8{cap: rev.len}
+	for i := rev.len - 1; i >= 0; i-- {
+		out << rev[i]
+	}
+	return out.bytestr()
+}
+
+// re2_class_items_for renders intervals as class items: \x{lo}-\x{hi}
+// (or a single \x{cp}).
+fn re2_class_items_for(ranges []Re2CpRange) string {
+	mut sb := []u8{cap: ranges.len * 18}
+	for r in ranges {
+		sb << '\\x{'.bytes()
+		sb << re2_cp_hex(r.lo).bytes()
+		sb << `}`
+		if r.hi > r.lo {
+			sb << `-`
+			sb << '\\x{'.bytes()
+			sb << re2_cp_hex(r.hi).bytes()
+			sb << `}`
+		}
+	}
+	return sb.bytestr()
+}
+
+// re2_class_end returns the index of the `]` closing the character class
+// that starts at pattern[start] == `[`, or -1 when unterminated. Skips
+// escape pairs and POSIX named classes ([:alpha:]) whose `]` does not
+// close the class. RE2 has no nested classes and no first-position
+// literal-`]` rule (`[]` is a syntax error), so no other cases exist.
+fn re2_class_end(pattern string, start int) int {
+	mut i := start + 1
+	if i < pattern.len && pattern[i] == `^` {
+		i++
+	}
+	for i < pattern.len {
+		c := pattern[i]
+		if c == `\\` && i + 1 < pattern.len {
+			i += 2
+			continue
+		}
+		if c == `[` && i + 1 < pattern.len && pattern[i + 1] == `:` {
+			mut j := i + 2
+			for j + 1 < pattern.len && !(pattern[j] == `:` && pattern[j + 1] == `]`) {
+				j++
+			}
+			if j + 1 < pattern.len {
+				i = j + 2
+				continue
+			}
+			i++
+			continue
+		}
+		if c == `]` {
+			return i
+		}
+		i++
+	}
+	return -1
+}
+
+// re2_class_has_shorthand reports whether the class source (brackets
+// included) contains any of \d \D \w \W \s \S at an escape position.
+fn re2_class_has_shorthand(cls string) bool {
+	mut i := 0
+	for i < cls.len {
+		if cls[i] == `\\` && i + 1 < cls.len {
+			n := cls[i + 1]
+			if n == `d` || n == `D` || n == `w` || n == `W` || n == `s` || n == `S` {
+				return true
+			}
+			i += 2
+			continue
+		}
+		i++
+	}
+	return false
+}
+
+// re2_rewrite_class rewrites ONE character class (brackets included, `]`
+// guaranteed last by re2_class_end). Classes without shorthands return
+// byte-identical. A `-` immediately following an expanded shorthand is
+// pinned literal as \x{2D}: RE2 natively treats a dash after a Perl class
+// item as literal (measured: `[\d-x]` matches '-'), and without pinning it
+// could bind to the expansion's trailing range endpoint as a range.
+fn re2_rewrite_class(cls string) string {
+	if !re2_class_has_shorthand(cls) {
+		return cls
+	}
+	mut out := []u8{cap: cls.len + 64}
+	out << `[`
+	mut i := 1
+	if i < cls.len - 1 && cls[i] == `^` {
+		out << `^`
+		i++
+	}
+	for i < cls.len - 1 {
+		c := cls[i]
+		if c == `\\` && i + 1 < cls.len {
+			n := cls[i + 1]
+			mut expanded := true
+			match n {
+				`d` { out << '\\p{Nd}'.bytes() }
+				`D` { out << '\\P{Nd}'.bytes() }
+				`w` { out << '\\p{L}\\p{Nd}_'.bytes() }
+				`s` { out << '\\s\\p{Z}'.bytes() }
+				`S` { out << re2_class_not_s_items.bytes() }
+				`W` { out << re2_class_not_w_items.bytes() }
+				else {
+					out << c
+					out << n
+					expanded = false
+				}
+			}
+			i += 2
+			if expanded && i < cls.len - 1 && cls[i] == `-` {
+				out << '\\x{2d}'.bytes()
+				i++
+			}
+			continue
+		}
+		if c == `[` && i + 1 < cls.len - 1 && cls[i + 1] == `:` {
+			mut j := i + 2
+			for j + 1 < cls.len && !(cls[j] == `:` && cls[j + 1] == `]`) {
+				j++
+			}
+			if j + 1 < cls.len {
+				for k in i .. j + 2 {
+					out << cls[k]
+				}
+				i = j + 2
+				continue
+			}
+			out << c
+			i++
+			continue
+		}
+		out << c
+		i++
+	}
+	out << `]`
+	return out.bytestr()
+}
+
 // re2_apply_unicode_classes rewrites Perl shorthand classes to their
 // Unicode-aware RE2 equivalents (spec §5): \d→\p{Nd}, \w→[\p{L}\p{Nd}_],
 // \s→[\s\p{Z}] (and the negated \D/\W/\S). Skips escaped backslashes so
-// `\\d` (literal backslash + d) is left untouched. Only applied when the
+// `\\d` (literal backslash + d) is left untouched. Character classes are
+// delegated to re2_rewrite_class (see above — #924). Only applied when the
 // `unicode` flag is true; with unicode=false RE2's default ASCII classes
 // stand.
 fn re2_apply_unicode_classes(pattern string) string {
@@ -251,6 +527,20 @@ fn re2_apply_unicode_classes(pattern string) string {
 				}
 			}
 			i += 2
+			continue
+		}
+		if c == `[` {
+			end := re2_class_end(pattern, i)
+			if end < 0 {
+				// Unterminated class — copy the tail verbatim; RE2 itself
+				// reports the syntax error (CXER3201) at compile.
+				for j in i .. pattern.len {
+					out << pattern[j]
+				}
+				break
+			}
+			out << re2_rewrite_class(pattern[i..end + 1]).bytes()
+			i = end + 1
 			continue
 		}
 		out << c

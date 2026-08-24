@@ -1694,7 +1694,19 @@ fn locale_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 			t := loc_parse_tag(loc) or { return loc_err_tag_invalid('"${loc}"') }
 			return loc_bool(loc_is_supported(t))
 		}
+		// #828 (RULED: 828-1a): this READS AN ENVIRONMENT VARIABLE
+		// (loc_env_lang → LANG/LC_ALL), and env.md §7 already states the rule
+		// flatly — "Environment-variable reads require `env`". The
+		// capability-free carve-out there is limited to the ambient process
+		// basics "intrinsic to the running process" (stdin/stdout/stderr,
+		// pid, argv, cpu-count, exit); an env-var read is not one, and
+		// `hostname`/`username` are gated "in the same spirit" — the spec
+		// chose breadth over secret-ness, so LANG not being a secret does not
+		// exempt it. The impl rises to the spec.
 		'locale-default-locale' {
+			if d := cap_guard('env', name) {
+				return d
+			}
 			return loc_str(loc_env_lang())
 		}
 		'locale-locale-name' {

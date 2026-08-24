@@ -1,4 +1,4 @@
-[test-suite name=time
+[test-suite name=time ring=1
   [doc [#
 conformance fixtures for cx-stdlib/time (spec/std-lib/time.md §6).
 
@@ -1256,7 +1256,7 @@ cx-err:CXER3302
 [$time:list-timezones]
 #]]
   [out-text [#
-('UTC', 'Etc/UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Asia/Tokyo', 'Asia/Kolkata', 'Australia/Sydney')
+(UTC, Etc/UTC, America/New_York, America/Chicago, America/Denver, America/Los_Angeles, Europe/London, Europe/Paris, Europe/Berlin, Asia/Tokyo, Asia/Kolkata, Australia/Sydney)
 #]]
  ]
 

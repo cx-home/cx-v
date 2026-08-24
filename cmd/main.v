@@ -2,7 +2,13 @@ module main
 
 import os
 import cx
+import cli
 import code
+// The platform (Ring-2) module import is PROFILE-GATED (I4, #651/#516,
+// spec §4): it lives in cmd/platform_verbs_d_cx_platform.v, compiled only
+// under `-d cx_platform`. A cx built without the flag (the cli / embed
+// profiles) carries no Ring-2 code — one binary name, profile-determined
+// surface, cannot-serve by construction.
 
 // Build-stamped version info. The values are injected at build time via V
 // compile-time string defines (`-d cx_version=… -d cx_commit=…`), wired in
@@ -59,8 +65,75 @@ fn compiled_features() string {
 	return if f.len == 0 { '(none)' } else { f.join(' ') }
 }
 
-// print_version emits expanded build/version info (commit, build time, GC model,
-// V-fork gitlink, compiled-in engines/features) — `cx --version` / `cx -v`.
+// compiled_profile derives THIS binary's §4 profile from the build gates
+// themselves (I4, #651/#516) — never from a free-text define, so the line
+// cannot drift from what the artifact contains: `-d cx_platform` compiles
+// the Ring-2 module in (platform); otherwise the local-effect pack gates
+// decide cli (all packs) vs embed (all nine excluded) vs a custom cut.
+fn compiled_profile() string {
+	$if cx_platform ? {
+		return 'platform'
+	}
+	off := excluded_packs()
+	if off.len == 0 {
+		return 'cli'
+	}
+	if off.len == 9 {
+		return 'embed'
+	}
+	return 'custom'
+}
+
+// excluded_packs lists the Ring-1 local-effect packs compiled OUT of this
+// binary (the §4 set + the sched/http-client closure), probed from the same
+// `-d cx_no_pack_*` gates that exclude them.
+fn excluded_packs() []string {
+	mut off := []string{}
+	$if cx_no_pack_io ? {
+		off << 'io'
+	}
+	$if cx_no_pack_env ? {
+		off << 'env'
+	}
+	$if cx_no_pack_process ? {
+		off << 'process'
+	}
+	$if cx_no_pack_time ? {
+		off << 'time'
+	}
+	$if cx_no_pack_random ? {
+		off << 'random'
+	}
+	$if cx_no_pack_log ? {
+		off << 'log'
+	}
+	$if cx_no_pack_term ? {
+		off << 'term'
+	}
+	$if cx_no_pack_http_client ? {
+		off << 'http-client'
+	}
+	$if cx_no_pack_sched ? {
+		off << 'sched'
+	}
+	return off
+}
+
+// profile_desc is the human line for `cx -v`: the profile name plus, for
+// non-default compositions, the excluded pack list (pack membership is
+// data, recorded in the build — spec §4).
+fn profile_desc() string {
+	p := compiled_profile()
+	off := excluded_packs()
+	if off.len == 0 {
+		return p
+	}
+	return '${p} (packs off: ${off.join(' ')})'
+}
+
+// print_version emits expanded build/version info (profile, commit, build
+// time, GC model, V-fork gitlink, compiled-in engines/features) —
+// `cx --version` / `cx -v`.
 fn print_version() {
 	gc_desc := match cx_gc {
 		'e' { 'e — Perceus RC front line + precise STW vgc backstop' }
@@ -69,6 +142,7 @@ fn print_version() {
 		else { cx_gc }
 	}
 	println('cx v${version}')
+	println('  profile  ${profile_desc()}')
 	println('  commit   ${cx_commit}')
 	println('  built    ${cx_build_date}')
 	println('  gc       ${gc_desc}')
@@ -114,23 +188,41 @@ fn main() {
 				return
 			}
 		}
+		// Platform verb words in a non-platform profile refuse BY NAME —
+		// never file-argument fall-through (I4; the #426 lesson).
+		$if !cx_platform ? {
+			if args[0] in absent_platform_verbs {
+				profile_refusal('`cx ${args[0]}`')
+			}
+		}
 		// No subcommand matched: fall through to the default program /
 		// convert readings below (legacy --flag form).
 	}
 
-	// ── Bare run / convert surface: ONE strict argv pass (#415) ─────────────
-	// Every argument is either a recognised flag, a recognised
-	// flag-with-value, `-e EXPR`, `-` (program from stdin), or the single
-	// positional input FILE. Anything else is a hard usage error (exit 2)
-	// per spec/misc/cli.md §3.7 — the pre-#415 surface silently swallowed
+	// ── Bare run / convert surface: ONE strict argv pass (#415, #926) ────────
+	// The surface is `cx [cx-flags] RESOURCE [program-args...]` (RULED:
+	// PYE-2 — the interpreter convention: python/node/ruby). BEFORE the
+	// resource, every argument is either a recognised flag, a recognised
+	// flag-with-value, `-e EXPR`, or `-` (program from stdin); anything
+	// else that starts with `-` is a hard usage error (exit 2) per
+	// spec/misc/cli.md §3.7 — the pre-#415 surface silently swallowed
 	// unknown flags (`--data=…` no-op'd with rc=0), which is how four
 	// flagship example tours ran empty for a whole release.
 	//
+	// AT the resource, flag parsing STOPS: everything after it is the
+	// program's argv, delivered verbatim via $env:argv as
+	// [resource, ...program-args] (sys.argv shape — env.md §3.2). There is
+	// no `--` separator and no passthrough flag; a cx flag placed after
+	// the resource is a program argument, not a cx flag. This makes
+	// `cx tool.cx a b` and shebang `./tool.cx a b` identical by
+	// construction (the kernel hands cx exactly `tool.cx a b`).
+	//
 	// Program sources mirror `cx eval`'s (the never-`cx eval` rule):
-	//   cx FILE        — program from FILE
-	//   cx -           — program from stdin (explicit)
-	//   cx -e EXPR     — inline program EXPR (also --expression)
-	//   echo P | cx    — program from stdin (pipe; the no-input fall-through)
+	//   cx FILE [args] — program from FILE            (argv[0] = FILE)
+	//   cx - [args]    — program from stdin (explicit; argv[0] = 'stdin')
+	//   cx -e EXPR [args] — inline program EXPR       (argv[0] = '-e')
+	//   echo P | cx    — program from stdin (pipe; the no-input
+	//                    fall-through; argv[0] = 'stdin', no args)
 	mut input := ''
 	mut input_file := ''
 	mut got_input := false
@@ -149,36 +241,37 @@ fn main() {
 	mut data_given := false
 	// Capability grants for the default program reading (deny-by-default,
 	// matching `cx eval` — spec/security.md §3). `--allow-all` opts out;
-	// `--allow-<cap>` grants one capability.
+	// `--allow-common` grants the common working set WITHOUT `secret-reveal`
+	// (the grant the docs can recommend — #833); `--allow-<cap>` grants one
+	// capability.
 	mut allow_all := false
+	mut allow_common := false
 	mut allow_caps := []string{}
 	mut net_specs := []string{}
+	// Program argv (PYE-2): argv[0] names the resource ('-e' / 'stdin'
+	// for the sourceless launch modes), prog_args is everything after it.
+	mut prog_argv0 := ''
+	mut prog_args := []string{}
 	mut i := 0
 	for i < args.len {
 		arg := args[i]
 		if arg == '-e' || arg == '--expression' {
-			if got_input {
-				eprintln('cx: unexpected ${arg} — a program input was already given')
-				exit(2)
-			}
 			if i + 1 >= args.len {
 				eprintln('cx ${arg}: missing expression argument')
 				exit(2)
 			}
 			input = args[i + 1]
 			got_input = true
-			i += 2
-			continue
+			prog_argv0 = '-e'
+			prog_args = args[i + 2..].clone()
+			break
 		}
 		if arg == '-' {
-			if got_input {
-				eprintln('cx: unexpected `-` — a program input was already given')
-				exit(2)
-			}
 			stdin_program = true
 			got_input = true
-			i++
-			continue
+			prog_argv0 = 'stdin'
+			prog_args = args[i + 1..].clone()
+			break
 		}
 		if arg == '-h' || arg == '--help' {
 			print_usage_and_exit(0)
@@ -188,14 +281,11 @@ fn main() {
 			exit(0)
 		}
 		if !arg.starts_with('-') {
-			if got_input {
-				eprintln('cx: unexpected extra argument ${arg} — the run surface takes one input FILE')
-				exit(2)
-			}
 			input_file = arg
 			got_input = true
-			i++
-			continue
+			prog_argv0 = arg
+			prog_args = args[i + 1..].clone()
+			break
 		}
 		// Flag namespace — a closed set; unknown names are hard errors.
 		if arg == '--ast' { mode = 'ast' }
@@ -212,6 +302,12 @@ fn main() {
 		else if arg == '--compact' { compact = true }
 		else if arg == '--lossless' { lossless = true }
 		else if arg == '--allow-all' { allow_all = true }
+		else if arg == '--allow-common' { allow_common = true }
+		else if arg == '--strict' {
+			// The §12.7 strict dial (stream 16 W5): declared ::T /
+			// [returns T] annotations ENFORCE for this run.
+			code.set_strict_mode_cli(true)
+		}
 		else if arg.starts_with('--allow-') {
 			rest_cap := arg['--allow-'.len..]
 			cap_name := rest_cap.all_before('=')
@@ -219,6 +315,7 @@ fn main() {
 			// no-grant (spec/misc/cli.md §3.7).
 			if cap_name == '' || cap_name !in code.capability_names() {
 				mut grant_flags := code.capability_names().map('--allow-' + it)
+				grant_flags << '--allow-common'
 				grant_flags << '--allow-all'
 				eprintln('cx: unknown flag ${arg}')
 				eprintln('accepted capability grants: ${grant_flags.join(' ')}')
@@ -251,6 +348,19 @@ fn main() {
 		i++
 	}
 
+	// Install the program argv (PYE-2/PYE-3): [resource, ...program-args],
+	// the vector $env:argv returns and $env:parse-args parses — UNGATED
+	// (the caller exercised the authority by typing the args; only
+	// $env:var, ambient process state, needs --allow-env). The pipe
+	// fall-through (`echo P | cx`) has no resource token: argv[0] is the
+	// 'stdin' placeholder and there are no program args.
+	if prog_argv0 == '' {
+		prog_argv0 = 'stdin'
+	}
+	mut program_argv := [prog_argv0]
+	program_argv << prog_args
+	code.set_program_argv(program_argv)
+
 	// Resolve the program source. Stdin is read at most once here; the
 	// `--data=-` lane below guards against a double-read.
 	mut program_reads_stdin := false
@@ -279,7 +389,7 @@ fn main() {
 	// One extra round-trip in exchange for not duplicating every
 	// to_* entry point.
 	if include_root != '' && from_fmt == 'cx' {
-		input = resolve_includes_text(input, include_root) or {
+		input = cli.resolve_includes_text(input, include_root) or {
 			eprintln('error resolving includes: ${err}')
 			exit(1)
 		}
@@ -296,20 +406,10 @@ fn main() {
 
 	if mode.len == 0 { mode = to_fmt }
 
-	// #416/#444: --lossless is honored only by lanes whose emitter implements
-	// a lossless image (conversions.md §0.2): cx, xml (`<cx:T>` carriers),
-	// json (`cx:type` sidecar) and yaml (`!!cx:T` tags) — read from the codec
-	// registry's capability flag, the single source of truth. TOML/MD
-	// lossless is spec'd as unsupported; every non-lossless lane REJECTS the
-	// flag loudly (the pre-#416 CLI accepted it as a silent no-op). Checked
-	// here (not only in convert_by_name) because csv/tsv/psv/ast/cxcol
-	// dispatch bypasses the codec-registry compose.
+	// #416/#444 lossless-lane enforcement — shared with the data-profile
+	// binary; rationale lives at cli.check_lossless.
 	if lossless {
-		mode_lossless := (cx.codec_lookup(mode) or { cx.Codec{} }).lossless
-		if !mode_lossless {
-			eprintln('error: --lossless is not supported for --to=${mode}; supported: ${cx.lossless_codec_names().join(', ')}')
-			exit(2)
-		}
+		cli.check_lossless(mode)
 	}
 
 	// ── CLI DEFAULT = the program reading (spec/code.md §1.3, D-A1) ──────────
@@ -321,13 +421,24 @@ fn main() {
 	// An EXPLICIT --from=… selects the CONVERT pipeline (the data reading),
 	// per the ruling's "--from=/convert" surface — the escape hatch for the
 	// lossless CX⇄XML/JSON bijection and for ingesting foreign formats
-	// (`cx --from=cx --to=xml d.cx` converts; `cx d.cx --xml` evaluates).
+	// (`cx --from=cx --to=xml d.cx` converts; `cx --xml d.cx` evaluates).
 	// Auto-detected non-CX inputs (.xml/.json/…) also stay on convert.
 	// Structural/inspection modes the result-renderer doesn't cover
 	// (ast/cxcol/toml/psv, and --compact) also stay on the data path.
 	eval_targets := ['cx', 'xml', 'json', 'yaml', 'csv', 'tsv']
 	run_surface := from_fmt == 'cx' && !explicit_from && !compact && !lossless
 		&& mode in eval_targets
+
+	// Trailing arguments belong to the PROGRAM (PYE-2) — and the convert
+	// surface has no program to receive them. Refuse loudly (#415: nothing
+	// on the surface may swallow argv): `cx data.json --to=xml` used to
+	// convert; silently ignoring the now-trailing `--to=xml` would emit the
+	// default format as if it were the asked-for one.
+	if !run_surface && prog_args.len > 0 {
+		eprintln('cx: unexpected argument(s) after the input FILE on the convert surface: ${prog_args.join(' ')}')
+		eprintln('program arguments exist on the run surface only; convert flags bind BEFORE the FILE (spec/misc/cli.md §3.7)')
+		exit(2)
+	}
 
 	// ── Separate data input, `--data=FILE|-` (#415; spec/misc/cli.md §3.7) ──
 	// Run-surface only: on the convert pipeline there is no evaluation and
@@ -355,7 +466,7 @@ fn main() {
 			}
 		}
 		if include_root != '' {
-			data_input = resolve_includes_text(data_input, include_root) or {
+			data_input = cli.resolve_includes_text(data_input, include_root) or {
 				eprintln('error resolving includes in --data input: ${err}')
 				exit(1)
 			}
@@ -364,46 +475,32 @@ fn main() {
 
 	if run_surface {
 		// Install the capability set before eval (deny-by-default).
+		// `--allow-all` wins when both broad grants are given: it is the
+		// strict superset, so the combination is not ambiguous.
 		if allow_all {
 			code.caps_set_all()
+		} else if allow_common {
+			code.caps_set_common()
 		} else {
-			code.caps_set_list(allow_caps)
+			code.caps_set_list(allow_caps) or {
+				eprintln('cx: ${err.msg()}')
+				exit(2)
+			}
 			if net_specs.len > 0 {
 				code.caps_set_net_hosts(net_specs)
 			}
 		}
-		out := code.eval_code(data_input, input, mode) or { eprintln('error: ${err}'); exit(1) }
-		print(out)
+		// #822: streams incrementally where the shape allows; identical
+		// bytes either way. See eval_and_print (eval.v) for the memory
+		// measurement and the partial-output-on-error trade.
+		eval_and_print(data_input, input, mode, 'error')
 		return
 	}
 
-	out := if mode == 'ast' {
-		cx.to_ast(input) or { eprintln('error: ${err}'); exit(1) }
-	} else if mode == 'cx' && compact {
-		cx.to_cx_compact(input) or { eprintln('error: ${err}'); exit(1) }
-	} else if mode == 'csv' {
-		cx.to_csv(input) or { eprintln('error: ${err}'); exit(1) }
-	} else if mode == 'tsv' {
-		cx.to_tsv(input) or { eprintln('error: ${err}'); exit(1) }
-	} else if mode == 'psv' {
-		cx.to_psv(input) or { eprintln('error: ${err}'); exit(1) }
-	} else if mode == 'cxcol' {
-		doc := cx.parse(input) or { eprintln('error: ${err}'); exit(1) }
-		bytes := cx.emit_data_bin(doc)
-		C.write(1, bytes.data, bytes.len)
-		return
-	} else {
-		// --from/--to convert pipeline: a registry lookup + compose
-		// (codec.md §6). Names pass through verbatim to the one registry —
-		// any registered codec is reachable, and an unknown name errors
-		// ("unknown source/target format: …") rather than silently folding
-		// to cx (G6).
-		cx.convert_by_name(input, from_fmt, mode, lossless) or {
-			eprintln('error: ${err}')
-			exit(1)
-		}
-	}
-	println(out)
+	// --from/--to convert pipeline — shared with the data-profile binary
+	// (vcx/cli, I2): registry lookup + compose (codec.md §6) plus the
+	// structural projections; see cli.convert_and_print.
+	cli.convert_and_print(input, from_fmt, mode, compact, lossless)
 }
 
 // ── Subcommand handlers ──────────────────────────────────────────────────────
@@ -533,88 +630,16 @@ fn run_fmt(args []string) {
 		}
 		return
 	}
-	src := read_one_input(args, 'fmt')
+	src := cli.read_one_input(args, 'fmt')
 	// code.fmt_source is program-faithful + fail-closed: it never rewrites a
 	// program file through the data emitter (#118 — data loss on save).
 	out := code.fmt_source(src) or { eprintln('cx fmt: ${err}'); exit(1) }
 	println(out)
 }
 
-fn run_canonical(args []string) {
-	src := read_one_input(args, 'canonical')
-	out := cx.cx_text_canonical(src) or { eprintln('cx canonical: ${err}'); exit(1) }
-	println(out)
-}
-
-fn run_hash(args []string) {
-	src := read_one_input(args, 'hash')
-	out := cx.cx_text_hash(src) or { eprintln('cx hash: ${err}'); exit(1) }
-	println(out)
-}
-
-fn run_eq(args []string) {
-	if args.len != 2 {
-		eprintln('Usage: cx eq FILE_A FILE_B')
-		eprintln('Exits 0 if strict-canonical(A) == strict-canonical(B), 1 if not, 2 on error.')
-		exit(2)
-	}
-	a := os.read_file(args[0]) or { eprintln('cx eq: ${err}'); exit(2) }
-	b := os.read_file(args[1]) or { eprintln('cx eq: ${err}'); exit(2) }
-	eq := cx.cx_text_eq(a, b) or { eprintln('cx eq: ${err}'); exit(2) }
-	exit(if eq { 0 } else { 1 })
-}
-
-// run_diff implements `cx diff [--format=unified|json|summary] [--no-color] A B`
-// per internal design record Exit codes 0/1/2.
-fn run_diff(args []string) {
-	mut format := 'unified'
-	mut color_pref := 'auto'
-	mut files := []string{}
-	for arg in args {
-		if arg.starts_with('--format=') {
-			format = arg[9..]
-		} else if arg == '--no-color' {
-			color_pref = 'never'
-		} else if arg == '--color' || arg.starts_with('--color=') {
-			val := if arg == '--color' { 'always' } else { arg[8..] }
-			color_pref = val
-		} else if arg.starts_with('--') {
-			eprintln('cx diff: unknown flag ${arg}')
-			eprintln('Usage: cx diff [--format=unified|json|summary] [--no-color] A.cx B.cx')
-			exit(2)
-		} else {
-			files << arg
-		}
-	}
-	if files.len != 2 {
-		eprintln('Usage: cx diff [--format=unified|json|summary] [--no-color] A.cx B.cx')
-		eprintln('Exit 0 if data-equivalent, 1 if differs, 2 on error.')
-		exit(2)
-	}
-	a := os.read_file(files[0]) or { eprintln('cx diff: ${err}'); exit(2) }
-	b := os.read_file(files[1]) or { eprintln('cx diff: ${err}'); exit(2) }
-	changes := cx.cx_text_diff(a, b) or { eprintln('cx diff: ${err}'); exit(2) }
-
-	color := match color_pref {
-		'always' { true }
-		'never' { false }
-		else { os.is_atty(1) > 0 } // auto: TTY check
-	}
-
-	out := match format {
-		'unified' { cx.diff_render_unified(changes, color) }
-		'json' { cx.diff_render_json(changes) }
-		'summary' { cx.diff_render_summary(changes) }
-		else {
-			eprintln('cx diff: unknown --format=${format} (use unified|json|summary)')
-			exit(2)
-		}
-	}
-	if out.len > 0 {
-		println(out)
-	}
-	exit(if changes.len == 0 { 0 } else { 1 })
-}
+// run_canonical / run_hash / run_eq / run_diff / run_validate moved to the
+// shared Ring-0 verb layer (vcx/cli, I2) — the data-profile binary
+// dispatches the same implementations.
 
 // run_lint implements `cx lint [--format=text|json|summary] [--fail-on=info|warn|error|none]
 // [--disable=ID1,ID2] [--only=ID] [--config=path] [--no-config] FILE` per
@@ -712,100 +737,6 @@ fn run_lint(args []string) {
 	exit(if cx.findings_at_or_above_threshold(findings, threshold) { 1 } else { 0 })
 }
 
-// run_validate implements `cx validate FILE --schema=SCHEMA.cxs` per
-// spec/schema.md §10 (). Exit codes:
-// 0 — no diagnostics at or above --fail-on threshold
-// 1 — diagnostics at or above threshold
-// 2 — usage / I/O / schema-load failure
-// Default --fail-on=error matches `cx lint`. The validator is
-// currently the bootstrap validator (4 of 14 rules end-to-end; the rest
-// are TODO(phase-7.74d) inside vcx/cx/schema_validate.v).
-fn run_validate(args []string) {
-	mut schema_path := ''
-	mut fail_on := 'error'
-	mut mode_override := ''
-	mut apply_defaults := false
-	mut doc_files := []string{}
-	for arg in args {
-		if arg.starts_with('--schema=') {
-			schema_path = arg[9..]
-		} else if arg == '--schema' {
-			eprintln('cx validate: --schema requires a value (use --schema=FILE)')
-			exit(2)
-		} else if arg.starts_with('--fail-on=') {
-			fail_on = arg[10..]
-		} else if arg.starts_with('--mode=') {
-			mode_override = arg[7..]
-		} else if arg == '--apply-defaults' {
-			apply_defaults = true
-		} else if arg.starts_with('--') {
-			eprintln('cx validate: unknown flag ${arg}')
-			eprintln('Usage: cx validate FILE --schema=SCHEMA.cxs')
-			eprintln(' [--fail-on=info|warn|error|none] [--mode=open|strict|closed]')
-			eprintln(' [--apply-defaults]')
-			exit(2)
-		} else {
-			doc_files << arg
-		}
-	}
-	if doc_files.len != 1 {
-		eprintln('Usage: cx validate FILE --schema=SCHEMA.cxs [opts]')
-		eprintln('Exit 0 if no diagnostics at/above --fail-on threshold (default error),')
-		eprintln(' 1 if any diagnostic at/above threshold, 2 on I/O / schema-load failure.')
-		exit(2)
-	}
-	if schema_path == '' {
-		eprintln('cx validate: --schema=SCHEMA.cxs is required')
-		exit(2)
-	}
-	doc_path := doc_files[0]
-	doc_src := os.read_file(doc_path) or { eprintln('cx validate: ${err}'); exit(2) }
-	schema_src := os.read_file(schema_path) or { eprintln('cx validate: ${err}'); exit(2) }
-	doc := cx.parse_cx(doc_src) or { eprintln('cx validate: parse error: ${err}'); exit(2) }
-	doc_single := doc.single or {
-		eprintln('cx validate: multi-document inputs not yet supported')
-		exit(2)
-	}
-	mut opts := cx.ValidateOptions{}
-	if mode_override != '' {
-		opts = cx.ValidateOptions{
-			mode_override: match mode_override {
-				'open' { ?cx.SchemaMode(cx.SchemaMode.open) }
-				'strict' { ?cx.SchemaMode(cx.SchemaMode.strict) }
-				'closed' { ?cx.SchemaMode(cx.SchemaMode.closed) }
-				else {
-					eprintln('cx validate: unknown --mode=${mode_override} (use open|strict|closed)')
-					exit(2)
-				}
-			}
-		}
-	}
-	report := if apply_defaults {
-		cx.validate_with_defaults(doc_single, schema_src, opts) or {
-			eprintln('cx validate: ${err}')
-			exit(2)
-		}
-	} else {
-		cx.validate(doc_single, schema_src, opts) or {
-			eprintln('cx validate: ${err}')
-			exit(2)
-		}
-	}
-	if report.diagnostics.len > 0 {
-		println(report.render(doc_path))
-	}
-	threshold := match fail_on {
-		'info' { cx.Severity.info }
-		'warn' { cx.Severity.warn }
-		'error' { cx.Severity.error_severity }
-		'none' { exit(0) }
-		else {
-			eprintln('cx validate: unknown --fail-on=${fail_on} (use info|warn|error|none)')
-			exit(2)
-		}
-	}
-	exit(if report.has_at_or_above_severity(threshold) { 1 } else { 0 })
-}
 
 // discover_cxlint_config walks up from `start_dir` looking for the
 // nearest `.cxlint.cx`. Returns its contents on first match, or an
@@ -828,32 +759,7 @@ fn discover_cxlint_config(start_dir string) string {
 	return ''
 }
 
-// resolve_includes_text parses the given CX source with include
-// resolution enabled against `root`, then emits the resolved AST
-// back to canonical CX text. Used by the legacy format-dispatch
-// and `cx eval` to bolt `--include-root` onto entry points whose
-// downstream library calls only accept raw text. Round-trip cost
-// is one extra parse + emit; acceptable for the doc-gen + ad-hoc
-// CLI use cases that need this flag.
-fn resolve_includes_text(src string, root string) !string {
-	if root == '' {
-		return src
-	}
-	doc := cx.parse_with_include_root(src, root)!
-	return cx.emit_cx(doc)
-}
 
-fn read_one_input(args []string, cmd string) string {
-	if args.len > 1 {
-		eprintln('Usage: cx ${cmd} [FILE]')
-		eprintln('Reads from FILE if given, otherwise stdin.')
-		exit(2)
-	}
-	if args.len == 1 {
-		return os.read_file(args[0]) or { eprintln('cx ${cmd}: ${err}'); exit(2) }
-	}
-	return os.get_raw_lines_joined()
-}
 
 // ── CLI subcommand registry (#417) ───────────────────────────────────────────
 //
@@ -875,7 +781,7 @@ struct SubcommandSpec {
 const subcommands = build_subcommands()
 
 fn build_subcommands() []SubcommandSpec {
-	return [
+	mut list := [
 		SubcommandSpec{
 			name:    'fmt'
 			summary: 'Lossless canonical formatter (preserves comments/anchors).'
@@ -903,7 +809,55 @@ fn build_subcommands() []SubcommandSpec {
 				'Strict canonical text: strips comments and other presentation; the output',
 				'is data-equivalent to the input. Reads FILE, or stdin if absent.',
 			]
-			run:     run_canonical
+			run:     cli.run_canonical
+		},
+		SubcommandSpec{
+			name:    'schema'
+			summary: 'Schema verb family — infer a .cxs from a corpus; export to JSON Schema; classify compatibility.'
+			help:    [
+				'Usage: cx schema infer [--sample=N] [--output=FILE] FILE...',
+				'       cx schema export --to=json-schema [--output=FILE] SCHEMA.cxs',
+				'       cx schema compat [--rename=TYPE/OLD=NEW]... [--allow-remove=TYPE/FIELD]... [--output=FILE] OLD.cxs NEW.cxs',
+				'',
+				'infer — synthesize a deterministic open-mode .cxs schema from a corpus',
+				'of documents (shape_inference.md: identical types stay identical,',
+				'int and float join to float, decimal joins only decimal, anything else',
+				'becomes [or ...] — never widened to string; attr optionality and child',
+				'[card "M..N"] come from observed counts). Full-corpus by default;',
+				'--sample=N bounds it and records provenance in the schema header.',
+				'',
+				'export — project a .cxs schema to JSON Schema 2020-12 describing the',
+				'document\'s lossless JSON projection (the \$tag envelope): element types',
+				'become \$defs objects; [card] becomes contains/minContains/maxContains;',
+				'scalar kinds map to native JSON types with string carriers for exact',
+				'numerics, temporals, and bytes. Deterministic byte-stable output.',
+				'',
+				'compat — classify every field-level change OLD -> NEW into the closed',
+				'class set (schema.md §16.5, RULED: SEA-1): additive/widen/rename/',
+				'default classes derive their translator (a [schema-lineage] claim +',
+				'a generated pure upcaster def, written via --output=FILE); narrowing,',
+				'removal, and reinterpreting classes REFUSE with the missing rule named',
+				'per change. Renames are declared, never guessed. Exit 0 derivable/',
+				'identical; 1 refused; 2 usage/load failure.',
+			]
+			run:     cli.run_schema
+		},
+		SubcommandSpec{
+			name:    'tools'
+			summary: 'Agent-tool verb family — project command defs to MCP tool descriptors.'
+			help:    [
+				'Usage: cx tools export [--output=FILE] MODULE.cx',
+				'',
+				'export — project a module\'s command defs ([effects]-bearing [?def]s) to',
+				'the MCP tools/list array (2025-06-18 entries: inputSchema/outputSchema,',
+				'annotation hints, _meta with the Tier-1/Tier-2 addresses, schema ids,',
+				'and cap: requirements) — the offline registration lane. The projection',
+				'is the SAME CX adapter the live server uses (cx-x/tools +',
+				'cx-x/mcp-server); a projection failure (a command without a',
+				'[fn-doc][summary], malformed source) exits 2 with the [err …] on',
+				'stderr — never a silently empty or partial tool set.',
+			]
+			run:     run_tools
 		},
 		SubcommandSpec{
 			name:    'hash'
@@ -914,7 +868,7 @@ fn build_subcommands() []SubcommandSpec {
 				'SHA-256 hex digest of the strict-canonical bytes — the content address of',
 				'the document. Reads FILE, or stdin if absent.',
 			]
-			run:     run_hash
+			run:     cli.run_hash
 		},
 		SubcommandSpec{
 			name:    'eq'
@@ -925,7 +879,7 @@ fn build_subcommands() []SubcommandSpec {
 				'Compares the strict-canonical forms of two documents.',
 				'Exit 0 if equal, 1 if they differ, 2 on error.',
 			]
-			run:     run_eq
+			run:     cli.run_eq
 		},
 		SubcommandSpec{
 			name:    'diff'
@@ -939,7 +893,7 @@ fn build_subcommands() []SubcommandSpec {
 				'  --color[=always|never|auto]     color policy (default auto: TTY only)',
 				'Exit 0 if data-equivalent, 1 if the documents differ, 2 on error.',
 			]
-			run:     run_diff
+			run:     cli.run_diff
 		},
 		SubcommandSpec{
 			name:    'lint'
@@ -971,23 +925,52 @@ fn build_subcommands() []SubcommandSpec {
 				'Exit 0 if no diagnostics at/above --fail-on, 1 if any,',
 				'2 on I/O / schema-load failure.',
 			]
-			run:     run_validate
+			run:     cli.run_validate
 		},
 		SubcommandSpec{
 			name:    'eval'
 			summary: 'Evaluate a CX program (alias of the default run action; prefer `cx FILE`).'
 			help:    [
-				'Usage: cx eval PROGRAM.cx [--data=INPUT.cx] [--target=FMT] [--allow-*]',
+				'Usage: cx eval [--data=INPUT.cx] [--target=FMT] [--allow-*] PROGRAM.cx [args...]',
 				'',
 				'Evaluates a CX program — an alias of the default run action; prefer the',
-				'plain `cx PROGRAM.cx` spelling.',
+				'plain `cx PROGRAM.cx` spelling. Flags bind BEFORE the program resource;',
+				'everything after it is the program\'s argv (PYE-2, exactly as the run',
+				'surface).',
 				"  -e 'PROGRAM' | --expression     inline program",
 				"  -d 'INPUT' | --data-text        inline input document",
 				'  --data=FILE|-                   input document from a file (or stdin: -)',
 				'  --target=text|cx|json|yaml|xml|csv|tsv   output rendering (default text)',
-				'  --allow-<cap>[=SCOPE] / --allow-all       capability grants (see cx --help)',
+				'  --allow-<cap>[=SCOPE] / --allow-common / --allow-all   capability grants (see cx --help)',
+				'  --strict                        enforce declared ::T / [returns T] annotations (code.md §12.7)',
 			]
 			run:     run_eval
+		},
+		SubcommandSpec{
+			name:    'primer'
+			summary: 'Print the LLM onboarding primer for THIS binary (#938).'
+			help:    [
+				'Usage: cx primer',
+				'',
+				'Prints the CX primer for the installed version on stdout: the surface',
+				'taught through runnable examples, a ring decision table, the core',
+				'idioms, and the anti-patterns that Lisp/Clojure/shell priors produce.',
+				'',
+				'CX post-dates every language model training set, so an assistant needs',
+				'this context supplied. Point one at `cx primer` before it writes CX.',
+				'',
+				'The text is embedded at build time from the generated docs/llm/primer.md,',
+				'so it always matches this binary — no checkout and no network needed.',
+				'Every code example in it is a conformance fixture whose output was',
+				'RE-RECORDED by running this toolchain, so it cannot drift from behavior.',
+				'',
+				'Output is byte-identical to docs/llm/primer.md (pipe it freely). If the',
+				'binary and the embedded document were built at different versions, a',
+				'warning goes to stderr and stdout is unaffected.',
+				'',
+				'See also: AGENTS.md in the repo root, and /llms.txt on the site.',
+			]
+			run:     run_primer
 		},
 		SubcommandSpec{
 			name:    'version'
@@ -1028,10 +1011,18 @@ fn build_subcommands() []SubcommandSpec {
 			summary: 'Render a CX program as a diagram (mermaid/svg/png).'
 			help:    [
 				'Usage: cx diagram PROGRAM.cx [--format=mermaid|svg|png] [-o OUT]',
+				'                             [--allow-subprocess]',
 				'',
 				'Renders a CX program as a diagram. Output goes to stdout by default;',
 				'-o PATH writes a file (recommended for svg/png). Every format embeds the',
 				'original source bytes, so the diagram reverse-parses to the same AST.',
+				'',
+				'svg and png render through graphviz `dot`, so they REQUIRE an explicit',
+				'--allow-subprocess grant (--allow-common / --allow-all also carry it);',
+				'without it the command refuses with CXER0271 rather than substituting a',
+				'diagram nobody asked for. With the grant but no `dot` on PATH, the',
+				'dot-less 1x1 envelope is emitted — it still carries the source and still',
+				'reverse-parses. mermaid is pure text and needs no capability.',
 			]
 			run:     run_diagram
 		},
@@ -1039,11 +1030,20 @@ fn build_subcommands() []SubcommandSpec {
 			name:    'code-diagram'
 			summary: 'Mermaid diagram of a CX source (flowchart / erDiagram).'
 			help:    [
-				'Usage: cx code-diagram [FILE|-] [--level=min|compact|full]',
+				'Usage: cx code-diagram [FILE|-] [--view=auto|effects] [--level=min|compact|full]',
 				'',
 				'Auto-detecting Mermaid emitter: flowchart TD for code sources, erDiagram',
 				'for data sources. Reads FILE, or stdin if `-` / absent.',
 				'  --level=min|compact|full   detail level (default compact)',
+				'  --view=auto|effects        subject (default auto)',
+				'',
+				'--view=effects renders the EFFECT/CAPABILITY graph instead: which of the',
+				'nine capabilities the program reaches, through which call path, and which',
+				'only under a branch. What it cannot resolve statically — a dynamic [?eval],',
+				'an unresolvable callee, an unreadable [?lib] — is rendered as an explicit',
+				'unknown edge, never omitted. Reachability is syntactic and the resource',
+				'scope (which file, which host) is never shown: it answers "it can read",',
+				'not "it reads /etc/passwd".',
 			]
 			run:     run_code_diagram
 		},
@@ -1089,6 +1089,35 @@ fn build_subcommands() []SubcommandSpec {
 			run:     run_scaffold
 		},
 		SubcommandSpec{
+			name:    'xap'
+			summary: 'XAP project tooling — scaffold (`init`) and check (`check-surface`).'
+			help:    [
+				'Usage: cx xap init NAME [--dir DIR] [--client]',
+				'       cx xap check-surface [DIR]',
+				'',
+				'init scaffolds a XAP project: two base features, one composite',
+				'that joins them, the xap wiring layer, and a surface. The result',
+				'composes through the W1-W6 gate as generated — nothing to fix',
+				'before it runs.',
+				'',
+				'  --dir DIR   where to create it (default: ./NAME)',
+				'  --client    also scaffold NAME-web-client/ as a SEPARATE',
+				'              project (N-CLIENT-2: a XAP never embeds its',
+				'              renderer). Emits the client SPEC + document shell,',
+				'              NOT a runnable server — views are yours to write.',
+				'',
+				'check-surface verifies every *.surface.cxd in DIR (default .) is',
+				'a faithful DERIVATION of the xap + feature specs beside it — the',
+				'classes the shape schema cannot see (unknown intent, unenabled',
+				'feature, nonexistent shown field). Exit 1 on any problem.',
+				'',
+				'Then:',
+				'  cx --allow-read DIR/compose.cx      # the gate + bare-term resolution',
+				'  cx xap check-surface DIR            # the surface derivation check',
+			]
+			run:     run_xap
+		},
+		SubcommandSpec{
 			name:    'demo'
 			summary: 'Self-contained showcase (no file I/O, no network, < 1s).'
 			help:    [
@@ -1126,72 +1155,29 @@ fn build_subcommands() []SubcommandSpec {
 			]
 			run:     run_lsp
 		},
-		SubcommandSpec{
-			name:    'store-serve'
-			summary: 'Run the CX store service daemon from a config.'
-			help:    [
-				'Usage: cx store-serve --config PATH [--allow-net[=host:port]] [--allow-*]',
-				'',
-				'Runs the single-node CX store service daemon: loads + validates the',
-				'cxstore.service.cx config, opens the store mount, and serves until',
-				'SIGTERM/SIGINT, then drains gracefully.',
-			]
-			run:     run_store_serve
-		},
-		SubcommandSpec{
-			name:    'fabric-serve'
-			summary: 'Run the CX fabric eventing daemon from a config.'
-			help:    [
-				'Usage: cx fabric-serve --config PATH [--allow-net[=host:port]] [--allow-*]',
-				'',
-				'Runs the single-node cx-fabric served tier: loads + validates the',
-				'fabric.service.cx config, mounts the configured fabrics (journal-backed',
-				'durable streams + transient channels), and serves XSP-AUTH-attached',
-				'clients over raw XSP frames until SIGTERM/SIGINT, then drains.',
-				'Health/ready probes ride the optional [health addr=…] listener',
-				'(compatible with `cx store-health --url`).',
-			]
-			run:     run_fabric_serve
-		},
-		SubcommandSpec{
-			name:    'store-health'
-			summary: 'Store readiness probe (exit 0 iff accepting).'
-			help:    [
-				'Usage: cx store-health --url READY_URL',
-				'',
-				'Readiness probe for the store daemon (Docker HEALTHCHECK / systemd / LB):',
-				'exit 0 iff the daemon at READY_URL reports accepting, else non-zero.',
-			]
-			run:     run_store_health
-		},
-		SubcommandSpec{
-			name:    'store-token'
-			summary: 'Mint a store bearer token + ready-to-paste config stanza.'
-			help:    [
-				'Usage: cx store-token --id NAME [--roles r1,r2] [--tenant SPEC]',
-				'',
-				'Generates a cryptographically-random bearer token: the [static [token ...]]',
-				'config stanza goes to stdout (pipeable), the secret to stderr — shown once,',
-				'never stored (the config carries only the hash).',
-				'  --roles    reader|writer|admin|metrics, comma-separated (default admin)',
-				"  --tenant   tenant scope (default \"*\")",
-			]
-			run:     run_store_token
-		},
-		SubcommandSpec{
-			name:    'store-rotate-kek'
-			summary: 'Rotate a store key-encryption key (re-wrap envelopes).'
-			help:    [
-				'Usage: cx store-rotate-kek --url STORE_URL --encrypt-key-id OLD --new-key-id NEW',
-				'',
-				"Re-wraps every at-rest envelope's data key under the new tenant KEK",
-				'(payloads and content addresses untouched; atomic per object, resumable,',
-				'fail-closed) and prints the [rotation-report ...].',
-				'Requires env CX_STORE_KEK_<OLD> and CX_STORE_KEK_<NEW> (64 hex chars each).',
-			]
-			run:     run_store_rotate_kek
-		},
 	]
+	// Platform-profile verbs (store/fabric daemons + operator helpers) exist
+	// only under `-d cx_platform` (I4, spec §4) — the entries live with their
+	// implementations behind the same gate (platform_verbs_d_cx_platform.v).
+	$if cx_platform ? {
+		list << platform_subcommands()
+	}
+	return list
+}
+
+// absent_platform_verbs names the platform-profile verb words for the
+// refusal below. Kept in sync with platform_subcommands() by the profile
+// corpus gate (a verb word must never fall through to the run surface and
+// evaluate a same-named FILE — the #426 lesson, extended to profiles).
+const absent_platform_verbs = ['store-serve', 'fabric-serve', 'store-health',
+	'store-rotate-kek']
+
+// profile_refusal — a platform verb word reached a non-platform cx: refuse
+// loudly BY NAME, never file-argument fall-through (cmd_data precedent).
+fn profile_refusal(what string) {
+	eprintln('cx: ${what} is not available in the ${compiled_profile()} profile — this artifact has no Ring-2 platform code (by construction).')
+	eprintln('install the platform profile for store/fabric daemons and operator verbs (https://cxhome.org/install).')
+	exit(2)
 }
 
 // run_version implements the `cx version` verb — identical output to
@@ -1252,28 +1238,38 @@ fn usage_text() string {
 	// the --from/--to lists from the codec registry, and the subcommand
 	// catalog from the dispatch table — no hand-maintained copies.
 	mut allow_flags := code.capability_names().map('--allow-' + it)
+	allow_flags << '--allow-common'
 	allow_flags << '--allow-all'
 	mut b := []string{}
 	b << 'Usage:'
-	b << '  cx FILE.cx [flags]        Run a CX resource (the default action): parse and'
-	b << '                            evaluate. A pure-data document evaluates to itself.'
-	b << '  cx - [flags]              Run a program from stdin (a pipe into bare `cx`'
+	b << '  cx [flags] FILE.cx [args...]   Run a CX resource (the default action): parse'
+	b << '                            and evaluate. A pure-data document evaluates to'
+	b << '                            itself. Everything after FILE is the PROGRAM\'s'
+	b << '                            argv ($env:argv, argv[0]=FILE) — cx flags go'
+	b << '                            BEFORE the file, program args after (the'
+	b << '                            interpreter convention; shebang-identical).'
+	b << '  cx [flags] - [args...]    Run a program from stdin (a pipe into bare `cx`'
 	b << '                            with no FILE also evaluates stdin).'
-	b << "  cx -e 'PROGRAM' [flags]   Run an inline program (also --expression)."
+	b << "  cx [flags] -e 'PROGRAM' [args...]   Run an inline program (also --expression)."
 	b << '  cx <subcommand> [args]    One of the subcommands below.'
 	b << '  cx -v | --version         Version / build info.'
 	b << '  cx -h | --help            This help.'
 	b << ''
-	b << 'Run flags (the default action):'
+	b << 'Run flags (the default action; flags bind BEFORE the resource):'
 	b << '  --cx (default) | --xml | --json | --yaml | --csv | --tsv   render the RESULT'
 	b << '  --data=FILE|-             separate data input: loaded via the data reading'
 	b << '                            and bound as $doc/$input before evaluation; the'
 	b << '                            caller input WINS over the program\'s data roots.'
+	b << '  --strict                  enforce declared ::T / [returns T] annotations at'
+	b << '                            call boundaries + [?pipe] stage flow (code.md §12.7;'
+	b << '                            default OFF erases annotations — documentation only).'
 	b << '  Unknown flags are hard usage errors (exit 2) — nothing is ignored.'
 	b << '  Capabilities are deny-by-default (spec/core/security.md); grant explicitly:'
 	b << '    ' + allow_flags[..5].join(' ')
 	b << '    ' + allow_flags[5..].join(' ')
 	b << '    (--allow-net takes an optional scope: --allow-net=host[:port])'
+	b << '    --allow-common is the common working set WITHOUT secret-reveal;'
+	b << '    --allow-all additionally grants secret-reveal, which declassifies secrets.'
 	b << ''
 	b << 'Convert flags (the data reading; an explicit --from selects it):'
 	b << '  cx --from=FMT [--to=FMT] [--compact] [--lossless] [--include-root=DIR] [FILE]'

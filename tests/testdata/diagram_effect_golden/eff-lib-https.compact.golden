@@ -1,0 +1,10 @@
+flowchart TD
+  prog(["program"])
+  eff_lib_https[["[?lib] over https"]]
+  unk_1[/"[?lib] — module body not in the image: https://example.com/m.cx"/]
+  cap_net{{"net --allow-net"}}
+  any{{"any granted capability"}}
+  prog --> eff_lib_https
+  eff_lib_https --> cap_net
+  prog ==> unk_1
+  unk_1 ==> any

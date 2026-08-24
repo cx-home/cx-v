@@ -1,4 +1,4 @@
-[test-suite name=similar
+[test-suite name=similar ring=1
   [doc [#
 conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
 
@@ -686,7 +686,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
 [$join ({name: "acme corp", city: "berlin"},) ({name: "acme corp.", city: "berlin"},) {on: [$similar:predicate {decide: {match: 0.9, review: 0.8}}], type: :inner}]
 #]]
   [out-text [#
-[join-result type=:inner [pair score=0.99 band=:match [left {name: 'acme corp', city: 'berlin'}] [right {name: 'acme corp.', city: 'berlin'}]]]
+[join-result type=:inner [pair score=0.99 band=:match [left {name: 'acme corp', city: berlin}] [right {name: 'acme corp.', city: berlin}]]]
 #]]
  ]
 
@@ -714,7 +714,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
 [$join (("red", "green"),) (("red", "gren"),) {on: [$similar:predicate {decide: {match: 0.9, review: 0.8}}], type: :inner}]
 #]]
   [out-text [#
-[join-result type=:inner [pair score=0.9766666666666666 band=:match [left ('red', 'green')] [right ('red', 'gren')]]]
+[join-result type=:inner [pair score=0.9766666666666666 band=:match [left (red, green)] [right (red, gren)]]]
 #]]
  ]
 
@@ -728,7 +728,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
 [$join (["acme corp", "berlin"],) (["acme corp.", "berlin"],) {on: [$similar:predicate {decide: {match: 0.9, review: 0.8}}], type: :inner}]
 #]]
   [out-text [#
-[join-result type=:inner [pair score=0.99 band=:match [left ['acme corp', 'berlin']] [right ['acme corp.', 'berlin']]]]
+[join-result type=:inner [pair score=0.99 band=:match [left ['acme corp', berlin]] [right ['acme corp.', berlin]]]]
 #]]
  ]
 
@@ -744,7 +744,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
    [$distinct ([v [name "acme corp"]], [v [name "acme corp."]], [v [name "globex"]]) {by: $p, policy: :transitive-closure}])]
 #]]
   [out-text [#
-(({name: 'acme corp'}, {name: 'globex'}), ([v [name 'acme corp']], [v [name 'globex']]))
+(({name: 'acme corp'}, {name: globex}), ([v [name 'acme corp']], [v [name 'globex']]))
 #]]
  ]
 
@@ -760,7 +760,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
    [$distinct (["acme corp"], ["acme corp."], ["globex"]) {by: $p, policy: :transitive-closure}])]
 #]]
   [out-text [#
-((('acme corp'), ('globex')), (['acme corp'], ['globex']))
+((('acme corp'), (globex)), (['acme corp'], [globex]))
 #]]
  ]
 
@@ -792,7 +792,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
    [$contains (["red", "green"], ["blue", "cyan"]) ["red", "gren"] $p])]
 #]]
   [out-text [#
-([similar score=0.9766666666666666 band=:match [best ('red', 'green')]], [similar score=0.9766666666666666 band=:match [best ['red', 'green']]])
+([similar score=0.9766666666666666 band=:match [best (red, green)]], [similar score=0.9766666666666666 band=:match [best [red, green]]])
 #]]
  ]
 
@@ -807,7 +807,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
  [$sort ([v [name "globex"]], [v [name "acme inc"]], [v [name "acme corp"]]) {by: [$similar:similarity-to [v [name "acme"]]]}])
 #]]
   [out-text [#
-(({name: 'acme inc'}, {name: 'acme corp'}, {name: 'globex'}), ([v [name 'acme inc']], [v [name 'acme corp']], [v [name 'globex']]))
+(({name: 'acme inc'}, {name: 'acme corp'}, {name: globex}), ([v [name 'acme inc']], [v [name 'acme corp']], [v [name 'globex']]))
 #]]
  ]
 
@@ -822,7 +822,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
  [$sort (["globex"], ["acme inc"], ["acme corp"]) {by: [$similar:similarity-to ["acme"]]}])
 #]]
   [out-text [#
-((('acme inc'), ('acme corp'), ('globex')), (['acme inc'], ['acme corp'], ['globex']))
+((('acme inc'), ('acme corp'), (globex)), (['acme inc'], ['acme corp'], [globex]))
 #]]
  ]
 
@@ -838,7 +838,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
    [?match $x [when [~ $x [v [name "acme corp."]]] 'same-org'] [else 'new-org']]])
 #]]
   [out-text [#
-('same-org', 'same-org')
+(same-org, same-org)
 #]]
  ]
 
@@ -854,7 +854,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
    [?match $x [when [~ $x ["red", "green"]] 'close'] [else 'far']]])
 #]]
   [out-text [#
-('close', 'close')
+(close, close)
 #]]
  ]
 
@@ -886,7 +886,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
    [$validate ["red", "gren"] (["red", "green"], ["blue", "cyan"]) {by: $p}])]
 #]]
   [out-text [#
-([similar score=0.9766666666666666 band=:match [nearest ('red', 'green')]], [similar score=0.9766666666666666 band=:match [nearest ['red', 'green']]])
+([similar score=0.9766666666666666 band=:match [nearest (red, green)]], [similar score=0.9766666666666666 band=:match [nearest [red, green]]])
 #]]
  ]
 
@@ -980,7 +980,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
 [$join ({id: 1, v: "a"}, {id: 2, v: "b"}) ({id: 2, w: "x"}, {id: 3, w: "y"}) {on: "id"}]
 #]]
   [out-text [#
-[join-result type=:inner [pair score=1.0 band=:match [left {id: 2, v: 'b'}] [right {id: 2, w: 'x'}]]]
+[join-result type=:inner [pair score=1.0 band=:match [left {id: 2, v: b}] [right {id: 2, w: x}]]]
 #]]
  ]
 
@@ -1099,7 +1099,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
 [$distinct ("acme", "acme", "acne") {by: [$similar:predicate {decide: {match: 0.95, review: 0.85}}], policy: :singletons}]
 #]]
   [out-text [#
-('acme', 'acne')
+(acme, acne)
 #]]
  ]
 
@@ -1112,7 +1112,7 @@ conformance fixtures for cx-stdlib/similar (spec/std-lib/similar.md §8).
 [$distinct ("a", "b", "a", "c", "b")]
 #]]
   [out-text [#
-('a', 'b', 'c')
+(a, b, c)
 #]]
  ]
 
@@ -1251,7 +1251,7 @@ true
  [?if [~ "acme" "acme" [$similar:predicate {}]] [then 'y'] [else 'n']])
 #]]
   [out-text [#
-('y', 'n', 'n')
+(y, n, n)
 #]]
  ]
 
@@ -1281,7 +1281,7 @@ true
 [$sort ("acme corp", "globex", "acme inc") {by: [$similar:similarity-to "acme"]}]
 #]]
   [out-text [#
-('acme inc', 'acme corp', 'globex')
+('acme inc', 'acme corp', globex)
 #]]
  ]
 
@@ -1337,7 +1337,7 @@ true
 [$sort ("globex", "acme inc", "acme corp") {by: [$similar:similarity-to "acme" [$similar:predicate {score: :levenshtein}]]}]
 #]]
   [out-text [#
-('acme inc', 'acme corp', 'globex')
+('acme inc', 'acme corp', globex)
 #]]
  ]
 
@@ -1391,7 +1391,7 @@ true
 [$sort ({n: "b", v: 1}, {n: "a", v: 2}) {by: "n"}]
 #]]
   [out-text [#
-({n: 'a', v: 2}, {n: 'b', v: 1})
+({n: a, v: 2}, {n: b, v: 1})
 #]]
  ]
 
@@ -1405,7 +1405,7 @@ true
 [$sort ("bb", "a", "ccc") {by: [?fn ($x) [$strings:length $x]]}]
 #]]
   [out-text [#
-('a', 'bb', 'ccc')
+(a, bb, ccc)
 #]]
  ]
 
@@ -1446,7 +1446,7 @@ true
  [?let [= $x "totally different"] [?match $x [when [~ $x "ACME Corp"] 'hit'] [else 'no']]])
 #]]
   [out-text [#
-('hit', 'no')
+(hit, no)
 #]]
  ]
 

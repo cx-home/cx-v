@@ -1,0 +1,29 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  m{"match $day"}
+  a1["'mon'"]
+  m -- "1" --> a1
+  a1 --> done
+  a2["'tue'"]
+  m -- "2" --> a2
+  a2 --> done
+  a3["'wed'"]
+  m -- "3" --> a3
+  a3 --> done
+  a4["'thu'"]
+  m -- "4" --> a4
+  a4 --> done
+  a5["'fri'"]
+  m -- "5" --> a5
+  a5 --> done
+  a6["'sat'"]
+  m -- "6" --> a6
+  a6 --> done
+  a7["'sun'"]
+  m -- "7" --> a7
+  a7 --> done
+  a8["'unknown'"]
+  m -- "else" --> a8
+  a8 --> done
+  start --> m

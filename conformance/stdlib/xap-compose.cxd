@@ -1,7 +1,7 @@
-[test-suite name=xap-compose
+[test-suite name=xap-compose ring=2
   [doc [#
 Conformance fixtures for XAP grammar composition — the §8.1 function surface of
-spec/02-working/xap_grammar_composition.md: [$xap:compose] (n feature grammars →
+spec/03-approved/xap/xap_grammar_composition.md: [$xap:compose] (n feature grammars →
 ONE grammar, or CXER4870 carrying every W1-W6 conflict), [$xap:compose-report]
 (the never-raising tooling face), [$xap:resolve] (bare-term resolution ρ;
 ambiguity is CXER4871 with candidates, never a guess), [$xap:grammar-hash]
@@ -28,16 +28,36 @@ present) so every input would also pass `cx validate` — fixtures never lean on
 schema-invalid inputs except where the case is ABOUT invalidity (016).
 #]]
 
-  [case id=xap-compose-001-empty-identity level=core
-   [tags xap-compose compose algebra identity]
+  [case id=xap-compose-051-no-features-refuses level=core
+   [tags xap-compose compose vacuity CXER4874]
+   [; #844 — a gate over the empty set has verified the empty set. Reporting
+      that as a pass is the one failure mode that makes a gate worse than no
+      gate: the green is load-bearing in the reader's mind and carries no
+      information. A XAP whose feature files were renamed, moved or not yet
+      written used to compose green right here. ]
    [in-cx [# [empty] #]]
    [in-code [#
 [?lib 'cx-xap' :as xap]
-[?let [= $g [$xap:compose]]
- [$count $g//verb]]
+[$xap:compose]
 #]]
    [out-text [#
-0
+[err code=cx-err:CXER4874 message='E_XAP_COMPOSE_EMPTY: composition has no features — a gate over the empty set verifies nothing (§3.1 identity)']
+#]]
+  ]
+
+  [case id=xap-compose-052-no-features-reports-not-ok level=core
+   [tags xap-compose compose-report vacuity agreement]
+   [; The §8.1 agreement law — `compose` raises IFF `compose-report` says
+      ok=false — has to hold at the vacuous case too, or the tooling face
+      shows a green for the very input the enforcing face refuses. Both faces
+      run the SAME vacuity predicate, so this cannot drift. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[$xap:compose-report]
+#]]
+   [out-text [#
+[compose-report ok=false [conflict code=':empty' at='(no features)' detail='composition has no features — a gate over the empty set verifies nothing (§3.1 identity)']]
 #]]
   ]
 
@@ -258,7 +278,7 @@ cx-err:CXER4870
  [= $storm-guard
  [feature name=storm-guard kind=composite
   [uses features=chart]
-  [nouns [noun name=storm-marks derived=true [field name=n type=int] [from 'count of chart highlights while a storm condition holds']]]
+  [nouns [noun name=storm-marks derived=true [field name=n type=int] [from 'chart/viewport']]]
   [verbs [verb name=watch effect=observe [intent [do :watch]] [reads storm-marks]]]
   [rules
    [rule name=must-mark kind=mandate verb='chart/highlight' when=storm [statement 'In a storm the hazard must be highlighted.']]
@@ -289,7 +309,7 @@ cx-err:CXER4870
  [= $seq-guard
  [feature name=seq-guard kind=composite
   [uses features='chart strikes']
-  [nouns [noun name=plan derived=true [field name=n type=int] [from 'waypoints ordered against strike listings']]]
+  [nouns [noun name=plan derived=true [field name=n type=int] [from 'chart/viewport' 'strikes/strike']]]
   [verbs [verb name=review effect=observe [intent [do :review]] [reads plan]]]
   [rules
    [rule name=o1 kind=ordering verb='chart/set-waypoint' after='strikes/list-strikes' [statement 'Check strikes before setting a waypoint.']]
@@ -315,7 +335,7 @@ cx-err:CXER4870
  [= $ghost-user
  [feature name=ghost-user kind=composite
   [uses features='chart ghost']
-  [nouns [noun name=shadow derived=true [field name=n type=int] [from 'a join over chart and ghost']]]
+  [nouns [noun name=shadow derived=true [field name=n type=int] [from 'chart/viewport']]]
   [verbs [verb name=peek effect=observe [intent [do :peek]] [reads shadow]]]
   [requirements [requirement kind=functional as=user traces=peek [want 'to peek'] [so 'peeked']]]]]
  [$xap:compose $chart $ghost-user]]
@@ -559,7 +579,7 @@ cx-err:CXER4872
  [= $cpa-guard
  [feature name=cpa-guard kind=composite
   [uses features='chart strikes']
-  [nouns [noun name=threat derived=true [field name=level type=int] [from 'strikes joined against the chart viewport']]]
+  [nouns [noun name=threat derived=true [field name=level type=int] [from 'chart/viewport' 'strikes/strike']]]
   [verbs
    [verb name=mark-threat effect=act scope=shared consequence=reversible
     [intent [do :mark-threat]]
@@ -587,7 +607,7 @@ cx-err:CXER4872
  [= $weak-guard
  [feature name=weak-guard kind=composite
   [uses features=chart]
-  [nouns [noun name=threat derived=true [field name=level type=int] [from 'a projection over chart waypoints']]]
+  [nouns [noun name=threat derived=true [field name=level type=int] [from 'chart/viewport']]]
   [verbs
    [verb name=mark-threat effect=observe
     [intent [do :mark-threat]]
@@ -623,7 +643,7 @@ cx-err:CXER4870
  [feature name=collision-cpa kind=composite
   [uses features='own-ship traffic']
   [frames [use frame=geo] [use frame=time]]
-  [nouns [noun name=cpa derived=true [field name=vessel type=mmsi] [field name=cpa-dist type=nm] [field name=tcpa type=minutes] [from 'per traffic vessel, closest point of approach from own-ship and vessel course/speed over the time frame']]]
+  [nouns [noun name=cpa derived=true [field name=vessel type=mmsi] [field name=cpa-dist type=nm] [field name=tcpa type=minutes] [from 'own-ship/own-ship' 'traffic/vessel']]]
   [verbs [verb name=cpa-threats effect=observe [intent [do :cpa-threats]] [reads cpa]]]
   [requirements [requirement kind=functional as=skipper traces=cpa-threats [want 'closing vessels flagged'] [so 'I can avoid collision']]]]]
  [?let [= $g [$xap:compose $own-ship $traffic $collision-cpa]]
@@ -651,7 +671,7 @@ cx-err:CXER4870
  [= $porch
  [feature name=porch kind=composite
   [uses features=door]
-  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door/door']]]
   [verbs
    [verb name=welcome effect=act scope=shared consequence=irreversible
     [intent [do :welcome]]
@@ -659,7 +679,7 @@ cx-err:CXER4870
     [reads visit]]]
   [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
  [= $g [$xap:compose $door $porch]]
- [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g derivers: ({name: "counter" produces: "porch/visit"})}]]
  [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/chime']]]
  [$xap:emit $rt [do :welcome] {actor: "agent:porter-1"}]]
 #]]
@@ -685,7 +705,7 @@ cx-err:CXER4850
  [= $porch
  [feature name=porch kind=composite
   [uses features=door]
-  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door/door']]]
   [verbs
    [verb name=welcome effect=act scope=shared consequence=irreversible
     [intent [do :welcome]]
@@ -693,7 +713,7 @@ cx-err:CXER4850
     [reads visit]]]
   [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
  [= $g [$xap:compose $door $porch]]
- [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g derivers: ({name: "counter" produces: "porch/visit"})}]]
  [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'porch/welcome']]]
  [$xap:emit $rt [do :welcome] {actor: "agent:porter-1"}]]
 #]]
@@ -719,7 +739,7 @@ cx-err:CXER4850
  [= $porch
  [feature name=porch kind=composite
   [uses features=door]
-  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door/door']]]
   [verbs
    [verb name=welcome effect=act scope=shared consequence=irreversible
     [intent [do :welcome]]
@@ -727,7 +747,7 @@ cx-err:CXER4850
     [reads visit]]]
   [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
  [= $g [$xap:compose $door $porch]]
- [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g derivers: ({name: "counter" produces: "porch/visit"})}]]
  [= $d1 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/unlock']]]
  [= $d2 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/chime']]]
  [$xap:emit $rt [do :welcome] {actor: "agent:porter-1"}]]
@@ -754,7 +774,7 @@ cx-err:CXER4850
  [= $porch
  [feature name=porch kind=composite
   [uses features=door]
-  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door/door']]]
   [verbs
    [verb name=welcome effect=act scope=shared consequence=irreversible
     [intent [do :welcome]]
@@ -764,7 +784,7 @@ cx-err:CXER4850
  [= $estate
  [feature name=estate kind=composite
   [uses features=porch]
-  [nouns [noun name=open-day derived=true [field name=visits type=int] [from 'porch visits folded per day']]]
+  [nouns [noun name=open-day derived=true [field name=visits type=int] [from 'porch/visit']]]
   [verbs
    [verb name=open-house effect=act scope=shared consequence=irreversible
     [intent [do :open-house]]
@@ -772,7 +792,7 @@ cx-err:CXER4850
     [reads open-day]]]
   [requirements [requirement kind=functional as=resident traces=open-house [want 'to run an open house'] [so 'visitors flow in']]]]]
  [= $g [$xap:compose $door $porch $estate]]
- [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g derivers: ({name: "counter" produces: "porch/visit"}, {name: "planner" produces: "estate/open-day"})}]]
  [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'porch/welcome']]]
  [$xap:emit $rt [do :open-house] {actor: "agent:porter-1"}]]
 #]]
@@ -798,7 +818,7 @@ cx-err:CXER4850
  [= $porch
  [feature name=porch kind=composite
   [uses features=door]
-  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door/door']]]
   [verbs
    [verb name=welcome effect=act scope=shared consequence=irreversible
     [intent [do :welcome]]
@@ -808,7 +828,7 @@ cx-err:CXER4850
  [= $estate
  [feature name=estate kind=composite
   [uses features=porch]
-  [nouns [noun name=open-day derived=true [field name=visits type=int] [from 'porch visits folded per day']]]
+  [nouns [noun name=open-day derived=true [field name=visits type=int] [from 'porch/visit']]]
   [verbs
    [verb name=open-house effect=act scope=shared consequence=irreversible
     [intent [do :open-house]]
@@ -816,7 +836,7 @@ cx-err:CXER4850
     [reads open-day]]]
   [requirements [requirement kind=functional as=resident traces=open-house [want 'to run an open house'] [so 'visitors flow in']]]]]
  [= $g [$xap:compose $door $porch $estate]]
- [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g derivers: ({name: "counter" produces: "porch/visit"}, {name: "planner" produces: "estate/open-day"})}]]
  [= $d1 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/unlock']]]
  [= $d2 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/chime']]]
  [$xap:emit $rt [do :open-house] {actor: "agent:porter-1"}]]
@@ -905,7 +925,7 @@ cx-err:CXER4872
  [= $porch
  [feature name=porch kind=composite
   [uses features=door]
-  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door/door']]]
   [verbs
    [verb name=welcome effect=act scope=shared consequence=irreversible
     [intent [do :welcome]]
@@ -913,7 +933,7 @@ cx-err:CXER4872
     [reads visit]]]
   [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
  [= $g [$xap:compose $door $porch]]
- [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g derivers: ({name: "counter" produces: "porch/visit"})}]]
  [= $d [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'porch/welcome']]]
  [?let [= $w [$xap:why-allowed $rt [do :welcome] {actor: "agent:porter-1"}]]
   $w/@allowed]]
@@ -940,7 +960,7 @@ cx-err:CXER4872
  [= $porch
  [feature name=porch kind=composite
   [uses features=door]
-  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door events folded per guest']]]
+  [nouns [noun name=visit derived=true [field name=count type=int] [from 'door/door']]]
   [verbs
    [verb name=welcome effect=act scope=shared consequence=irreversible
     [intent [do :welcome]]
@@ -948,7 +968,7 @@ cx-err:CXER4872
     [reads visit]]]
   [requirements [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]]
  [= $g [$xap:compose $door $porch]]
- [= $rt [$xap:run {tenant: "demo" grammar: $g}]]
+ [= $rt [$xap:run {tenant: "demo" grammar: $g derivers: ({name: "counter" produces: "porch/visit"})}]]
  [= $d1 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/unlock']]]
  [= $d2 [$xap:dial $rt [from id="principal:dana"] [to id="agent:porter-1"] [scope 'door/chime']]]
  [?let [= $w [$xap:why-allowed $rt [do :welcome] {actor: "agent:porter-1"}]]
@@ -1245,6 +1265,306 @@ true
 #]]
    [out-text [#
 [err code=cx-err:CXER4852 message='E_XAP: run {resolver: …} takes :scripted, a CX closure, or a [$xap:resolver-default …] value — an external resolver handle is not yet a shipped surface (xap.md §3.1/§3.6)']
+#]]
+  ]
+
+  [case id=xap-compose-053-w5-from-reference-not-a-noun level=core
+   [tags xap-compose compose w-gate w5 from derived-noun]
+   [; #840 — W5 covers every qualified noun reference in a derived noun's
+      [from …] (spec §4.1). Before this the noun parser read `name` and
+      `derived` and stopped, so a composite could name a noun that does not
+      exist and compose CLEAN — the one part describing its actual content
+      was unvalidated free text while `uses` beside it was strict. Here
+      `chart/viewport` resolves and `nosuchfeature/nothing` does not. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $dangling
+ [feature name=dangling kind=composite
+  [uses features='chart']
+  [nouns [noun name=shadow derived=true [field name=n type=int]
+          [from 'chart/viewport' 'nosuchfeature/nothing']]]
+  [verbs [verb name=peek effect=observe [intent [do :peek]] [reads shadow]]]
+  [requirements [requirement kind=functional as=user traces=peek [want 'to peek'] [so 'peeked']]]]]
+ [= $r [$xap:compose-report $chart $dangling]]
+ [$first [?for [in $c $r//conflict] [yield $c@detail]]]]
+#]]
+   [out-text [#
+'[from …] reference "nosuchfeature/nothing" is not a noun of the composed grammar'
+#]]
+  ]
+
+  [case id=xap-compose-054-w5-derived-noun-without-from level=core
+   [tags xap-compose compose w-gate w5 from derived-noun]
+   [; #840 (spec §4.1) — a `derived` noun with NO [from …] is a W5 violation:
+      a derived noun that says nothing about its source is exactly the
+      unchecked free text this rule replaces. Fail-closed, not tolerated. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $sourceless
+ [feature name=sourceless kind=composite
+  [uses features='chart']
+  [nouns [noun name=shadow derived=true [field name=n type=int]]]
+  [verbs [verb name=peek effect=observe [intent [do :peek]] [reads shadow]]]
+  [requirements [requirement kind=functional as=user traces=peek [want 'to peek'] [so 'peeked']]]]]
+ [= $r [$xap:compose-report $chart $sourceless]]
+ [$first [?for [in $c $r//conflict] [yield $c@detail]]]]
+#]]
+   [out-text [#
+'derived noun "sourceless/shadow" declares no [from …] source list'
+#]]
+  ]
+
+  [case id=xap-compose-055-w5-from-resolving-composes-clean level=core
+   [tags xap-compose compose w-gate w5 from derived-noun green]
+   [; #840 — the positive side, so the check is not merely a way to fail:
+      a derived noun whose [from …] references all resolve composes green.
+      Note the join itself is NOT computed and NOT checked — [from …] names
+      the sources only; join semantics stay unspecified (spec §4.1). ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $shade
+ [feature name=shade kind=composite
+  [uses features='chart']
+  [nouns [noun name=shadow derived=true [field name=n type=int]
+          [from 'chart/viewport']]]
+  [verbs [verb name=peek effect=observe [intent [do :peek]] [reads shadow]]]
+  [requirements [requirement kind=functional as=user traces=peek [want 'to peek'] [so 'peeked']]]]]
+ [= $r [$xap:compose-report $chart $shade]]
+ $r@ok]
+#]]
+   [out-text [#
+true
+#]]
+  ]
+
+  [case id=xap-compose-056-w7-write-verb-on-derived-noun-refuses level=core
+   [tags xap-compose compose w-gate w7 derived-noun deriver-reserved]
+   [; #865 §4.2/R8.2 — a derived noun is DERIVER-RESERVED: no grammar verb
+      may declare [writes] onto it. The producer is the deriver bound at run
+      assembly; a hand-rolled write verb is exactly the workaround W7 exists
+      to retire. The report face carries the :w7 conflict; the enforcing
+      face refuses with CXER4870 (agreement law, §8.1). ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $chart
+  [feature name=chart
+   [nouns [noun name=viewport singular=true [field name=center type=geo-point]]]
+   [verbs [verb name=highlight effect=arrange [intent [do :highlight]] [reads viewport]]]
+   [requirements [requirement kind=functional as=user traces=highlight [want 'to mark a spot'] [so 'I can find it']]]]]
+ [= $shade
+ [feature name=shade kind=composite
+  [uses features='chart']
+  [nouns [noun name=shadow derived=true [field name=n type=int]
+          [from 'chart/viewport']]]
+  [verbs [verb name=assert-shadow effect=act [intent [do :assert-shadow [n]]] [writes shadow]]
+         [verb name=peek effect=observe [intent [do :peek]] [reads shadow]]]
+  [requirements [requirement kind=functional as=user traces=peek [want 'to peek'] [so 'peeked']]]]]
+ [= $r [$xap:compose-report $chart $shade]]
+ [probe [ok $r@ok]
+        [w7 [$count [?for [in $c $r//conflict] [where [= $c@code ':w7']] [yield $c]]]]]]
+#]]
+   [out-text [#
+[probe [ok false] [w7 1]]
+#]]
+  ]
+
+  [case id=xap-compose-057-instantiate-effective-feature level=core
+   [tags xap-compose instantiate archetype refinement-contract green]
+   [; #866 §4.3 — the positive shape: a pinned binding renames presentation,
+      adds, tightens, selects; the effective feature carries the instance
+      name, the tighten, the requalified self-references, the [selection],
+      and its [instantiated-from …] provenance — and composes like any
+      other feature. The pin is computed in-case (the archetype is inline),
+      which is also the demonstration that of= is derivable, never magic. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/hash' :as hash]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?let [= $arch
+  [feature name=stamp version="1"
+   [nouns [noun name=mark [field name=id type=text] [field name=note type=text label='Note']]]
+   [verbs [verb name=press effect=act scope=shared consequence=reversible [intent [do :press [id]]] [writes mark]]
+          [verb name=see effect=observe [intent [do :see]] [reads mark]]]
+   [rules [rule name=see-after-press kind=ordering verb='stamp/see' after='stamp/press'
+           [statement 'You can only see a mark that was pressed.']]]
+   [requirements [requirement kind=functional as=user traces=press [want 'to press'] [so 'pressed']]]]]
+ [= $pin [$concat "sha2-256:" [$bytes:to-hex [$hash:sha256-string [$cx:canonical $arch]]]]]
+ [= $eff [$xap:instantiate $arch
+   [instance name=wax-seal of=$pin
+    [rename field='mark/note' label='Inscription']
+    [add on=mark [field name=colour type=text]]
+    [tighten verb=press consequence=irreversible]
+    [select [offer verb=press] [not-offered verb=see why='Seals are inspected by the registrar.']]]]]
+ [= $r [$xap:compose-report $eff]]
+ [probe [name [$string $eff@name]]
+        [cq [?for [in $v $eff//verb] [where [= [$string $v@name] "press"]] [yield [$string $v@consequence]]]]
+        [rule [?for [in $ru $eff//rule] [yield [$string $ru@verb]]]]
+        [fields [$count $eff//field]]
+        [sel [$count $eff//selection]]
+        [prov [$count $eff//instantiated-from]]
+        [composes [$string $r@ok]]]]
+#]]
+   [out-text [#
+[probe [name 'wax-seal'] [cq ('irreversible')] [rule ('wax-seal/see')] [fields 3] [sel 1] [prov 1] [composes 'true']]
+#]]
+  ]
+
+  [case id=xap-compose-058-instantiate-repurpose-refuses level=core
+   [tags xap-compose instantiate archetype repurpose refusal]
+   [; #866 §4.3 — the ERP trap: an [add] colliding with an inherited name is
+      giving that name a different meaning. CXER4877, no escape hatch. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/hash' :as hash]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?let [= $arch
+  [feature name=stamp version="1"
+   [nouns [noun name=mark [field name=id type=text]]]
+   [verbs [verb name=press effect=act [intent [do :press [id]]] [writes mark]]]
+   [requirements [requirement kind=functional as=user traces=press [want 'to press'] [so 'pressed']]]]]
+ [= $pin [$concat "sha2-256:" [$bytes:to-hex [$hash:sha256-string [$cx:canonical $arch]]]]]
+ [$xap:instantiate $arch
+   [instance name=x of=$pin
+    [add [verb name=press effect=observe [intent [do :press]]]]]]]
+#]]
+   [out-err [#
+cx-err:CXER4877
+#]]
+  ]
+
+  [case id=xap-compose-059-instantiate-loosen-refuses level=core
+   [tags xap-compose instantiate archetype loosen refusal]
+   [; #866 §4.3 — substitutability: one loosened instance means no consumer
+      can trust any instance. A widening [tighten] refuses CXER4878. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?lib 'cx-stdlib/hash' :as hash]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?let [= $arch
+  [feature name=stamp version="1"
+   [nouns [noun name=mark [field name=id type=text]]]
+   [verbs [verb name=press effect=act scope=shared consequence=irreversible [intent [do :press [id]]] [writes mark]]]
+   [requirements [requirement kind=functional as=user traces=press [want 'to press'] [so 'pressed']]]]]
+ [= $pin [$concat "sha2-256:" [$bytes:to-hex [$hash:sha256-string [$cx:canonical $arch]]]]]
+ [$xap:instantiate $arch
+   [instance name=x of=$pin
+    [tighten verb=press consequence=reversible]]]]
+#]]
+   [out-err [#
+cx-err:CXER4878
+#]]
+  ]
+
+  [case id=xap-compose-060-instantiate-stale-pin-refuses level=core
+   [tags xap-compose instantiate archetype pin refusal]
+   [; #866 §4.3 — an instance derives from an EXACT base; a pin that does
+      not match the archetype presented refuses CXER4879. Re-bless is the
+      pin moving deliberately, never the base moving underneath it. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $arch
+  [feature name=stamp version="1"
+   [nouns [noun name=mark [field name=id type=text]]]
+   [verbs [verb name=press effect=act [intent [do :press [id]]] [writes mark]]]
+   [requirements [requirement kind=functional as=user traces=press [want 'to press'] [so 'pressed']]]]]
+ [$xap:instantiate $arch [instance name=x of='sha2-256:0000dead' ]]]
+#]]
+   [out-err [#
+cx-err:CXER4879
+#]]
+  ]
+
+  [case id=xap-compose-061-cohesion-one-component level=core
+   [tags xap-compose cohesion granularity green]
+   [; #867 §4.4 — a healthy feature is ONE component: the verb reads/writes
+      edges and a declared rule noun-list bind every member. Report-first:
+      the instrument never refuses. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $f
+  [feature name=till version="1"
+   [nouns [noun name=sale [field name=id type=text]]
+          [noun name=receipt [field name=sale-id type=text]]]
+   [verbs [verb name=ring-up effect=act [intent [do :ring-up [id]]] [writes sale]]
+          [verb name=print effect=act [intent [do :print [id]]] [writes receipt]]]
+   [rules [rule name=receipt-cites-sale kind=validity nouns='receipt sale'
+           [statement 'A receipt MUST cite the sale it records.']]]
+   [requirements [requirement kind=functional as=clerk traces=ring-up [want 'to ring up'] [so 'rung']]]]]
+ [= $r [$xap:cohesion $f]]
+ [probe [n [$string $r@components]] [members [$count $r//member]] [edges [$count $r//edge]]]]
+#]]
+   [out-text [#
+[probe [n '1'] [members 4] [edges 3]]
+#]]
+  ]
+
+  [case id=xap-compose-062-cohesion-two-domains-report-two level=core
+   [tags xap-compose cohesion granularity split-advisor]
+   [; #867 §4.4 — two connected components are two features wearing one
+      name, and the components ARE the split the gate would accept. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $f
+  [feature name=till-and-piano version="1"
+   [nouns [noun name=sale [field name=id type=text]]
+          [noun name=piano [field name=pitch type=text]]]
+   [verbs [verb name=ring-up effect=act [intent [do :ring-up [id]]] [writes sale]]
+          [verb name=tune effect=act [intent [do :tune]] [writes piano]]]
+   [requirements [requirement kind=functional as=clerk traces=ring-up [want 'to ring up'] [so 'rung']]]]]
+ [= $r [$xap:cohesion $f]]
+ [probe [n [$string $r@components]]
+        [split [?for [in $c $r//component]
+                 [yield [part [?splice [?for [in $m $c/*] [yield [x [$string $m@name]]]]]]]]]]]
+#]]
+   [out-text [#
+[probe [n '2'] [split ([part [x 'piano'] [x 'tune']], [part [x 'sale'] [x 'ring-up']])]]
+#]]
+  ]
+
+  [case id=xap-compose-063-rule-nouns-existence-checked level=core
+   [tags xap-compose cohesion w-gate w5 rule-nouns]
+   [; #867 §4.4 rider — declaring nouns= opts the rule into compose-time
+      existence checking, exactly like the other structured targets. ]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-xap' :as xap]
+[?let [= $f
+  [feature name=till version="1"
+   [nouns [noun name=sale [field name=id type=text]]]
+   [verbs [verb name=ring-up effect=act [intent [do :ring-up [id]]] [writes sale]]]
+   [rules [rule name=cites kind=validity nouns='sale ghost'
+           [statement 'A sale MUST cite a ghost.']]]
+   [requirements [requirement kind=functional as=clerk traces=ring-up [want 'to ring up'] [so 'rung']]]]]
+ [= $r [$xap:compose-report $f]]
+ [probe [ok [$string $r@ok]] [n [$count $r//conflict]]]]
+#]]
+   [out-text [#
+[probe [ok 'false'] [n 1]]
 #]]
   ]
 ]

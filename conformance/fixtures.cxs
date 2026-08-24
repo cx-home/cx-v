@@ -1,5 +1,4 @@
-[?cx schema-of test-suite]
-[?cx schema-mode open]
+[schema of=test-suite mode=open]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CX-native conformance fixture schema (DRAFT).
@@ -19,6 +18,15 @@
  [attr name::string [req]]
  [attr version::string [opt]]
  [attr spec-date::date [opt]]
+ # ring tag (partition, I0): the Ring-N corpus lane this suite belongs to.
+ # Resolution order per-case → per-suite (corpus audit §2 Q2); the corpus
+ # query is scripts/ring_query.cx and `make ring-tag-gate` hard-fails any
+ # suite header missing it.
+ [attr ring::int [req] [min 0] [max 3]]
+ # eval-ring (MIXED suites, today code.cxd only): the suite's EVAL lane runs
+ # at this ring while the doc/parse lane stays at `ring` — the lane is
+ # defined by the consumer (the parse vs eval gates), not per-case.
+ [attr eval-ring::int [opt] [min 0] [max 3]]
  [elem doc [card "0..1"]]
  [elem case [card "1..*"]]]
 
@@ -36,8 +44,57 @@
  # A per-case gate overrides the per-module policy in conformance/gates.cxd.
  # (string enum, not atom — atom enums mis-register in cx 0.8.0, see SPEC-FINDINGS.)
  [attr gate::string [default enforced] [enum enforced advisory pending skip]]
+ # per-case ring override (partition, I0): binding_api.cxd tags its
+ # evaluation-dependent cases ring=1; io.cxd tags its watch cases ring=2.
+ [attr ring::int [opt] [min 0] [max 3]]
+ # per-case EVAL-lane override (partition, I4): a case whose PROGRAM needs a
+ # higher ring than the suite's eval-ring while its document stays inert data
+ # (code.cxd's [?http-service]/[?test-service-client] svc family: doc lane
+ # ring=0, eval lane ring=2 — the services substrate is platform). Keeps the
+ # doc-lane ring — and the I2 Ring-0 extraction corpus — untouched.
+ # Resolution: case eval-ring > case ring > suite eval-ring > suite ring.
+ [attr eval-ring::int [opt] [min 0] [max 3]]
+ # declared pack dependencies (partition, I4): the Ring-1 local-effect packs
+ # this case's PROGRAM composes beyond its own suite's pack (space-separated;
+ # names per spec §4 + 'http-client'/'sched'). A profile whose composition
+ # excludes any listed pack skips the case (the pack's absence is separately
+ # pinned by the profile gate's refusal probes). Discovered mechanically by
+ # the I4 profile gate at the embed composition: crypto's JWT surface and
+ # locale's date formatting compose time; two granted fixtures stage via io.
+ [attr packs::string [opt]]
+ # capability grants for eval fixtures (#707 item 2 — this policy used to be
+ # INFERRED by the runner and written nowhere; it is now normative):
+ #   grant="read write"  — the runner grants EXACTLY the listed capabilities
+ #                         (space-separated), nothing else.
+ #   grant="none"        — the runner grants the EMPTY set (deny-all) for a
+ #                         BEHAVIOR case: pins that a surface is UNGATED
+ #                         (#926, RULED: PYE-3 — argv/parse-args succeed
+ #                         under zero grants). 'none' is not a capability
+ #                         name; it is this policy token.
+ #   grant=""  (absent)  — DEFAULT: the runner grants ALL capabilities,
+ #                         EXCEPT when the case's out-err expects CXER0271
+ #                         (capability denied), in which case it grants NONE —
+ #                         denial cases run under deny-by-default.
+ # A clean-room runner reproducing the gate MUST implement exactly this
+ # four-way policy; a case that needs any other grant shape must say so
+ # with an explicit grant=.
+ [attr grant::string [opt]]
+ # program argv (#926, RULED: PYE-2): the argument vector the runner installs
+ # (code.set_program_argv) before evaluating this case — space-separated,
+ # argv[0] INCLUDED (the fixture spells the whole [resource, ...args] vector,
+ # exactly as the env-parse-args explicit-argv rows already do). Absent = the
+ # runner installs nothing and $env:argv falls back to the host process args
+ # (environment-dependent — such a case must not assert literal argv values).
+ [attr argv::string [opt]]
  # relative float tolerance: when > 0, out-text is matched as |actual-expected| <= tol*|expected| (absent = exact match).
  [attr tol::float [opt]]
+ # normative evaluation-rule id this case witnesses (stream 22 §8 — the
+ # second traceability axis, beside ring=): 'EV-…' stable ids from the
+ # clean-room register / code.md §Evaluation. The rule → witness map is
+ # a CORPUS QUERY over this attr, never a maintained list. A rule's
+ # witnesses are DISCRIMINATOR PAIRS — each pair fails under the
+ # opposite semantic choice.
+ [attr rule::string [opt]]
 
  [elem title [card "0..1"]]    # free-text description (legacy: trailing words of the test name)
  [elem tags [card "0..1"]]
@@ -49,6 +106,7 @@
  [elem in-xml    [card "0..1"]]    # XML input (xml-import fixtures)
  [elem in-md     [card "0..1"]]    # Markdown input
  [elem in-yaml   [card "0..1"]]    # YAML input (yaml-import fixtures)
+ [elem in-toml   [card "0..1"]]    # TOML input (toml-import fixtures, G7)
  [elem in-a      [card "0..1"]]    # left operand  (diff fixtures)
  [elem in-b      [card "0..1"]]    # right operand (diff fixtures)
  [elem source    [card "0..1"]]    # document validated against a schema
@@ -63,6 +121,12 @@
  [elem out-md    [card "0..1"]]    # expected Markdown
  [elem out-json  [card "0..1"]]    # expected JSON projection
  [elem events    [card "0..1"]]    # expected streaming event sequence
+ # out-effects (#707 item / clean-room §6.4): the observable-effect TRACE
+ # channel — one effect per line, in required order (the witness channel for
+ # ordering/count rules: EV-ARG-ORDER, EV-PULL, …). The stream-22 witness
+ # families land against this section at I5; the schema admits it now so
+ # rule authoring never blocks on a schema change.
+ [elem out-effects [card "0..1"]]
 
  # ── typed assertions — native CX scalars/sequences, not payloads ──
  [elem expect-codes      [card "0..1"]]   # [:S002, :CXER0230] — error-severity codes
@@ -83,6 +147,7 @@
 [type in-xml::any]
 [type in-md::any]
 [type in-yaml::any]
+[type in-toml::any]
 [type in-a::any]
 [type in-b::any]
 [type source::any]
@@ -95,6 +160,7 @@
 [type out-md::any]
 [type out-json::any]
 [type events::any]
+[type out-effects::any]
 
 [type expect-codes::[list atom]]
 [type expect-warn-codes::[list atom]]

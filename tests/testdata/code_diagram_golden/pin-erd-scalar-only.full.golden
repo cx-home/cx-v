@@ -1,0 +1,10 @@
+erDiagram
+  DOCUMENT {
+    int node_count "3"
+    int type_count "3"
+    int max_depth "1"
+  }
+  point {
+    int x
+    int y
+  }

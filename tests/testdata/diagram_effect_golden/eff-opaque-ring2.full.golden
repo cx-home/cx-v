@@ -1,0 +1,12 @@
+flowchart TD
+  classDef entry fill:#e8f5e9,stroke:#1b5e20;
+  classDef effect fill:#e8eaf6,stroke:#1a237e;
+  classDef cap fill:#ffebee,stroke:#b71c1c;
+  classDef unknown fill:#fff8e1,stroke:#ff6f00;
+  prog(["program"])
+  unk_1[/"Ring-2 pack verb — charge registered at runtime: journal:read"/]
+  any{{"any granted capability"}}
+  prog ==> unk_1
+  unk_1 ==> any
+  class prog entry;
+  class unk_1 unknown;

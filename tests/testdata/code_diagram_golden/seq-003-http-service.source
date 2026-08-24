@@ -1,0 +1,1 @@
+[?http-service name="hello" :on http [resource [get "/"] [response status=200 [body "hi"]]]]

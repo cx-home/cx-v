@@ -1,4 +1,4 @@
-[test-suite name=path
+[test-suite name=path ring=1
   [doc [#
 conformance fixtures for cx-stdlib/path (spec/std-lib/path.md §6).
 
@@ -103,7 +103,7 @@ conformance fixtures for cx-stdlib/path (spec/std-lib/path.md §6).
 [$path:parts "/a/b/c.txt"]
 #]]
   [out-text [#
-('a', 'b', 'c.txt')
+(a, b, 'c.txt')
 #]]
  ]
 

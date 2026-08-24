@@ -1,0 +1,13 @@
+erDiagram
+  user ||--|| order : has
+  user {
+    int id "@"
+  }
+  order {
+    int id "@"
+    decimal total "@"
+    float rate "@"
+    date when "@"
+    bigint big "@"
+    bool live "@"
+  }

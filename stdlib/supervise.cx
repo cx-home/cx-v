@@ -1,0 +1,833 @@
+[; cx-stdlib/supervise — restart policies over monitored workers
+   (spec/03-approved/std-lib/supervise.md, band CXER5090-5109;
+   issue #765, RULED: SUP-1). PURE CX over shipped primitives:
+   [?worker]/[?monitor] (code.md §10.4.6/.6a — terminal events delivered
+   even post-mortem), fan-out channels (U1.11a), and cx-stdlib/sched
+   timers (backoff/window/attempt-reset ride the mock clock, so restart
+   fixtures are deterministic). It adds NO new concurrency primitive and
+   NO capability (§5) — the module is the restart LOOP written once,
+   with policies as data.
+
+   SHAPE. One supervision loop per supervisor, running in an ordinary
+   [?worker]. The loop parks on ONE subscription to its own fan-out
+   inbox; everything that needs its attention arrives as an inbox
+   message: control ops from the public verbs ([sup-op ...] with an
+   embedded reply channel), terminal notes from the child-body wrapper
+   ([sup-note ...] — the wrapper catches the child fn's fault, posts the
+   note, then re-raises so the worker terminal stays honest), and sched
+   [tick ...] posts for backoff delays, intensity-window expiry, and
+   per-child attempt-reset. Closing the handle ([?with-open]) closes
+   that inbox subscription — the parked loop wakes closed-and-drained
+   and runs the same graceful stop as supervise/stop.
+
+   CHILD SPECS carry the body as a child element (attrs are scalar-only,
+   code.md §6.4.1 — RULED: SUP-1 rider SUP-1c):
+     [child name="ing" restart=:permanent shutdown=5s [fn $callable]]
+   restart ∈ :permanent (any exit) | :transient (panic only) |
+   :temporary (never). POLICY is data:
+     [policy strategy=:one-for-one max-restarts=5 window=1m
+       backoff=:exp base=100ms cap=10s]
+   strategy ∈ :one-for-one | :one-for-all | :rest-for-one. Defaults
+   (SUP-1h): :one-for-one, max-restarts=3, window=5s, backoff=:none,
+   base=100ms, cap=10s, shutdown=5s. Intensity counts POLICY DECISIONS
+   (a one-for-all flap of N children = 1), never respawns; only
+   policy-initiated restarts count — a supervisor-initiated cancel is
+   never a countable exit and never restarts :transient children.
+
+   GIVE-UP (§4.3): past max-restarts within window the loop cancels all
+   children (reverse start order, bounded), emits [gave-up ...] as the
+   final event, and terminates with cx-err:CXER5094 — a parent
+   supervisor monitoring this one sees [panicked ... [err CXER0220
+   [cause [err CXER5094]]]] and applies ITS policy (SUP-1g). Escalation
+   is composition, not a feature.
+
+   EVENTS are a standard keep=256 fan-out subscription of the
+   supervisor's own acts, replayed from the retained floor:
+     [child-started name= attempt=] [child-exited name= reason=(:done|
+     :panicked|:cancelled) err-code=?] [child-restarted name= attempt=
+     delay-ms=] [child-abandoned name=] [gave-up restarts= window-ms=]
+   A laggard observer hits the channel contract's CXER0218 STREAM_GAP
+   and re-subscribes (SUP-1b). STATUS answers through the control
+   round-trip while running and stays readable after stop through the
+   keep=1 status cell (SUP-1a — status is impure; purity is enforced,
+   CXER0233, and reading live state is channel I/O by construction).
+
+   FOUR-CHANNEL MODEL (code.md §9.1.2): the running supervisor and its
+   status snapshot are present VALUES; a malformed policy/spec is
+   CXER5090 and a duplicate child CXER5091 (faults); stop of an
+   already-stopped supervisor is a VALUE (null; idempotent) and
+   stop-child of an unknown name is the VALUE false — but
+   start-child/stop-child/events on a STOPPED supervisor are the fault
+   CXER5093 (status stays readable). CXER5092 is reserved. The give-up
+   terminal is CXER5094 on the loop worker.
+
+   The abandon rule (§4.4): stopping a child is [?cancel] + a wait
+   bounded by its shutdown; a child that outlives the bound is ABANDONED
+   ([child-abandoned], state abandoned), never force-killed (force-kill
+   does not exist; cancellation is cooperative, §10.5.4). On the
+   reference substrate the cancel terminal is stamped at request
+   (SUP-1f), so the bound resolves immediately and abandon is reserved
+   surface; the no-hang guarantee holds either way.
+
+   NOTE: this const is the loader source of truth for cx-stdlib/supervise. ]
+
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/fp']
+
+# ── utilities ───────────────────────────────────────────────────────────────
+
+# sup--alloc mints a process-unique id, used to name this supervisor's four
+# channels and its loop worker (RULED: SPF-1, issue #895). The source is the
+# EVALUATOR's own handle counter: [?subscribe] stamps every subscription with
+# a `__cx_close_id__` drawn from the monotonic per-evaluator allocator the
+# engine keeps precisely to tell handles apart. [?channel]/[?subscribe]/
+# [?close] are CORE directives (code.md §10.4) — present in every §4 profile
+# and carrying NO capability, which is what the module's §5 no-capability
+# contract requires. The generator channel is one fixed-name, never-read
+# rendezvous shared by every call; the subscription is closed at once, so
+# nothing accumulates.
+#
+# It used to arm a 240-hour [$sched:after] against a devnull channel, cancel
+# it, and keep the TIMER'S synthesized name — i.e. it borrowed the scheduler
+# registry's private counter, from an OPTIONAL local-effect pack, for a need
+# that has nothing to do with scheduling. In a `-d cx_no_pack_sched` build
+# that name came back empty and the failure surfaced 25 fixtures deep as
+# `[?channel] requires :name`. cx-stdlib/uuid is NOT the replacement: its
+# v4/v7 generators are capability-gated on `random`, and supervise grants no
+# capability.
+[?def sup--alloc scope=private impure [returns string] ()
+  [?let [= $gen [?channel name="cxsup-idgen" sharing=independent retention=window keep=1]]
+    [= $s [?subscribe from=$gen]]
+    [= $id [$concat "" $s@__cx_close_id__]]
+    [= $_ [?close $s]]
+    $id]]
+
+# sup--has-sched reports whether the `sched` local-effect pack is in THIS
+# build (RULED: SPF-1(b)). [$sched:clock-mode] is the cheapest honest probe —
+# pure, nullary, no timer armed, no registry touched; where the pack is
+# excluded the callable is simply absent and the call refuses.
+#
+# The probe's RESULT is consumed on purpose. A `[?let]` binding is LAZY: an
+# earlier spelling here bound [$sched:clock-mode] to an unread $_m and
+# answered a constant `true`, so the call never happened and the refusal
+# below was dead code in exactly the build it exists for. Comparing the
+# rendered mode forces the call, which is the whole point of the probe.
+[?def sup--has-sched scope=private impure [returns bool] ()
+  [?fallback [not [= [$concat "" [$sched:clock-mode]] ""]]
+    [recover-with false]]]
+
+[?def sup--is-err scope=private pure [returns bool] ($v)
+  [?match $v [case [err] true] [else false]]]
+
+[?def sup--append scope=private pure [returns any] ($a $b)
+  [$fp:flat-map ($a, $b) [?fn ($s) $s]]]
+
+[?def sup--reverse scope=private pure [returns any] ($s)
+  [?if [$empty $s]
+    [then ()]
+    [else [?let [= $t [$tail $s]]
+      [= $rt [sup--reverse $t]]
+      [= $h [$first $s]]
+      [= $hw [$fp:pure $h]]
+      [sup--append $rt $hw]]]]]
+
+[?def sup--dur-ms scope=private impure [returns int] ($d)
+  [?fallback [$time:duration-total-ms $d]
+    [recover-with
+      [?let [= $s [$concat "" $d]]
+        [= $p [$time:parse-duration $s]]
+        [$time:duration-total-ms $p]]]]]
+
+[?def sup--pow2 scope=private pure [returns int] ($n::int)
+  [?if [< $n 1] [then 1]
+    [else [?if [> $n 30] [then 1073741824]
+      [else [?let [= $r [sup--pow2 [- $n 1]]] [* 2 $r]]]]]]]
+
+[?def sup--member scope=private pure [returns bool] ($names $x)
+  [?let [= $hits [?for [in $n $names] [where [= $n $x]] [yield $n]]]
+    [> [$count $hits] 0]]]
+
+# rebuild one child record with a new state (everything else carried)
+[?def sup--rec-with scope=private pure [returns map] ($c::map $state::string $wname::string $attempt::int $spawns::int $mon $w)
+  {'name': $c/name 'fn': $c/fn 'restart': $c/restart 'shutdown-ms': $c/shutdown-ms
+   'wname': $wname 'attempt': $attempt 'spawns': $spawns 'state': $state 'mon': $mon 'w': $w}]
+
+[?def sup--rec-state scope=private pure [returns map] ($c::map $state::string)
+  [sup--rec-with $c $state $c/wname $c/attempt $c/spawns $c/mon $c/w]]
+
+[?def sup--st-set scope=private pure [returns map] ($st::map $children $pends $decisions::int $gave-up::bool)
+  {'sid': $st/sid 'inbox': $st/inbox 'isub': $st/isub 'events': $st/events 'statusch': $st/statusch
+   'sleepch': $st/sleepch 'strategy': $st/strategy 'max-restarts': $st/max-restarts
+   'window-ms': $st/window-ms 'backoff': $st/backoff 'base-ms': $st/base-ms 'cap-ms': $st/cap-ms
+   'children': $children 'pends': $pends 'decisions': $decisions 'gave-up': $gave-up}]
+
+# ── status cell ─────────────────────────────────────────────────────────────
+
+[?def sup--snapshot scope=private pure [returns element] ($children $decisions::int)
+  [?let [= $rows [?for [in $c $children]
+      [yield [child name=$c/name state=$c/state attempts=$c/attempt]]]]
+    [supervisor-status restarts-in-window=$decisions $rows]]]
+
+[?def sup--publish scope=private impure [returns null] ($statusch $children $decisions::int)
+  [?let [= $snap [sup--snapshot $children $decisions]]
+    [= $_ [?send $snap to=$statusch]]
+    null]]
+
+[?def sup--read-cell scope=private impure [returns element] ($statusch)
+  [?let [= $try [?subscribe from=$statusch from-pos=0]]
+    [= $sub [?if [sup--is-err $try]
+        [then [?subscribe from=$statusch from-pos=$try@floor]]
+        [else $try]]]
+    [= $batch [?receive from=$sub max=64 deadline=0]]
+    [= $n [$count $batch]]
+    [= $_c [?close $sub]]
+    [?if [< $n 1]
+      [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: not a supervisor handle (no status cell)']]
+      [else [$nth $batch $n]]]]]
+
+# ── the child body wrapper ──────────────────────────────────────────────────
+
+[?def sup--child-body scope=private impure [returns any] ($fn $name::string $wname::string $inbox)
+  [?fallback
+    [?let [= $r [$fn]]
+      [= $bad [sup--is-err $r]]
+      [; #908 — a child that RETURNS an [err] value is just as dead as one
+         that raises, and its error is just as real. This arm used to
+         `[skip]`, so the only terminal signal was one carrying no [err]:
+         the supervisor saw outcome=:panicked with an EMPTY error filter,
+         and building `err-code=` from `[$first ()]` hit the engine's
+         (correct) refusal to write an attribute from the empty sequence.
+         Post the same note the raise path posts, paired with the returned
+         err, so both deaths carry their cause. Defaulting err-code to ""
+         instead would have asserted that something panicked for no stated
+         reason — the parent reading this stream for escalation must not
+         confuse "no cause given" with "cause is X". ]
+      [= $_n [?if $bad
+        [then [?send ([sup-note name=$name wname=$wname outcome=:panicked], $r) to=$inbox]]
+        [else [?send ([sup-note name=$name wname=$wname outcome=:done]) to=$inbox]]]]
+      $r]
+    [recover-with
+      [?if [= $err@code 'cx-err:CXER0260']
+        [then $err]
+        [else [?let [= $_n [?send ([sup-note name=$name wname=$wname outcome=:panicked], $err) to=$inbox]]
+          $err]]]]]]
+
+# ── spawn / stop one child ──────────────────────────────────────────────────
+
+[?def sup--spawn scope=private impure [returns map] ($sid::string $inbox $events $rec::map $attempt::int)
+  [?let [= $name $rec/name]
+    [= $spawns [+ $rec/spawns 1]]
+    [= $wname [$concat "cxsup-" $sid "-" $name "-s" $spawns]]
+    [= $fn $rec/fn]
+    [= $w [?worker name=$wname [sup--child-body $fn $name $wname $inbox]]]
+    [= $mon [?monitor $w]]
+    [= $_sp [?receive from=$mon]]
+    [= $_ev [?send [child-started name=$name attempt=$attempt] to=$events]]
+    [sup--rec-with $rec 'running' $wname $attempt $spawns $mon $w]]]
+
+[?def sup--probe-terminal scope=private impure [returns element] ($rec::map)
+  [?let [= $mon $rec/mon]
+    [?select
+      [case [from $mon $e] [got [term $e]]]
+      [case [timeout 0] [none]]]]]
+
+# cancel + bounded wait; emits child-exited/child-abandoned; returns final state string
+[?def sup--stop-wait scope=private impure [returns string] ($sleepch $rec::map $events)
+  [?let [= $_c [?cancel worker=$rec/w]]
+    [= $tries [+ 1 [/ $rec/shutdown-ms 20]]]
+    [sup--stop-wait-poll $sleepch $rec $events $tries]]]
+
+[?def sup--stop-wait-poll scope=private impure [returns string] ($sleepch $rec::map $events $tries::int)
+  [?let [= $p [sup--probe-terminal $rec]]
+    [?match $p
+      [case [got]
+        [?let [= $_cl [?close $rec/mon]]
+          [= $_ev [?send [child-exited name=$rec/name reason=:cancelled] to=$events]]
+          'stopped']]
+      [else
+        [?if [< $tries 1]
+          [then [?let [= $_ev [?send [child-abandoned name=$rec/name] to=$events]]
+            [= $_cl [?close $rec/mon]]
+            'abandoned']]
+          [else [?let [= $_zz [?receive from=$sleepch max=1 deadline=20]]
+            [= $t2 [- $tries 1]]
+            [sup--stop-wait-poll $sleepch $rec $events $t2]]]]]]]]
+
+# bounded-stop every RUNNING child named in $names, honoring $order (a name sequence)
+[?def sup--stop-many scope=private impure [returns any] ($st::map $names $order)
+  [?let [= $_cp [?check-cancel]]
+  [?if [$empty $order]
+    [then $st/children]
+    [else
+      [?let [= $n [$first $order]]
+        [= $rest [$tail $order]]
+        [= $kids $st/children]
+        [= $children2 [?for [in $c $kids]
+          [yield [?if [and [= $c/name $n] [and [= $c/state 'running'] [sup--member $names $n]]]
+            [then [?let [= $fs [sup--stop-wait $st/sleepch $c $st/events]]
+              [sup--rec-state $c $fs]]]
+            [else $c]]]]]
+        [= $st2 [sup--st-set $st $children2 $st/pends $st/decisions $st/gave-up]]
+        [sup--stop-many $st2 $names $rest]]]]]]
+
+# ── the loop ────────────────────────────────────────────────────────────────
+
+[?def sup--loop scope=private impure [returns element] ($st::map)
+  [?let [= $msg [?receive from=$st/isub]]
+    [?if [sup--is-err $msg]
+      [then [?let [= $st2 [sup--stop-all $st]] [stopped]]]
+      [else [sup--dispatch $st $msg]]]]]
+
+[?def sup--dispatch scope=private impure [returns element] ($st::map $msg)
+  [?let [= $_cp [?check-cancel]]
+  [?match $msg
+    [case [tick]
+      [?let [= $st2 [sup--on-tick $st $msg]]
+        [= $st3 [sup--publish-st $st2]]
+        [sup--loop-or-die $st3]]]
+    [else
+      [?let [= $head [$first $msg]]
+        [?match $head
+          [case [sup-note]
+            [?let [= $st2 [sup--on-note $st $msg]]
+              [= $st3 [sup--publish-st $st2]]
+              [sup--loop-or-die $st3]]]
+          [case [sup-op] [sup--on-op $st $msg]]
+          [else [sup--loop $st]]]]]]]]
+
+[?def sup--publish-st scope=private impure [returns map] ($st::map)
+  [?let [= $_cp [?check-cancel]]
+    [= $_ [sup--publish $st/statusch $st/children $st/decisions]]
+    $st]]
+
+[?def sup--loop-or-die scope=private impure [returns element] ($st::map)
+  [?let [= $_cp [?check-cancel]]
+  [?if $st/gave-up
+    [then [err code=cx-err:CXER5094 message='E_SUP_RESTART_INTENSITY: restart intensity exceeded — supervisor gave up']]
+    [else [sup--loop $st]]]]]
+
+# ── notes ───────────────────────────────────────────────────────────────────
+
+[?def sup--on-note scope=private impure [returns map] ($st::map $msg)
+  [?let [= $note [$first $msg]]
+    [= $name [$concat "" $note@name]]
+    [= $wname [$concat "" $note@wname]]
+    [= $kids $st/children]
+    [= $hits [?for [in $c $kids]
+        [where [and [= $c/name $name] [and [= $c/wname $wname] [= $c/state 'running']]]]
+        [yield $c]]]
+    [?if [< [$count $hits] 1]
+      [then $st]
+      [else
+        [?let [= $cur [$first $hits]]
+          [= $outcome $note@outcome]
+          [= $panicked [= $outcome :panicked]]
+          [= $errs [?for [in $e $msg] [where [sup--is-err $e]] [yield $e]]]
+          [; #951 — BOTH :panicked producers pair the note with its [err],
+             yet under full-parallel load one note in ~3,200 arrived with an
+             EMPTY error filter, and building err-code= from [$first ()] hit
+             the engine's (correct) empty-attribute refusal — which crashed
+             the WHOLE supervisor loop over one malformed note. Per the #908
+             reasoning: never default to "" (that asserts no-cause) — but a
+             supervisor dying of a cosmetic attribute refusal is worse than
+             an explicit marker. 'cause-unreported' states exactly what is
+             known: the child panicked and its cause did not arrive. ]
+          [= $ecode [?if $panicked
+              [then [?if [< [$count $errs] 1]
+                [then 'cause-unreported']
+                [else [?let [= $e1 [$first $errs]] [$concat "" $e1@code]]]]]
+              [else ""]]]
+          [= $ev [?if $panicked
+              [then [child-exited name=$name reason=:panicked err-code=$ecode]]
+              [else [child-exited name=$name reason=:done]]]]
+          [= $_ev [?send $ev to=$st/events]]
+          [= $_cl [?close $cur/mon]]
+          [= $restart $cur/restart]
+          [= $should [?if [= $restart :permanent] [then true]
+              [else [?if [= $restart :transient] [then $panicked] [else false]]]]]
+          [?if $should
+            [then
+              [?let [= $children1 [?for [in $c $kids]
+                  [yield [?if [= $c/name $name] [then [sup--rec-state $c 'stopped']] [else $c]]]]]
+                [= $stx [sup--st-set $st $children1 $st/pends $st/decisions false]]
+                [sup--decide $stx $cur]]]
+            [else
+              [?let [= $children2 [?for [in $c $kids]
+                  [yield [?if [= $c/name $name] [then [sup--rec-state $c 'stopped']] [else $c]]]]]
+                [sup--st-set $st $children2 $st/pends $st/decisions false]]]]]]]]]
+
+# ── the policy decision ─────────────────────────────────────────────────────
+
+[?def sup--decide scope=private impure [returns map] ($st::map $cur::map)
+  [?if [> [+ $st/decisions 1] $st/max-restarts]
+    [then [sup--give-up $st]]
+    [else
+      [?let
+        [= $wdur [$time:duration-ms $st/window-ms]]
+        [= $wt [$sched:after $wdur $st/inbox]]
+        [= $wpend {'kind': 'window' 'timer': [$concat "" $wt@name] 'names': () 'trigger': "" 'attempt': 0 'delay-ms': 0}]
+        [= $attempt [+ $cur/attempt 1]]
+        [= $delay-ms [sup--backoff-ms $st $attempt]]
+        # the affected set, in start order
+        [= $kids0 $st/children]
+        [= $affected [?if [= $st/strategy :one-for-one]
+            [then [$fp:pure $cur/name]]
+            [else [?if [= $st/strategy :one-for-all]
+              [then [?for [in $c $kids0] [yield $c/name]]]
+              [else [sup--tail-names $kids0 $cur/name]]]]]]
+        # cancel the other affected running children, reverse start order (never countable)
+        [= $others [?for [in $n $affected] [where [not [= $n $cur/name]]] [yield $n]]]
+        [= $order [sup--reverse $others]]
+        [= $st1 [sup--st-set $st $st/children $st/pends [+ $st/decisions 1] false]]
+        [= $children2 [sup--stop-many $st1 $others $order]]
+        # the restart set: affected minus :temporary members (marked restarting)
+        [= $children3 [?for [in $c $children2]
+            [yield [?if [and [sup--member $affected $c/name] [not [= $c/restart :temporary]]]
+              [then [sup--rec-state $c 'restarting']]
+              [else $c]]]]]
+        [= $rnames [?for [in $c $children3] [where [= $c/state 'restarting']] [yield $c/name]]]
+        [= $pend0 {'kind': 'restart' 'names': $rnames 'trigger': [$concat "" $cur/name] 'attempt': $attempt 'delay-ms': $delay-ms}]
+        [= $st2 [sup--st-set $st1 $children3 $st1/pends $st1/decisions false]]
+        [?if [< $delay-ms 1]
+          [then [?let [= $stR [sup--do-restart $st2 $pend0]]
+            [= $pends2 [sup--append $stR/pends [$fp:pure $wpend]]]
+            [sup--st-set $stR $stR/children $pends2 $stR/decisions false]]]
+          [else
+            [?let [= $ddur [$time:duration-ms $delay-ms]]
+              [= $rt [$sched:after $ddur $st/inbox]]
+              [= $pend {'kind': 'restart' 'timer': [$concat "" $rt@name] 'names': $rnames
+                        'trigger': [$concat "" $cur/name] 'attempt': $attempt 'delay-ms': $delay-ms}]
+              [= $pends2 [sup--append $st2/pends ($pend, $wpend)]]
+              [sup--st-set $st2 $st2/children $pends2 $st2/decisions false]]]]]]]]
+
+[?def sup--backoff-ms scope=private pure [returns int] ($st::map $attempt::int)
+  [?if [= $st/backoff :none]
+    [then 0]
+    [else [?let [= $p [sup--pow2 [- $attempt 1]]]
+      [= $raw [* $st/base-ms $p]]
+      [?if [> $raw $st/cap-ms] [then $st/cap-ms] [else $raw]]]]]]
+
+# names of $trigger and every later-started child (start order)
+[?def sup--tail-names scope=private pure [returns any] ($children $trigger::string)
+  [?if [$empty $children]
+    [then ()]
+    [else
+      [?let [= $h [$first $children]]
+        [?if [= $h/name $trigger]
+          [then [?for [in $c $children] [yield $c/name]]]
+          [else [?let [= $t [$tail $children]] [sup--tail-names $t $trigger]]]]]]]]
+
+[?def sup--give-up scope=private impure [returns map] ($st::map)
+  [?let [= $kids $st/children]
+    [= $running [?for [in $c $kids] [where [= $c/state 'running']] [yield $c/name]]]
+    [= $order [sup--reverse $running]]
+    [= $children2 [sup--stop-many $st $running $order]]
+    [= $_ev [?send [gave-up restarts=$st/decisions window-ms=$st/window-ms] to=$st/events]]
+    [sup--st-set $st $children2 $st/pends $st/decisions true]]]
+
+# ── ticks ───────────────────────────────────────────────────────────────────
+
+[?def sup--on-tick scope=private impure [returns map] ($st::map $tick)
+  [?let [= $_cp [?check-cancel]]
+    [= $tname [$concat "" $tick@timer]]
+    [= $allp $st/pends]
+    [= $hits [?for [in $p $allp] [where [= [?else $p/timer ""] $tname]] [yield $p]]]
+    [?if [< [$count $hits] 1]
+      [then $st]
+      [else
+        [?let [= $hit [$first $hits]]
+          [= $pends2 [?for [in $p $allp] [where [not [= [?else $p/timer ""] $tname]]] [yield $p]]]
+          [= $st2 [sup--st-set $st $st/children $pends2 $st/decisions false]]
+          [?if [= $hit/kind 'window']
+            [then [sup--st-set $st2 $st2/children $st2/pends [- $st2/decisions 1] false]]
+            [else [?if [= $hit/kind 'restart']
+              [then [sup--do-restart $st2 $hit]]
+              [else [?if [= $hit/kind 'health']
+                [then [sup--on-health $st2 $hit]]
+                [else $st2]]]]]]]]]]]
+
+[?def sup--on-health scope=private pure [returns map] ($st::map $hit::map)
+  [?let [= $kids $st/children]
+    [= $children2 [?for [in $c $kids]
+      [yield [?if [and [= $c/name $hit/name] [and [= $c/wname $hit/wname] [= $c/state 'running']]]
+        [then [sup--rec-with $c 'running' $c/wname 0 $c/spawns $c/mon $c/w]]
+        [else $c]]]]]
+    [sup--st-set $st $children2 $st/pends $st/decisions false]]]
+
+[?def sup--do-restart scope=private impure [returns map] ($st::map $pend::map)
+  [?let [= $kk $st/children]
+    [= $children2 [?for [in $c $kk]
+      [yield [?if [and [= $c/state 'restarting'] [sup--member $pend/names $c/name]]
+        [then
+          [?let [= $att [?if [= $c/name $pend/trigger] [then $pend/attempt] [else [+ $c/attempt 1]]]]
+            [= $_ev [?send [child-restarted name=$c/name attempt=$att delay-ms=$pend/delay-ms] to=$st/events]]
+            [= $rec2 [sup--spawn $st/sid $st/inbox $st/events $c $att]]
+            $rec2]]
+        [else $c]]]]]
+    # arm the per-child health (attempt-reset) timers for the respawned members
+    [= $hpends [?for [in $c $children2]
+        [where [and [= $c/state 'running'] [sup--member $pend/names $c/name]]]
+        [yield [sup--arm-health $st $c]]]]
+    [= $pends2 [sup--append $st/pends $hpends]]
+    [sup--st-set $st $children2 $pends2 $st/decisions false]]]
+
+[?def sup--arm-health scope=private impure [returns map] ($st::map $c::map)
+  [?let [= $wdur [$time:duration-ms $st/window-ms]]
+    [= $ht [$sched:after $wdur $st/inbox]]
+    {'kind': 'health' 'timer': [$concat "" $ht@name] 'name': [$concat "" $c/name]
+     'wname': [$concat "" $c/wname] 'names': () 'trigger': "" 'attempt': 0 'delay-ms': 0}]]
+
+# ── ops ─────────────────────────────────────────────────────────────────────
+
+[?def sup--on-op scope=private impure [returns element] ($st::map $msg)
+  [?let [= $op [$first $msg]]
+    [= $reply [$first $op/reply/*]]
+    [= $kind $op@kind]
+    [?if [= $kind :status]
+      [then [?let [= $snap [sup--snapshot $st/children $st/decisions]]
+        [= $_r [?send $snap to=$reply]]
+        [sup--loop $st]]]
+      [else [?if [= $kind :stop]
+        [then [?let [= $st2 [sup--stop-all $st]]
+          [= $_p [sup--publish-st $st2]]
+          [= $_r [?send [ok] to=$reply]]
+          [stopped]]]
+        [else [?if [= $kind :start-child]
+          [then [sup--op-start-child $st $op $reply]]
+          [else [?if [= $kind :stop-child]
+            [then [sup--op-stop-child $st $op $reply]]
+            [else [sup--loop $st]]]]]]]]]]]
+
+[?def sup--stop-all scope=private impure [returns map] ($st::map)
+  [?let [= $_cp [?check-cancel]]
+    [= $kids $st/children]
+    [= $running [?for [in $c $kids] [where [= $c/state 'running']] [yield $c/name]]]
+    [= $order [sup--reverse $running]]
+    [= $children2 [sup--stop-many $st $running $order]]
+    [= $children3 [?for [in $c $children2]
+        [yield [?if [= $c/state 'restarting'] [then [sup--rec-state $c 'stopped']] [else $c]]]]]
+    [sup--st-set $st $children3 $st/pends $st/decisions false]]]
+
+[?def sup--op-start-child scope=private impure [returns element] ($st::map $op $reply)
+  [?let [= $sp0 $op/spec/*]
+    [= $specs [?for [in $s $sp0] [yield $s]]]
+    [= $spec [$first $specs]]
+    [= $parsed [sup--parse-child $spec]]
+    [?if [sup--is-err $parsed]
+      [then [?let [= $_r [?send [sup-reply ok=false code=$parsed@code message=$parsed@message] to=$reply]]
+        [sup--loop $st]]]
+      [else
+        [?let [= $name $parsed/name]
+          [= $kids $st/children]
+          [= $dups [?for [in $c $kids] [where [= $c/name $name]] [yield $c]]]
+          [?if [> [$count $dups] 0]
+            [then [?let [= $_r [?send [sup-reply ok=false code='cx-err:CXER5091' message='E_SUP_DUPLICATE_CHILD: a child with this name is already present'] to=$reply]]
+              [sup--loop $st]]]
+            [else
+              [?let [= $rec [sup--spawn $st/sid $st/inbox $st/events $parsed 0]]
+                [= $recw [$fp:pure $rec]]
+                [= $children2 [sup--append $st/children $recw]]
+                [= $st2 [sup--st-set $st $children2 $st/pends $st/decisions false]]
+                [= $st3 [sup--publish-st $st2]]
+                [= $_r [?send [sup-reply ok=true] to=$reply]]
+                [sup--loop $st3]]]]]]]]]
+
+[?def sup--op-stop-child scope=private impure [returns element] ($st::map $op $reply)
+  [?let [= $name [$concat "" $op@name]]
+    [= $kids $st/children]
+    [= $hits [?for [in $c $kids] [where [= $c/name $name]] [yield $c]]]
+    [?if [< [$count $hits] 1]
+      [then [?let [= $_r [?send [sup-reply ok=true value=false] to=$reply]]
+        [sup--loop $st]]]
+      [else
+        [?let [= $st2 [sup--stop-many $st [$fp:pure $name] [$fp:pure $name]]]
+          [= $children2 [?for [in $c $st2] [where [not [= $c/name $name]]] [yield $c]]]
+          [= $st3 [sup--st-set $st $children2 $st/pends $st/decisions false]]
+          [= $st4 [sup--publish-st $st3]]
+          [= $_r [?send [sup-reply ok=true value=true] to=$reply]]
+          [sup--loop $st4]]]]]]
+
+# ── validation / parsing ────────────────────────────────────────────────────
+
+[?def sup--parse-child scope=private impure [returns any] ($spec)
+  [?let [= $_cp [?check-cancel]]
+    [= $ok-el [?match $spec [case [child] true] [else false]]]
+    [?if [not $ok-el]
+      [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: a child spec must be a [child …] element']]
+      [else
+        [?let [= $name [$concat "" [?else $spec@name ""]]]
+          [= $restart [?else $spec@restart :permanent]]
+          [= $shutdown [?else $spec@shutdown ""]]
+          [= $fn0 $spec/fn/*]
+          [= $fns [?for [in $f $fn0] [yield $f]]]
+          [?if [= $name ""]
+            [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: child spec needs name=']]
+            [else [?if [< [$count $fns] 1]
+              [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: child spec needs an [fn CALLABLE] child']]
+              [else [?if [not [or [= $restart :permanent] [or [= $restart :transient] [= $restart :temporary]]]]
+                [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: restart= must be :permanent | :transient | :temporary']]
+                [else
+                  [?let [= $sd-ms [?if [= [$concat "" $shutdown] ""] [then 5000]
+                      [else [sup--dur-ms $shutdown]]]]
+                    [?if [< $sd-ms 0]
+                      [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: shutdown= must be a non-negative duration']]
+                      [else {'name': $name 'fn': [$first $fns] 'restart': $restart 'shutdown-ms': $sd-ms
+                             'wname': "" 'attempt': 0 'spawns': 0 'state': 'new' 'mon': [none] 'w': [none]}]]]]]]]]]]]]]]
+
+[?def sup--parse-policy scope=private impure [returns any] ($policy)
+  [?let [= $_cp [?check-cancel]]
+    [= $ok-el [?match $policy [case [policy] true] [else false]]]
+    [?if [not $ok-el]
+      [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: policy must be a [policy …] element']]
+      [else
+        [?let [= $strategy [?else $policy@strategy :one-for-one]]
+          [= $max [?else $policy@max-restarts 3]]
+          [= $window [?else $policy@window ""]]
+          [= $backoff [?else $policy@backoff :none]]
+          [= $base [?else $policy@base ""]]
+          [= $cap [?else $policy@cap ""]]
+          [?if [not [or [= $strategy :one-for-one] [or [= $strategy :one-for-all] [= $strategy :rest-for-one]]]]
+            [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: strategy= must be :one-for-one | :one-for-all | :rest-for-one']]
+            [else [?if [< $max 1]
+              [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: max-restarts= must be >= 1']]
+              [else [?if [not [or [= $backoff :exp] [= $backoff :none]]]
+                [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: backoff= must be :exp | :none']]
+                [else
+                  [?let [= $window-ms [?if [= [$concat "" $window] ""] [then 5000] [else [sup--dur-ms $window]]]]
+                    [= $base-ms [?if [= [$concat "" $base] ""] [then 100] [else [sup--dur-ms $base]]]]
+                    [= $cap-ms [?if [= [$concat "" $cap] ""] [then 10000] [else [sup--dur-ms $cap]]]]
+                    [?if [< $window-ms 1]
+                      [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: window= must be a positive duration']]
+                      [else [?if [or [< $base-ms 1] [< $cap-ms 1]]
+                        [then [err code=cx-err:CXER5090 message='E_SUP_ARG_INVALID: base=/cap= must be positive durations']]
+                        [else {'strategy': $strategy 'max-restarts': $max 'window-ms': $window-ms
+                               'backoff': $backoff 'base-ms': $base-ms 'cap-ms': $cap-ms}]]]]]]]]]]]]]]]]
+
+# ── alive-check + op round-trip ─────────────────────────────────────────────
+
+[?def sup--alive scope=private impure [returns bool] ($sup)
+  [?let [= $wn [$concat "" $sup@worker]]
+    [= $wh [?fallback [?worker-handle name=$wn] [recover-with [none]]]]
+    [?if [sup--is-err $wh]
+      [then false]
+      [else
+        [?match $wh
+          [case [none] false]
+          [else
+            [?let [= $mon [?monitor $wh]]
+              [= $_sp [?receive from=$mon]]
+              [= $probe [?select [case [from $mon $e] [got]] [case [timeout 0] [alive]]]]
+              [= $_cl [?close $mon]]
+              [?match $probe [case [alive] true] [else false]]]]]]]]]
+
+[?def sup--call scope=private impure [returns element] ($sup $kind $name::string $payload $tries::int)
+  [?let [= $reply-name [sup--alloc]]
+    [= $rch [?channel name=[$concat "cxsup-reply-" $reply-name] buffer=1]]
+    [= $op [sup-op kind=$kind name=$name [reply $rch] [spec $payload]]]
+    [= $inbox [$first $sup/ctrl/*]]
+    [= $opw [$fp:pure $op]]
+    [= $_s [?send $opw to=$inbox]]
+    [sup--call-wait $sup $rch $tries]]]
+
+[?def sup--call-wait scope=private impure [returns element] ($sup $rch $tries::int)
+  [?let [= $batch [?receive from=$rch max=1 deadline=200]]
+    [?if [> [$count $batch] 0]
+      [then [$first $batch]]
+      [else
+        [?let [= $alive [sup--alive $sup]]
+          [?if [not $alive]
+            [then [err code=cx-err:CXER5093 message='E_SUP_CLOSED: the supervisor is stopped']]
+            [else [?if [< $tries 1]
+              [then [err code=cx-err:CXER5093 message='E_SUP_CLOSED: no reply from the supervision loop']]
+              [else [?let [= $t2 [- $tries 1]] [sup--call-wait $sup $rch $t2]]]]]]]]]]]
+
+# ── public surface ──────────────────────────────────────────────────────────
+
+[?def start scope=public impure [returns element] ($policy $children)
+  [?let [= $pol [sup--parse-policy $policy]]
+    [= $parsed [?for [in $c $children] [yield [sup--parse-child $c]]]]
+    [= $bad [?for [in $p $parsed] [where [sup--is-err $p]] [yield $p]]]
+    [?if [sup--is-err $pol]
+      [then $pol]
+      [else [?if [> [$count $bad] 0]
+      [then [$first $bad]]
+      [else
+        [?let [= $names [?for [in $p $parsed] [yield $p/name]]]
+          [= $dups [?for [in $a $names]
+              [where [> [$count [?for [in $b $names] [where [= $a $b]] [yield $b]]] 1]]
+              [yield $a]]]
+          [?if [> [$count $dups] 0]
+            [then [err code=cx-err:CXER5091 message='E_SUP_DUPLICATE_CHILD: child names must be unique per supervisor']]
+            [else
+             # COMPOSITION GATE (RULED: SPF-1(b), issue #895). Everything above
+             # is argument validation — pure, and profile-independent: a
+             # malformed policy or child spec is a caller bug in every build,
+             # so CXER5090/CXER5091 stay its answer everywhere. Composition
+             # starts HERE, where the identity, the four channels and the loop
+             # worker are minted, and here a missing substrate is the truthful
+             # complaint. supervise cannot honour its own contract without
+             # sched — backoff delays, the intensity window and per-child
+             # attempt-reset are all sched posts — so a no-sched build refuses
+             # at composition rather than yielding a supervisor that silently
+             # never backs off, never expires its window and never resets
+             # attempts.
+             [?if [not [sup--has-sched]]
+              [then [err code=cx-err:CXER5095 message='E_SUP_NO_SCHED: the local-effect pack `sched` is absent from this build; cx-stdlib/supervise needs it for backoff delays, the intensity window and per-child attempt-reset']]
+              [else
+              [?let [= $sid [sup--alloc]]
+                [= $inbox [?channel name=[$concat "cxsup-" $sid "-inbox"] sharing=independent retention=window keep=1024]]
+                [= $events [?channel name=[$concat "cxsup-" $sid "-events"] sharing=independent retention=window keep=256]]
+                [= $statusch [?channel name=[$concat "cxsup-" $sid "-status"] sharing=independent retention=window keep=1]]
+                [= $sleepch [?channel name=[$concat "cxsup-" $sid "-sleep"] buffer=1]]
+                [= $isub [?subscribe from=$inbox]]
+                [= $started [?for [in $r $parsed] [yield [sup--spawn $sid $inbox $events $r 0]]]]
+                [= $st {'sid': $sid 'inbox': $inbox 'isub': $isub 'events': $events 'statusch': $statusch
+                        'sleepch': $sleepch 'strategy': $pol/strategy 'max-restarts': $pol/max-restarts
+                        'window-ms': $pol/window-ms 'backoff': $pol/backoff 'base-ms': $pol/base-ms 'cap-ms': $pol/cap-ms
+                        'children': $started 'pends': () 'decisions': 0 'gave-up': false}]
+                [= $_p [sup--publish-st $st]]
+                [= $lname [$concat "cxsup-" $sid "-loop"]]
+                [= $w [?worker name=$lname [sup--loop $st]]]
+                [= $nkids [$count $started]]
+                [supervisor sup=$sid worker=$lname state="running" strategy=$pol/strategy
+                  children=$nkids on-close="supervise/stop"
+                  __cx_close_id__=$isub@__cx_close_id__
+                  [ctrl $inbox] [events-ch $events] [status-ch $statusch]]]]]]]]]]]]]]
+
+[?def stop scope=public impure [returns null] ($sup)
+  [?let [= $alive [sup--alive $sup]]
+    [?if [not $alive]
+      [then null]
+      [else
+        [?let [= $r [?fallback [sup--call $sup :stop "" "" 100]
+            [recover-with [none]]]]
+          null]]]]]
+
+[?def start-child scope=public impure [returns element] ($sup $child)
+  [?let [= $_cp [?check-cancel]]
+    [= $alive [sup--alive $sup]]
+    [?if [not $alive]
+      [then [err code=cx-err:CXER5093 message='E_SUP_CLOSED: start-child on a stopped supervisor']]
+      [else
+        [?let [= $r [sup--call $sup :start-child "" $child 100]]
+          [?if [sup--is-err $r]
+            [then $r]
+            [else [?if $r@ok
+              [then [ok]]
+              [else [err code=$r@code message=$r@message]]]]]]]]]]
+
+[?def stop-child scope=public impure [returns bool] ($sup $name::string)
+  [?let [= $_cp [?check-cancel]]
+    [= $alive [sup--alive $sup]]
+    [?if [not $alive]
+      [then [err code=cx-err:CXER5093 message='E_SUP_CLOSED: stop-child on a stopped supervisor']]
+      [else
+        [?let [= $r [sup--call $sup :stop-child $name "" 100]]
+          [?if [sup--is-err $r]
+            [then $r]
+            [else $r@value]]]]]]]
+
+[?def status scope=public impure [returns element] ($sup)
+  [?let [= $alive [sup--alive $sup]]
+    [?if [not $alive]
+      [then [?let [= $statusch [$first $sup/status-ch/*]]
+        [sup--read-cell $statusch]]]
+      [else
+        [?let [= $r [?fallback [sup--call $sup :status "" "" 100]
+            [recover-with [none]]]]
+          [?match $r
+            [case [supervisor-status] $r]
+            [else [?let [= $statusch [$first $sup/status-ch/*]]
+              [sup--read-cell $statusch]]]]]]]]]
+
+[?def events scope=public impure [returns element] ($sup)
+  [?let [= $alive [sup--alive $sup]]
+    [?if [not $alive]
+      [then [err code=cx-err:CXER5093 message='E_SUP_CLOSED: events on a stopped supervisor']]
+      [else
+        [?let [= $evch [$first $sup/events-ch/*]]
+          [= $try [?subscribe from=$evch from-pos=0]]
+          [?if [sup--is-err $try]
+            [then [?subscribe from=$evch from-pos=$try@floor]]
+            [else $try]]]]]]]
+
+
+[; co-located docs. ]
+[module-doc name=supervise
+  [scope """Restart policies over monitored workers: run a set of named children (each an arity-0 callable spawned as a worker) under a declared policy — strategy (:one-for-one, :one-for-all, :rest-for-one), restart intensity (max-restarts within a window), and per-child exponential backoff — restarting them when they die according to each child's restart type (:permanent, :transient, :temporary). Provides start, stop, dynamic start-child/stop-child, status snapshots, and an observable event stream of the supervisor's own acts. The supervision loop runs in an ordinary worker, so supervisors nest by composition: a give-up terminates the loop with CXER5094 and a parent supervisor monitoring it escalates by policy. Composes workers, monitors, fan-out channels, and sched timers; adds no new concurrency primitive and no capability."""]]
+[fn-doc name=start scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Validate a policy and child specs, spawn the children and the supervision loop, and return the closeable [supervisor] handle."""]
+  [example [code """[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-start" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $ev [$sup:events $s]]
+[= $e [?receive from=$ev max=1 deadline=5000]]
+[= $_ [$sup:stop $s]]
+$e]"""] [expect """([child-started name=a attempt=0])"""]]
+]
+[fn-doc name=stop scope=public purity=impure
+  [sig """-> null"""]
+  [summary """Gracefully stop the supervisor: cancel children in reverse start order, each bounded by its shutdown, then stop the loop; idempotent."""]
+  [example [code """[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-stop" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $r1 [$sup:stop $s]]
+[= $r2 [$sup:stop $s]]
+($r1, $r2)]"""] [expect """(null, null)"""]]
+]
+[fn-doc name=start-child scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Add and start a child under the running policy; it joins at the end of start order. Duplicate names refuse CXER5091."""]
+  [example [code """[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-sc" buffer=1]]
+[= $c2 [?channel name="doc-sup-sc2" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $kid [child name="b" [fn [?fn () [?receive from=$c2]]]]]
+[= $r [$sup:start-child $s $kid]]
+[= $st [$sup:status $s]]
+[= $rows [$first $st/*]]
+[= $_ [$sup:stop $s]]
+($r, [$count $rows])]"""] [expect """([ok], 2)"""]]
+]
+[fn-doc name=stop-child scope=public purity=impure
+  [sig """-> bool"""]
+  [summary """Cancel (bounded by its shutdown) and REMOVE a child by name — true if it was present, false if unknown (a value; idempotent removal is normal)."""]
+  [example [code """[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-rc" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $r1 [$sup:stop-child $s "a"]]
+[= $r2 [$sup:stop-child $s "a"]]
+[= $_ [$sup:stop $s]]
+($r1, $r2)]"""] [expect """(true, false)"""]]
+]
+[fn-doc name=status scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Read a [supervisor-status] snapshot — restarts-in-window plus each child's name, state (running|restarting|abandoned|stopped), and attempt count; stays readable after stop."""]
+  [example [code """[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-st" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $st [$sup:status $s]]
+[= $_ [$sup:stop $s]]
+$st]"""] [expect """[supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0])]"""]]
+]
+[fn-doc name=events scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Subscribe to the supervisor's own acts — child-started/child-exited/child-restarted/child-abandoned/gave-up — as a standard fan-out subscription replayed from the retained floor."""]
+  [example [code """[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-ev" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=5000]]
+[= $_k [?send [go] to=$c]]
+[= $e1 [?receive from=$ev max=1 deadline=5000]]
+[= $_ [$sup:stop $s]]
+($e0, $e1)]"""] [expect """(([child-started name=a attempt=0]), ([child-exited name=a reason=:done]))"""]]
+]

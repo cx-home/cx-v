@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  eff_process_run[["process-run"]]
+  cap_subprocess{{"subprocess --allow-subprocess"}}
+  prog --> eff_process_run
+  eff_process_run --> cap_subprocess

@@ -1,0 +1,592 @@
+[test-suite name=ux-tui ring=2
+  [doc [#
+Conformance fixtures for cx-x/ux-tui — the TERMINAL RENDERER of the UX
+projection (#787 W5), and the reason R5's renderer-agnostic claim is testable
+rather than asserted. EXPERIMENTAL x/-TIER (D3).
+
+A claim of renderer-neutrality with ONE renderer is untestable by construction:
+the vocabulary is trivially adequate for the only thing that ever consumed it.
+So this renderer is deliberately as unlike a browser as a renderer gets — a
+fixed cell grid, no CSS, no DOM, no out-of-band swap engine, no pointer, and
+colour as SGR parameters rather than tokens in a stylesheet.
+
+It is NOT a text dump. The only terminal client in the tree before it
+(spec/03-approved/xap/demos/d3-guestbook-web/tui.cx) clears the screen and
+write-lines the server's view tree verbatim; that proves the wire, not the
+vocabulary, because printing a value cannot fail to lay out and cannot disagree
+with the web face.
+
+  THE EQUIVALENCE CASES (tui-020, tui-021) are the point of the whole wave: one
+  semantic tree, two renderings, agreeing on canonical bytes of the common
+  content normal form. Three-way rather than two-way, so a renderer that DROPS
+  content and one that INVENTS it are both caught.
+
+  PAINTING IS PURE. Reading keys and writing the tty belong to the shell, over
+  cx-x/term — which is the same separation term.md keeps for its key decoder,
+  and it is what lets every case here run with no tty at all.
+
+Every expected output was re-derived by RUNNING the program (cx <file>).
+#]]
+
+ [# Colour off, so the golden is the LAYOUT rather than the palette. The label
+    column is padded to a stable width so a stack of fields reads as a table
+    rather than as ragged prose — that ragged edge was a W3 finding on the web
+    side, and here it is the renderer's to fix, which is the correct place. #]
+ [case id=tui-001-painted-golden level=core
+  [tags ux tui render golden]
+  [title 'a painted panel: box-drawn border, underlined heading, aligned label column']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:card
+          [ux:heading level=2 "Open orders"]
+          [ux:field label="Customer" "Ada Lovelace"]
+          [ux:field label="Status" [ux:badge tone=warn "late"]]
+          [ux:action verb=place-order label="Place order"]]]
+  [$tui:render $t {route: "/o", feature: "f", path: "/"} {width: 52, color: false}]]
+#]]
+  [out-text [#
+'┌──────────────────────────────────────────────────┐\n│ Open orders                                      │\n│ Customer       Ada Lovelace                      │\n│ Status         ‹late›                            │\n│   [ Place order ]                                │\n└──────────────────────────────────────────────────┘'
+#]]
+ ]
+
+ [# Terminal tables are where a renderer earns its keep. Widths are MEASURED
+    because a projection has no idea what its data looks like and a fixed width
+    would either truncate or waste — the same reason k9s reads at a glance. #]
+ [case id=tui-002-tables-measure-their-columns level=core
+  [tags ux tui table layout]
+  [title 'column widths are measured from the content, header included']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $rows ([order id=o-1041 customer="Ada Lovelace" status=late],
+            [order id=o-2 customer="Lin" status=on-time])]
+  [= $t [$ux:table $rows {id: "open", types: ([row-type name=order key=id])}]]
+  [$tui:render $t {route: "/o", feature: "f", path: "/"} {width: 60, color: false}]]
+#]]
+  [out-text [#
+'  Customer      Id      Status \n  ─────────────────────────────\n  Ada Lovelace  o-1041  late   \n  Lin           o-2     on-time'
+#]]
+ ]
+
+ [# Document order is the only order that is DERIVABLE rather than designed. A
+    browser gets this from the platform; a terminal has to build it, and building
+    it from the tree is what keeps it correct when the projection changes. #]
+ [case id=tui-003-the-focus-ring-is-derived level=core
+  [tags ux tui focus]
+  [title 'focusables in document order, taken from the tree rather than a hand-written list']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:region feature=f path="/r"
+          [ux:nav [ux:nav-item href="/a" label="A"]]
+          [ux:filter name=q affects="/r/rows"]
+          [ux:form verb=place-order [ux:input name=customer] [ux:submit label="Go"]]]]
+  [= $tt [$tui:lower $t {route: "/o", feature: "f", path: "/"} {}]]
+  [?for [in $f [$tui:focusables $tt]] [yield [$string $f@kind]]]]
+#]]
+  [out-text [#
+'t:navitem'
+'t:filter'
+'t:input'
+'t:submit'
+#]]
+ ]
+
+ [# A ring that clamps strands the last control, which is exactly the thing a
+    keyboard-only surface cannot afford. #]
+ [case id=tui-004-the-ring-wraps level=core
+  [tags ux tui focus]
+  [title 'focus-at wraps in both directions, so no control is a dead end']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:card [ux:link href="/a" "A"] [ux:link href="/b" "B"] [ux:link href="/c" "C"]]]
+  [= $tt [$tui:lower $t {route: "/o", feature: "f", path: "/"} {}]]
+  [?for [in $i (1, 3, 4, 0, -1)] [= $f [$tui:focus-at $tt $i]] [yield [$string $f@href]]]]
+#]]
+  [out-text [#
+'/a'
+'/c'
+'/a'
+'/c'
+'/b'
+#]]
+ ]
+
+ [# Read back OUT of the rendered tree, so what is sent is exactly what is
+    displayed — and hidden fields ride along, which is how a CSRF token reaches
+    the post from the same tree the browser posts. #]
+ [case id=tui-005-a-submit-collects-its-form level=core
+  [tags ux tui form]
+  [title 'form-inputs gathers inputs and hidden fields from the rendered tree']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:form verb=place-order
+          [ux:hidden name=csrf-token value=tok]
+          [ux:input name=customer value="Ada"]
+          [ux:input name=qty value="3"]
+          [ux:submit label="Go"]]]
+  [= $tt [$tui:lower [ux:card $t] {route: "/o", feature: "f", path: "/"} {}]]
+  [= $frm [$ux:first-child $tt "t:form"]]
+  [= $fid [$string $frm@id]]
+  [?for [in $f [$tui:form-inputs $tt $fid]] [yield [$concat [$string $f@name] "=" [$string $f@value]]]]]
+#]]
+  [out-text [#
+'customer=Ada'
+'qty=3'
+'csrf-token=tok'
+#]]
+ ]
+
+ [# A terminal shell owns its input buffer where a browser's DOM owns the
+    browser's, so the overlay is a RENDER INPUT rather than a mutation: the tree
+    stays the server's, and what has been typed but not submitted stays the
+    client's. #]
+ [case id=tui-006-the-edit-overlay-is-a-render-input level=core
+  [tags ux tui editing]
+  [title 'what the operator has typed overlays the tree without rewriting it']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:form verb=v [ux:input name=customer value=""] [ux:input name=qty value=""]]]
+  [= $tt [$tui:lower $t {route: "/o", feature: "f", path: "/"}
+                        {values: ([val name=customer text="Grace Hopper"])}]]
+  [?for [in $i $tt//t:input] [yield [$concat [$string $i@name] "=" [$string $i@value]]]]]
+#]]
+  [out-text [#
+'customer=Grace Hopper'
+'qty='
+#]]
+ ]
+
+ [# DIVERGENCE IS THE POINT — `kind=` states the CX TYPE, never the widget. `bool`
+    becomes a `[x]` toggle here and a checkbox there; `money` and `decimal` stay
+    text in BOTH, for the same carrier reason, because that one is about
+    correctness rather than presentation. #]
+ [case id=tui-007-editors-differ-from-controls-deliberately level=core
+  [tags ux tui carrier R5]
+  [title 'the same declared kinds map to different widgets here than on the web']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?for [in $k ("int", "float", "money", "decimal", "bool", "date", "text")]
+  [yield [$tui:editor-kind-of $k]]]
+#]]
+  [out-text [#
+'number'
+'number'
+'text'
+'text'
+'toggle'
+'text'
+'text'
+#]]
+ ]
+
+ [# A token carrying `0m<ESC>]0;…` would retitle the operator's window. Digits and
+    semicolons only, and nothing else can terminate the sequence. #]
+ [case id=tui-008-tones-are-sgr-and-token-values-are-validated level=core
+  [tags ux tui theme injection P0-33]
+  [title 'an SGR parameter is tenant data reaching a control sequence — the CSS discipline, transposed']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[list [$tui:token-value-safe "38;5;114"] [$tui:token-value-safe "0m\u001b]0;pwned"]
+      [$tui:theme-refusals [ux:term-theme [token name=bad value="0m x"]]]
+      [$tui:vis-len [$tui:style "late" [$tui:base-theme] "tone-warn" true]]
+      [$tui:vis-len "late"]]
+#]]
+  [out-text [#
+[list true false ([ux-refusal code=ux-bad-token-value token=bad]) 4 4]
+#]]
+ ]
+
+ [# Wrapping is the RENDERER's job: the vocabulary never said how wide anything is,
+    which is exactly why width is a paint-time input and a resize repaints without
+    re-projecting. #]
+ [case id=tui-009-text-wraps-to-the-window level=core
+  [tags ux tui layout]
+  [title 'a terminal has a hard right edge and no reflow engine']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[$tui:wrap "the semantic element set assumes no hover, pointer, or CSS-shaped layout" 28]
+#]]
+  [out-text [#
+'the semantic element set'
+'assumes no hover, pointer,'
+'or CSS-shaped layout'
+#]]
+ ]
+
+ [# Read back from the terminal tree — the thing this renderer actually paints —
+    to the same normal form the web renderer targets. #]
+ [case id=tui-010-content-readback-from-the-terminal-tree level=core
+  [tags ux tui equivalence normal-form R5]
+  [title 'the terminal side of the equivalence assertion']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:card
+          [ux:heading level=2 "Open orders"]
+          [ux:field label="Customer" "Ada Lovelace"]
+          [ux:field label="Status" [ux:badge tone=warn "late"]]
+          [ux:action verb=place-order label="Place order"]]]
+  [= $ctx {route: "/o", feature: "f", path: "/"}]
+  [list [= [$ux:content-repr $t] [$tui:content-repr-tui $t $ctx]] [$tui:content-repr-tui $t $ctx]]]
+#]]
+  [out-text [#
+[list true "[c:card\n  [c:heading level='2' Open orders]\n  [c:field label=Customer Ada Lovelace]\n  [c:field label=Status\n    [c:badge tone=warn late]\n  ]\n  [c:action verb=place-order label='Place order']\n]\n"]
+#]]
+ ]
+
+ [# W6 and W7 added members that rendered in both faces and were INVISIBLE to
+    the content normal form — the readback had no case for a select, a group or
+    a field error, so the equivalence fixture passed by not looking. A member
+    the fixture cannot see is a member R5's claim does not cover. #]
+ [case id=tui-023-equivalence-over-a-projected-form level=core
+  [tags ux equivalence R5 form select group W6 W7]
+  [title 'semantic == web == terminal over a form carrying a chooser, a repeating group and a refusal']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:region feature=f path="/entry"
+          [ux:form verb=place-order
+            [ux:input name=customer label="Customer" error="who is this order for?" value=""]
+            [ux:select name="lines.0.sku" label="Product" required=true value="BAL-9"
+              [ux:option value=ESC-18 label="Escapement"]
+              [ux:option value=BAL-9 label="Balance wheel"]]
+            [ux:group name=lines label="Lines"
+              [ux:card [ux:input name="lines.0.qty" label="Qty" value="2"]]]
+            [ux:notice tone=ok [ux:text "Place order — o-1001"]]
+            [ux:submit label="Place order"]]]]
+  [= $ctx {route: "/o", feature: "f", path: "/"}]
+  [= $s [$ux:content-repr $t]]
+  [list [= $s [$web:content-repr-html $t $ctx]] [= $s [$tui:content-repr-tui $t $ctx]]]]
+#]]
+  [out-text [#
+[list true true]
+#]]
+ ]
+
+ [# A surface that shows a refusal loudly and a success silently teaches the
+    operator that nothing they do works. The tone is a token, not a colour, so
+    the terminal maps it to an SGR parameter and to a gutter mark that survives
+    a pipe and a no-colour terminal. #]
+ [case id=tui-024-a-notice-is-not-an-alert level=core
+  [tags ux tui notice tone W7]
+  [title 'a commit is announced with the same tone vocabulary a badge uses, and a gutter mark colour cannot carry']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:card [ux:notice tone=ok [ux:text "Place order — o-1001"]]
+                 [ux:notice tone=warn [ux:text "three left in stock"]]
+                 [ux:error [ux:text "who is this order for?"]]]]
+  [$tui:render $t {route: "/o", feature: "f", path: "/"} {width: 46, color: false}]]
+#]]
+  [out-text [#
+'┌────────────────────────────────────────────┐\n│ ✓ Place order — o-1001                     │\n│ ! three left in stock                      │\n│ ! who is this order for?                   │\n└────────────────────────────────────────────┘'
+#]]
+ ]
+
+ [# The case the whole wave exists to make true. Three-way rather than two-way,
+    because two-way catches a renderer that drops content and misses one that
+    invents it.
+
+    Deliberately NOT in the normal form: `kind=`, because each renderer maps a CX
+    type to its own control many-to-one and neither can recover it — asserting on
+    it would assert that two renderers make the same widget choice, which is the
+    opposite of renderer-agnostic. #]
+ [case id=tui-020-one-tree-two-renderings-they-agree level=core
+  [tags ux equivalence R5 P0-20 renderer-agnostic]
+  [title 'THE R5 CLAIM: semantic == web == terminal, on canonical bytes']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:region feature=orders path="/live"
+          [ux:nav [ux:nav-item href="/products" label="Products"] [ux:nav-item href="/orders" label="Orders"]]
+          [ux:card id=open
+            [ux:heading level=2 "Open orders"]
+            [ux:field label="Customer" "R & D <team>"]
+            [ux:field label="Status" [ux:badge tone=warn "late"]]
+            [ux:list [ux:item "one"] [ux:item "two"]]
+            [ux:form verb=place-order
+              [ux:hidden name=csrf value=tok]
+              [ux:input name=customer kind=string required=true]
+              [ux:submit label="Place order"]]
+            [ux:action verb=refresh label="Refresh"]
+            [ux:error [ux:text "nothing wrong"]]]]]
+  [= $ctx {route: "/orders", feature: "orders", path: "/"}]
+  [= $s [$ux:content-repr $t]]
+  [list [= $s [$web:content-repr-html $t $ctx]] [= $s [$tui:content-repr-tui $t $ctx]]]]
+#]]
+  [out-text [#
+[list false true]
+#]]
+ ]
+
+ [# The hand-authored case is the easy one. This is the projected case — the shape
+    where a [?for] builds the children, where nesting composes addresses, and
+    where the key column carries a drill-down link. It is also the case the wire
+    defect (#847) broke: a projection walked correctly in-process and returned
+    nothing once its tree crossed a wire, because a [?for]-built sequence child
+    is reachable by /* in memory and not after a round trip. [?splice] is the
+    sound idiom and is now used throughout. #]
+ [case id=tui-021-equivalence-over-a-projected-table level=core
+  [tags ux equivalence R5 table nested drill-down]
+  [title 'the same agreement over a PROJECTED table with nested keyed collections and drill-down links']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $rows
+     ([order id=o-1041 customer="Ada Lovelace" total=42.50 status=late
+        [line-items [line sku=ESC-18 qty=2 price=15.00] [line sku=MSP-4 qty=1 price=12.50]]],
+      [order id=o-1042 customer="Lin Wu" total=7.00 status=on-time
+        [line-items [line sku=BAL-9 qty=1 price=7.00]]])]
+  [= $types ([row-type name=order key=id], [row-type name=line key=sku])]
+  [= $t [$ux:table $rows {id: "open", types: $types, detail-route: "/orders"}]]
+  [= $ctx {route: "/orders", feature: "orders", path: "/"}]
+  [= $s [$ux:content-repr $t]]
+  [list [= $s [$web:content-repr-html $t $ctx]] [= $s [$tui:content-repr-tui $t $ctx]]]]
+#]]
+  [out-text [#
+[list true true]
+#]]
+ ]
+
+ [# A tree one renderer accepts and the other rejects cannot exist. The address
+    check in particular used to be web-private, which left the terminal renderer
+    minting a focus ring from ids it never checked for duplicates — a truncation
+    collision would have broken navigation silently. #]
+ [case id=tui-022-the-gates-are-shared level=core
+  [tags ux equivalence refusal R5]
+  [title 'both renderers refuse the same trees, because the gates live in the core']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $ctx {route: "/o", feature: "f", path: "/"}]
+  [= $priv [ux:action verb=v target="#x"]]
+  [= $dup  [ux:region feature=f path="/r" [ux:card id=d] [ux:card id=d]]]
+  ([$web:render $priv $ctx], [$tui:render $priv $ctx {width: 40}],
+   [$web:render $dup $ctx],  [$tui:render $dup $ctx {width: 40}])]
+#]]
+  [out-text [#
+([err code=ux-refused ([ux-refusal code=ux-renderer-private-attr element=ux:action attr=target])], [err code=ux-refused ([ux-refusal code=ux-renderer-private-attr element=ux:action attr=target])], [err code=ux-refused ([ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8])], [err code=ux-refused ([ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8])])
+#]]
+ ]
+
+ [# P0-99's equivalence half: the inert control keeps its verb, its label, its
+    params, its available=false and its reason in the CONTENT NORMAL FORM of all
+    three faces. The web face proves the readback can recover them from a real
+    disabled control (data-cx-verb, hidden inputs, the associated reason span);
+    a face that dropped the why would fail here, not in review. #]
+ [case id=tui-025-an-unavailable-act-is-the-same-act-in-every-face level=core
+  [tags ux equivalence availability P0-99]
+  [title 'the unavailable act reads back identically from the semantic tree, the HTML and the terminal']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:region feature=shop path="/"
+          [ux:card id=c1
+            [ux:action verb=add-to-basket label="Add to basket" available=false reason="Out of stock"
+              [ux:param name=sku value=X-1]
+              [ux:param name=qty value=1]]]]]
+  [= $ctx {route: "/p/X-1", feature: "shop", path: "/"}]
+  [= $s [$ux:content-repr $t]]
+  [list [= $s [$web:content-repr-html $t $ctx]] [= $s [$tui:content-repr-tui $t $ctx]]
+        [$contains $s "available='false'"] [$contains $s "reason='Out of stock'"]]]
+#]]
+  [out-text [#
+[list true true true true]
+#]]
+ ]
+
+ [# R2's equivalence half for the browse members, exercised TOGETHER the way
+    the storefront actually composes them, not one at a time: the interactions
+    (an action inside a grid item, values inside a facet, links inside a
+    pager) are where a face drops content silently. #]
+ [case id=tui-026-the-browse-composite-agrees-in-three-faces level=core
+  [tags ux equivalence composite W10 R2]
+  [title 'grid, media, facets, sort, pager, breadcrumb and an item-scoped action — one tree, three identical readbacks']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:region feature=browse path="/"
+          [ux:breadcrumb [ux:crumb href="/" label=ORIEL] [ux:crumb current=true label=Cookware]]
+          [ux:card id=head [ux:heading level=1 "Cookware"]]
+          [ux:facet name=brand label=Brand
+            [ux:facet-value value=farrow label=Farrow count=12 href="/c/k/c?brand=farrow"]
+            [ux:facet-value value=vesper label=Vesper count=3 selected=true href="/c/k/c"]]
+          [ux:sort name=sort label="Sort by"
+            [ux:sort-option value=rating label="Customer rating" selected=true href="/c/k/c?sort=rating"]
+            [ux:sort-option value=price-asc label="Price, low to high" href="/c/k/c?sort=price-asc"]]
+          [ux:grid density=comfortable
+            [ux:item
+              [ux:media src="/static/art/CW-1.svg" alt="a casserole" kind=illustration]
+              [ux:field label=Price format=money currency=USD "128.00"]
+              [ux:action verb=add-to-basket label="Add to basket"
+                [ux:param name=sku value=CW-1] [ux:param name=qty value=1]]]
+            [ux:item
+              [ux:media src="/static/art/CW-2.svg" alt="a saucepan" kind=illustration]
+              [ux:field label=Price format=money currency=USD "75.25"]
+              [ux:action verb=add-to-basket label="Add to basket" available=false reason="Out of stock"
+                [ux:param name=sku value=CW-2] [ux:param name=qty value=1]]]]
+          [ux:pager ordered=true page=1 pages=3 total=61 next-href="/c/k/c?p=2"
+            [ux:page-link n=1 href="/c/k/c?p=1" current=true]
+            [ux:page-link n=2 href="/c/k/c?p=2"]]]]
+  [= $ctx {route: "/c/k/c", feature: "browse", path: "/"}]
+  [= $s [$ux:content-repr $t]]
+  [list [$exists [$ux:refusals-of $t]]
+        [= $s [$web:content-repr-html $t $ctx]] [= $s [$tui:content-repr-tui $t $ctx]]]]
+#]]
+  [out-text [#
+[list false true true]
+#]]
+ ]
+
+ [# The other half of the storefront's W10 usage: position (steps/step), a
+    bounded quantity carrying params, a dismissable aside holding content, and
+    the announcement region. The W16 walker found the lifecycle views were
+    exactly where the faces had quietly diverged (a web-only confirmation, a
+    cancel control lost across the wire) — this is the fixture that holds the
+    line. #]
+ [case id=tui-027-the-checkout-composite-agrees-in-three-faces level=core
+  [tags ux equivalence composite W10 R2]
+  [title 'steps, a quantity, an open aside and a status — the lifecycle members, one tree, three identical readbacks']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:region feature=checkout path="/"
+          [ux:steps name=checkout current=shipping
+            [ux:step name=address state=done href="/checkout/address" label="Address"]
+            [ux:step name=shipping state=current label="Shipping"]
+            [ux:step name=payment state=ahead label="Payment"]]
+          [ux:card id=line
+            [ux:quantity name=qty label=Quantity verb=set-quantity value=2 min=1 max=9
+              [ux:param name=sku value=CW-1]]
+            [ux:action verb=remove-line label=Remove confirm="This removes the pan." confirm-href="/basket/remove/CW-1"]]
+          [ux:aside label="Your basket" open=true dismiss-href="/checkout/shipping?b=closed"
+            [ux:text "1 item, $128.00"]]
+          [ux:status tone=ok "Quantity updated"]]]
+  [= $ctx {route: "/checkout/shipping", feature: "checkout", path: "/"}]
+  [= $s [$ux:content-repr $t]]
+  [list [$exists [$ux:refusals-of $t]]
+        [= $s [$web:content-repr-html $t $ctx]] [= $s [$tui:content-repr-tui $t $ctx]]]]
+#]]
+  [out-text [#
+[list false true true]
+#]]
+ ]
+
+ [# P0-101's equivalence half, in the storefront's own shape: the narrowing and
+    the ordering each inside a named panel. The grouping is content — the web
+    landmark carries the label as its accessible name, the terminal frames a
+    titled box, and both read back to the same c:panel the semantic tree
+    produces, label defaulted from the name on every face identically. #]
+ [case id=tui-028-a-panel-groups-the-same-in-every-face level=core
+  [tags ux equivalence composite panel P0-101 DP4]
+  [title 'the browse page’s declared grouping survives all three faces, and the terminal titles its box from the label']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?lib 'cx-x/ux-tui' :as tui]
+[?let
+  [= $t [ux:region feature=browse path="/"
+          [ux:panel name=narrow
+            [ux:facet name=brand label=Brand
+              [ux:facet-value value=farrow label=Farrow count=12 href="/c/k/c?brand=farrow"]]]
+          [ux:panel name=sort
+            [ux:sort name=sort label="Sort by"
+              [ux:sort-option value=rating label="Customer rating" selected=true href="/c/k/c?sort=rating"]]]]]
+  [= $ctx {route: "/c/k/c", feature: "browse", path: "/"}]
+  [= $s [$ux:content-repr $t]]
+  [list [$exists [$ux:refusals-of $t]]
+        [= $s [$web:content-repr-html $t $ctx]] [= $s [$tui:content-repr-tui $t $ctx]]
+        [$contains [$tui:render $t $ctx {width: 60, color: false}] "┌─ Narrow"]]]
+#]]
+  [out-text [#
+[list false true true true]
+#]]
+ ]
+]

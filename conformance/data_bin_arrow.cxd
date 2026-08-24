@@ -1,4 +1,4 @@
-[test-suite name=data-bin-arrow
+[test-suite name=data-bin-arrow ring=0
   [doc [#
 # CX Conformance — Apache Arrow C-Data interop round-trips
 # Version: 0.3 — 2026-05-09 (Phase 7.74c-conformance-runner)
@@ -84,8 +84,8 @@ g
   [expect-values [#
 alice
 bob
-0.91
-0.88
+9.1e-1
+8.8e-1
 #]]
  ]
 
@@ -300,8 +300,15 @@ tsn:UTC
 #]]
  ]
 
- [case id=arrow-011-datetime-offset-normalizes level=extended
-  [tags arrow roundtrip datetime canonical_offset]
+ [case id=arrow-011-datetime-offset-rides-transport level=extended
+  [; ── RE-PINNED at the #795 batch (2026-08-15): the #807(d) offset
+     transport carriage reached this lane late — the arrow conform
+     suite was outside every union target until the full aggregate was
+     wired in. The CX text now preserves the +02:00 render; the ARROW
+     side still carries timestamp[ns, UTC] (the instant is
+     UTC-normalized on the wire either way — Arrow has no offset
+     channel, an honest bridge boundary).]
+  [tags arrow roundtrip datetime canonical_offset 807]
   [meta [#
 chunk_at: 1024
 #]]
@@ -314,7 +321,10 @@ chunk_at: 1024
 u
 tsn:UTC
 #]]
-  [expect-values [#
+  [expect-values-in [#
+2025-06-30T23:00:00+02:00
+#]]
+  [expect-values-out [#
 2025-06-30T21:00:00Z
 #]]
  ]
@@ -370,10 +380,10 @@ dave
 88
 73
 95
-0.91
-0.88
-0.73
-0.95
+9.1e-1
+8.8e-1
+7.3e-1
+9.5e-1
 #]]
  ]
 

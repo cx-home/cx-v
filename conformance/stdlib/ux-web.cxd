@@ -1,0 +1,693 @@
+[test-suite name=ux-web ring=2
+  [doc [#
+Conformance fixtures for cx-x/ux-web — the WEB RENDERER of the UX projection
+(#787). One of TWO peers over cx-x/ux's semantic vocabulary, not the privileged
+one. EXPERIMENTAL x/-TIER (D3).
+
+Normative source: design/787/787-phase0-spec.md, owner-RULED 2026-08-17.
+
+  SOLE ATTRIBUTE AUTHOR (P0-30/P0-31). The pinned subset is the whole htmx
+  surface the emitter may produce; `hx-on` is excluded PERMANENTLY, which is
+  what keeps strict CSP possible. Enforcement is two-sided — the name gate at
+  authorship, and a re-scan of the serialized bytes.
+
+  EVERY HTMX SPELLING IS DERIVED. Since W5 nothing in a semantic tree names an
+  htmx attribute, an event name, or a CSS selector: `hx-target` comes from a
+  semantic `affects=` path through the same frag-id that minted the target's
+  own id, and `sse-connect`/`sse-swap` come from the render context's binding
+  for a logical feed name. A hand-written selector could drift from what the
+  emitter minted, and in W1 did.
+
+  STRUCTURAL ESCAPING (P0-32). Fragments compose as CXDM trees and serialize
+  once through the html pack, so there is no interpolation surface.
+
+  TOKENS, NEVER INLINE STYLE (P0-33). A theme's token values are TENANT data
+  reaching a stylesheet, which is an injection surface exactly like markup.
+
+Every expected output was re-derived by RUNNING the program (cx <file>).
+#]]
+
+ [# The full emitter golden. Every htmx attribute present is on the pinned list,
+    the action posts to the shipped intent wire, and the readable address rides
+    beside the derived id so the golden stays human-diffable.
+
+    `hx-target` is DERIVED from the semantic `affects=` path using the same
+    frag-id that minted the region's own id — so it cannot drift. W1 carried that
+    selector by hand and had to recompute it in the service. #]
+ [case id=web-001-region-and-action-golden level=core
+  [tags ux web render golden htmx intent P0-11 P0-18 P0-31]
+  [title 'rendered-fragment golden — region, placed card, and an action whose target is derived']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $ctx {route: "/orders", feature: "orders", path: "/", bind: [ux:render-ctx [swap default=outerHTML]]}]
+  [$web:render
+    [ux:region feature=orders path="/open-orders"
+      [ux:card id=summary
+        [ux:heading level=2 "Open orders"]
+        [ux:action verb=place-order label="Place order" affects="/open-orders"]]]
+    $ctx]]
+#]]
+  [out-text [#
+'<section class="ux-region" id="cx-0c97f153f9ac3076" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /open-orders]\n]\n"><section class="ux-card" id="cx-af0e55ddefd36714" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /open-orders/summary]\n]\n"><h2 class="ux-heading">Open orders</h2><form class="ux-action-form" method="post" action="/intent/place-order" hx-post="/intent/place-order" hx-target="#cx-0c97f153f9ac3076" hx-swap="outerHTML"><button type="submit" class="ux-action">Place order</button></form></section></section>'
+#]]
+ ]
+
+ [# The keying ruling made visible in rendered output: the keyed row carries an id
+    and its readable address, the unkeyed row carries neither — the enclosing
+    fragment is then the smallest addressable unit and updates repaint the region. #]
+ [case id=web-002-keyed-rows-golden level=core
+  [tags ux web render golden row-key P0-10 P0-16]
+  [title 'rendered-fragment golden — keyed rows addressed, unkeyed rows not']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[$web:render
+  [ux:table id=grid
+    [ux:rows [ux:row key=r1 [ux:cell "a"]] [ux:row [ux:cell "b"]]]]
+  {route: "/o", feature: "orders", path: "/"}]
+#]]
+  [out-text [#
+'<table class="ux-table" id="cx-9488f4b5edb0421b" data-cx-frag="[frag\n  [route /o]\n  [feature orders]\n  [path /grid]\n]\n"><tbody class="ux-rows"><tr class="ux-row" id="cx-0c605a4e78d087b1" data-cx-frag="[frag\n  [route /o]\n  [feature orders]\n  [path \'/grid/row[r1]\']\n]\n"><td class="ux-cell">a</td></tr><tr class="ux-row"><td class="ux-cell">b</td></tr></tbody></table>'
+#]]
+ ]
+
+ [# THE subset list, verbatim. Additions are individual rulings; `hx-on` is
+    excluded PERMANENTLY because it is what would force 'unsafe-inline' into
+    script-src. hx-boost stands for the "excluded until individually ruled in"
+    set. #]
+ [case id=web-003-the-pinned-htmx-subset level=core
+  [tags ux web htmx subset normative P0-31]
+  [title 'the normative attribute set, with hx-on permanently excluded']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[list [$web:htmx-subset] [$web:htmx-allowed "hx-post"] [$web:htmx-allowed "hx-on"] [$web:htmx-allowed "hx-boost"]]
+#]]
+  [out-text [#
+[list (hx-get, hx-post, hx-target, hx-swap, hx-swap-oob, hx-trigger, hx-include, hx-indicator, hx-ext, sse-connect, sse-swap) true false false]
+#]]
+ ]
+
+ [# Enforcement is TWO-SIDED: the name gate makes an off-list attribute
+    unreachable at authorship, and this re-scans the serialized bytes so a path
+    that bypassed the constructor still goes red. RE2 has no lookaround, so the
+    `=\"` sentinel is matched and the name taken from the capture group — an
+    attribute NAME, never a value, can reach here. #]
+ [case id=web-004-off-subset-attributes-are-refused level=core
+  [tags ux web htmx subset P0-31]
+  [title 'the output-side scan refuses any hx-*/sse-* attribute off the pinned list']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[list [$web:off-subset-attrs "<div hx-post=\"/x\" hx-target=\"#y\"></div>"]
+      [$web:off-subset-attrs "<div hx-on=\"click: x\" hx-boost=\"true\"></div>"]]
+#]]
+  [out-text [#
+[list () ([ux-refusal code=ux-attr-off-subset attr=hx-on], [ux-refusal code=ux-attr-off-subset attr=hx-boost])]
+#]]
+ ]
+
+ [# Fragments compose as CXDM trees and serialize ONCE through the html pack
+    (WHATWG rules, double-quoted attributes). There is no interpolation surface
+    to inject into. #]
+ [case id=web-005-escaping-is-structural level=core
+  [tags ux web escaping P0-32]
+  [title 'text and attribute values escape by construction, because nothing is concatenated']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[$web:render
+  [ux:card [ux:text "R & D <team> \"quoted\""] [ux:field label="A & B" "<script>alert(1)</script>"]]
+  {route: "/o", feature: "f", path: "/"}]
+#]]
+  [out-text [#
+'<section class="ux-card"><p class="ux-text">R &amp; D &lt;team&gt; "quoted"</p><div class="ux-field"><span class="ux-field-label">A &amp; B</span><span class="ux-field-value">&lt;script&gt;alert(1)&lt;/script&gt;</span></div></section>'
+#]]
+ ]
+
+ [# A <script src=… integrity=…> element is SANCTIONED — that is precisely how the
+    vendored kernel is served and hash-pinned. What is refused is an INLINE
+    script: a <script> with no src, or any content between its tags. Both are
+    checked, because either one alone would let the other through. #]
+ [case id=web-006-csp-invariants level=core
+  [tags ux web csp P0-33]
+  [title 'no inline style, no inline script, no event-handler attribute — and a hash-pinned script is sanctioned']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[list [$web:csp-violations "<div style=\"x\"></div>"]
+      [$web:csp-violations "<script>alert(1)</script>"]
+      [$web:csp-violations "<div onclick=\"x\"></div>"]
+      [$web:csp-violations "<script src=\"/static/htmx.min.js\" integrity=\"sha384-a\"></script>"]]
+#]]
+  [out-text [#
+[list ([ux-refusal code=ux-inline-style]) ([ux-refusal code=ux-inline-script], [ux-refusal code=ux-inline-script]) ([ux-refusal code=ux-event-handler]) ()]
+#]]
+ ]
+
+ [# Token values are TENANT data reaching a stylesheet, which is an injection
+    surface exactly like markup. Fail-loud: never a sheet with a silently dropped
+    token. #]
+ [case id=web-007-token-theme-to-stylesheet level=core
+  [tags ux web theme tokens P0-33]
+  [title 'a token document compiles to a generated stylesheet; an unsafe value refuses the whole sheet']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $ok  [ux:theme [token name=bg value="#111"] [token name=fg value="white"]]]
+  [= $bad [ux:theme [token name=bg value="red;} body{display:none"]]]
+  ([$web:token-value-safe "#111"], [$web:token-value-safe "red;}"],
+   [$web:theme-refusals $bad], [$web:theme-css $bad])]
+#]]
+  [out-text [#
+(true, false, [ux-refusal code=ux-bad-token-value token=bg], [err code=ux-refused ([ux-refusal code=ux-bad-token-value token=bg])])
+#]]
+ ]
+
+ [# Sound only because each <script> also carries the matching integrity= (CSP3
+    matches a hash-source against an external script's SRI digest). `hx-on`'s
+    permanent exclusion is what lets script-src omit 'unsafe-inline' at all. #]
+ [case id=web-008-strict-csp-header level=core
+  [tags ux web csp P0-33]
+  [title 'the header pins each vendored script by the SRI digest of the bytes actually served']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[$web:csp-header ([ux:asset name="htmx.min.js" href="/static/htmx.min.js" sri="sha384-abc"])]
+#]]
+  [out-text [#
+"default-src 'none'; script-src 'self' 'sha384-abc'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+#]]
+ ]
+
+ [# The semantic tree says `live=orders` — a logical name. The endpoint and the
+    event name come from the render context, which is why the same declaration
+    reaches the terminal renderer intact. Both output scans come back clean. #]
+ [case id=web-009-the-live-region-rides-the-render-context level=core
+  [tags ux web liveness sse P0-44 R5]
+  [title 'sse-connect and sse-swap come from the feed BINDING, never from the tree']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctx [ux:render-ctx
+             [feed name=orders endpoint="/stream" event="orders-changed"]
+             [fragment affects="/live/open/rows" endpoint="/orders/rows"]
+             [swap default=outerHTML]]]
+  [= $ctx {route: "/orders", feature: "orders", path: "/", bind: $rctx}]
+  [= $r [$web:render [$ux:feed "orders" "/open" "orders" [ux:text "live"]] $ctx]]
+  [list $r [$web:off-subset-attrs $r] [$web:csp-violations $r]]]
+#]]
+  [out-text [#
+[list '<section class="ux-region" id="cx-2905217911f2a7e8" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /open]\n]\n" hx-ext="sse" sse-connect="/stream"><p class="ux-text">live</p></section>' () ()]
+#]]
+ ]
+
+ [# The container id is DERIVED from the operation's element path with the same
+    frag-id that minted it during the first render, so a patch cannot target a
+    selector that no longer exists. This is the ONLY place hx-swap-oob is
+    authored anywhere in the tree. #]
+ [case id=web-010-patch-operations-lower-to-out-of-band-swaps level=core
+  [tags ux web liveness oob P0-44]
+  [title 'insert, update, remove and repaint become the only hx-swap-oob values the emitter authors']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $ctx {route: "/orders", feature: "orders", path: "/open"}]
+  [= $ops ([ux:op kind=insert container="/open/rows" [ux:row key=o-3 [ux:cell "Wu"]]],
+           [ux:op kind=remove container="/open/rows" key=o-1],
+           [ux:op kind=repaint container="/open/rows" [ux:rows id=rows [ux:row key=o-2 [ux:cell "Lin"]]]])]
+  [$web:render-ops $ops $ctx]]
+#]]
+  [out-text [#
+'<template><tr class="ux-row" id="cx-a0842b4d116cd0bc" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path \'/open/rows/row[o-3]\']\n]\n" hx-swap-oob="beforeend:#cx-7024cc013e20e9e5"><td class="ux-cell">Wu</td></tr></template><template><tr class="ux-row" id="cx-78b7a1c1b189d286" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path \'/open/rows/row[o-1]\']\n]\n" hx-swap-oob="delete"></tr></template><template><tbody class="ux-rows" id="cx-7024cc013e20e9e5" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /open/rows]\n]\n" hx-swap-oob="true"><tr class="ux-row" id="cx-e77435da8491f34f" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path \'/open/rows/row[o-2]\']\n]\n"><td class="ux-cell">Lin</td></tr></tbody></template>'
+#]]
+ ]
+
+ [# A filter is a QUERY: it commits nothing, so it READS with hx-get and swaps the
+    collection in place. The debounced trigger is a RENDERER decision and is
+    spelled here, not in the tree — the terminal renderer binds the same
+    declaration to `/`. A filter whose affected collection has no endpoint bound
+    renders as a box that filters nothing, so it refuses instead, for the same
+    reason an unbound feed does. #]
+ [case id=web-011-the-filter-reads-it-does-not-post level=core
+  [tags ux web filter W5]
+  [title 'a filter lowers to hx-get against its fragment endpoint, and an unbound one refuses']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctx [ux:render-ctx
+             [feed name=orders endpoint="/stream" event="orders-changed"]
+             [fragment affects="/live/open/rows" endpoint="/orders/rows"]
+             [swap default=outerHTML]]]
+  [= $ctx {route: "/orders", feature: "orders", path: "/", bind: $rctx}]
+  [= $ok  [ux:region feature=orders path="/live"
+            [ux:filter name=q label="Find" affects="/live/open/rows"]
+            [ux:table id=open [ux:rows id=rows [ux:row key=r1 [ux:cell "a"]]]]]]
+  [= $bad [ux:region feature=orders path="/live"
+            [ux:filter name=q label="Find" affects="/live/nowhere"]]]
+  ([$web:render $ok $ctx], [$web:render $bad $ctx])]
+#]]
+  [out-text [#
+('<section class="ux-region" id="cx-b9aa0e4902fe6a43" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live]\n]\n"><div class="ux-control-field ux-filter"><label class="ux-label" for="ux-filter-q">Find</label><input class="ux-control" type="search" id="ux-filter-q" name="q" hx-get="/orders/rows" hx-target="#cx-cb25c893adec8e5e" hx-swap="outerHTML" hx-trigger="keyup changed delay:200ms, search"></div><table class="ux-table" id="cx-70c02252bf05598f" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live/open]\n]\n"><tbody class="ux-rows" id="cx-cb25c893adec8e5e" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live/open/rows]\n]\n"><tr class="ux-row" id="cx-a20fa70a7778ad68" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path \'/live/open/rows/row[r1]\']\n]\n"><td class="ux-cell">a</td></tr></tbody></table></section>', [err code=ux-refused ([ux-refusal code=ux-unbound-filter filter=q], [ux-refusal code=ux-dangling-affects element=ux:filter affects='/live/nowhere'])])
+#]]
+ ]
+
+ [# An HTML number input round-trips through a double and would silently corrupt a
+    value the command declared exactly — the projection must never quietly narrow
+    a declared type. RENDERER-PRIVATE: the terminal renderer maps the same kinds
+    to its own editors and is free to disagree, because `kind=` states the CX
+    TYPE, not a widget. #]
+ [case id=web-012-declared-kinds-map-to-controls level=core
+  [tags ux web form carrier P0-17]
+  [title 'a decimal or money stays TEXT, because it rides a string carrier']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?for [in $k ("int", "float", "money", "decimal", "text", "bool", "date", "instant")]
+  [yield [$web:input-kind-of $k]]]
+#]]
+  [out-text [#
+'number'
+'number'
+'text'
+'text'
+'text'
+'checkbox'
+'date'
+'datetime-local'
+#]]
+ ]
+
+ [# It reads the tree this renderer actually serializes, not a re-parse of the
+    bytes — the tree IS the rendering, and re-parsing would test the html pack's
+    parser instead of this lowering. Two recoveries are deliberate rather than
+    cheats: a row's KEY comes out of data-cx-frag, which P0-11 says exists so a
+    client can recover the address without a second registry, and a verb comes
+    out of /intent/<verb>, which IS the command address. #]
+ [case id=web-013-content-readback-from-the-html-tree level=core
+  [tags ux web equivalence normal-form R5]
+  [title 'the web side of the equivalence assertion, read back from the tree it serializes']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $t [ux:card [ux:heading level=2 "Open"] [ux:field label="Customer" "Ada"]
+                 [ux:badge tone=warn "late"] [ux:action verb=place-order label="Go"]]]
+  [= $ctx {route: "/o", feature: "f", path: "/"}]
+  [list [= [$ux:content-repr $t] [$web:content-repr-html $t $ctx]] [$web:content-repr-html $t $ctx]]]
+#]]
+  [out-text [#
+[list true "[c:card\n  [c:heading level='2' Open]\n  [c:field label=Customer Ada]\n  [c:badge tone=warn late]\n  [c:action verb=place-order label=Go]\n]\n"]
+#]]
+ ]
+
+ [# Never a partial render: the pipeline runs the SHARED semantic gate, the binding
+    gates and the address check before lowering, and a refusal returns one [err]
+    naming every violation. #]
+ [case id=web-014-a-refused-tree-yields-no-markup level=core
+  [tags ux web refusal]
+  [title 'a projection failure never reaches a browser as content']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+([$web:render [ux:action verb=v target="#x"] {route: "/o", feature: "f", path: "/"}],
+ [$web:render [ux:region feature=f path="/r" [ux:card id=d] [ux:card id=d]] {route: "/o", feature: "f", path: "/"}])
+#]]
+  [out-text [#
+([err code=ux-refused ([ux-refusal code=ux-renderer-private-attr element=ux:action attr=target])], [err code=ux-refused ([ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8])])
+#]]
+ ]
+
+ [# A red border is not a message and a screen reader reads neither a colour nor
+    a border, so `aria-invalid` is emitted next to the sentence rather than
+    instead of it. #]
+ [case id=web-015-a-refusal-lands-on-its-own-control level=core
+  [tags ux web validation aria W7]
+  [title 'the field is marked bad, the message sits with it, and a screen reader gets both']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $t [ux:form verb=place-order
+          [ux:input name=customer label="Customer" error="who is this order for?"]
+          [ux:submit label="Place order"]]]
+  [$web:render $t {route: "/o", feature: "f", path: "/"}]]
+#]]
+  [out-text [#
+'<form class="ux-form ux-busy" method="post" action="/intent/place-order" id="cx-75350d510997b9f4" data-cx-frag="[frag\n  [route /o]\n  [feature f]\n  [path /place-order]\n]\n" hx-post="/intent/place-order" hx-indicator="#cx-75350d510997b9f4"><div class="ux-control-field"><label class="ux-label" for="cx-75350d510997b9f4-customer">Customer</label><input class="ux-control ux-control-bad" id="cx-75350d510997b9f4-customer" name="customer" type="text" aria-invalid="true"><span class="ux-field-error">who is this order for?</span></div><button type="submit" class="ux-action ux-submit">Place order</button></form>'
+#]]
+ ]
+
+ [# Removing an unsubmitted line is not an INTENT: nothing is committed and
+    nothing is journaled, so it cannot ride the intent wire — the same
+    reasoning that made `ux:filter` a query control. htmx replaces the
+    instance with the response body, so an empty body IS the removal. The
+    pinned subset already carries every attribute it needs. #]
+ [case id=web-016-removing-a-line-is-an-empty-response level=core
+  [tags ux web group remove hypermedia W7]
+  [title 'the remove control is renderer-minted from the group’s declaration and needs no script']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctx [ux:render-ctx
+             [feed name=orders endpoint="/stream" event="orders-changed"]
+             [fragment affects="/live/open/rows" endpoint="/orders/rows"]
+             [swap default=outerHTML]]]
+  [= $t [ux:group name=lines label="Lines" affects="/f/entry/place-order/lines" add-label="Add a line"
+          [ux:card [ux:input name="lines.0.qty" label="Qty"]]]]
+  [$web:render $t {route: "/o", feature: "f", path: "/entry/place-order", fragment: true, bind: $rctx}]]
+#]]
+  [out-text [#
+[err code=ux-refused ([ux-refusal code=ux-dangling-affects element=ux:group affects='/f/entry/place-order/lines'])]
+#]]
+ ]
+
+ [# The strict rule — every affects= must name something the same tree mints —
+    is right for a PAGE and wrong for a fragment: the form re-rendered after a
+    refusal targets the card it is about to be swapped into, and that card is
+    on the page, not in the payload. The relaxation is not "skip the gate": a
+    fragment must still name a path the render context declares, so an
+    affects= naming nothing anywhere still refuses. #]
+ [case id=web-017-a-fragment-may-aim-at-the-page-it-is-swapped-into level=core
+  [tags ux web refusal fragment affects W7]
+  [title 'a fragment’s affects= is checked against the surface’s declaration, not against the payload']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctx [ux:render-ctx
+             [feed name=orders endpoint="/stream" event="orders-changed"]
+             [fragment affects="/live/open/rows" endpoint="/orders/rows"]
+             [swap default=outerHTML]]]
+  [= $t [ux:form verb=place-order affects="/f/entry" [ux:submit label="Go"]]]
+  [= $bad [ux:form verb=place-order affects="/nowhere" [ux:submit label="Go"]]]
+  ([$web:render $t   {route: "/o", feature: "f", path: "/", bind: $rctx}],
+   [$web:render $t   {route: "/o", feature: "f", path: "/", fragment: true, bind: $rctx}],
+   [$web:render $bad {route: "/o", feature: "f", path: "/", fragment: true, bind: $rctx}])]
+#]]
+  [out-text [#
+([err code=ux-refused ([ux-refusal code=ux-dangling-affects element=ux:form affects='/f/entry'])], [err code=ux-refused ([ux-refusal code=ux-dangling-affects element=ux:form affects='/f/entry'])], [err code=ux-refused ([ux-refusal code=ux-dangling-affects element=ux:form affects='/nowhere'])])
+#]]
+ ]
+
+ [# P0-104: shared tokens outside any palette are written once; the default
+    palette joins them in :root; each non-default palette re-states the same
+    custom properties under its scheme's media condition. The refusals are
+    fail-loud like every token's: a scheme outside the ruled set (or claimed
+    twice) is ux-bad-palette-scheme; palettes without exactly one default=true
+    are ux-bad-palette-default. A theme with no palettes emits byte-identically
+    to the single-block form this generalizes. #]
+ [case id=web-018-a-palette-is-a-scheme-conditioned-token-set level=core
+  [tags ux web theme palettes P0-104]
+  [title 'the default palette is :root, the dark palette rides prefers-color-scheme, and a malformed palette refuses the sheet']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $two [ux:theme [token name=gap value="4px"]
+            [palette scheme=light default=true [token name=bg value="#fff"] [token name=fg value="#111"]]
+            [palette scheme=dark [token name=bg value="#111"] [token name=fg value="#eee"]]]]
+  [= $plain [ux:theme [token name=bg value="#111"] [token name=fg value="white"]]]
+  [= $odd [ux:theme [palette scheme=sepia default=true [token name=bg value="#111"]]]]
+  [= $twodefault [ux:theme [palette scheme=light default=true [token name=bg value="#fff"]]
+                           [palette scheme=dark default=true [token name=bg value="#111"]]]]
+  ([$web:theme-vars $two], [$web:theme-vars $plain],
+   [$web:theme-refusals $odd], [$web:theme-refusals $twodefault],
+   [$web:theme-css $odd])]
+#]]
+  [out-text [#
+(':root{--cx-gap:4px;--cx-bg:#fff;--cx-fg:#111;}\n@media (prefers-color-scheme: dark){:root{--cx-bg:#111;--cx-fg:#eee;}}\n', ':root{--cx-bg:#111;--cx-fg:white;}\n', [ux-refusal code=ux-bad-palette-scheme scheme=sepia], [ux-refusal code=ux-bad-palette-default], [err code=ux-refused ([ux-refusal code=ux-bad-palette-scheme scheme=sepia])])
+#]]
+ ]
+
+ [# W23, audit2 letter (i): the product page says "two of them" where the
+    decision happens. No wire of its own — the browser is the shell that steps
+    it. The direct-entry input inside a verb-carrying quantity's pill posts the
+    whole intent on enter, kernel-free, and the readback recovers the value
+    from the input's value= (the text-content read died with the span). #]
+ [case id=web-019-a-field-mode-quantity-is-the-forms-own-field level=core
+  [tags ux web quantity field-mode readback P0-102 W23]
+  [title 'verb-less quantity lowers to a labeled bounded number input; inside an action it rides that act’s post; both read back as c:quantity with verb stated empty']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $ctx {route: "/p/X", feature: "product", path: "/"}]
+  [= $fld [ux:quantity name=qty label=Quantity value=2 min=1 max=9]]
+  [= $act [ux:action verb=add-to-basket label="Add to basket"
+            [ux:param name=sku value=X]
+            [ux:quantity name=qty label=Quantity value=1 min=1 max=5]]]
+  [list [$web:render $fld $ctx]
+        [$web:content-repr-html $fld $ctx]
+        [$web:content-repr-html $act $ctx]
+        [$web:content-repr-html [ux:quantity name=qty verb=set-quantity value=3 min=1 max=9
+                                  [ux:param name=sku value=X]] $ctx]]]
+#]]
+  [out-text [#
+[list '<div class="ux-quantity ux-quantity-field" role="group" aria-label="Quantity" data-cx-name="qty" data-cx-verb="" data-cx-min="1" data-cx-max="9"><label class="ux-label" for="ux-qty-qty">Quantity</label><input type="number" class="ux-control ux-quantity-direct" id="ux-qty-qty" name="qty" value="2" min="1" max="9" step="1"></div>' "[c:quantity name=qty label=Quantity verb='' value='2' min='1' max='9']\n" "[c:action verb=add-to-basket label='Add to basket'\n  [c:param name=sku value=X]\n  [c:quantity name=qty label=Quantity verb='' value='1' min='1' max='5']\n]\n" "[c:quantity name=qty label=Qty verb=set-quantity value='3' min='1' max='9'\n  [c:param name=sku value=X]\n]\n"]
+#]]
+ ]
+
+ [# W24: the region owns the ONE connection (web-009); these are the listeners
+    under it. The nav item's push payload is its new TEXT — route-neutral, the
+    href stays the receiving page's own. The aside cannot take pushed content
+    at all: a fragment address is (route, feature instance, element path), so
+    a pushed body would carry the PUBLISHER's targets — so it hx-gets the
+    binding's refetch= endpoint with its own location as return=, triggered by
+    sse:<event>, swapping itself whole. #]
+ [case id=web-020-live-listeners-under-one-connection level=core
+  [tags ux web liveness sse P0-44 W24]
+  [title 'a live nav item listens with sse-swap on its anchor; a live OPEN aside refetches itself on the same event; a closed aside carries neither']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctx [ux:render-ctx [feed name=basket endpoint="/stream" event="basket-changed" refetch="/basket/aside"]
+                          [swap default=outerHTML]]]
+  [= $ctx {route: "/c/k", feature: "shell", path: "/shell", bind: $rctx}]
+  [list [$web:render [ux:nav-item id=basket live=basket href="/c/k?basket=open" label="Basket · 1 item · $9.00"] $ctx]
+        [$web:render [ux:aside label="Your basket" open=true live=basket dismiss-href="/c/k" [ux:text "a line"]] $ctx]
+        [$web:render [ux:aside label="Your basket" open=false live=basket dismiss-href="/c/k" [ux:text "a line"]] $ctx]]]
+#]]
+  [out-text [#
+[list '<li class="ux-nav-item" id="cx-563528cf560b374a" data-cx-frag="[frag\n  [route /c/k]\n  [feature shell]\n  [path /shell/basket]\n]\n"><a href="/c/k?basket=open" sse-swap="basket-changed">Basket · 1 item · $9.00</a></li>' '<aside class="ux-aside ux-aside-open" aria-label="Your basket" hx-get="/basket/aside?return=%2Fc%2Fk" hx-trigger="sse:basket-changed" hx-target="this" hx-swap="outerHTML"><div class="ux-aside-head"><h2 class="ux-aside-title">Your basket</h2><a class="ux-aside-dismiss" href="/c/k" aria-label="Close Your basket">×</a></div><div class="ux-aside-body"><p class="ux-text">a line</p></div></aside>' '<aside class="ux-aside" aria-label="Your basket"><div class="ux-aside-head"><h2 class="ux-aside-title">Your basket</h2></div><div class="ux-aside-body"><p class="ux-text">a line</p></div></aside>']
+#]]
+ ]
+
+ [# ── EDIT MODE (P0-109/P0-110, W26 — the studio) ─────────────────────────────
+    The studio is this emitter with edit engaged: same projection, same
+    lowering, plus the selection stamps. Edit data rides the RENDER CONTEXT
+    ([edit], [sel-placed], [sel-prov], [sel-claim] children), so the fragment
+    context map never changes shape and a normal render is byte-identical by
+    construction — web-022 pins the absence, these pin the stamped bytes. #]
+
+ [# a placed element (author-assigned id) resolves to the regime-4 target
+    `[placed <id>]`; the inspector's facts — hint provenance by cascade level,
+    the component, container-ness — ride beside it, emitter-authored. #]
+ [case id=web-021-edit-mode-stamps-the-placed-target level=core
+  [tags ux web edit studio sel P0-109 W26]
+  [title 'edit mode stamps data-cx-sel [placed id] with provenance and component facts']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctxE [ux:render-ctx [swap default=outerHTML]
+              [edit components="hero promo group" return="/?edit=1"]
+              [sel-placed id=hero component=hero container=false]
+              [sel-prov id=hero hint=tone level=surface]]]
+  [= $cE {route: "/", feature: "home", path: "/", bind: $rctxE}]
+  [$web:render [ux:card id=hero [ux:heading level=2 "Hello"]] $cE]]
+#]]
+  [out-text [#
+'<section class="ux-card" id="cx-d4671953f6aa8281" data-cx-frag="[frag\n  [route /]\n  [feature home]\n  [path /hero]\n]\n" data-cx-sel="[placed hero]" data-cx-sel-prov="tone:surface:" data-cx-sel-component="hero" data-cx-sel-container="false"><h2 class="ux-heading">Hello</h2></section>'
+#]]
+ ]
+
+ [# SELECTION IS MEMBERSHIP (P0-123's sibling rule): an element carrying an id
+    is a regime-4 target only when the arrangement actually holds a placed
+    element of that id. A projection's OWN output — a department card, a
+    product tile — has an id for addressing and fragment identity but is not
+    something a layout command can name, so it must not be stamped selectable.
+    Stamping it offered the studio a drag whose only possible answer was
+    `ux-layout-address-miss`. #]
+ [case id=web-021b-edit-mode-stamps-only-arrangement-members level=core
+  [tags ux web edit studio sel P0-109 P0-123 W27]
+  [title 'edit mode stamps a placed target only for an id the arrangement holds']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctxE [ux:render-ctx [swap default=outerHTML]
+              [edit components="hero" return="/?edit=1"]
+              [sel-placed id=hero component=hero container=false]]]
+  [= $cE {route: "/", feature: "home", path: "/", bind: $rctxE}]
+  [= $member [$web:render [ux:card id=hero [ux:text "in the arrangement"]] $cE]]
+  [= $other  [$web:render [ux:card id=dept-kitchen [ux:text "a projection's own output"]] $cE]]
+  [list [$contains [$string $member] "data-cx-sel=\"[placed hero]\""]
+        [$contains [$string $other] "data-cx-sel"]
+        [$contains [$string $other] "id="]]]
+#]]
+  [out-text [#
+[list true false true]
+#]]
+ ]
+
+ [# a formatted field resolves to its regime-1 claim key — the resolution the
+    projection computed anyway, stamped rather than re-derived (one resolver);
+    and the SAME tree under a normal context carries NO data-cx-sel at all. #]
+ [case id=web-022-edit-mode-claim-stamp-and-normal-mode-absence level=core
+  [tags ux web edit studio sel claim P0-109 W26]
+  [title 'a formatted field stamps its claim target; normal mode stamps nothing']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctxE [ux:render-ctx [swap default=outerHTML]
+              [edit components="hero" return="/?edit=1"]
+              [sel-claim label=Price addr=sha2-256:abc path="/price" prov=platform]]]
+  [= $rctx0 [ux:render-ctx [swap default=outerHTML]]]
+  [= $tree [ux:field label=Price format=money currency=USD "12.00"]]
+  [= $hE [$web:render $tree {route: "/", feature: "home", path: "/", bind: $rctxE}]]
+  [= $h0 [$web:render $tree {route: "/", feature: "home", path: "/", bind: $rctx0}]]
+  [list $hE [$contains [$string $h0] "data-cx-sel"]]]
+#]]
+  [out-text [#
+[list '<div class="ux-field" data-cx-sel="[claim sha2-256:abc /price]" data-cx-sel-prov="platform"><span class="ux-field-label">Price</span><span class="ux-field-value" data-cx-format="money">$12.00</span></div>' false]
+#]]
+ ]
+
+ [# a region whose feed binding carries region-refetch= LISTENS on the page's
+    one connection instead of opening a second one (P0-44): hx-get itself on
+    sse:<event>, rendered for its own location — while the binding without it
+    keeps owning the connection (sse-connect). #]
+ [case id=web-023-region-listens-and-refetches level=core
+  [tags ux web live region refetch P0-44 W26]
+  [title 'a region-refetch feed binding makes the region a listener, not a second connection']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctx [ux:render-ctx
+             [feed name=layout endpoint="/stream" event="layout-changed" region-refetch="/home/body"]
+             [feed name=basket endpoint="/stream" event="basket-changed"]
+             [swap default=outerHTML]]]
+  [= $c0 {route: "/", feature: "home", path: "/", bind: $rctx}]
+  [= $listener [$web:render [ux:region feature=home path="/home" live=layout [ux:text "x"]] $c0]]
+  [= $owner    [$web:render [ux:region feature=shell path="/shell" live=basket [ux:text "x"]] $c0]]
+  [list $listener [$contains [$string $owner] "sse-connect"] [$contains [$string $listener] "sse-connect"]]]
+#]]
+  [out-text [#
+[list '<section class="ux-region" id="cx-61b6533d57b9b944" data-cx-frag="[frag\n  [route /]\n  [feature home]\n  [path /home]\n]\n" hx-get="/home/body?return=%2F" hx-trigger="sse:layout-changed" hx-target="this" hx-swap="outerHTML"><p class="ux-text">x</p></section>' true false]
+#]]
+ ]
+
+ [# ── the ARRANGED grid (W26 owner review): spans as surface data ─────────────
+    An arrangement element's `span` hint realizes on THIS face as data-cx-span
+    (and the arranged region as data-cx-arranged), driven by render-context
+    entries — the semantic tree stays layout-blind (P0-20), the terminal face
+    never reads them, and a context without the entries stamps nothing. #]
+ [case id=web-024-arranged-region-and-spans level=core
+  [tags ux web arranged span studio W26]
+  [title 'an arranged region grids and a place-span stamps; a plain context stamps neither']
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-x/ux' :as ux]
+[?lib 'cx-x/ux-web' :as web]
+[?let
+  [= $rctx [ux:render-ctx [swap default=outerHTML]
+             [arranged feature=home]
+             [place-span id=featured span=6]]]
+  [= $c0 {route: "/", feature: "shell", path: "/", bind: $rctx}]
+  [= $tree [ux:region feature=home path="/home"
+             [ux:card id=hero [ux:text "h"]]
+             [ux:card id=featured [ux:text "f"]]]]
+  [= $h [$web:render $tree $c0]]
+  [= $plain [$web:render $tree {route: "/", feature: "shell", path: "/", bind: [ux:render-ctx [swap default=outerHTML]]}]]
+  [list $h [$contains [$string $plain] "data-cx-arranged"] [$contains [$string $plain] "data-cx-span"]]]
+#]]
+  [out-text [#
+[list '<section class="ux-region" id="cx-61b6533d57b9b944" data-cx-frag="[frag\n  [route /]\n  [feature home]\n  [path /home]\n]\n" data-cx-arranged="1"><section class="ux-card" id="cx-6d329c0db3f3b12b" data-cx-frag="[frag\n  [route /]\n  [feature home]\n  [path /home/hero]\n]\n"><p class="ux-text">h</p></section><section class="ux-card" id="cx-84144876512931d3" data-cx-frag="[frag\n  [route /]\n  [feature home]\n  [path /home/featured]\n]\n" data-cx-span="6"><p class="ux-text">f</p></section></section>' false false]
+#]]
+ ]
+]

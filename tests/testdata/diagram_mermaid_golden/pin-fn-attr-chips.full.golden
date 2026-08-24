@@ -1,0 +1,13 @@
+%%cx:Wz9tYXAgJHhzIHVzaW5nPVs/Zm4gKCR4KSBbdXNlciBpZD0xIG5hbWU9J2FkYScgcm9sZT0nYWRtaW4nIHRlbmFudD0nYWNtZSddXV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["$xs"]
+    n4{{"map"}}
+    n3 --> n4
+    n5[["fn(x) → [user @id=1 @name='ada' @role='admin' @tenant='acme']"]]
+    n4 -- ":using" --> n5
+    n6(["collect"])
+    n5 --> n6
+    n1 --> n6
+    n6 --> n2

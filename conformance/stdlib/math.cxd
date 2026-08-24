@@ -1,4 +1,4 @@
-[test-suite name=math
+[test-suite name=math ring=1
   [doc [#
 conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 
@@ -128,7 +128,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round 0.5]
+[$math:round 0.5e0]
 #]]
   [out-text [#
 0
@@ -142,7 +142,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round 1.5]
+[$math:round 1.5e0]
 #]]
   [out-text [#
 2
@@ -156,7 +156,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round 2.5]
+[$math:round 2.5e0]
 #]]
   [out-text [#
 2
@@ -170,7 +170,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-half-up 0.5]
+[$math:round-half-up 0.5e0]
 #]]
   [out-text [#
 1
@@ -184,7 +184,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-half-up -0.5]
+[$math:round-half-up -0.5e0]
 #]]
   [out-text [#
 -1
@@ -198,7 +198,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-half-even 2.5]
+[$math:round-half-even 2.5e0]
 #]]
   [out-text [#
 2
@@ -212,7 +212,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to 3.14159 2]
+[$math:round-to 3.14159e0 2]
 #]]
   [out-text [#
 3.14
@@ -226,7 +226,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:truncate -2.9]
+[$math:truncate -2.9e0]
 #]]
   [out-text [#
 -2
@@ -311,7 +311,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:pow 2.0 10.0] 0]
+[$math:round-to [$math:pow 2.0e0 1.0e1] 0]
 #]]
   [out-text [#
 1024.0
@@ -325,7 +325,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:sqrt 16.0] 0]
+[$math:round-to [$math:sqrt 1.6e1] 0]
 #]]
   [out-text [#
 4.0
@@ -339,7 +339,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:sqrt 2.0] 8]
+[$math:round-to [$math:sqrt 2.0e0] 8]
 #]]
   [out-text [#
 1.41421356
@@ -353,7 +353,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:cbrt 27.0] 0]
+[$math:round-to [$math:cbrt 2.7e1] 0]
 #]]
   [out-text [#
 3.0
@@ -367,7 +367,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:exp 0.0] 0]
+[$math:round-to [$math:exp 0.0e0] 0]
 #]]
   [out-text [#
 1.0
@@ -395,7 +395,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:log2 1024.0] 0]
+[$math:round-to [$math:log2 1.024e3] 0]
 #]]
   [out-text [#
 10.0
@@ -409,7 +409,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:log10 100.0] 0]
+[$math:round-to [$math:log10 1.0e2] 0]
 #]]
   [out-text [#
 2.0
@@ -423,7 +423,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:log-base 81.0 3.0] 0]
+[$math:round-to [$math:log-base 8.1e1 3.0e0] 0]
 #]]
   [out-text [#
 4.0
@@ -438,7 +438,7 @@ conformance fixtures for cx-stdlib/math (spec/std-lib/math.md §6).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:is-nan [$math:log -1.0]]
+[$math:is-nan [$math:log -1.0e0]]
 #]]
   [out-text [#
 true
@@ -453,7 +453,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:sin 0.0] 0]
+[$math:round-to [$math:sin 0.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -467,7 +467,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:cos 0.0] 0]
+[$math:round-to [$math:cos 0.0e0] 0]
 #]]
   [out-text [#
 1.0
@@ -496,7 +496,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:tan [/ [$math:pi] 4.0]] 8]
+[$math:round-to [$math:tan [/ [$math:pi] 4.0e0]] 8]
 #]]
   [out-text [#
 1.0
@@ -510,7 +510,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:asin 0.0] 0]
+[$math:round-to [$math:asin 0.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -524,7 +524,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:acos 1.0] 0]
+[$math:round-to [$math:acos 1.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -538,7 +538,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:atan 0.0] 0]
+[$math:round-to [$math:atan 0.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -553,7 +553,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:atan2 1.0 1.0] 8]
+[$math:round-to [$math:atan2 1.0e0 1.0e0] 8]
 #]]
   [out-text [#
 0.78539816
@@ -567,7 +567,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:sinh 0.0] 0]
+[$math:round-to [$math:sinh 0.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -581,7 +581,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:cosh 0.0] 0]
+[$math:round-to [$math:cosh 0.0e0] 0]
 #]]
   [out-text [#
 1.0
@@ -595,7 +595,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:tanh 0.0] 0]
+[$math:round-to [$math:tanh 0.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -609,7 +609,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:asinh 0.0] 0]
+[$math:round-to [$math:asinh 0.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -623,7 +623,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:acosh 1.0] 0]
+[$math:round-to [$math:acosh 1.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -637,7 +637,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:atanh 0.0] 0]
+[$math:round-to [$math:atanh 0.0e0] 0]
 #]]
   [out-text [#
 0.0
@@ -651,7 +651,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:deg-to-rad 180.0] 8]
+[$math:round-to [$math:deg-to-rad 1.8e2] 8]
 #]]
   [out-text [#
 3.14159265
@@ -856,7 +856,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:percentile (1, 2, 3, 4, 5) 50.0] 1]
+[$math:round-to [$math:percentile (1, 2, 3, 4, 5) 5.0e1] 1]
 #]]
   [out-text [#
 3.0
@@ -871,7 +871,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:quantile (1, 2, 3, 4, 5) 0.5] 1]
+[$math:round-to [$math:quantile (1, 2, 3, 4, 5) 0.5e0] 1]
 #]]
   [out-text [#
 3.0
@@ -886,7 +886,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:correlation (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0) (2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0)] 1]
+[$math:round-to [$math:correlation (1.0e0, 2.0e0, 3.0e0, 4.0e0, 5.0e0, 6.0e0, 7.0e0, 8.0e0, 9.0e0, 1.0e1) (2.0e0, 4.0e0, 6.0e0, 8.0e0, 1.0e1, 1.2e1, 1.4e1, 1.6e1, 1.8e1, 2.0e1)] 1]
 #]]
   [out-text [#
 1.0
@@ -901,7 +901,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:round-to [$math:covariance (1.0, 2.0, 3.0, 4.0, 5.0) (2.0, 4.0, 6.0, 8.0, 10.0)] 1]
+[$math:round-to [$math:covariance (1.0e0, 2.0e0, 3.0e0, 4.0e0, 5.0e0) (2.0e0, 4.0e0, 6.0e0, 8.0e0, 1.0e1)] 1]
 #]]
   [out-text [#
 5.0
@@ -1160,7 +1160,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:is-nan 1.0]
+[$math:is-nan 1.0e0]
 #]]
   [out-text [#
 false
@@ -1188,7 +1188,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:is-finite 3.5]
+[$math:is-finite 3.5e0]
 #]]
   [out-text [#
 true
@@ -1216,7 +1216,7 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:is-integer 4.0]
+[$math:is-integer 4.0e0]
 #]]
   [out-text [#
 true
@@ -1230,7 +1230,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:is-integer 4.5]
+[$math:is-integer 4.5e0]
 #]]
   [out-text [#
 false
@@ -1606,7 +1606,7 @@ cx-err:CXER3000
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:percentile (1, 2, 3, 4, 5) 150.0]
+[$math:percentile (1, 2, 3, 4, 5) 1.5e2]
 #]]
   [out-err [#
 cx-err:CXER3003
@@ -1620,7 +1620,7 @@ cx-err:CXER3003
 #]]
   [in-code [#
 [?lib 'cx-stdlib/math']
-[$math:quantile (1, 2, 3, 4, 5) 2.0]
+[$math:quantile (1, 2, 3, 4, 5) 2.0e0]
 #]]
   [out-err [#
 cx-err:CXER3003
@@ -1669,4 +1669,62 @@ cx-err:CXER3003
 #]]
  ]
 
+ [case id=math-116-transcendental-decimal-refuses level=core gate=enforced
+  [tags math sqrt decimal CXER3002 refusal exact-family]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:sqrt 2.25]
+#]]
+  [out-err [#
+cx-err:CXER3002
+#]]
+ ]
+
+ [case id=math-117-div-decimal-rounding-context level=core gate=enforced
+  [tags math div-decimal decimal rounding-context l44 683]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+([$math:div-decimal 1.00 3.0 {precision: 4 mode: :half-up}], [$math:div-decimal 1.0 8.0 {precision: 2 mode: :half-even}], [$math:div-decimal -10.0 3.0 {precision: 2 mode: :down}])
+#]]
+  [out-text [#
+(0.3333, 0.12, -3.33)
+#]]
+ ]
+
+ [case id=math-118-div-decimal-negatives level=core gate=enforced
+  [tags math div-decimal negative CXER3002 CXER0101 683]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[?let [= $badmode [$math:div-decimal 1.0 3.0 {precision: 2 mode: :bogus}]]
+[= $divzero [$math:div-decimal 1.0 0.0 {precision: 2 mode: :down}]]
+  ($badmode@code, $divzero@code)]
+#]]
+  [out-text [#
+('cx-err:CXER3002', 'cx-err:CXER0101')
+#]]
+ ]
+
+ [case id=math-119-exact-division-operator-family level=core gate=enforced
+  [tags math decimal division exact non-terminating CXER3002 l44 683]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $exact [/ 1.00 8.0]]
+[= $nt [/ 1.0 3.0]]
+  ($exact, $nt@code)]
+#]]
+  [out-text [#
+(0.125000, 'cx-err:CXER3002')
+#]]
+ ]
 ]

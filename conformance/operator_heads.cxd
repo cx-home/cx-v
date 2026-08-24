@@ -1,0 +1,154 @@
+[test-suite name=operator-heads ring=0
+  [doc [#
+# CX Conformance — operator-headed documents (I1 manifest row 8, L80/C4)
+# Version: 2.0 — 2026-08-05 (the row-8 lexer fix; re-blessed per the
+# ledger's flip-at-row-8 instruction, ONE re-bless for this class —
+# v1.0 of this file pinned the pre-fix stringify/error bytes; the
+# old→new digests are recorded in the epoch mapping file)
+#
+# All seven operator heads `+ - * / = < >` parse as OPERATOR-NAMED
+# ELEMENTS when the single operator char is DELIMITED (followed by
+# whitespace or `]`). Pre-I1, five of them silently STRINGIFIED through
+# the array lane (`[+ $x 2]` → `['+ $x 2']`) and two (`*` `>`) errored
+# ("expected name"). GLUED continuations keep their old routes:
+# `[-1, 2]` is a negative-number array item, `[*n]` is an alias
+# reference, `[+1, 2]` normalizes through the array lane. Multi-char
+# glyphs (`<=`, `**`, …) are NOT operator heads.
+#]]
+
+ [; ── The seven heads — delimited operator char = element name ── ]
+
+ [case id=oph-001-plus-element level=core
+  [tags operator-heads i1 element]
+  [in-cx [#
+[+ $x 2]
+#]]
+  [out-cx [#
+[+ $x 2]
+#]]
+  [out-hash [#
+sha2-256:7478d6bbf1e9ba55b778993530972b389ac28c2148a084b7460d2815d559d01c
+#]]
+ ]
+
+ [case id=oph-002-minus-element level=core
+  [tags operator-heads i1 element]
+  [in-cx [#
+[- $x 2]
+#]]
+  [out-cx [#
+[- $x 2]
+#]]
+  [out-hash [#
+sha2-256:ef9a9fceb59e34dba7c784df0755c169b3c0fdd1955eda5ea31a8bae79fe2cc4
+#]]
+ ]
+
+ [case id=oph-003-slash-element level=core
+  [tags operator-heads i1 element]
+  [in-cx [#
+[/ $x 2]
+#]]
+  [out-cx [#
+[/ $x 2]
+#]]
+  [out-hash [#
+sha2-256:0ea2a01bdf0675ead39cdcc23d9b3cc73007335191f74137bfec87fa986fc350
+#]]
+ ]
+
+ [case id=oph-004-equals-element level=core
+  [tags operator-heads i1 element]
+  [in-cx [#
+[= $x 2]
+#]]
+  [out-cx [#
+[= $x 2]
+#]]
+  [out-hash [#
+sha2-256:62309d110578e24d4b223d84ab8389e49f577593d03cbc8bb24ff6ce514316cc
+#]]
+ ]
+
+ [case id=oph-005-less-than-element level=core
+  [tags operator-heads i1 element]
+  [in-cx [#
+[< $x 2]
+#]]
+  [out-cx [#
+[< $x 2]
+#]]
+  [out-hash [#
+sha2-256:a0e1269c76ed687dae523399d37a1c12e4f7a07f00ffbcfcf5516ab9636cea88
+#]]
+ ]
+
+ [case id=oph-006-star-element level=core
+  [tags operator-heads i1 element]
+  [in-cx [#
+[* $x 2]
+#]]
+  [out-cx [#
+[* $x 2]
+#]]
+  [out-hash [#
+sha2-256:0177db99c9e76cd8858a4402e95b796688c0bd4212b836ed8bb893616d9df538
+#]]
+ ]
+
+ [case id=oph-007-greater-than-element level=core
+  [tags operator-heads i1 element]
+  [in-cx [#
+[> $x 2]
+#]]
+  [out-cx [#
+[> $x 2]
+#]]
+  [out-hash [#
+sha2-256:035024fc29be0b68f53364eca31100403d820f250c450139fb6992018404e6be
+#]]
+ ]
+
+ [; ── Glued continuations keep their old routes (the guard rails) ── ]
+
+ [case id=oph-008-negative-number-array-unmoved level=core
+  [tags operator-heads i1 guard array]
+  [in-cx [#
+[-1, 2]
+#]]
+  [out-cx [#
+[-1, 2]
+#]]
+ ]
+
+ [case id=oph-009-alias-reference-unmoved level=core
+  [tags operator-heads i1 guard alias]
+  [; The GLUED `*name` spelling stays an alias reference in every
+     position — only the DELIMITED `*` is an operator head. Canonical
+     resolves the alias (§2.8), proving the parse route held. (out-cx is
+     not pinned here: the lossless fmt emitter has a pre-existing
+     body-position alias defect, tracked separately — parse and
+     canonical are correct.) ]
+  [in-cx [#
+[x [a &n 1] [b [*n]]]
+#]]
+  [out-canonical [#
+[x
+  [a 1]
+  [b
+    [a 1]
+  ]
+]
+#]]
+ ]
+
+ [case id=oph-010-empty-operator-element level=core
+  [tags operator-heads i1 element empty]
+  [in-cx [#
+[+]
+#]]
+  [out-cx [#
+[+]
+#]]
+ ]
+]

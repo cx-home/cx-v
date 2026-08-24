@@ -1,0 +1,236 @@
+[test-suite name=diagram ring=1
+  [doc [#
+conformance fixtures for cx-stdlib/diagram (spec/03-approved/std-lib/diagram.md).
+
+   The §10.1.2 reference renderer AND the playground CFG/ERD/SEQ emitter, both
+   pure CX (#758 waves 1-2; #889 wave 3). Every case here IS the worked example
+   of a public function's [fn-doc] — the co-located docs gate
+   (scripts/gen_guide/stdlib_docs_check.cx) pins each example verbatim to this
+   corpus, so a doc example that drifts from real behavior fails a gate rather
+   than misleading a reader.
+
+   CONVENTIONS: the render verbs that take a program IMAGE are exercised with a
+   minimal image node ([greet]); the source-text entries (of-source,
+   code-diagram) take source directly. `render-svg` / `render-png` run WITHOUT
+   the `subprocess` capability here, so they exercise the dot-less envelope
+   contract (§6) — the round trip holds on both roads by construction.
+
+   The byte-level pins live elsewhere and are stronger than these examples:
+   vcx/tests/diagram_mermaid_golden_test.v (120 mermaid goldens),
+   vcx/tests/diagram_vector_golden_test.v (DOT + envelopes + splices),
+   vcx/tests/code_diagram_golden_test.v (264 playground goldens).
+#]]
+ [case id=diagram-001-render-mermaid level=core
+  [tags diagram render-mermaid]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-mermaid [$diagram:render-mermaid [greet] "[greet]" "min"]]
+#]]
+  [out-text [# '[greet]' #]]
+ ]
+ [case id=diagram-002-rules level=core
+  [tags diagram rules]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$count [?for [in $r [$diagram:rules]/*] [where [= [$name $r] "row"]] [yield $r]]]
+#]]
+  [out-text [# 26 #]]
+ ]
+ [case id=diagram-003-admitted level=core
+  [tags diagram admitted]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:admitted "secret"]
+#]]
+  [out-text [# false #]]
+ ]
+ [case id=diagram-004-extract-mermaid level=core
+  [tags diagram extract-mermaid]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-mermaid "%%cx:W3hd%%"]
+#]]
+  [out-text [# '[x]' #]]
+ ]
+ [case id=diagram-005-extract-svg level=core
+  [tags diagram extract-svg]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-svg "<svg><metadata><cx:source>W3hd</cx:source></metadata></svg>"]
+#]]
+  [out-text [# '[x]' #]]
+ ]
+ [case id=diagram-006-extract-png level=core
+  [tags diagram extract-png]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[?lib 'cx-stdlib/bytes' as=bytes]
+[?else [$diagram:extract-png [$bytes:from-base64 "iVBORw0KGgo="]] "no cx-source chunk"]
+#]]
+  [out-text [# 'no cx-source chunk' #]]
+ ]
+ [case id=diagram-007-render-dot level=core
+  [tags diagram render-dot]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[?lib 'cx-stdlib/strings' as=strings]
+[$strings:contains [$diagram:render-dot [greet]] "digraph CX {"]
+#]]
+  [out-text [# true #]]
+ ]
+ [case id=diagram-008-render-svg level=core
+  [tags diagram render-svg]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-svg [$diagram:render-svg [greet] "[greet]"]]
+#]]
+  [out-text [# '[greet]' #]]
+ ]
+ [case id=diagram-009-render-png level=core
+  [tags diagram render-png]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-png [$diagram:render-png [greet] "[greet]"]]
+#]]
+  [out-text [# '[greet]' #]]
+ ]
+ [case id=diagram-010-of-source level=core
+  [tags diagram of-source]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-mermaid [$diagram:of-source "[greet]" "mermaid"]]
+#]]
+  [out-text [# '[greet]' #]]
+ ]
+ [case id=diagram-011-code-diagram level=core
+  [tags diagram code-diagram]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[?lib 'cx-stdlib/strings' as=strings]
+[$strings:contains [$diagram:code-diagram "[user id=1]" "min"] "erDiagram"]
+#]]
+  [out-text [# true #]]
+ ]
+ [case id=diagram-012-svg-envelope level=core
+  [tags diagram svg-envelope]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-svg [$diagram:svg-envelope "[x]"]]
+#]]
+  [out-text [# '[x]' #]]
+ ]
+ [case id=diagram-013-png-envelope level=core
+  [tags diagram png-envelope]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-png [$diagram:png-envelope "[x]"]]
+#]]
+  [out-text [# '[x]' #]]
+ ]
+ [case id=diagram-014-inject-svg-metadata level=core
+  [tags diagram inject-svg-metadata]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-svg [$diagram:inject-svg-metadata "<svg></svg>" "[x]"]]
+#]]
+  [out-text [# '[x]' #]]
+ ]
+ [case id=diagram-015-inject-png-chunk level=core
+  [tags diagram inject-png-chunk]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:extract-png [$diagram:inject-png-chunk [$diagram:png-envelope "[y]"] "[x]"]]
+#]]
+  [out-text [# '[x]' #]]
+ ]
+ [case id=diagram-016-crc32 level=core
+  [tags diagram crc32]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[?lib 'cx-stdlib/bytes' as=bytes]
+[$diagram:crc32 [$bytes:from-string-utf8 "IEND"]]
+#]]
+  [out-text [# 2923585666 #]]
+ ]
+ [case id=diagram-017-code-rules level=core
+  [tags diagram code-rules]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$count [?for [in $r [$diagram:code-rules]/*] [where [= [$name $r] "trigger"]] [yield $r]]]
+#]]
+  [out-text [# 5 #]]
+ ]
+ [case id=diagram-018-code-class level=core
+  [tags diagram code-class]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:code-class "const"]
+#]]
+  [out-text [# 'generic' #]]
+ ]
+ [case id=diagram-019-effect-graph level=core
+  [tags diagram effect-graph capabilities]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:effect-graph "[?def double ($x) [* $x 2]]" "min"]
+#]]
+  [out-text [# 'flowchart TD\n  prog(["program"])\n  nocap["no capability-charging effect reached"]\n  prog --> nocap' #]]
+ ]
+ [case id=diagram-020-effect-rules level=core
+  [tags diagram effect-graph capabilities]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$count [?for [in $r [$diagram:effect-rules]/*] [where [= [$name $r] "cap"]] [yield $r]]]
+#]]
+  [out-text [# 9 #]]
+ ]
+ [case id=diagram-021-effect-cap level=core
+  [tags diagram effect-graph capabilities]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[$diagram:effect-cap "io-read-file"]
+#]]
+  [out-text [# 'read' #]]
+ ]
+ [case id=diagram-020-data-tree-dot level=core
+  [tags diagram data-tree dot d913-1 issue-913]
+  [meta [#
+note: RULED D913-1 (#913) — a document with no program structure renders
+note: its ELEMENT TREE in the DOT text (the svg/png stdin), where the
+note: shipped walk emitted ZERO nodes (an empty canvas with exit 0, the
+note: #910 silent-degradation class one lane over). The bare URL keeps the
+note: source in the D910-1 data-lift class.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/diagram' as=diagram]
+[?lib 'cx-stdlib/strings' as=strings]
+[?let [= $dot [$diagram:of-source "[server [origins https://example.com]]" "dot"]]
+  ([$strings:contains $dot "digraph CX {"],
+   [$strings:contains $dot "n1 [label=\"[server "],
+   [$strings:contains $dot "n1 -> n2;"])]
+#]]
+  [out-text [# (true, true, true) #]]
+ ]
+]

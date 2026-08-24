@@ -28,6 +28,9 @@
 [?def host        scope=public impure [returns element] ($xap::element $opts::map {})       [$xap-host $xap $opts]]
 [?def host-push   scope=public impure [returns element] ($runtime::element $feature::string) [$xap-host-push $runtime $feature]]
 [?def emit        scope=public impure [returns element] ($runtime::element $intent::element $opts::map {}) [$xap-emit $runtime $intent $opts]]
+[?def derive      scope=public impure [returns element] ($runtime::element $opts::map)                     [$xap-derive $runtime $opts]]
+[?def instantiate scope=public pure   [returns element] ($archetype::element $binding::element)            [$xap-instantiate $archetype $binding]]
+[?def cohesion    scope=public pure   [returns element] ($feature::element)                                [$xap-cohesion $feature]]
 [?def on          scope=public impure [returns null]    ($runtime::element $pattern::element $handler)     [$xap-on $runtime $pattern $handler]]
 [?def state       scope=public impure [returns element] ($runtime::element $cxpath::string) [$xap-state $runtime $cxpath]]
 [; #25 Tier-2: transient coordination channel — ephemeral viewport/selection, latest-wins, off the journal/PEP cascade; rides the cx-fabric transient plane (#531 P2, fabric.md §12 — one transient-channel mechanism on the platform) ]
@@ -123,6 +126,18 @@
 [fn-doc name=emit scope=public purity=impure
   [sig """-> element"""]
   [summary """Run the committed cascade for one intent — PEP check, journal append, ordered dispatch. With a grammar attached, the term resolves through rho first (the committed event is qualified) and a derived verb is admitted by its transitive leaf constituent grants, never the wrapper's name."""]
+]
+[fn-doc name=derive scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Commit one derived-noun event as the noun's bound deriver (composition spec §4.2): {deriver:, noun:, record:} appends under actor deriver:<name> through the ordinary envelope/fold path — a derived noun's only producer; an unbound noun or a mismatched deriver refuses."""]
+]
+[fn-doc name=instantiate scope=public purity=pure
+  [sig """-> element"""]
+  [summary """Derive a feature from an immutable archetype under the refinement contract (composition spec §4.3): a pinned [instance …] binding renames presentation, adds, tightens, and selects — repurposing an inherited name or loosening an inherited signature refuses; the effective [feature …] carries its [instantiated-from …] provenance and composes like any other."""]
+]
+[fn-doc name=cohesion scope=public purity=pure
+  [sig """-> element"""]
+  [summary """The granularity instrument (composition spec §4.4): a feature's internal graph under the declared-edge set, reported as components + members + edges. Report-first, never refuses — two components are two features wearing one name, and the components are the split the gate would accept."""]
 ]
 [fn-doc name=on scope=public purity=impure
   [sig """-> null"""]

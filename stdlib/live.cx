@@ -1,0 +1,186 @@
+[; cx-stdlib/live — the live MODES over the ONE planar comprehension
+   (pack spec spec/02-working/live.md; ruled design live_modes.md L129–L137
+   plus the §10 U1 binding — campaign stream 3, #675). Every verb takes the
+   comprehension QUOTED (the L99 [$store:query] lowering) plus an explicit
+   $bind map — formal source names (sigil-less keys) → open handles —
+   because a live query spans a planar SOURCE SET, where [$store:query]
+   binds every name to the one queried store. Live sources may be store
+   sources AND journal sources (the one deliberate widening).
+
+   W1 shipped the stateless core, `changes-since`; W2 the live ∂
+   subscription, `observe`; W3 ships the maintained fold — `materialize`
+   — and its poll-substrate companions `advance` (the maintenance tick)
+   and `read` (the point-in-time read). The full surface is live.
+
+   [$live:changes-since Q BIND CURSOR OPTS?] → [changes [head-set …] ∂…]:
+   the ∂ set that carries a consumer from $cursor to head, plus the new
+   cursor — stateless, one-shot; the server holds nothing. THE cursor is a
+   head-set ([head-set [s source= pos=]…], the profile §5.1 spelling): one
+   entry per FORMAL source name, pos the source's own position — the #708
+   store:log docs-plane advance seq for a store source, the stream seq for
+   a journal source; [head-set] is the empty cursor and an absent entry
+   reads as position 0. ∂ frames are the planar_delta vocabulary verbatim
+   ([insert pos= ROW] / [retract pos=] / [regroup pos= ROW]), positions in
+   apply-order coordinates, ROW shaped exactly as the recompute relation
+   (L131 transparency). Within the incremental sub-fragment (L101) the ∂
+   set is EXACT; outside it the answer is the honest [recompute reason=…]
+   marker + the full relation at head re-stated as inserts — and from the
+   EMPTY cursor the exact ∂ IS the full relation as inserts, for EVERY
+   comprehension (equivalence-quartet leg 1: one-time [?for] ≡
+   changes-since from the empty cursor). A query err is a fault, not a
+   finding: it surfaces as the [err] value. Executing the quoted
+   comprehension requires the `eval` capability (the L99 sandbox posture);
+   $opts carries the authz-slice layer ({authz: H, actor: …}) exactly as
+   store:query. Refusals: CXER5070 not a quoted planar comprehension,
+   CXER0120 membership, CXER5071 unbound / mis-kinded formal name,
+   CXER5072 invalid cursor, CXER5073 resume below retention, CXER4700
+   authz deny — codes per live.md §9 (band CXER5070–5089, governance
+   §9.6).
+
+   [$live:observe Q BIND FROM OPTS?] → [live-sub …]: a live ∂ subscription
+   over the same validated query — the handle IS a delivery.md §4
+   subscription value (the §10 U1 binding; no bespoke handle kind):
+   rung= always reported (weakest of the source set; native store/journal
+   sources declare :complete-ordered), sharing=independent, flow=pull,
+   retention=window|full declared at creation (retention=latest on a ∂
+   stream refuses CXER5075 — ∂ MUST NOT coalesce, L130), the client
+   anchor as the [head-set] child, on-close=live-close ([?with-open]
+   composes). Resume is client-anchored (from=last+1): $from is the
+   last-delivered head-set; a $from below the retained tail refuses
+   CXER5073 at creation — never a silent re-seed. Consumption is the core
+   verbs — [?receive from=$sub] answers the next [changes [head-set …]
+   frame…] batch (exactly the changes-since answer from the anchor to
+   head; empty when quiescent), [?receive from=$sub max=N deadline=D] is
+   the U1.12a batch form (the sequence of up to N non-empty batches
+   within D ms), [?select] case [from $sub $msg] fires on readiness,
+   [?close $sub] closes. A fault terminates the stream LOUD, the err
+   delivered as the final frame; a receive on the terminated, fully
+   drained subscription refuses CXER5074 (closed-and-drained).
+
+   [$live:materialize STORE Q BIND NAME OPTS?] → [materialization …]: a
+   named, store-aliased, checkpointed fold — the fold value lives in
+   $store as a doc, $name is its alias, and THE CHECKPOINT IS THE
+   DURABLE CURSOR (value-anchored): [checkpoint q= [head-set …] ROW…],
+   written put-doc-then-alias with the alias advanced by an expect-pos
+   CAS (CXER1114 on conflict). materialize on an existing alias
+   RE-ATTACHES iff the checkpoint carries the same query (q= is the
+   query's canonical-text hash); a name held by a different value
+   refuses CXER1114 — never a silent replace. $opts
+   maintenance=incremental turns every loud recompute into the typed
+   CXER5076 refusal (demanded outside the incremental sub-fragment it
+   refuses at creation). [$live:advance REF] is the maintenance tick
+   (sched cadence is the deployment driver): pull sources to head,
+   apply ∂ or recompute LOUD, checkpoint, CAS — answers [advanced
+   applied=N recomputed=BOOL [head-set …]]. Per-aggregate maintenance:
+   a γ-retract is absorbed when the fold uses only sum/count/avg
+   (recomputed=false — sum decrements exactly); max/min/distinct force
+   the loud group recompute (recomputed=true). Derived-state posture: a
+   missing/unreadable checkpoint means full replay, correctness
+   untouched. [$live:read REF] → [snapshot [head-set …] ROW…] — the
+   point-in-time value carrying its coordinate. A materialization over
+   journal sources REGISTERS in each journal's own store, and
+   journal-retain refuses to prune a stream with a registered
+   materialization (the retention cover rule extended — the fold's
+   recompute basis may not be compacted away). ]
+
+[?def changes-since scope=public impure [returns element] ($q::element $bind::map $cursor::element $opts::map {}) [$live-changes-since $q $bind $cursor $opts]]
+[?def observe scope=public impure [returns element] ($q::element $bind::map $from::element $opts::map {}) [$live-observe $q $bind $from $opts]]
+[?def materialize scope=public impure [returns element] ($store::element $q::element $bind::map $name::string $opts::map {}) [$live-materialize $store $q $bind $name $opts]]
+[?def advance scope=public impure [returns element] ($ref::element $opts::map {}) [$live-advance $ref $opts]]
+[?def read scope=public impure [returns element] ($ref::element) [$live-read $ref]]
+[?def lower scope=public pure [returns element] ($raw::any) [$live-lower $raw]]
+[?def adapt-poll scope=public impure [returns element] ($url::string $tenant::string $stream::string $src::element $q::element $writer::string) [$live-adapt-poll $url $tenant $stream $src $q $writer]]
+[?def adapt-watch scope=public impure [returns element] ($url::string $tenant::string $stream::string $dir::string $writer::string) [$live-adapt-watch $url $tenant $stream $dir $writer]]
+[?def ingest scope=public impure [returns element] ($adapter::element) [$live-ingest $adapter]]
+
+[; co-located docs (guide-check: presence + purity + example backing). ]
+[module-doc name=live
+  [scope """The live modes over the one planar comprehension: the same quoted `[?for]` that runs once as a query is also a delta feed. `changes-since` is the stateless core — it takes the quoted comprehension, a `$bind` map (formal source names → open store/journal handles), and a head-set cursor, and answers `[changes [head-set …] ∂-frame…]`: the edit script that carries a consumer from its cursor to head, plus the new cursor. Within the incremental sub-fragment the ∂ set is exact (`[insert]`/`[retract]`/`[regroup]`); outside it the answer is the honest `[recompute reason=…]` marker followed by the full relation as inserts — and from the empty cursor `[head-set]` the exact ∂ is the full relation as inserts for every comprehension, which is why a one-time `[?for]` and `changes-since`-from-empty agree (the equivalence quartet, leg 1). `observe` is the live form of the same answer: it returns a delivery-contract subscription (`[live-sub …]` — rung reported, retention declared, closeable) whose every `[?receive]` delivers the next `[changes …]` batch from the consumer's own cursor — observe ≡ repeated `changes-since` driven by source advance (leg 2), a fault terminating the stream loud as the final frame. The maintained fold (`materialize`) and its poll-substrate companions (`advance`/`read`) land with their implementation wave per the pack spec."""]]
+[fn-doc name=changes-since scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Answer the ∂ set from a head-set cursor to head over a quoted planar comprehension, plus the new cursor."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-doc"]]
+[= $h [$store:put-doc $s [order [region "west"] [amount 100]]]]
+  [$live:changes-since [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]"""] [expect """[changes [head-set [s source=orders pos=1]] [insert pos=0 [order [region 'west'] [amount 100]]]]"""]]
+]
+[fn-doc name=observe scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Open a live ∂ subscription over a quoted planar comprehension: a delivery-contract handle whose receives deliver the [changes …] batches from the consumer's cursor to head."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-obs-doc"]]
+[= $sub [$live:observe [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} [head-set]]]
+[= $h [$store:put-doc $s [order id=1]]]
+  [?receive from=$sub]]"""] [expect """[changes [head-set [s source=orders pos=1]] [insert pos=0 [order id=1]]]"""]]
+]
+[fn-doc name=materialize scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Create (or re-attach to) a named, store-aliased, checkpointed fold of a quoted planar comprehension; the checkpoint is the durable cursor."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-mat-src"]]
+[= $cs [$store:open "mem://live-mat-ckpt"]]
+[= $h [$store:put-doc $s [order region=west amount=100]]]
+[= $m [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [group-by $o@region] [yield [rev region=$key n=$count]]]] {orders: $s} "rev-by-region"]]
+  [$live:read $m]]"""] [expect """[snapshot [head-set [s source=orders pos=1]] [rev region=west n=1]]"""]]
+]
+[fn-doc name=advance scope=public purity=impure
+  [sig """-> element"""]
+  [summary """The maintenance tick: pull the fold's sources to head, apply the ∂ (or recompute loud), checkpoint, and CAS the alias forward."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-adv-src"]]
+[= $cs [$store:open "mem://live-adv-ckpt"]]
+[= $m [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} "orders-live"]]
+[= $h [$store:put-doc $s [order id=1]]]
+  [$live:advance $m]]"""] [expect """[advanced applied=1 recomputed=false [head-set [s source=orders pos=1]]]"""]]
+]
+[fn-doc name=read scope=public purity=impure
+  [sig """-> element"""]
+  [summary """A point-in-time read of a materialization: the fold value carrying its head-set coordinate."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $s [$store:open "mem://live-read-src"]]
+[= $cs [$store:open "mem://live-read-ckpt"]]
+[= $h1 [$store:put-doc $s [order id=1]]]
+[= $m [$live:materialize $cs [?quote [?for [in $o [$store:source $orders "//order"]] [yield $o]]] {orders: $s} "orders"]]
+  [$live:read $m]]"""] [expect """[snapshot [head-set [s source=orders pos=1]] [order id=1]]"""]]
+]
+[fn-doc name=lower scope=public purity=pure
+  [sig """-> element"""]
+  [summary """The three-way ingest lowering ladder: JSON text becomes a wrapped [json …] value, CX-parseable text becomes its first element verbatim, anything else becomes the lossless [foreign …] wrapper — never a drop."""]
+  [example [code """[?lib 'cx-stdlib/live']
+([$live:lower "{\"sku\": \"A-1\", \"qty\": 2}"], [$live:lower "[order id=1]"], [$live:lower "plain text, not a record"])"""] [expect """([json {sku: A-1, qty: 2}], [order id=1], [foreign 'plain text, not a record'])"""]]
+]
+[fn-doc name=adapt-poll scope=public purity=impure
+  [sig """-> element"""]
+  [summary """The :snapshot-diff floor adapter: owns a declared journal stream and, on every ingest tick, appends the source store's exact delta window as one atomic [ingested from= at= FRAME…] entry — the entry itself carries the resume token."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $db [$store:open "mem://live-poll-doc"]]
+[= $a [$live:adapt-poll "mem://live-poll-doc-j" "acme" "orders" $db [?quote [?for [in $r [$store:source $db2 "//order"]] [yield $r]]] "poll-1"]]
+[= $h1 [$store:put-doc $db [order id=1]]]
+  [$live:ingest $a]]"""] [expect """[ingested from=0 at=1 n=1]"""]]
+]
+[fn-doc name=adapt-watch scope=public purity=impure
+  [sig """-> element"""]
+  [summary """The :coalesced-rescan floor adapter: fs watch events between ticks; overflow — or the first tick — rescans the directory; files lower through the three-way ladder into the declared stream."""]
+  [example [code """[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/live']
+[?let [= $a [$live:adapt-watch "mem://live-watch-doc" "acme" "files" "/tmp/live-watch-doc-dir" "watch-1"]]
+[= $w1 [$io:write-file "/tmp/live-watch-doc-dir/a.json" "{\"sku\": \"A-1\"}"]]
+  [$live:ingest $a]]"""] [expect """[ingested rescan=true n=1]"""]]
+]
+[fn-doc name=ingest scope=public purity=impure
+  [sig """-> element"""]
+  [summary """The explicit adapter tick (sched cadence is the deployment driver): pull the adapter's pending window and append it to the declared stream; answers the tick summary."""]
+  [example [code """[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/live']
+[?let [= $db [$store:open "mem://live-ingest-doc"]]
+[= $a [$live:adapt-poll "mem://live-ingest-doc-j" "acme" "orders" $db [?quote [?for [in $r [$store:source $db2 "//order"]] [yield $r]]] "poll-1"]]
+[= $h1 [$store:put-doc $db [order id=1]]]
+[= $t1 [$live:ingest $a]]
+  [$live:ingest $a]]"""] [expect """[ingested from=1 at=1 n=0]"""]]
+]

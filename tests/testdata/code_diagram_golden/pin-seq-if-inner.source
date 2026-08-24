@@ -1,0 +1,1 @@
+[?worker name="w" body=[?if $p [then [?send "a" to=$ch]] [else [?send "b" to=$ch]]]]

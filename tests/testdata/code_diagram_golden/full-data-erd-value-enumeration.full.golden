@@ -1,0 +1,13 @@
+erDiagram
+  DOCUMENT {
+    int node_count "4"
+    int type_count "2"
+    int max_depth "1"
+  }
+  users ||--o{ user : has
+  users {
+  }
+  user {
+    int id "@ 1, 2, 3"
+    string note "appears 3× depth 1"
+  }

@@ -1,4 +1,4 @@
-[test-suite name=a2a
+[test-suite name=a2a ring=1
   [doc [#
 Conformance fixtures for cx-x/a2a — a minimal A2A (Agent-to-Agent) protocol client
 (#6 Y2). NB cx-x/a2a is an EXPERIMENTAL x/-TIER module (D3): bundled + gated but
@@ -47,7 +47,7 @@ the result (emitted JSON has keys sorted; strings single-quoted).
    [in-code [#
 [?lib 'cx-x/a2a' :as a2a]
 [?lib 'cx-stdlib/json' :as json]
-[$json:emit [$a2a:agent-card "greeter" "says hi" "http://x/" "0.1"]]
+[$json:emit [$a2a:agent-card "greeter" "says hi" "http://x/" "0.1" ()]]
 #]]
    [out-text [#
 '{"capabilities":{"streaming":false},"description":"says hi","name":"greeter","skills":[],"url":"http://x/","version":"0.1"}'
@@ -77,6 +77,51 @@ the result (emitted JSON has keys sorted; strings single-quoted).
 #]]
    [out-text [#
 'completed'
+#]]
+  ]
+
+  [case id=a2a-008-skills-for-derived-from-projection level=core
+   [tags a2a skills projection descriptor stream-18 690 715 L141]
+   [meta [#
+note: the hardcoded empty skills list DIED (stream 18, the #715 rider):
+note: an Agent Card's skills derive from the SAME cx-x/tools projection
+note: the MCP adapter serves — one model, two lossy adapters. The A2A
+note: ruling drops the JSON Schemas and keeps the TRUE annotation hints
+note: as skill tags.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a' :as a2a]
+[?lib 'cx-stdlib/json' :as json]
+[?let [= $src """
+[fn-doc name=refund-order scope=public purity=impure
+  [sig '''($order-id::string $amount::decimal) -> element''']
+  [summary '''Refund an order via the payment provider.''']]
+[?def refund-order scope=public impure [effects [write] [net]] [returns element] ($order-id::string $amount::decimal) [refunded $order-id]]
+[fn-doc name=archive-order scope=public purity=impure [sig '''x'''] [summary '''Archive an order (idempotent).''']]
+[?def archive-order scope=public impure [idempotent] [effects [write]] [returns element] ($opts::map {}) [archived]]
+"""]
+      [= $skills [$a2a:skills-for $src]]
+  [$json:emit [$a2a:agent-card "orders" "order ops" "http://x/" "0.1" $skills]]]
+#]]
+   [out-text [#
+'{"capabilities":{"streaming":false},"description":"order ops","name":"orders","skills":[{"description":"Refund an order via the payment provider.","id":"refund-order","name":"refund-order","tags":["destructive","open-world"]},{"description":"Archive an order (idempotent).","id":"archive-order","name":"archive-order","tags":["idempotent","destructive"]}],"url":"http://x/","version":"0.1"}'
+#]]
+  ]
+
+  [case id=a2a-009-skills-for-propagates-projection-failure level=core
+   [tags a2a skills projection fail-loud stream-18 690 L143]
+   [meta [#
+note: a projection failure propagates as its [err] — an Agent Card must
+note: never advertise a silently empty or partial skill set.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a' :as a2a]
+[$a2a:skills-for "[?def undocumented-cmd impure [effects [write]] ($x::string) [w $x]]"]
+#]]
+   [out-text [#
+[err code=missing-summary ([missing-summary def=undocumented-cmd])]
 #]]
   ]
 ]

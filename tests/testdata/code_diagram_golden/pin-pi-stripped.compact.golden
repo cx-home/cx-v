@@ -1,0 +1,4 @@
+erDiagram
+  user {
+    string name
+  }

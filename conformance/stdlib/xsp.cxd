@@ -1,0 +1,554 @@
+[test-suite name=xsp ring=2
+ [doc [#
+cx-stdlib/xsp — the XSP frame + session layer (spec/03-approved/xap/xsp.md),
+landed as the G8 corpus family at I5 stream 4 W3: frames are pure byte
+encode/decode over CX values, so the corpus itself pins frame round-trips
+(all 8 types), header edges (principal-len 0, eos, reserved-flag rejection,
+the 2^32-1 declared-length ceiling), the six error lanes (CXER5000-5005,
+numeric since the L166 cutover), decode-all remainders, the negotiation
+accept/ignore/refuse triple (§4.4a via the auth calculus), credit-frame
+arithmetic + replenishment (§5.2), the §5.3 scalar resume-cursor form,
+and the store profile's HEAD-SET map cursor form (xsp-021, W4). Only
+live-socket behavior stays in V: the listener-side credit ORDERING (push
+stops at zero, a credit frame resumes), cancel/eos choreography, and the
+group `from=` refusal (fabric_serve_test.v; store streams in
+store_xsp_serve_test.v). Two shipped defects were caught by these cases at
+authoring: a payload-less binary frame mis-refused as a data-bin parse
+failure (xsp-004), and an int(u32) overflow at the declared-length ceiling
+that crashed the decoder past the truncation check (xsp-012).
+#]]
+ [case id=xsp-001-roundtrip-binary-payload level=core gate=enforced
+  [tags xsp frame roundtrip binary i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?let
+  [= $d [$xsp:decode [$xsp:encode [frame type=request stream=7 principal="did:key:z6MkABC"
+    [payload [order id=1 [line sku="a" qty=2]]]]]]]
+  [seq [$text $d/@type] [$text $d/@stream] [$text $d/@principal] [$text $d/@eos] [$text $d/@binary] [$count $d/payload/*]]]
+#]]
+  [out-text [#
+[seq 'request' '7' 'did:key:z6MkABC' 'false' 'true' 1]
+#]]
+ ]
+ [case id=xsp-002-roundtrip-all-eight-types level=core gate=enforced
+  [tags xsp frame roundtrip types i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?for [in $t ("request", "event", "reply", "cancel", "ping", "pong", "error", "credit")]
+  [yield [?let [= $d [$xsp:decode [$xsp:encode [frame type=$t [payload 1]]]]]
+    [$text $d/@type]]]]
+#]]
+  [out-text [#
+'request'
+'event'
+'reply'
+'cancel'
+'ping'
+'pong'
+'error'
+'credit'
+#]]
+ ]
+ [case id=xsp-003-roundtrip-text-payload level=core gate=enforced
+  [tags xsp frame roundtrip text i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?let
+  [= $d [$xsp:decode [$xsp:encode [frame type=event binary=false [payload "hello xsp"]]]]]
+  [seq [$text $d/@binary] [$text $d/payload]]]
+#]]
+  [out-text [#
+[seq 'false' 'hello xsp']
+#]]
+ ]
+ [case id=xsp-004-anonymous-payloadless-header level=core gate=enforced
+  [tags xsp frame header anonymous principal-len-zero i5-stream4]
+  [doc [#
+Header edge: principal-len 0 (anonymous) and a payload-less frame. The
+consumed attr is exactly the 17-byte header, and the [payload] child is
+EMPTY - a zero-length binary payload is a payload-less frame, never a
+data-bin parse error (the pre-W3 codec mis-refused this; this case is
+the regression guard).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?let
+  [= $d [$xsp:decode [$xsp:encode [frame type=ping]]]]
+  [seq [$text $d/@principal] [$text $d/@consumed] [$text $d/@stream]]]
+#]]
+  [out-text [#
+[seq '' '17' '0']
+#]]
+ ]
+ [case id=xsp-005-eos-flag-roundtrip level=core gate=enforced
+  [tags xsp frame header eos i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?let
+  [= $d [$xsp:decode [$xsp:encode [frame type=reply eos=true [payload [ok]]]]]]
+  [seq [$text $d/@eos] [$text $d/@type]]]
+#]]
+  [out-text [#
+[seq 'true' 'reply']
+#]]
+ ]
+ [case id=xsp-006-reserved-flags-rejected level=core gate=enforced
+  [tags xsp frame header flags reserved error-lane i5-stream4]
+  [doc [#
+Flags bits 2-7 are reserved and MUST be 0 in XSP/1 (xsp.md §2). A set
+reserved bit is rejected loudly - a future flag must be negotiated
+(§5.0), and tolerating unknown bits would make that negotiation
+unenforceable. The 17 bytes here are a hand-built ping header with
+flags=0x04.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[$xsp:decode [$bytes:from-hex "0105000000000000000004000000000000"]]
+#]]
+  [out-err [#
+cx-err:CXER5005
+#]]
+ ]
+ [case id=xsp-007-version-lane level=core gate=enforced
+  [tags xsp error-lane version i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[$xsp:decode [$bytes:from-hex "020500000000000000000000000000000000"]]
+#]]
+  [out-err [#
+cx-err:CXER5000
+#]]
+ ]
+ [case id=xsp-008-truncated-lane level=core gate=enforced
+  [tags xsp error-lane truncated i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[$xsp:decode [$bytes:from-hex "0102"]]
+#]]
+  [out-err [#
+cx-err:CXER5001
+#]]
+ ]
+ [case id=xsp-009-type-lane level=core gate=enforced
+  [tags xsp error-lane type i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[$xsp:decode [$bytes:from-hex "010900000000000000000000000000000000"]]
+#]]
+  [out-err [#
+cx-err:CXER5002
+#]]
+ ]
+ [case id=xsp-010-length-lane-principal level=core gate=enforced
+  [tags xsp error-lane length principal i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/strings' :as str]
+[?let
+  [= $p [$str:repeat "a" 65536]]
+  [$xsp:encode [frame type=ping principal=$p]]]
+#]]
+  [out-err [#
+cx-err:CXER5003
+#]]
+ ]
+ [case id=xsp-011-payload-lane level=core gate=enforced
+  [tags xsp error-lane payload data-bin i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[$xsp:decode [$bytes:from-hex "0102000000000000000001000000000002ffff"]]
+#]]
+  [out-err [#
+cx-err:CXER5004
+#]]
+ ]
+ [case id=xsp-012-declared-ceiling-truncated level=core gate=enforced
+  [tags xsp error-lane length ceiling security i5-stream4]
+  [doc [#
+The 2^32-1 declared-length ceiling edge: a 17-byte header declaring a
+4294967295-byte payload refuses as TRUNCATED (the buffer cannot carry
+it). At authoring this case caught an int(u32) overflow that slipped
+past the truncation check and crashed the decoder on a negative
+allocation - the length arithmetic is i64 now.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[$xsp:decode [$bytes:from-hex "01020000000000000000000000ffffffff"]]
+#]]
+  [out-err [#
+cx-err:CXER5001
+#]]
+ ]
+ [case id=xsp-013-decode-all-remainder level=core gate=enforced
+  [tags xsp decode-all remainder i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?let
+  [= $f1 [$xsp:encode [frame type=event stream=1 [payload [a x=1]]]]]
+  [= $f2 [$xsp:encode [frame type=event stream=2 [payload [b y=2]]]]]
+  [= $fs [$xsp:decode-all [$bytes:concat ($f1, $f2, [$bytes:from-hex "aabbcc"])]]]
+  [= $rem [$first $fs//remainder]]
+  [seq [$count $fs//frame] [$count $fs//remainder] [$text $rem/@bytes]]]
+#]]
+  [out-text [#
+[seq 2 1 '3']
+#]]
+ ]
+ [case id=xsp-014-decode-all-clean level=core gate=enforced
+  [tags xsp decode-all i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?let
+  [= $f1 [$xsp:encode [frame type=event stream=1 [payload [a x=1]]]]]
+  [= $f2 [$xsp:encode [frame type=event stream=2 [payload [b y=2]]]]]
+  [= $fs [$xsp:decode-all [$bytes:concat ($f1, $f2)]]]
+  [seq [$count $fs//frame] [$count $fs//remainder]]]
+#]]
+  [out-text [#
+[seq 2 0]
+#]]
+ ]
+ [case id=xsp-015-credit-frame-roundtrip level=core gate=enforced
+  [tags xsp credit frame roundtrip flow-control i5-stream4]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?let
+  [= $d [$xsp:decode [$xsp:encode [frame type=credit stream=42 [payload 7]]]]]
+  [seq [$text $d/@type] [$text $d/@stream] [$text $d/payload]]]
+#]]
+  [out-text [#
+[seq 'credit' '42' '7']
+#]]
+ ]
+ [case id=xsp-016-credit-arithmetic-replenishment level=core gate=enforced
+  [tags xsp credit flow-control arithmetic i5-stream4]
+  [doc [#
+§5.2 credit arithmetic as executable spec: a window of 2, three event
+frames, one credit frame granting 2 - the balance folds to
+2 - events + grants = 1 and never goes negative. The listener-side
+ORDERING (push stops at zero credits, a credit frame resumes the pump)
+is live-socket behavior, pinned in store_xsp_serve_test.v (store result
+streams) and fabric_serve_test.v (durable subscriptions).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?let
+  [= $e1 [$xsp:encode [frame type=event stream=9 [payload [entry seq=1]]]]]
+  [= $e2 [$xsp:encode [frame type=event stream=9 [payload [entry seq=2]]]]]
+  [= $cf [$xsp:encode [frame type=credit stream=9 [payload 2]]]]
+  [= $e3 [$xsp:encode [frame type=event stream=9 [payload [entry seq=3]]]]]
+  [= $fs [$xsp:decode-all [$bytes:concat ($e1, $e2, $cf, $e3)]]]
+  [= $events [$count $fs//frame[= $_@type "event"]]]
+  [= $cfr [$first $fs//frame[= $_@type "credit"]]]
+  [= $grant [$first $cfr/payload/*]]
+  [seq $events [$text $cfr/payload] [- [+ 2 $grant] $events]]]
+#]]
+  [out-text [#
+[seq 3 '2' 1]
+#]]
+ ]
+ [case id=xsp-017-negotiation-accept-intersection level=core gate=enforced
+  [tags xsp negotiation accept intersection store-profile i5-stream4]
+  [doc [#
+Negotiation ACCEPT (§4.4a via the auth calculus): both sides offer
+overlapping sets, M4 confirms the per-field intersection in canonical
+sorted order, and auth-finish returns it. The store profile's attach is
+exactly this exchange (profiles="store").
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "",
+           offer-profiles: "store xap", offer-features: "store-feed credit resume"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           offer-profiles: "store", offer-features: "credit resume store-feed"}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [tenant "acme"] [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv,
+           session: [session id="s-1" [principal $i-did] [tenant "acme"]]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [seq [$text $done/confirmed/@profiles] [$text $done/confirmed/@features]]]
+#]]
+  [out-text [#
+[seq 'store' 'credit resume store-feed']
+#]]
+ ]
+ [case id=xsp-018-negotiation-ignore-unknown-token level=core gate=enforced
+  [tags xsp negotiation ignore unknown-token i5-stream4]
+  [doc [#
+Negotiation IGNORE: an unknown offered token ("quantum-teleport") never
+breaks the handshake - it simply cannot land in the confirmed
+intersection. Unknown tokens are ignored on the discovery surface
+(forward-compatible, xsp.md §5.0); only un-negotiated USE is an error.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "",
+           offer-profiles: "store", offer-features: "credit quantum-teleport"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           offer-profiles: "store", offer-features: "credit"}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [tenant "acme"] [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv,
+           session: [session id="s-1" [principal $i-did] [tenant "acme"]]}]]
+  [= $done [$xsp:auth-finish $m1 $m2 $m4 {eph-priv: $i-eph-priv}]]
+  [seq [$text $done/confirmed/@profiles] [$text $done/confirmed/@features]]]
+#]]
+  [out-text [#
+[seq 'store' 'credit']
+#]]
+ ]
+ [case id=xsp-019-negotiation-refuse-extension level=core gate=enforced
+  [tags xsp negotiation refuse forged extension security i5-stream4]
+  [doc [#
+Negotiation REFUSE, the extension direction: a forged M4 (valid tag)
+claiming a feature NEITHER side offered ("store-feed") is refused by
+auth-finish, which recomputes the intersection from its own M1 and the
+received M2. Complements xsp-auth-027 (narrowing) - together they pin
+that the confirmed set can neither shrink nor grow past the offers.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/did' :as did]
+[?let
+  [= $i-eph-priv [$bytes:from-hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"]]
+  [= $i-eph-pub  [$bytes:from-hex "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"]]
+  [= $r-eph-priv [$bytes:from-hex "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"]]
+  [= $r-eph-pub  [$bytes:from-hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"]]
+  [= $i-seed [$bytes:from-hex "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"]]
+  [= $i-pub  [$bytes:from-hex "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]]
+  [= $r-seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $r-pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $n-i [$bytes:from-hex "0101010101010101010101010101010101010101010101010101010101010101"]]
+  [= $n-r [$bytes:from-hex "0202020202020202020202020202020202020202020202020202020202020202"]]
+  [= $i-did [$did:key-create $i-pub]]
+  [= $r-did [$did:key-create $r-pub]]
+  [= $m1 [$xsp:auth-hello {did: $i-did, nonce: $n-i, eph: $i-eph-pub, endpoint: "",
+           offer-profiles: "store", offer-features: "credit resume"}]]
+  [= $m2 [$xsp:auth-challenge $m1 {did: $r-did, nonce: $n-r, eph: $r-eph-pub, key: $r-seed,
+           offer-profiles: "store", offer-features: "credit"}]]
+  [= $m3 [$xsp:auth-prove $m1 $m2 {eph-priv: $i-eph-priv, key: $i-seed,
+           attach: [attach [tenant "acme"] [session mirror]]}]]
+  [= $m4 [$xsp:auth-confirm $m1 $m2 $m3 {eph-priv: $r-eph-priv,
+           session: [session id="s-1" [principal $i-did] [tenant "acme"]]}]]
+  [= $m4-forged [xsp-auth phase=confirm [tag [$first $m4/tag]]
+    [confirmed-profiles "store"] [confirmed-features "credit resume store-feed"]
+    [session [session id="s-1"]]]]
+  [$xsp:auth-finish $m1 $m2 $m4-forged {eph-priv: $i-eph-priv}]]
+#]]
+  [out-err [#
+cx-err:CXER-XSP-AUTH-STATE
+#]]
+ ]
+ [case id=xsp-022-store-advert-canonical-signature level=core gate=enforced
+  [tags xsp store-profile advert head-set signature crypto i5-stream4]
+  [doc [#
+The §7a.1 store-advert signing recipe (W5): the signature covers the
+STRICT canonical text of [store-advert-canonical generation= [head-set …]
+[guarantees …]] under the daemon identity key — generation, coordinate,
+and guarantee set bound together. A verifier rebuilds the wrapper from
+the advert's parts, canonicalizes ($cx:canonical — the same
+canonicalization content addresses use), and verifies. The negative half:
+STRIPPING a guarantee token changes the canonical bytes and the signature
+dies — the F3/downgrade surface this shape exists to close. The live
+push/re-advertise choreography is socket behavior in
+store_xsp_serve_test.v.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/strings' :as str]
+[?let
+  [= $seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $hs "[head-set boot=\"b-77\" [s plane=\"docs\" pos=4] [s plane=\"refs\" name=\"head\" pos=2]]"]
+  [= $full [$str:join ("[store-advert-canonical generation=3 ", $hs, " [guarantees \":at-least-once :gapless :monotonic-reads\"]]") ""]]
+  [= $sig [$crypto:ed25519-sign $seed [$cx:canonical $full]]]
+  [$crypto:ed25519-verify $pub [$cx:canonical $full] $sig]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+ [case id=xsp-023-store-advert-stripped-guarantee-dies level=core gate=enforced
+  [tags xsp store-profile advert signature strip negative i5-stream4]
+  [doc [#
+The xsp-022 negative: stripping ONE guarantee token from the signed
+wrapper changes the canonical bytes and the signature refuses — a
+downgrade-by-omission on the advert is detectable, never silent (F3).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/bytes' :as bytes]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?lib 'cx-stdlib/strings' :as str]
+[?let
+  [= $seed [$bytes:from-hex "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"]]
+  [= $pub  [$bytes:from-hex "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"]]
+  [= $hs "[head-set boot=\"b-77\" [s plane=\"docs\" pos=4] [s plane=\"refs\" name=\"head\" pos=2]]"]
+  [= $full [$str:join ("[store-advert-canonical generation=3 ", $hs, " [guarantees \":at-least-once :gapless :monotonic-reads\"]]") ""]]
+  [= $stripped [$str:join ("[store-advert-canonical generation=3 ", $hs, " [guarantees \":at-least-once :monotonic-reads\"]]") ""]]
+  [= $sig [$crypto:ed25519-sign $seed [$cx:canonical $full]]]
+  [$crypto:ed25519-verify $pub [$cx:canonical $stripped] $sig]]
+#]]
+  [out-err [#
+cx-err:CXER3705
+#]]
+ ]
+ [case id=xsp-021-headset-cursor-form level=core gate=enforced
+  [tags xsp resume cursor head-set map store-profile i5-stream4]
+  [doc [#
+The HEAD-SET map cursor FORM (store profile §5.1/§5.2, xsp.md §5.3): a
+multi-stream feed resumes with a MAP - [from boot="…" [s plane= name=?
+pos=]…] - never a scalar (no cross-stream total order exists). The
+boot token binds positions to the retention boundary. This pins the
+text-envelope round-trip of the form; the listener-side refusals
+(cross-boot CXER5020, malformed entries CXER5019) are live-socket
+behavior in store_xsp_serve_test.v.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?let
+  [= $b [$xsp:encode [frame type=request stream=6 binary=false
+    [payload "[feed window=8 [planes \"docs refs\"] [from boot=\"b-1\" [s plane=\"docs\" pos=7] [s plane=\"refs\" name=\"head\" pos=3]]]"]]]]
+  [= $d [$xsp:decode $b]]
+  [= $req [$cx:parse [$text $d/payload]]]
+  [= $f [$first $req//from]]
+  [seq [$text $f/@boot] [$count $f/s]
+    [?for [in $s $f/s] [yield [$text $s/@pos]]]]]
+#]]
+  [out-text [#
+[seq 'b-1' 2 ('7', '3')]
+#]]
+ ]
+
+ [case id=xsp-020-resume-cursor-form level=core gate=enforced
+  [tags xsp resume cursor subscribe session-layer i5-stream4]
+  [doc [#
+§5.3 resume-cursor FORM: a [subscribe ... from=N window=W] envelope
+rides a text frame intact - from= is the resume token, window= the §5.2
+credit declaration. The refusal of from= on a GROUP subscription (the
+committed offset is the group's resume point) is listener behavior,
+pinned live in fabric_serve_test.v.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/xsp' :as xsp]
+[?let
+  [= $b [$xsp:encode [frame type=request stream=5 binary=false
+    [payload "[subscribe stream=\"orders\" from=42 window=8]"]]]]
+  [= $d [$xsp:decode $b]]
+  [= $req [$cx:parse [$text $d/payload]]]
+  [seq [$text $req/@from] [$text $req/@window] [$text $req/@stream]]]
+#]]
+  [out-text [#
+[seq '42' '8' 'orders']
+#]]
+ ]
+]

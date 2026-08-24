@@ -1,0 +1,16 @@
+%%cx:Wz9pZiBbPiAkZXh0cmVtZWx5LWxvbmctYmluZGluZy1uYW1lLXRoYXQtb3ZlcmZsb3dzLXRoZS10cnVuY2F0aW9uLWNhcCAxMDAwMDAwXSB0aGVuPVthLXZlcnktbG9uZy1lbGVtZW50LW5hbWUtaGVyZS15ZXMgaz0ndnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnYnIFtjaGlsZF1dIGVsc2U9Wz9jYW5jZWwgJGZ1dHVyZS1oYW5kbGVdXQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3{"if [> …]"}
+    n4["[?if] result"]
+    n5["[a-very-long-element-name-here-yes @k='vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv…"]
+    n3 -- "true" --> n5
+    n5 --> n4
+    n6[["[?cancel]"]]
+    n7["$future-handle"]
+    n6 -- "cancel" --> n7
+    n3 -- "false" --> n6
+    n6 --> n4
+    n1 --> n4
+    n4 --> n2

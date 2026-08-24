@@ -1,0 +1,370 @@
+[test-suite name=vc ring=2
+  [doc [#
+conformance fixtures for cx-stdlib/vc (spec/03-approved/std-lib/vc.md).
+Authored at the I3 open (partition corpus audit gap G14), the authority
+half of the did/vc pair. Ring 2 by the partition plan-row contract
+(cx_partition.md §11 single authority model; I3 ledger census note N3) —
+issue/verify/present are pure, revoke/revoked-set touch only the mem://
+journal substrate, so every case is hermetic and offline.
+
+   DETERMINISM: same golden key material as stdlib/did.cxd —
+     issuer  seed-1 0102…1f20 → did-1 did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7
+     subject pub-2             → did-2 did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG
+   ed25519 signing is deterministic ⇒ the [proof [signature …]] values pin
+   byte-for-byte. Validity window: issued-at 2026-06-16T12:00:00Z /
+   expires 2026-06-16T13:00:00Z with `now` pinned per case. mem:// journals
+   give the epoch-counter ts (journal.cxd convention).
+
+   SPEC-FINDING RESOLVED (issue-739, RULED 739-1a): the §3 predicate was
+   named `valid?` and was therefore UNREACHABLE — the lexicon does not
+   admit `?` inside an identifier, so `[$vc:valid? …]` is a parse error
+   while `[?def valid? …]` parsed fine on the definition side, leaving a
+   public surface that existed only in prose. RENAMED `valid`,
+   cutover-first (the old spelling is not dual-accepted). Case vc-016 flips
+   from pinning the parse failure to pinning the reachable call.
+
+   Id ranges:
+     001-002  issue: full golden shape (subject≠issuer) + minimal→verify
+     003-008  verify statuses: expired / not-yet-valid / bad-signature /
+              tamper (real signature, altered claim) / malformed / revoked
+     009-012  revocation: revoke event, attribution required, revoked-set
+              fold, end-to-end issue→revoke→verify
+     013      present (v1 passthrough [vp …] envelope)
+     014-015  issue negatives: claim-invalid, key-invalid
+     016      the `valid` predicate reached through the qualified form
+              (was: the valid? unreachable-surface defect pin — issue-739)
+     017      revoked-list negative control (other id stays valid)
+     018      unsupported-suite fail-closed: proof type= is READ and gated
+              against the signature-suite registry BEFORE any signature
+              byte is touched (#702/L36) — an unknown suite is
+              :unsupported-suite, never :bad-signature
+     019      stripped-tag downgrade (#691 §10): an ABSENT proof type= over
+              a genuinely valid signature is :unsupported-suite, never a
+              default-ed25519 attempt — the tag-strip attack is detected
+#]]
+
+ [case id=vc-001-issue-full-golden-shape level=core gate=enforced
+  [tags vc issue delegation proof golden]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[?let [= $claim [delegation d-recon-77 [tenant acme] [from [principal "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]] [to [principal "did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG"]] [capabilities [refund-duplicate]] [over "/orders"] [revocable true]]]
+  [$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG" $claim {id: "urn:uuid:fixture-vc-1", issued-at: 2026-06-16T12:00:00Z, expires: 2026-06-16T13:00:00Z}]]
+#]]
+  [out-text [#
+[vc id=urn:uuid:fixture-vc-1 [issuer 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [subject 'did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG'] [issued-at 2026-06-16T12:00:00Z] [expires 2026-06-16T13:00:00Z] [claim [delegation 'd-recon-77' [tenant 'acme'] [from [principal 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7']] [to [principal 'did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG']] [capabilities [refund-duplicate]] [over '/orders'] [revocable true]]] [proof type=Ed25519Signature2020 [verification-method 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [signature 'z5GHgTsMWEUSXVMDRyAoMG9aDVHnHAHPK3L3qzyHbMuZh7KqcciuiRVbVrs3WtaEQ4LpHVQG1YZ9WEyef35jfS2VB']]]
+#]]
+ ]
+
+ [case id=vc-002-issue-then-verify-valid level=core gate=enforced
+  [tags vc issue verify valid window]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[?let [= $claim [delegation d1 [tenant acme] [capabilities [read]]]]
+  [= $cred [$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $claim {id: "urn:vc:1", issued-at: 2026-06-16T12:00:00Z, expires: 2026-06-16T13:00:00Z}]]
+  [$vc:verify $cred 2026-06-16T12:30:00Z]]
+#]]
+  [out-text [#
+[vc-verification status=valid id='urn:vc:1' issuer=did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7]
+#]]
+ ]
+
+ [case id=vc-003-verify-expired level=core gate=enforced
+  [tags vc verify expired window]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[?let [= $claim [delegation d1 [tenant acme] [capabilities [read]]]]
+  [= $cred [$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $claim {id: "urn:vc:1", issued-at: 2026-06-16T12:00:00Z, expires: 2026-06-16T13:00:00Z}]]
+  [$vc:verify $cred 2026-06-16T14:00:00Z]]
+#]]
+  [out-text [#
+[vc-verification status=expired]
+#]]
+ ]
+
+ [case id=vc-004-verify-not-yet-valid level=core gate=enforced
+  [tags vc verify not-yet-valid window]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[?let [= $claim [delegation d1 [tenant acme] [capabilities [read]]]]
+  [= $cred [$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $claim {id: "urn:vc:1", issued-at: 2026-06-16T12:00:00Z, expires: 2026-06-16T13:00:00Z}]]
+  [$vc:verify $cred 2026-06-16T11:00:00Z]]
+#]]
+  [out-text [#
+[vc-verification status=not-yet-valid]
+#]]
+ ]
+
+ [case id=vc-005-verify-bad-signature-literal level=core gate=enforced
+  [tags vc verify bad-signature negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?let [= $bad [vc id="urn:vc:x" [issuer "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"] [subject "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"] [issued-at 2026-06-16T12:00:00Z] [expires 2026-06-16T13:00:00Z] [claim [delegation d1 [capabilities [read]]]] [proof type=Ed25519Signature2020 [verification-method "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#x"] [signature "zBADBADBAD"]]]]
+  [$vc:verify $bad 2026-06-16T12:30:00Z]]
+#]]
+  [out-text [#
+[vc-verification status=bad-signature]
+#]]
+ ]
+
+ [case id=vc-006-verify-tampered-claim level=core gate=enforced
+  [tags vc verify tamper attenuation security]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?let [= $tampered [vc id='urn:vc:1' [issuer 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [subject 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [issued-at 2026-06-16T12:00:00Z] [expires 2026-06-16T13:00:00Z] [claim [delegation 'd1' [tenant 'acme'] [capabilities [read write]]]] [proof type=Ed25519Signature2020 [verification-method 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [signature 'z3K6kWeMQv92PWPefVp4H1fraFkQUVTgL6HuP4j4QefaGzq5WmB9JgPddhthpsTpv6gCeqBf64wm5djuFDif5gCmq']]]]
+  [$vc:verify $tampered 2026-06-16T12:30:00Z]]
+#]]
+  [out-text [#
+[vc-verification status=bad-signature]
+#]]
+ ]
+
+ [case id=vc-007-verify-malformed level=core gate=enforced
+  [tags vc verify malformed negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[$vc:verify [not-a-vc] 2026-06-16T12:30:00Z]
+#]]
+  [out-text [#
+[vc-verification status=malformed]
+#]]
+ ]
+
+ [case id=vc-008-verify-revoked-via-opts level=core gate=enforced
+  [tags vc verify revoked opts]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[?let [= $claim [delegation d1 [tenant acme] [capabilities [read]]]]
+  [= $cred [$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $claim {id: "urn:vc:1", issued-at: 2026-06-16T12:00:00Z, expires: 2026-06-16T13:00:00Z}]]
+  [$vc:verify $cred 2026-06-16T12:30:00Z {revoked: ["urn:vc:1"]}]]
+#]]
+  [out-text [#
+[vc-verification status=revoked]
+#]]
+ ]
+
+ [case id=vc-009-revoke-journal-event level=core gate=enforced
+  [tags vc revoke journal event]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$vc:revoke $j "urn:vc:1" {actor: "ops", authority: "d-77"}]]
+#]]
+  [out-text [#
+[entry seq=1 tenant=acme actor=ops authority=d-77 ts='1970-01-01T00:00:01Z' prev-hash='genesis:' payload=sha2-256:e68c9af8c2f0629fe0e8b7ef141b67d40f2807689fe23debb88370eee05da22d hash=sha2-256:cec418f2323d355b5b49ddea9571f1d99f1f150ad21a706160c7592e4988b020 [event [revoke vc-id='urn:vc:1']]]
+#]]
+ ]
+
+ [case id=vc-010-revoke-requires-attribution level=core gate=enforced
+  [tags vc revoke negative attribution CXER4609]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [$vc:revoke $j "urn:vc:1"]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER4609 message='E_JOURNAL_ATTRIBUTION_INVALID: append requires non-empty actor + authority (no anonymous appends)']
+#]]
+ ]
+
+ [case id=vc-011-revoked-set-fold level=core gate=enforced
+  [tags vc revoked-set fold journal]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://t" "acme"]]
+  [= $r1 [$vc:revoke $j "urn:vc:1" {actor: "ops", authority: "d-77"}]]
+  [= $r2 [$vc:revoke $j "urn:vc:2" {actor: "ops", authority: "d-77"}]]
+  [$vc:revoked-set $j]]
+#]]
+  [out-text [#
+[revoked-set [id 'urn:vc:1'] [id 'urn:vc:2']]
+#]]
+ ]
+
+ [case id=vc-012-issue-revoke-verify-end-to-end level=core gate=enforced
+  [tags vc issue revoke revoked-set verify end-to-end]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/bytes']
+[?let [= $claim [delegation d1 [tenant acme] [capabilities [read]]]]
+  [= $cred [$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $claim {id: "urn:vc:1", issued-at: 2026-06-16T12:00:00Z, expires: 2026-06-16T13:00:00Z}]]
+  [= $j [$journal:open "mem://t" "acme"]]
+  [= $r [$vc:revoke $j "urn:vc:1" {actor: "ops", authority: "d-77"}]]
+  [$vc:verify $cred 2026-06-16T12:30:00Z {revoked: [$vc:revoked-set $j]}]]
+#]]
+  [out-text [#
+[vc-verification status=revoked]
+#]]
+ ]
+
+ [case id=vc-013-present-passthrough level=core gate=enforced
+  [tags vc present vp envelope]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[?let [= $claim [delegation d1 [tenant acme] [capabilities [read]]]]
+  [= $cred [$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $claim {id: "urn:vc:1", issued-at: 2026-06-16T12:00:00Z, expires: 2026-06-16T13:00:00Z}]]
+  [$vc:present $cred]]
+#]]
+  [out-text [#
+[vp [vc id='urn:vc:1' [issuer 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [subject 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [issued-at 2026-06-16T12:00:00Z] [expires 2026-06-16T13:00:00Z] [claim [delegation 'd1' [tenant 'acme'] [capabilities [read]]]] [proof type=Ed25519Signature2020 [verification-method 'did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7'] [signature 'z3K6kWeMQv92PWPefVp4H1fraFkQUVTgL6HuP4j4QefaGzq5WmB9JgPddhthpsTpv6gCeqBf64wm5djuFDif5gCmq']]]]
+#]]
+ ]
+
+ [case id=vc-014-issue-claim-invalid level=core gate=enforced
+  [tags vc issue negative CXER-VC-CLAIM-INVALID]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [not-a-delegation] {id: "urn:vc:9"}]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-VC-CLAIM-INVALID message='vc/issue: claim must be a [delegation …] (§22.2)']
+#]]
+ ]
+
+ [case id=vc-015-issue-key-invalid level=core gate=enforced
+  [tags vc issue negative CXER-VC-KEY-INVALID]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [delegation d1 [capabilities [read]]] {id: "urn:vc:9"}]
+#]]
+  [out-text [#
+[err code=cx-err:CXER-VC-KEY-INVALID message='vc/issue: Ed25519 seed must be 32 bytes, got 2']
+#]]
+ ]
+
+ [case id=vc-016-valid-predicate-reachable level=core gate=enforced
+  [tags vc valid lexicon issue-739]
+  [meta [#
+note: RULED 739-1a. This case used to pin a CXER0100 parse failure —
+note: `[$vc:valid? …]` could not be written, because the lexicon does not
+note: admit `?` inside an identifier, so the §3 predicate had no call form
+note: at all. Renamed `valid` cutover-first; the pin now asserts the
+note: surface WORKS rather than that it does not exist.
+note:
+note: An unsigned [vc] is not verifiable, so the predicate answers false —
+note: which is the point: it ANSWERS. Reaching a `false` is the whole
+note: difference from a parse error.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[$vc:valid [vc id="urn:vc:1"] 2026-06-16T12:30:00Z]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=vc-017-revoked-list-other-id-stays-valid level=core gate=enforced
+  [tags vc verify revoked negative-control]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?lib 'cx-stdlib/bytes']
+[?let [= $claim [delegation d1 [tenant acme] [capabilities [read]]]]
+  [= $cred [$vc:issue "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" [$bytes:from-hex "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"] "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7" $claim {id: "urn:vc:1", issued-at: 2026-06-16T12:00:00Z, expires: 2026-06-16T13:00:00Z}]]
+  [$vc:verify $cred 2026-06-16T12:30:00Z {revoked: ["urn:vc:other"]}]]
+#]]
+  [out-text [#
+[vc-verification status=valid id='urn:vc:1' issuer=did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7]
+#]]
+ ]
+
+ [case id=vc-018-verify-unsupported-suite level=core gate=enforced
+  [tags vc verify unsupported-suite fail-closed suite-registry negative]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?let [= $bad [vc id="urn:vc:x" [issuer "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"] [subject "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"] [issued-at 2026-06-16T12:00:00Z] [expires 2026-06-16T13:00:00Z] [claim [delegation d1 [capabilities [read]]]] [proof type=ml-dsa-65 [verification-method "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#x"] [signature "zBADBADBAD"]]]]
+  [$vc:verify $bad 2026-06-16T12:30:00Z]]
+#]]
+  [out-text [#
+[vc-verification status=unsupported-suite]
+#]]
+ ]
+
+ [case id=vc-019-verify-stripped-suite-tag-rejected level=core gate=enforced
+  [tags vc verify unsupported-suite fail-closed downgrade stripped-tag negative crypto-agility]
+  [; the credential is vc-001's golden with a GENUINELY VALID ed25519
+     signature, EXCEPT the proof's type= attr is STRIPPED — the L36
+     downgrade attack (crypto_agility §1.4, #691 §10): the signature stays
+     valid over the proof-stripped preimage, so a verifier that defaults an
+     absent suite tag to ed25519 verifies it clean and the strip goes
+     undetected. The suite tag MUST be present and registry-verified BEFORE
+     any signature byte is touched: absent → :unsupported-suite, never a
+     default-suite attempt. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/vc']
+[?let [= $stripped [vc id="urn:uuid:fixture-vc-1" [issuer "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"] [subject "did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG"] [issued-at 2026-06-16T12:00:00Z] [expires 2026-06-16T13:00:00Z] [claim [delegation d-recon-77 [tenant acme] [from [principal "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"]] [to [principal "did:key:z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG"]] [capabilities [refund-duplicate]] [over "/orders"] [revocable true]]] [proof [verification-method "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7#z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7"] [signature "z5GHgTsMWEUSXVMDRyAoMG9aDVHnHAHPK3L3qzyHbMuZh7KqcciuiRVbVrs3WtaEQ4LpHVQG1YZ9WEyef35jfS2VB"]]]]
+  [$vc:verify $stripped 2026-06-16T12:30:00Z]]
+#]]
+  [out-text [#
+[vc-verification status=unsupported-suite]
+#]]
+ ]
+]

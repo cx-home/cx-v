@@ -22,6 +22,8 @@
 [?lib 'cx-stdlib/jsonrpc' :as rpc]
 [?lib 'cx-stdlib/json' :as json]
 [?lib 'cx-stdlib/http' :as http]
+[?lib 'cx-stdlib/fp' :as fp]
+[?lib 'cx-x/tools' :as tools]
 
 # ── pure protocol shaping ──────────────────────────────────────────────────────
 # text-part — one text content part of a message.
@@ -41,9 +43,42 @@
   [$rpc:request $id "message/send" {message: $msg}]]
 
 # agent-card — a minimal A2A Agent Card (served at /.well-known/agent.json).
-[?def agent-card scope=public pure [returns map] ($name::string $description::string $url::string $version::string)
+# Skills are the caller's — derive them from module source via skills-for
+# (stream 18: the hardcoded empty skills list died; a card advertises the
+# SAME projection the MCP adapter serves).
+[?def agent-card scope=public pure [returns map] ($name::string $description::string $url::string $version::string $skills::any)
   {name: $name description: $description url: $url version: $version
-   capabilities: {streaming: false} skills: ()}]
+   capabilities: {streaming: false} skills: $skills}]
+
+# ── the projection adapter (stream 18: descriptor → A2A skill) ─────────────────
+# skill-of — ONE cx-x/tools descriptor element → the A2A skill entry. The A2A
+# adapter's lossy ruling (L141): it drops the JSON Schemas (A2A carries
+# modes/tags, not parameter schemas — argument validation happens at the
+# protocol peer's own boundary) and keeps the semantic contract as TAGS: the
+# true annotation hints, spelled as skill tags. Enforcement is unchanged by
+# whatever a client reads here (the lossy-downward rule, L142).
+[?def skill-of scope=public pure [returns map] ($d::element)
+  [?let [= $a $d/annotations]
+        [= $tags [?to-sequence [$filter
+                   ([?if $a@read-only   [then 'read-only']   [else ()]],
+                    [?if $a@idempotent  [then 'idempotent']  [else ()]],
+                    [?if $a@destructive [then 'destructive'] [else ()]],
+                    [?if $a@open-world  [then 'open-world']  [else ()]])
+                   [?fn ($t) [$exists $t]]]]]
+    {id: $d@name,
+     name: $d@name,
+     description: [$string $d/description],
+     tags: $tags}]]
+
+# skills-for — module source text → the Agent Card skills array, derived from
+# the SAME projection the MCP adapter serves (one model, two lossy adapters —
+# L141). A projection failure propagates as its [err] — a card must never
+# advertise a silently empty or partial skill set.
+[?def skills-for scope=public pure [returns any] ($source::string)
+  [?let [= $ds [$tools:descriptors-of $source]]
+    [?match $ds
+      [case [err @code=$c] $ds]
+      [else [$fp:map $ds [?fn ($d) [$skill-of $d]]]]]]]
 
 # ── pure response extractors ───────────────────────────────────────────────────
 # message-text — the first text part of a Message reply (result.parts[0].text).
@@ -91,8 +126,16 @@
   [sig """-> map"""]
   [summary """Build the JSON-RPC `message/send` request carrying a message."""]]
 [fn-doc name=agent-card scope=public purity=pure
-  [sig """-> map"""]
-  [summary """Build a minimal A2A Agent Card (name/description/url/version/capabilities/skills)."""]]
+  [sig """($name::string $description::string $url::string $version::string $skills::any) -> map"""]
+  [summary """Build a minimal A2A Agent Card (name/description/url/version/capabilities/skills). Skills are the caller's — derive them from module source via skills-for."""]]
+[fn-doc name=skill-of scope=public purity=pure
+  [sig """($d::element) -> map"""]
+  [summary """Map ONE cx-x/tools descriptor to the A2A skill entry ({id,name,description,tags}) — the A2A lossy ruling drops the JSON Schemas and keeps the true annotation hints as tags."""]
+  [param-doc name=d """A [tool …] descriptor element from cx-x/tools:descriptors-of."""]]
+[fn-doc name=skills-for scope=public purity=pure
+  [sig """($source::string) -> any"""]
+  [summary """Module source text → the Agent Card skills array from the SAME projection the MCP adapter serves (one model, two lossy adapters). A projection failure propagates its [err]."""]
+  [param-doc name=source """The module source text (the same bytes the module loader reads)."""]]
 [fn-doc name=message-text scope=public purity=pure
   [sig """-> string"""]
   [summary """Extract the first text part of a Message reply (result.parts[0].text)."""]]

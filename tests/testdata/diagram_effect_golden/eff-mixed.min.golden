@@ -1,0 +1,10 @@
+flowchart TD
+  prog(["program"])
+  cap_read{{"read"}}
+  prog -.->|"conditional"| cap_read
+  cap_write{{"write"}}
+  prog -.->|"conditional"| cap_write
+  cap_net{{"net"}}
+  prog -.->|"conditional"| cap_net
+  cap_env{{"env"}}
+  prog --> cap_env

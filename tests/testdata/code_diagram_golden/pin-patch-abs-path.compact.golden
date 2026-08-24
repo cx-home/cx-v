@@ -1,0 +1,8 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  lt["[= $x /root/item]"]
+  b["$x"]
+  lt --> b
+  start --> lt
+  b --> done

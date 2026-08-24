@@ -1,0 +1,27 @@
+flowchart TD
+  classDef input fill:#e0f7fa,stroke:#006064;
+  classDef output fill:#fff3e0,stroke:#e65100;
+  classDef callsite fill:#f3e5f5,stroke:#4a148c;
+  classDef cond fill:#fff9c4,stroke:#f57f17;
+  classDef loop fill:#e8f5e9,stroke:#1b5e20;
+  classDef lit fill:#eceff1,stroke:#37474f;
+  classDef binding fill:#ede7f6,stroke:#311b92;
+  classDef param fill:#e1f5fe,stroke:#01579b;
+  classDef path fill:#e0f2f1,stroke:#004d40;
+  classDef yield fill:#fce4ec,stroke:#880e4f;
+  classDef accessor fill:#f1f8e9,stroke:#33691e;
+  classDef exit fill:#fafafa,stroke:#212121;
+  input([INPUT]):::input
+  output([OUTPUT]):::output
+  start([entry])
+  done([exit])
+  i{"if $x"}
+  t["'big'"]
+  i -- "true" --> t
+  t --> done
+  e["'small'"]
+  i -- "false" --> e
+  e --> done
+  start --> i
+  input --> start
+  done --> output

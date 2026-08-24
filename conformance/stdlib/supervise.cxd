@@ -1,0 +1,754 @@
+[test-suite name=supervise ring=1
+  [doc [#
+conformance fixtures for cx-stdlib/supervise
+(spec/03-approved/std-lib/supervise.md §10; issue #765; RULED: SUP-1).
+Each program imports the bundled module via
+[?lib 'cx-stdlib/supervise' :as sup]. The LAST expression is the
+rendered result.
+
+   supervise runs named children (arity-0 callables spawned as workers)
+   under a policy (strategy × intensity × backoff) and restarts them per
+   child restart type. It composes [?worker]/[?monitor], fan-out
+   channels (U1.11a), and cx-stdlib/sched timers — no new primitive, no
+   capability (§5).
+
+   DETERMINISM. Backoff delays, the intensity window, and attempt-reset
+   ride sched's :manual clock — they fire only under
+   [$sched:test-clock-advance], deterministically. Loop handshakes ride
+   real worker threads, so fixtures synchronize on the EVENT stream
+   (exact-count batched receives with generous deadlines — each batch
+   returns the moment its count is met; the deadline is a liveness
+   bound, never a sleep). Negative-space assertions ("no restart before
+   the clock advances") use a short-deadline empty batch: nothing can
+   arrive without a tick, so the empty result is deterministic.
+
+   FOUR-CHANNEL MODEL: handle/status/events are present VALUES;
+   CXER5090 malformed policy/spec and CXER5091 duplicate child are
+   faults; stop-of-stopped is null and stop-child-of-unknown is false
+   (VALUES); start-child/stop-child/events on a stopped supervisor are
+   CXER5093 (status stays readable); the give-up terminal is CXER5094
+   on the loop worker, observed by a parent monitor as
+   [panicked … [err CXER0220 [cause [err CXER5094]]]] (SUP-1g).
+
+   NOT HERE, by recorded rider (ledger/rulings_2026_08_20_supervise.md):
+   - the wedged-child abandon arm rides the V lane
+     (vcx/tests/stdlib_supervise_test.v) — on this substrate [?cancel]
+     stamps the terminal at request (SUP-1f), so .cxd cannot observe a
+     shutdown-window expiry;
+   - the events-laggard CXER0218 arm is the standard channel STREAM_GAP
+     contract, pinned by the core channel lane (SUP-1b) — supervise adds
+     no gap logic.
+
+   Id ranges:
+     001-005  restart types × outcomes (permanent/transient/temporary)
+     006-007  exp backoff + attempt reset (mock clock)
+     008-010  strategies + intensity-counts-decisions
+     011-012  give-up + tree escalation
+     013-017  stop / with-open / dynamic children / status
+     018-024  negatives (CXER5090/5091/5093) + status-after-stop
+     025-030  the module fn-doc examples, verbatim (guide-check backing)
+  #]]
+
+  [# ── 001-005: restart types × outcomes ─────────────────────────── #]
+
+  [case id=sup-001-permanent-panic-restart-sequence level=concurrency packs=sched
+   [tags supervise restart permanent panicked events 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s001" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?let [= $m [?receive from=$c]]
+                                       [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $_k [?send [die] to=$c]]
+[= $e1 [?receive from=$ev max=3 deadline=8000]]
+[= $_ [$sup:stop $s]]
+($e0, $e1)]
+#]]
+   [out-text [#
+(([child-started name=a attempt=0]), ([child-exited name=a reason=:panicked err-code=cx-err:CXER0100], [child-restarted name=a attempt=1 delay-ms=0], [child-started name=a attempt=1]))
+#]]
+  ]
+
+  [case id=sup-002-permanent-restarts-on-done level=concurrency packs=sched
+   [tags supervise restart permanent done events 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s002" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $_k [?send [go] to=$c]]
+[= $e1 [?receive from=$ev max=3 deadline=8000]]
+[= $_ [$sup:stop $s]]
+$e1]
+#]]
+   [out-text [#
+([child-exited name=a reason=:done], [child-restarted name=a attempt=1 delay-ms=0], [child-started name=a attempt=1])
+#]]
+  ]
+
+  [case id=sup-003-transient-restarts-on-panic level=concurrency packs=sched
+   [tags supervise restart transient panicked 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s003" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="t" restart=:transient
+           [fn [?fn () [?let [= $m [?receive from=$c]]
+                         [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $_k [?send [die] to=$c]]
+[= $e1 [?receive from=$ev max=3 deadline=8000]]
+[= $_ [$sup:stop $s]]
+$e1]
+#]]
+   [out-text [#
+([child-exited name=t reason=:panicked err-code=cx-err:CXER0100], [child-restarted name=t attempt=1 delay-ms=0], [child-started name=t attempt=1])
+#]]
+  ]
+
+  [case id=sup-004-transient-not-restarted-on-done level=concurrency packs=sched
+   [tags supervise restart transient done negative-space status 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s004" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="t" restart=:transient [fn [?fn () [?receive from=$c]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $_k [?send [go] to=$c]]
+[= $e1 [?receive from=$ev max=1 deadline=8000]]
+[= $none [?receive from=$ev max=1 deadline=300]]
+[= $st [$sup:status $s]]
+[= $_ [$sup:stop $s]]
+($e1, [$count $none], $st)]
+#]]
+   [out-text [#
+(([child-exited name=t reason=:done]), 0, [supervisor-status restarts-in-window=0 ([child name=t state=stopped attempts=0])])
+#]]
+  ]
+
+  [case id=sup-005-temporary-never-restarted level=concurrency packs=sched
+   [tags supervise restart temporary panicked negative-space 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s005" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="p" restart=:temporary
+           [fn [?fn () [?let [= $m [?receive from=$c]]
+                         [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $_k [?send [die] to=$c]]
+[= $e1 [?receive from=$ev max=1 deadline=8000]]
+[= $none [?receive from=$ev max=1 deadline=300]]
+[= $_ [$sup:stop $s]]
+($e1, [$count $none])]
+#]]
+   [out-text [#
+(([child-exited name=p reason=:panicked err-code=cx-err:CXER0100]), 0)
+#]]
+  ]
+
+  [# ── 006-007: exp backoff + attempt reset (mock clock) ─────────── #]
+
+  [case id=sup-006-exp-backoff-100-200-mock-clock level=concurrency packs=sched
+   [tags supervise backoff exp sched mock-clock negative-space 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $c [?channel name="s006" buffer=8]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=10 window=1m
+                    backoff=:exp base=100ms cap=10s]
+        ([child name="a" [fn [?fn () [?let [= $m [?receive from=$c]]
+                                       [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $_k1 [?send [die] to=$c]]
+[= $e1 [?receive from=$ev max=1 deadline=8000]]
+[; the status round-trip is the ARM BARRIER: ops queue behind the
+   child's terminal note in the one inbox, so the reply proves the
+   backoff timer is armed before the clock advances ]
+[= $_b1 [$sup:status $s]]
+[= $none1 [?receive from=$ev max=1 deadline=300]]
+[= $d100 [$time:duration-ms 100]]
+[= $_a1 [$sched:test-clock-advance $d100]]
+[= $e2 [?receive from=$ev max=2 deadline=8000]]
+[= $_k2 [?send [die] to=$c]]
+[= $e3 [?receive from=$ev max=1 deadline=8000]]
+[= $_b2 [$sup:status $s]]
+[= $_a2 [$sched:test-clock-advance $d100]]
+[= $none2 [?receive from=$ev max=1 deadline=300]]
+[= $_a3 [$sched:test-clock-advance $d100]]
+[= $e4 [?receive from=$ev max=2 deadline=8000]]
+[= $_ [$sup:stop $s]]
+([nowait1 [$count $none1]], $e2, [nowait2 [$count $none2]], $e4)]
+#]]
+   [out-text [#
+([nowait1 0], ([child-restarted name=a attempt=1 delay-ms=100], [child-started name=a attempt=1]), [nowait2 0], ([child-restarted name=a attempt=2 delay-ms=200], [child-started name=a attempt=2]))
+#]]
+  ]
+
+  [case id=sup-007-attempt-reset-after-healthy-window level=concurrency packs=sched
+   [tags supervise backoff window attempt-reset intensity sched mock-clock 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?lib 'cx-stdlib/sched']
+[?lib 'cx-stdlib/time']
+[?let [= $c [?channel name="s007" buffer=8]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=10 window=5s
+                    backoff=:exp base=100ms cap=10s]
+        ([child name="a" [fn [?fn () [?let [= $m [?receive from=$c]]
+                                       [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $_k1 [?send [die] to=$c]]
+[= $e1 [?receive from=$ev max=1 deadline=8000]]
+[= $_b1 [$sup:status $s]]
+[= $d100 [$time:duration-ms 100]]
+[= $_a1 [$sched:test-clock-advance $d100]]
+[= $e2 [?receive from=$ev max=2 deadline=8000]]
+[= $stA [$sup:status $s]]
+[= $d6s [$time:duration-s 6]]
+[= $_a2 [$sched:test-clock-advance $d6s]]
+[= $stB [$sup:status $s]]
+[= $_k2 [?send [die] to=$c]]
+[= $e3 [?receive from=$ev max=1 deadline=8000]]
+[= $_b2 [$sup:status $s]]
+[= $_a3 [$sched:test-clock-advance $d100]]
+[= $e4 [?receive from=$ev max=2 deadline=8000]]
+[= $_ [$sup:stop $s]]
+([in-window $stA@restarts-in-window], [expired $stB@restarts-in-window], $e4)]
+#]]
+   [out-text [#
+([in-window 1], [expired 0], ([child-restarted name=a attempt=1 delay-ms=100], [child-started name=a attempt=1]))
+#]]
+  ]
+
+  [# ── 008-010: strategies + intensity-counts-decisions ──────────── #]
+
+  [case id=sup-008-one-for-all-cancel-reverse-restart-in-order level=concurrency packs=sched
+   [tags supervise strategy one-for-all ordering events byte-pinned 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $ca [?channel name="s008a" buffer=4]]
+[= $cb [?channel name="s008b" buffer=4]]
+[= $cc [?channel name="s008c" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-all max-restarts=5]
+        ([child name="a" [fn [?fn () [?receive from=$ca]]]],
+         [child name="b" [fn [?fn () [?let [= $m [?receive from=$cb]]
+                                       [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]],
+         [child name="c" [fn [?fn () [?receive from=$cc]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=3 deadline=8000]]
+[= $_k [?send [die] to=$cb]]
+[= $e1 [?receive from=$ev max=9 deadline=8000]]
+[= $_ [$sup:stop $s]]
+$e1]
+#]]
+   [out-text [#
+([child-exited name=b reason=:panicked err-code=cx-err:CXER0100], [child-exited name=c reason=:cancelled], [child-exited name=a reason=:cancelled], [child-restarted name=a attempt=1 delay-ms=0], [child-started name=a attempt=1], [child-restarted name=b attempt=1 delay-ms=0], [child-started name=b attempt=1], [child-restarted name=c attempt=1 delay-ms=0], [child-started name=c attempt=1])
+#]]
+  ]
+
+  [case id=sup-009-rest-for-one-restarts-the-tail level=concurrency packs=sched
+   [tags supervise strategy rest-for-one ordering events 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $ca [?channel name="s009a" buffer=4]]
+[= $cb [?channel name="s009b" buffer=4]]
+[= $cc [?channel name="s009c" buffer=4]]
+[= $s [$sup:start [policy strategy=:rest-for-one max-restarts=5]
+        ([child name="a" [fn [?fn () [?receive from=$ca]]]],
+         [child name="b" [fn [?fn () [?let [= $m [?receive from=$cb]]
+                                       [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]],
+         [child name="c" [fn [?fn () [?receive from=$cc]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=3 deadline=8000]]
+[= $_k [?send [die] to=$cb]]
+[= $e1 [?receive from=$ev max=6 deadline=8000]]
+[= $_ [$sup:stop $s]]
+$e1]
+#]]
+   [out-text [#
+([child-exited name=b reason=:panicked err-code=cx-err:CXER0100], [child-exited name=c reason=:cancelled], [child-restarted name=b attempt=1 delay-ms=0], [child-started name=b attempt=1], [child-restarted name=c attempt=1 delay-ms=0], [child-started name=c attempt=1])
+#]]
+  ]
+
+  [case id=sup-010-intensity-counts-decisions-not-respawns level=concurrency packs=sched
+   [tags supervise intensity one-for-all decisions status 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $ca [?channel name="s010a" buffer=4]]
+[= $cb [?channel name="s010b" buffer=4]]
+[= $cc [?channel name="s010c" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-all max-restarts=2]
+        ([child name="a" [fn [?fn () [?receive from=$ca]]]],
+         [child name="b" [fn [?fn () [?let [= $m [?receive from=$cb]]
+                                       [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]],
+         [child name="c" [fn [?fn () [?receive from=$cc]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=3 deadline=8000]]
+[= $_k [?send [die] to=$cb]]
+[= $e1 [?receive from=$ev max=9 deadline=8000]]
+[= $st [$sup:status $s]]
+[= $_ [$sup:stop $s]]
+[decisions n=$st@restarts-in-window]]
+#]]
+   [out-text [#
+[decisions n=1]
+#]]
+  ]
+
+  [# ── 011-012: give-up + tree escalation ─────────────────────────── #]
+
+  [case id=sup-011-give-up-emits-final-event-and-panics-CXER5094 level=concurrency packs=sched
+   [tags supervise intensity give-up CXER5094 monitor escalation 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s011" buffer=8]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=1]
+        ([child name="a" [fn [?fn () [?let [= $m [?receive from=$c]]
+                                       [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $wh [?worker-handle name=$s@worker]]
+[= $mon [?monitor $wh]]
+[= $sp [?receive from=$mon]]
+[= $_k1 [?send [die] to=$c]]
+[= $e1 [?receive from=$ev max=3 deadline=8000]]
+[= $_k2 [?send [die] to=$c]]
+[= $e2 [?receive from=$ev max=2 deadline=8000]]
+[= $term [?receive from=$mon max=1 deadline=8000]]
+[= $t [$first $term]]
+[= $cause [$first $t/err/cause/*]]
+($e2, [escalates code=$cause@code])]
+#]]
+   [out-text [#
+(([child-exited name=a reason=:panicked err-code=cx-err:CXER0100], [gave-up restarts=1 window-ms=5000]), [escalates code=cx-err:CXER5094])
+#]]
+  ]
+
+  [case id=sup-012-tree-parent-restarts-collapsed-subtree level=concurrency packs=sched
+   [tags supervise tree composition escalation CXER0220 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $cs [?channel name="s012" buffer=8]]
+[= $subfn [?fn ()
+    [?let [= $kids ([child name="leaf" [fn [?fn () [?let [= $m [?receive from=$cs]]
+                                                     [err code=cx-err:CXER0100 message="synthetic child fault (opaque to supervise)"]]]]])]
+      [= $s2 [$sup:start [policy strategy=:one-for-one max-restarts=1] $kids]]
+      [= $wn [$concat "" $s2@worker]]
+      [= $h [?worker-handle name=$wn]]
+      [?wait-for worker=$h]]]]
+[= $sP [$sup:start [policy strategy=:one-for-one max-restarts=3]
+         ([child name="sub" [fn $subfn]])]]
+[= $evP [$sup:events $sP]]
+[= $e0 [?receive from=$evP max=1 deadline=8000]]
+[= $_k1 [?send [die] to=$cs]]
+[= $_k2 [?send [die] to=$cs]]
+[= $e1 [?receive from=$evP max=3 deadline=12000]]
+[= $st [$sup:status $sP]]
+[= $rows [$first $st/*]]
+[= $r1 [$first $rows]]
+[= $_ [$sup:stop $sP]]
+($e1, [subtree state=$r1@state])]
+#]]
+   [out-text [#
+(([child-exited name=sub reason=:panicked err-code=cx-err:CXER0220], [child-restarted name=sub attempt=1 delay-ms=0], [child-started name=sub attempt=1]), [subtree state=running])
+#]]
+  ]
+
+  [# ── 013-017: stop / with-open / dynamic children / status ─────── #]
+
+  [case id=sup-013-stop-reverse-order-idempotent level=concurrency packs=sched
+   [tags supervise stop ordering idempotent 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $ca [?channel name="s013a" buffer=4]]
+[= $cb [?channel name="s013b" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$ca]]]],
+         [child name="b" [fn [?fn () [?receive from=$cb]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=2 deadline=8000]]
+[= $r1 [$sup:stop $s]]
+[= $e1 [?receive from=$ev max=2 deadline=8000]]
+[= $r2 [$sup:stop $s]]
+($e1, $r1, $r2)]
+#]]
+   [out-text [#
+(([child-exited name=b reason=:cancelled], [child-exited name=a reason=:cancelled]), null, null)
+#]]
+  ]
+
+  [case id=sup-014-with-open-auto-stop level=concurrency packs=sched
+   [tags supervise with-open closeable on-close 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s014" buffer=4]]
+[= $keep [?channel name="s014k" buffer=2]]
+[= $r [?with-open [$sup:start [policy strategy=:one-for-one max-restarts=3]
+                    ([child name="a" [fn [?fn () [?receive from=$c]]]])] $s
+        [?let [= $ev [$sup:events $s]]
+          [= $e0 [?receive from=$ev max=1 deadline=8000]]
+          [= $wh [?worker-handle name=$s@worker]]
+          [= $_h [?send [h $wh] to=$keep]]
+          [opened events=[$count $e0]]]]]
+[= $hh [?receive from=$keep max=1 deadline=8000]]
+[= $h1 [$first $hh]]
+[= $wh [$first $h1/*]]
+[= $term [?wait-for worker=$wh]]
+($r, $term)]
+#]]
+   [out-text [#
+([opened events=1], [stopped])
+#]]
+  ]
+
+  [case id=sup-015-start-child-joins-start-order-tail level=concurrency packs=sched
+   [tags supervise start-child dynamic status ordering 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $ca [?channel name="s015a" buffer=4]]
+[= $cb [?channel name="s015b" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$ca]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=8000]]
+[= $kid [child name="b" [fn [?fn () [?receive from=$cb]]]]]
+[= $r [$sup:start-child $s $kid]]
+[= $e1 [?receive from=$ev max=1 deadline=8000]]
+[= $st [$sup:status $s]]
+[= $_ [$sup:stop $s]]
+($r, $e1, $st)]
+#]]
+   [out-text [#
+([ok], ([child-started name=b attempt=0]), [supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0], [child name=b state=running attempts=0])])
+#]]
+  ]
+
+  [case id=sup-016-stop-child-true-then-false level=concurrency packs=sched
+   [tags supervise stop-child dynamic value-not-fault 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $ca [?channel name="s016a" buffer=4]]
+[= $cb [?channel name="s016b" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$ca]]]],
+         [child name="b" [fn [?fn () [?receive from=$cb]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=2 deadline=8000]]
+[= $r1 [$sup:stop-child $s "b"]]
+[= $e1 [?receive from=$ev max=1 deadline=8000]]
+[= $r2 [$sup:stop-child $s "b"]]
+[= $st [$sup:status $s]]
+[= $_ [$sup:stop $s]]
+($r1, $r2, $e1, $st)]
+#]]
+   [out-text [#
+(true, false, ([child-exited name=b reason=:cancelled]), [supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0])])
+#]]
+  ]
+
+  [case id=sup-017-status-snapshot-shape level=concurrency packs=sched
+   [tags supervise status snapshot 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s017" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $st [$sup:status $s]]
+[= $_ [$sup:stop $s]]
+$st]
+#]]
+   [out-text [#
+[supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0])]
+#]]
+  ]
+
+  [# ── 018-024: negatives + status-after-stop ─────────────────────── #]
+
+  [case id=sup-018-bad-strategy-CXER5090 level=concurrency
+   [tags supervise negative policy CXER5090 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[$sup:start [policy strategy=:round-robin] ()]
+#]]
+   [out-err [#
+cx-err:CXER5090
+#]]
+  ]
+
+  [case id=sup-019-max-restarts-below-one-CXER5090 level=concurrency
+   [tags supervise negative policy CXER5090 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[$sup:start [policy strategy=:one-for-one max-restarts=0] ()]
+#]]
+   [out-err [#
+cx-err:CXER5090
+#]]
+  ]
+
+  [case id=sup-020-bad-child-spec-CXER5090 level=concurrency
+   [tags supervise negative child-spec CXER5090 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[$sup:start [policy strategy=:one-for-one max-restarts=3]
+  ([child name="a" restart=:sometimes [fn [?fn () 1]]])]
+#]]
+   [out-err [#
+cx-err:CXER5090
+#]]
+  ]
+
+  [case id=sup-021-child-spec-missing-fn-CXER5090 level=concurrency
+   [tags supervise negative child-spec CXER5090 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[$sup:start [policy strategy=:one-for-one max-restarts=3]
+  ([child name="a"])]
+#]]
+   [out-err [#
+cx-err:CXER5090
+#]]
+  ]
+
+  [case id=sup-022-duplicate-child-CXER5091 level=concurrency
+   [tags supervise negative duplicate CXER5091 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[$sup:start [policy strategy=:one-for-one max-restarts=3]
+  ([child name="a" [fn [?fn () 1]]],
+   [child name="a" [fn [?fn () 2]]])]
+#]]
+   [out-err [#
+cx-err:CXER5091
+#]]
+  ]
+
+  [case id=sup-023-start-child-duplicate-CXER5091 level=concurrency packs=sched
+   [tags supervise negative start-child duplicate CXER5091 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s023" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $kid [child name="a" [fn [?fn () [?receive from=$c]]]]]
+[= $r [?fallback [$sup:start-child $s $kid]
+        [recover-with [refused code=$err@code]]]]
+[= $_ [$sup:stop $s]]
+$r]
+#]]
+   [out-text [#
+[refused code=cx-err:CXER5091]
+#]]
+  ]
+
+  [case id=sup-024-ops-on-stopped-CXER5093-status-readable level=concurrency packs=sched
+   [tags supervise negative stopped CXER5093 status 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="s024" buffer=4]]
+[= $cb [?channel name="s024b" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $_stp [$sup:stop $s]]
+[= $kid [child name="b" [fn [?fn () [?receive from=$cb]]]]]
+[= $r1 [?fallback [$sup:start-child $s $kid] [recover-with [refused code=$err@code]]]]
+[= $r2 [?fallback [$sup:stop-child $s "a"] [recover-with [refused code=$err@code]]]]
+[= $r3 [?fallback [$sup:events $s] [recover-with [refused code=$err@code]]]]
+[= $st [$sup:status $s]]
+($r1, $r2, $r3, $st)]
+#]]
+   [out-text [#
+([refused code=cx-err:CXER5093], [refused code=cx-err:CXER5093], [refused code=cx-err:CXER5093], [supervisor-status restarts-in-window=0 ([child name=a state=stopped attempts=0])])
+#]]
+  ]
+
+  [# ── 025-030: the module fn-doc examples, verbatim (guide-check backing:
+       every co-located doc example must appear in this corpus with its
+       expected output — the stdlib_docs_check.cx drift gate) ──────── #]
+
+  [case id=sup-025-doc-start level=concurrency packs=sched
+   [tags supervise doc-example start 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-start" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $ev [$sup:events $s]]
+[= $e [?receive from=$ev max=1 deadline=5000]]
+[= $_ [$sup:stop $s]]
+$e]
+#]]
+   [out-text [#
+([child-started name=a attempt=0])
+#]]
+  ]
+
+  [case id=sup-026-doc-stop level=concurrency packs=sched
+   [tags supervise doc-example stop idempotent 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-stop" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $r1 [$sup:stop $s]]
+[= $r2 [$sup:stop $s]]
+($r1, $r2)]
+#]]
+   [out-text [#
+(null, null)
+#]]
+  ]
+
+  [case id=sup-027-doc-start-child level=concurrency packs=sched
+   [tags supervise doc-example start-child 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-sc" buffer=1]]
+[= $c2 [?channel name="doc-sup-sc2" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $kid [child name="b" [fn [?fn () [?receive from=$c2]]]]]
+[= $r [$sup:start-child $s $kid]]
+[= $st [$sup:status $s]]
+[= $rows [$first $st/*]]
+[= $_ [$sup:stop $s]]
+($r, [$count $rows])]
+#]]
+   [out-text [#
+([ok], 2)
+#]]
+  ]
+
+  [case id=sup-028-doc-stop-child level=concurrency packs=sched
+   [tags supervise doc-example stop-child 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-rc" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $r1 [$sup:stop-child $s "a"]]
+[= $r2 [$sup:stop-child $s "a"]]
+[= $_ [$sup:stop $s]]
+($r1, $r2)]
+#]]
+   [out-text [#
+(true, false)
+#]]
+  ]
+
+  [case id=sup-029-doc-status level=concurrency packs=sched
+   [tags supervise doc-example status 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-st" buffer=1]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $st [$sup:status $s]]
+[= $_ [$sup:stop $s]]
+$st]
+#]]
+   [out-text [#
+[supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0])]
+#]]
+  ]
+
+  [case id=sup-030-doc-events level=concurrency packs=sched
+   [tags supervise doc-example events 765]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="doc-sup-ev" buffer=4]]
+[= $s [$sup:start [policy strategy=:one-for-one max-restarts=3]
+        ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
+[= $ev [$sup:events $s]]
+[= $e0 [?receive from=$ev max=1 deadline=5000]]
+[= $_k [?send [go] to=$c]]
+[= $e1 [?receive from=$ev max=1 deadline=5000]]
+[= $_ [$sup:stop $s]]
+($e0, $e1)]
+#]]
+   [out-text [#
+(([child-started name=a attempt=0]), ([child-exited name=a reason=:done]))
+#]]
+  ]
+
+  [case id=sup-031-identical-config-distinct-identities level=concurrency packs=sched
+   [tags supervise identity uniqueness 765 895]
+   [title [#two supervisors started with IDENTICAL config in one process get distinct identities#]]
+   [meta [#
+ruling: SPF-1 (#895)
+   #]]
+   [doc [#
+Supervisor identity comes from the EVALUATOR's own monotonic handle
+counter (supervise.md §9), read as the `__cx_close_id__` stamped on a
+[?subscribe] handle — core surface, present in every §4 profile, no
+capability. Nothing about the identity may derive from the CONFIG:
+same policy, same child list, same process, still two supervisors,
+so still two identities (and so two disjoint sets of channels).
+
+This case is the uniqueness proof for the id source. It also guards
+the regression that motivated it: the previous source armed a
+240-hour [$sched:after] and kept the timer's synthesized name, which
+made a supervisor's identity the property of an OPTIONAL pack.
+
+The ids themselves are engine-internal and deliberately NOT asserted
+(their absolute values depend on how many handles the program has
+stamped); the CONTRACT is that they differ.
+   #]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-stdlib/supervise' :as sup]
+[?let [= $c [?channel name="sup-uniq-park" buffer=1]]
+[= $p [policy strategy=:one-for-one max-restarts=3]]
+[= $kids ([child name="a" [fn [?fn () [?receive from=$c]]]])]
+[= $s1 [$sup:start $p $kids]]
+[= $s2 [$sup:start $p $kids]]
+[= $_1 [$sup:stop $s1]]
+[= $_2 [$sup:stop $s2]]
+[identity distinct=[not [= $s1@sup $s2@sup]]
+          workers-distinct=[not [= $s1@worker $s2@worker]]]]
+#]]
+   [out-text [#
+[identity distinct=true workers-distinct=true]
+#]]
+  ]
+]

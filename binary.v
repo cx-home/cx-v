@@ -233,10 +233,12 @@ pub fn events_to_bin(events []StreamEvent) BinBuf {
 // 3 — v3.4: Element gains optstr:body_ref after id, carrying
 //       the bare-ref body form `[ref @<name>]`.
 //   4 — schema fragments (spec/schema.md §8): CXDirective gains
-//       optstr:anchor + u16:item_count + items[] after attrs[]. Used by
+//       optstr:anchor + u16:item_count + items[] after attrs[]. Added for
 //       the standalone-fragment form `[?cx frag &name [body :TYPE :flags]]`
-//       and any future directive that nests a body. v1-3 decoders see the
-//       attrs-only shape and treat anchor/items as none/empty.
+//       (retired at I5 stream 1 — legacy texts still parse; schema load
+//       rejects them) and any future directive that nests a body. v1-3
+//       decoders see the attrs-only shape and treat anchor/items as
+//       none/empty.
 // 5 — three CX program surface additions land
 //       in ast_bin. New node tags 0x0D (Interpolation) and 0x0E (EvalDirective)
 //       carry the [?=EXPR] and [?Name ...] forms. Attribute encoding gains
@@ -259,6 +261,13 @@ pub fn events_to_bin(events []StreamEvent) BinBuf {
 //       pre-#464 layout, so every buffer an old reader could decode is
 //       unchanged). Decoders reject 0x17 in a < v9 envelope. Capability
 //       bit 40 signals support. (v7 reserved; v8 = MatchNode/ModifyNode.)
+// 10 — RULED: MSS-4 (#917): the declaration-only map entry `{k: ::T}`
+//       joins the wire. A declared entry's key_data_type string carries a
+//       `+decl:<kind>` suffix (`string+decl:int`); its value node is the
+//       inert null placeholder (never the entry's value — value reads are
+//       ABSENT). Emitted only when a declaration is present anywhere in
+//       the Document (common case stays at v6/v8/v9 — byte-identical).
+//       v1-9 decoders MUST reject v10 buffers.
 //
 // Node type IDs (u8):
 //   0x01 Element      — str:name  optstr:anchor  optstr:data_type  optstr:merge
@@ -282,6 +291,9 @@ pub fn events_to_bin(events []StreamEvent) BinBuf {
 //   0x10 ArrayNode    (v6+) — u16:item_count  nodes[]
 //   0x11 MapNode      (v6+) — u16:entry_count  entries[]
 //                             entry: str:key_data_type  str:key_value  node:value
+//                             (v10+: a declared entry suffixes key_data_type
+//                             with `+decl:<kind>` and carries a null
+//                             placeholder value node)
 //   0x17 TableRecord  (v9+) — u16:col_count  cols[]  u32:row_count  rows[]
 //                             col: str:name  str:type_name ('' = string-default)
 //                             row: u16:cell_count (MUST == col_count)  cells[]
@@ -353,6 +365,12 @@ fn encode_node(mut b BinBuf, n Node) {
 		}
 		AliasNode {
 			b.u8_(0x07)
+			b.str_(n.name)
+		}
+		// I1 row 9 (L78): the authorable variable hole — additive tag 0x18
+		// (the next free node ID; 0x17 is the v9 table record).
+		HoleNode {
+			b.u8_(0x18)
 			b.str_(n.name)
 		}
 		PINode {
@@ -429,9 +447,28 @@ fn encode_node(mut b BinBuf, n Node) {
 			b.u8_(0x11)
 			b.u16_(u16(n.entries.len))
 			for entry in n.entries {
-				b.str_(scalar_type_name(entry.key_type))
+				// v10 (RULED: MSS-4 #917): a declared entry suffixes its
+				// key type with `+decl:<kind>`; the value node is the inert
+				// null placeholder.
+				if entry.decl_kind != '' {
+					b.str_('${scalar_type_name(entry.key_type)}+decl:${entry.decl_kind}')
+				} else {
+					b.str_(scalar_type_name(entry.key_type))
+				}
 				b.str_(scalar_value_str(entry.key_value))
 				encode_node(mut b, entry.value)
+			}
+		}
+		PathNode {
+			// v8 — first-class CXPath (grafted I5-s17 W6, fulfilling
+			// capability bit 36's three-kinds-jointly promise). Wire
+			// layout per spec/core/ast-bin.md §4.4 implemented in
+			// path_node_codec.v; the standalone codec emits the §4.4
+			// payload bytes, we prepend the kind tag 0x13 here.
+			b.u8_(0x13)
+			payload := encode_path_node(n)
+			for by in payload {
+				b.u8_(by)
 			}
 		}
 		MatchNode {
@@ -552,9 +589,42 @@ fn node_has_table(n Node) bool {
 	}
 }
 
+// has_map_decl_node reports whether any MapNode in the slice (or nested
+// anywhere below it) carries a declaration-only entry (RULED: MSS-4
+// #917) — the v10 bump condition, same additive discipline as v8/v9.
+fn has_map_decl_node(nodes []Node) bool {
+	for n in nodes {
+		if node_has_map_decl(n) {
+			return true
+		}
+	}
+	return false
+}
+
+fn node_has_map_decl(n Node) bool {
+	return match n {
+		Element           { has_map_decl_node(n.items) }
+		CXDirectiveNode   { has_map_decl_node(n.items) }
+		EvalDirectiveNode { has_map_decl_node(n.items) }
+		SequenceNode      { has_map_decl_node(n.items) }
+		ArrayNode         { has_map_decl_node(n.items) }
+		IteratorNode      { has_map_decl_node(n.source_args) }
+		MapNode {
+			for entry in n.entries {
+				if entry.decl_kind != '' {
+					return true
+				}
+				if node_has_map_decl(entry.value) { return true }
+			}
+			false
+		}
+		else { false }
+	}
+}
+
 // has_v8_node returns true iff any node in the slice (or any nested
-// node reachable through items / entries) is a v8 kind (currently
-// MatchNode + ModifyNode — PathNode is parallel-only at this graft).
+// node reachable through items / entries) is a v8 kind (PathNode +
+// MatchNode + ModifyNode — the bit-36 trio, complete since I5-s17 W6).
 // Used by doc_to_bin to bump the version byte from 6 → 8 only when a
 // v8 variant is actually present, keeping the common-case Document
 // envelope at v6 for binding compatibility.
@@ -569,7 +639,7 @@ fn has_v8_node(nodes []Node) bool {
 
 fn node_is_v8(n Node) bool {
 	return match n {
-		MatchNode, ModifyNode { true }
+		PathNode, MatchNode, ModifyNode { true }
 		Element {
 			has_v8_node(n.items)
 		}
@@ -607,13 +677,18 @@ pub fn doc_to_bin(doc Document) BinBuf {
 	// v6→v8 bump below). Capability bit 40 signals reader support;
 	// v6/v8 readers MUST reject v9 buffers.
 	v9_needed := has_table_node(doc.prolog) || has_table_node(doc.elements)
-	if v9_needed {
+	// RULED: MSS-4 (#917): declaration-only map entries are a v10
+	// extension — bump ONLY when one is present (additive discipline).
+	v10_needed := has_map_decl_node(doc.prolog) || has_map_decl_node(doc.elements)
+	if v10_needed {
+		b.u8_(10) // v10 — declaration-only map entries (`+decl:` key suffix).
+	} else if v9_needed {
 		b.u8_(9) // v9 — Element table record (0x17).
 	} else if v8_needed {
-		b.u8_(8) // v8 — MatchNode (0x14) + ModifyNode (0x15) joined the
-		         // node-kind table / 0030. PathNode (0x13)
-		         // remains standalone at this graft; a later phase
-		         // grafts it alongside structural ProgramExpr work.
+		b.u8_(8) // v8 — PathNode (0x13) + MatchNode (0x14) + ModifyNode
+		         // (0x15) in the node-kind table (the three kinds
+		         // capability bit 36 gates jointly; PathNode joined at
+		         // I5-s17 W6).
 	} else {
 		b.u8_(6) // v6 — collection literals.
 	}
@@ -685,7 +760,11 @@ pub fn bin_to_doc(framed []u8) !Document {
 	}
 	size := u32(framed[0]) | (u32(framed[1]) << 8)
 		| (u32(framed[2]) << 16) | (u32(framed[3]) << 24)
-	if 4 + int(size) > framed.len {
+	// u64 comparison: a size >= 2^31 would make int(size) negative and slip
+	// past a signed 4+int(size) guard, then panic in the slice below on
+	// hostile/corrupt framing (cx R3.2, audit F-23 — the daemon must refuse
+	// loudly, never crash).
+	if u64(4) + u64(size) > u64(framed.len) {
 		return error('ast_bin: declared payload (${size}) exceeds remaining input')
 	}
 	mut r := AstReader{
@@ -702,7 +781,7 @@ pub fn bin_to_doc(framed []u8) !Document {
 	// decoder reuses the v6 decode_node dispatch table extended with
 	// the 0x14 / 0x15 arms below and the decode_element table-record
 	// hook.
-	if version < 1 || version > 9 {
+	if version < 1 || version > 10 {
 		return error('ast_bin: unsupported version ${version}')
 	}
 	r.version = version
@@ -718,6 +797,7 @@ pub fn bin_to_doc(framed []u8) !Document {
 	}
 	mut doc := Document{ prolog: prolog, elements: elements }
 	resolve_namespaces(mut doc)
+	validate_reserved_ns_bindings(doc)!
 	resolve_ids(doc)!
 	return doc
 }
@@ -732,7 +812,9 @@ pub fn node_from_bin(framed []u8) !Node {
 		return error('ast_bin: input too short for size header')
 	}
 	size := u32(framed[0]) | (u32(framed[1]) << 8) | (u32(framed[2]) << 16) | (u32(framed[3]) << 24)
-	if 4 + int(size) > framed.len {
+	// u64 comparison — see bin_to_doc: a size >= 2^31 must not overflow the
+	// guard into a slice panic (cx R3.2, audit F-23).
+	if u64(4) + u64(size) > u64(framed.len) {
 		return error('ast_bin: declared payload (${size}) exceeds remaining input')
 	}
 	mut r := AstReader{
@@ -858,6 +940,7 @@ fn (mut r AstReader) decode_node() !Node {
 		0x0F { r.decode_sequence_node()! }
 		0x10 { r.decode_array_node()! }
 		0x11 { r.decode_map_node()! }
+		0x13 { r.decode_path_node_dispatch()! }    // v8
 		0x14 { r.decode_match_node_dispatch()! }   // v8
 		0x15 { r.decode_modify_node_dispatch()! }  // v8
 		0x16 { r.decode_iterator_node()! }         // IteratorNode
@@ -869,9 +952,18 @@ fn (mut r AstReader) decode_node() !Node {
 			// child, nested container, cell). Fail loud, never misparse.
 			error('ast_bin: table record (0x17) outside the first child slot of an Element at offset ${r.pos - 1}')
 		}
+		0x18 { Node(HoleNode{ name: r.read_str()! }) } // I1 row 9: variable hole
 		0xFF { Node(TextNode{}) } // skip — unknown / DTD nodes
 		else { error('ast_bin: unknown node tag 0x${tag:02x} at offset ${r.pos - 1}') }
 	}
+}
+
+// decode_path_node_dispatch — the dispatch-side counterpart to
+// encode_node's 0x13 arm (grafted I5-s17 W6); re-enters
+// path_node_codec.v's standalone reader at the same AstReader.
+fn (mut r AstReader) decode_path_node_dispatch() !Node {
+	node := r.decode_path_node()!
+	return Node(node)
 }
 
 // decode_match_node_dispatch is the dispatch-side counterpart to
@@ -1003,8 +1095,13 @@ fn wire_node_to_table_cell(n Node) !TableCellValue {
 				.bool_type   { TableCellValue(n.value as bool) }
 				.null_type   { TableCellValue(NullValue{}) }
 				.string_type { TableCellValue(n.value as string) }
+				// I1 row 16 (§7): the cell-kind set widens to include the
+				// exact family — images ride the string cell slot; the
+				// column type carries the kind (full columnar fidelity
+				// lands at I5's lattice, the M23 advisory window).
+				.decimal_type, .bigint_type { TableCellValue(n.value as string) }
 				else {
-					error('cell scalar type "${scalar_type_name(n.data_type)}" is not a table-cell kind (int/float/bool/null/string)')
+					error('cell scalar type "${scalar_type_name(n.data_type)}" is not a table-cell kind (int/float/bool/null/string/decimal/bigint)')
 				}
 			}
 		}
@@ -1165,7 +1262,15 @@ fn (mut r AstReader) decode_map_node() !Node {
 	entry_count := r.read_u16()!
 	mut entries := []MapEntry{cap: int(entry_count)}
 	for _ in 0 .. entry_count {
-		key_type_str := r.read_str()!
+		mut key_type_str := r.read_str()!
+		// v10 (RULED: MSS-4 #917): a `+decl:<kind>` suffix marks a
+		// declaration-only entry; the decoded value node is the inert
+		// null placeholder.
+		mut decl_kind := ''
+		if idx := key_type_str.index('+decl:') {
+			decl_kind = key_type_str[idx + 6..]
+			key_type_str = key_type_str[..idx]
+		}
 		key_val_str := r.read_str()!
 		key_value := scalar_value_from_str(key_val_str, key_type_str)
 		key_type := map_key_type_from_str(key_type_str)
@@ -1174,6 +1279,7 @@ fn (mut r AstReader) decode_map_node() !Node {
 			key_type:  key_type
 			key_value: key_value
 			value:     val_node
+			decl_kind: decl_kind
 		}
 	}
 	return Node(MapNode{ entries: entries })

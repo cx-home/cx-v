@@ -1,4 +1,4 @@
-[test-suite name=mime
+[test-suite name=mime ring=1
   [doc [#
 conformance fixtures for cx-stdlib/mime (spec/std-lib/mime.md §6).
 
@@ -706,6 +706,26 @@ true
 #]]
   [out-text [#
 ''
+#]]
+ ]
+
+# 828-1a: multipart-boundary draws OS ENTROPY — its own failure mode is
+ # "entropy unavailable" — so it charges `random` like every other entropy
+ # surface. security.md §2.1 is an EFFECT-POINT table, not a secrets table:
+ # the question is whether the surface reaches an OS resource that can fail,
+ # not whether its output is confidential. A boundary is indeed not a secret;
+ # that is why it must resist COLLISION with body content, which is still
+ # entropy.
+ # (This case carries no grant=, so the runner installs the EMPTY cap set.)
+ [case id=mime-046-multipart-boundary-requires-random level=core gate=enforced rule=EV-EFFECT-SET
+  [tags mime multipart boundary capability random CXER0271 828]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/mime']
+[$mime:multipart-boundary]
+#]]
+  [out-err [#
+cx-err:CXER0271
 #]]
  ]
 ]

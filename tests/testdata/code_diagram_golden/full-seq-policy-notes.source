@@ -1,0 +1,1 @@
+[?worker name="w" [?retry max=3 [ok]]]

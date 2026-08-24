@@ -1,0 +1,30 @@
+erDiagram
+  DOCUMENT {
+    int node_count "12"
+    int type_count "12"
+    int max_depth "0"
+  }
+  a {
+  }
+  b {
+  }
+  c {
+  }
+  d {
+  }
+  e {
+  }
+  f {
+  }
+  g {
+  }
+  h {
+  }
+  i {
+  }
+  j {
+  }
+  k {
+  }
+  l {
+  }

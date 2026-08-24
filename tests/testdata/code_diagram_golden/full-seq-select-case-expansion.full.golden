@@ -1,0 +1,12 @@
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+  activate w
+  participant ch1
+  alt msg from ch1
+    ch1 ->> w : msg
+  else timeout (50ms)
+    w ->> w : timeout (50ms)
+  end
+  deactivate w

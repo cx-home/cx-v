@@ -1,0 +1,19 @@
+erDiagram
+  DOCUMENT {
+    int node_count "3"
+    int type_count "3"
+    int max_depth "1"
+  }
+  order }o--o{ user : FK
+  doc ||--|| user : has
+  doc ||--|| order : has
+  doc {
+  }
+  user {
+    int id "@ 1"
+    string note "appears 1× depth 1"
+  }
+  order {
+    int user-id "@ 1"
+    string note "appears 1× depth 1"
+  }

@@ -1,0 +1,7 @@
+%%cx:Wz9jaGFubmVsIG5hbWU9ImpvYnMiIGJ1ZmZlcj00XQ==%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[/"channel \"jobs\" (buffer 4)"/]
+    n1 --> n3
+    n3 --> n2

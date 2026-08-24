@@ -1,0 +1,1 @@
+[?worker name="w" [?send $ch 42]]

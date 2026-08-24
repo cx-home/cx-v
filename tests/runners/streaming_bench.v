@@ -13,16 +13,19 @@
 module main
 
 import code
+import platform as _
 import time
 import os
 
 const fixture_path = 'fixtures/bench/bench_medium.cx'
 
 fn build_program(n int) string {
-	// Iterate //service N times, emitting a small text fragment per
+	// Iterate $doc//service N times, emitting a small value per
 	// iteration. We wrap in an outer ?for over a range to amplify
-	// without growing the input fixture.
-	return '[?for k :in 1 to ${n} :return [?for s :in //service :return [?=s/@id]:[?=s/@name];]]'
+	// without growing the input fixture. (#710 item 4, I5-s17 W6: the
+	// retired `:in 1 to N :return` + `[?=…]` interpolation spellings
+	// crashed at parse; current forms per conformance/code.cxd.)
+	return '[?for [in \$k [\$range 1 ${n}]] [yield [?for [in \$s \$doc//service] [yield (\$s@id, \$s@name)]]]]'
 }
 
 fn run_buffered(input string, program string) (int, i64) {

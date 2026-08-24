@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  eff_env_var[["env-var"]]
+  cap_env{{"env --allow-env"}}
+  prog --> eff_env_var
+  eff_env_var --> cap_env

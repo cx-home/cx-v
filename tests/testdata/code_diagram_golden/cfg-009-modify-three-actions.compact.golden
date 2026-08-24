@@ -1,0 +1,6 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  u["modify @ //users/user | set-attr | delete-attr | append"]
+  start --> u
+  u --> done

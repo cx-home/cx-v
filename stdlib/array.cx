@@ -1,0 +1,136 @@
+[; cx-stdlib/array — array operations (#925, RULED: PYE-1).
+
+   Full surface per spec/03-approved/std-lib/array.md. Every [?def] body
+   bottoms out in a native primitive (vcx/code/stdlib_array.v, `arr-`-
+   prefixed names so they never clash with a language-core builtin).
+   Positions are 1-BASED; out of range REFUSES loudly. Arrays are
+   immutable — every constructor returns a NEW array; a boxed-sequence
+   item survives every constructor intact.
+
+   NOTE: this const and stdlib/array.cx are the same source — edit both. ]
+
+[; §3 read ]
+[?def size          scope=public pure [returns int]   ($a::array)                       [$arr-size $a]]
+[?def get           scope=public pure [returns any]   ($a::array $i::int)               [$arr-get $a $i]]
+[?def head          scope=public pure [returns any]   ($a::array)                       [$arr-head $a]]
+[?def tail          scope=public pure [returns array] ($a::array)                       [$arr-tail $a]]
+
+[; §3 construct ]
+[?def append        scope=public pure [returns array] ($a::array $v::any)               [$arr-append $a $v]]
+[?def reverse       scope=public pure [returns array] ($a::array)                       [$arr-reverse $a]]
+[?def subarray      scope=public pure [returns array] ($a::array $start::int $len::int) [$arr-subarray $a $start $len]]
+[?def put           scope=public pure [returns array] ($a::array $i::int $v::any)       [$arr-put $a $i $v]]
+[?def remove        scope=public pure [returns array] ($a::array $i::int)               [$arr-remove $a $i]]
+[?def insert-before scope=public pure [returns array] ($a::array $i::int $v::any)       [$arr-insert-before $a $i $v]]
+[?def flatten       scope=public pure [returns any]   ($a::any)                         [$arr-flatten $a]]
+[?def join          scope=public pure [returns array] ($arrays::any)                    [$arr-join $arrays]]
+[?def sort          scope=public pure [returns array] ($a::array)                       [$arr-sort $a]]
+
+[; §3 traverse ]
+[?def filter        scope=public pure [returns array] ($a::array $fn::any)              [$arr-filter $a $fn]]
+[?def for-each      scope=public pure [returns array] ($a::array $fn::any)              [$arr-for-each $a $fn]]
+[?def fold-left     scope=public pure [returns any]   ($a::array $init::any $fn::any)   [$arr-fold-left $a $init $fn]]
+[?def fold-right    scope=public pure [returns any]   ($a::array $init::any $fn::any)   [$arr-fold-right $a $init $fn]]
+
+[fn-doc name=size scope=public purity=pure
+  [sig """(a::array) -> int"""]
+  [summary """The item count."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:size [10, 20, 30]]"""] [expect """3"""]]
+]
+[fn-doc name=get scope=public purity=pure
+  [sig """(a::array, i::int) -> any"""]
+  [summary """The item at 1-based position i; out of range refuses loudly."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:get [10, 20, 30] 2]"""] [expect """20"""]]
+]
+[fn-doc name=head scope=public purity=pure
+  [sig """(a::array) -> any"""]
+  [summary """The first item; the empty array yields the empty sequence."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:head [10, 20]]"""] [expect """10"""]]
+]
+[fn-doc name=tail scope=public purity=pure
+  [sig """(a::array) -> array"""]
+  [summary """Everything after the first item; the empty array's tail is the empty array."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:tail [10, 20, 30]]"""] [expect """[20, 30]"""]]
+]
+[fn-doc name=append scope=public purity=pure
+  [sig """(a::array, v::any) -> array"""]
+  [summary """A new array with the value as the last item."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:append [1, 2] 3]"""] [expect """[1, 2, 3]"""]]
+]
+[fn-doc name=reverse scope=public purity=pure
+  [sig """(a::array) -> array"""]
+  [summary """The items in reverse order."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:reverse [1, 2, 3]]"""] [expect """[3, 2, 1]"""]]
+]
+[fn-doc name=subarray scope=public purity=pure
+  [sig """(a::array, start::int, len::int) -> array"""]
+  [summary """len items starting at 1-based start, clamped to the array's end."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:subarray [10, 20, 30, 40] 2 2]"""] [expect """[20, 30]"""]]
+]
+[fn-doc name=put scope=public purity=pure
+  [sig """(a::array, i::int, v::any) -> array"""]
+  [summary """A new array with 1-based position i replaced by the value; out of range refuses."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:put [1, 2, 3] 2 9]"""] [expect """[1, 9, 3]"""]]
+]
+[fn-doc name=remove scope=public purity=pure
+  [sig """(a::array, i::int) -> array"""]
+  [summary """A new array without 1-based position i; out of range refuses."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:remove [1, 2, 3] 2]"""] [expect """[1, 3]"""]]
+]
+[fn-doc name=insert-before scope=public purity=pure
+  [sig """(a::array, i::int, v::any) -> array"""]
+  [summary """A new array with the value inserted before 1-based position i; i = size + 1 appends."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:insert-before [1, 3] 2 2]"""] [expect """[1, 2, 3]"""]]
+]
+[fn-doc name=flatten scope=public purity=pure
+  [sig """(a::any) -> any"""]
+  [summary """The sequence of leaf items with every nested array and boxed sequence expanded, depth-first."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:flatten [1, [2, [3]], 4]]"""] [expect """(1, 2, 3, 4)"""]]
+]
+[fn-doc name=join scope=public purity=pure
+  [sig """(arrays::any) -> array"""]
+  [summary """A sequence of arrays concatenated left to right into one array."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:join ([1, 2], [3])]"""] [expect """[1, 2, 3]"""]]
+]
+[fn-doc name=sort scope=public purity=pure
+  [sig """(a::array) -> array"""]
+  [summary """Ascending by the language's one sort arrangement — the [\$sort] comparator (kind-class, then value)."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:sort [3, 1, 2]]"""] [expect """[1, 2, 3]"""]]
+]
+[fn-doc name=filter scope=public purity=pure
+  [sig """(a::array, fn::any) -> array"""]
+  [summary """The items for which the one-parameter predicate answers true, order preserved."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:filter [1, 2, 3, 4] [?fn ($x) [> $x 2]]]"""] [expect """[3, 4]"""]]
+]
+[fn-doc name=for-each scope=public purity=pure
+  [sig """(a::array, fn::any) -> array"""]
+  [summary """A new array of the function applied to each item, order preserved."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:for-each [1, 2, 3] [?fn ($x) [* $x 10]]]"""] [expect """[10, 20, 30]"""]]
+]
+[fn-doc name=fold-left scope=public purity=pure
+  [sig """(a::array, init::any, fn::any) -> any"""]
+  [summary """Fold left: fn(fn(init, a1), a2)… — fn takes (accumulator, item)."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:fold-left [1, 2, 3] 0 [?fn ($acc $x) [+ $acc $x]]]"""] [expect """6"""]]
+]
+[fn-doc name=fold-right scope=public purity=pure
+  [sig """(a::array, init::any, fn::any) -> any"""]
+  [summary """Fold right: fn(a1, fn(a2, … init)) — fn takes (item, accumulator)."""]
+  [example [code """[?lib 'cx-stdlib/array']
+[$array:fold-right [1, 2, 3] 0 [?fn ($x $acc) [- $x $acc]]]"""] [expect """2"""]]
+]

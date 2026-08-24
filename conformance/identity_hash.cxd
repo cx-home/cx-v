@@ -1,0 +1,410 @@
+[test-suite name=identity-hash ring=0
+  [doc [#
+# CX Conformance — Tier-1 identity hash
+# Version: 1.0 — 2026-08-05 (corpus audit G1; C8/I0 repair)
+#
+# The first hash fixtures in the corpus: before this family, no
+# `out-hash` assertion existed in any of 4127 cases, so partition §7's
+# byte-for-byte extraction gate named "hashes" it could not execute
+# from the corpus. Two forms:
+#
+#   Single (out-hash):   Tier-1 content hash = lowercase hex SHA-256
+#                         over the STRICT-CANONICAL text bytes
+#                         (cx_text_hash; bindings.md Doc.hash()).
+#   Pair (in-a / in-b /  hash-EQUALITY semantics — the pair properties
+#        out-hash-eq):    the single-input corpus cannot express
+#                         (code-identity.md §4 / audit Q3 form).
+#
+# Every digest below is BLESSED from the shipped binary (2026-08-05,
+# pre-I1): fixture-before-fix — these pin TODAY's canonical bytes so
+# the I1 identity epoch's ONE re-bless shows every moved address
+# explicitly in this family's diff.
+#
+# Semantics pinned (normative source in parentheses):
+#   - formatting / comments are presentation: hash-invariant
+#     (canonical.md presentation strip)
+#   - quote shape is canonicalized: hash-invariant (canonical.md)
+#   - anchor/alias/merge expand then drop: hash-invariant
+#     (canonical.md §2.8, stream-12/D7 lineage)
+#   - attribute order is NEVER normalized: hash-SIGNIFICANT
+#     (canonical.md "never a normalization axis"; the binding_api-005/
+#     -101 corrections landed with this suite)
+#   - -0.0 vs 0.0: distinct canonical scalars, hash-distinct
+#     (canonical.md; the hash≠eq precedent)
+#   - decimal scale 1.5 vs 1.50: canonical normalizes today →
+#     hash-EQUAL; campaign L40 (I1) preserves scale, so idh-023's
+#     expectation FLIPS at the I1 re-bless — that visible flip is the
+#     point of pinning it now.
+#   - syntactic ID declarations are identity-bearing (cxdm.md
+#     "Identity"): #id present vs absent → hash-distinct
+#
+# Document corpus: M5 commerce/order-fulfillment domain per the
+# campaign ruling (orders, line items, shipments, warehouse zones).
+#]]
+
+ [; ── Singles: blessed digests over strict-canonical bytes ── ]
+
+ [case id=idh-001-flat-order level=core
+  [tags identity-hash tier1 single]
+  [in-cx [#
+[order id=1001 status=open customer="Acme Retail"]
+#]]
+  [out-hash [#
+sha2-256:ab59c402c089bacb770b111ceb2b1ff7d85327191664c0bbd870e4904f367ff3
+#]]
+ ]
+
+ [case id=idh-002-nested-line-items level=core
+  [tags identity-hash tier1 single nested]
+  [in-cx [#
+[order id=1002 [item sku=SKU-100 qty=2] [item sku=SKU-200 qty=1]]
+#]]
+  [out-hash [#
+sha2-256:ef19e945a672c480a97b0ffa50b69cbe92cc0fae2092c927c74239b9e6325034
+#]]
+ ]
+
+ [case id=idh-003-typed-scalars level=core
+  [tags identity-hash tier1 single typed]
+  [in-cx [#
+[shipment id=s-77 weight=1.25 shipped=2026-08-01 express=true]
+#]]
+  [out-hash [#
+sha2-256:2e0eccd2c97196966fa9acccfef982c51257e8697306bcacb847cbbd4f1bd5aa
+#]]
+ ]
+
+ [case id=idh-004-escaped-string level=core
+  [tags identity-hash tier1 single escapes]
+  [in-cx [#
+[note text="line1\nline2 with \"quotes\""]
+#]]
+  [out-hash [#
+sha2-256:0388c04e42fa092f317700e8cb785d74730a7e12aba2412e3fccc59610af49bb
+#]]
+ ]
+
+ [case id=idh-005-id-declaration level=core
+  [tags identity-hash tier1 single id-decl]
+  [in-cx [#
+[order #o-1003 id=1003]
+#]]
+  [out-hash [#
+sha2-256:b7aa2162d97ee262f67bd549ec4cda46d30b94d57c77dda1c50355bffdf29125
+#]]
+ ]
+
+ [; ── Pairs: hash-INVARIANT axes (presentation layer) ── ]
+
+ [case id=idh-010-formatting-invariant level=core
+  [tags identity-hash tier1 pair invariant]
+  [in-a [#
+[order id=1002
+  [item sku=SKU-100 qty=2]
+  [item sku=SKU-200 qty=1]]
+#]]
+  [in-b [#
+[order id=1002 [item sku=SKU-100 qty=2] [item sku=SKU-200 qty=1]]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=idh-011-comment-invariant level=core
+  [tags identity-hash tier1 pair invariant]
+  [in-a [#
+# picking order for the morning wave
+[order id=1001 status=open customer="Acme Retail"]
+#]]
+  [in-b [#
+[order id=1001 status=open customer="Acme Retail"]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=idh-012-quote-shape-invariant level=core
+  [tags identity-hash tier1 pair invariant]
+  [in-a [#
+[customer name=Alice]
+#]]
+  [in-b [#
+[customer name="Alice"]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=idh-013-anchor-expansion-invariant level=core
+  [tags identity-hash tier1 pair invariant anchor]
+  [in-a [#
+[warehouse [zone &z aisle=7] [zone *z]]
+#]]
+  [in-b [#
+[warehouse [zone aisle=7] [zone aisle=7]]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [; ── Pairs: hash-SIGNIFICANT axes ── ]
+
+ [case id=idh-020-attribute-order-significant level=core
+  [tags identity-hash tier1 pair significant attr-order]
+  [in-a [#
+[order id=1001 status=open customer="Acme Retail"]
+#]]
+  [in-b [#
+[order status=open customer="Acme Retail" id=1001]
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=idh-021-element-name-case-significant level=core
+  [tags identity-hash tier1 pair significant]
+  [in-a [#
+[Order id=1001]
+#]]
+  [in-b [#
+[order id=1001]
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=idh-022-negative-zero-decimal-normalizes level=core
+  [tags identity-hash tier1 pair decimal i1]
+  [; FLIPPED at I1 (the 2b autotype ruling): bare fixed-point fractions
+     are DECIMALS, and decimal −0.0 normalizes to positive with scale
+     kept (§6 normalization) — so 0.0 and -0.0 are ONE decimal value and
+     ONE address. (Float −0.0 stays distinct: floats spell
+     exponent-always, `-0.0e0` ≢ `0.0e0`.) The pre-I1 pin recorded
+     hash-eq=false when both spellings were floats. ]
+  [in-a [#
+[reading delta=0.0]
+#]]
+  [in-b [#
+[reading delta=-0.0]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=idh-023-decimal-scale-significant level=core
+  [tags identity-hash tier1 pair scale l40 i1]
+  [; FLIPPED at I1 (L40 scale-preserving identity): 1.5 and 1.50 are
+     decimals with DIFFERENT scales — different canonical bytes,
+     different addresses. The pre-I1 pin recorded hash-eq=true (the
+     float reading merged them); this visible flip was the point of
+     pinning it. ]
+  [in-a [#
+[item price=1.5]
+#]]
+  [in-b [#
+[item price=1.50]
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=idh-024-id-declaration-significant level=core
+  [tags identity-hash tier1 pair significant id-decl]
+  [in-a [#
+[order #o-1003 id=1003]
+#]]
+  [in-b [#
+[order id=1003]
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=idh-026-hole-vs-string-distinct level=core
+  [tags identity-hash tier1 pair quote-hole c4 i1]
+  [; I1 row 9 (L78 collision MUST): `[total $x]` is a HOLE-bearing
+     document and `[total '$x']` a four-character string — different
+     canonical bytes, different addresses. Pre-I1 both collapsed to one
+     TextNode and ONE address (the pre-fix pin recorded hash-eq=true). ]
+  [in-a [#
+[total $x]
+#]]
+  [in-b [#
+[total '$x']
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=idh-025-value-significant level=core
+  [tags identity-hash tier1 pair significant]
+  [in-a [#
+[order id=1001 status=open]
+#]]
+  [in-b [#
+[order id=1001 status=closed]
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=idh-027-nfc-name-normalization level=core
+  [tags identity nfc unicode name normalization i1 warts 684]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+([$cx:hash [café 1]], [= [$cx:hash [café 1]] [$cx:hash [café 1]]])
+#]]
+  [out-text [#
+('sha2-256:30508620718209498a6a069bc651fcdc113f3c11a94d0e9156ace42ddca4634a', true)
+#]]
+ ]
+
+ [case id=idh-028-map-order-normalized-identity level=core
+  [tags identity map-key order-normalized dedup mixed-type tie-break 2-11-1 warts 684]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+([= [$cx:hash [m {"b": 1, "a": 2}]] [$cx:hash [m {"a": 2, "b": 1}]]], [= [$cx:hash [m {2: "x", 10: "y", 1.5: "z"}]] [$cx:hash [m {1.5: "z", 10: "y", 2: "x"}]]])
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
+ [; E2/L82-L83 type-identity pairs (I5 stream 1 W2, semantic_value_model
+    §3/§7). The schema header is BODY data — every header attribute
+    rides in the canonical text and the content-hash: two schemas
+    differing only in mode are two schemas (the I1 entry-25 residual,
+    RESOLVED). Reformatting never moves a schema's identity; changing
+    one declared facet always does. ]
+ [case id=idh-029-schema-mode-in-identity level=core
+  [tags identity-hash tier1 pair schema type-identity e2 i5-s1]
+  [in-a [#
+[schema of=server mode=closed]
+[server [attr host::string [req]]]
+#]]
+  [in-b [#
+[schema of=server]
+[server [attr host::string [req]]]
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=idh-030-schema-reformat-invariant level=core
+  [tags identity-hash tier1 pair schema type-identity e2 i5-s1]
+  [in-a [#
+[schema of=server]
+[server [attr host::string [req]] [attr port::u16 [req]]]
+#]]
+  [in-b [#
+[schema of=server]
+
+[server
+    [attr host::string [req]]
+    [attr port::u16    [req]]]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=idh-031-schema-facet-significant level=core
+  [tags identity-hash tier1 pair schema type-identity e2 i5-s1]
+  [in-a [#
+[schema of=server]
+[server [attr port::u16 [req] [range 1 65535]]]
+#]]
+  [in-b [#
+[schema of=server]
+[server [attr port::u16 [req] [range 1 1024]]]
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [; L85/#708 item 1 (I5 stream 1 W5): Lane 1 is identity-EXCLUDED —
+    [?meta] never changes the address or canonical-aware equality
+    (the I1 row-7 fix, corpus-pinned per semantic_value_model §7). ]
+ [case id=idh-032-meta-does-not-participate level=core
+  [tags identity-hash tier1 pair meta lane-1 e4 i5-s1]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+([= [$cx:hash [?meta {pii: true} [order id=1]]] [$cx:hash [order id=1]]], [$cx:equal [?meta {pii: true} [order id=1]] [order id=1]])
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
+ [; L78/§11.4 (I5 stream 1 W5): a lowered quote result is authorable
+    canonical CX — parse ∘ serialize closes over it byte-stably, and
+    the re-parsed tree keeps the SAME Tier-1 address. ]
+ [case id=idh-033-quote-roundtrip-closure level=core
+  [tags identity-hash tier1 quote lowering closure e1 i5-s1]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $q [?quote [total-due [* $qty 2] [tax-for $region]]]]
+  [?let [= $s [$cx:serialize $q]]
+    ([= $s [$cx:serialize [$cx:parse $s]]], [= [$cx:hash $q] [$cx:hash [$cx:parse $s]]])]]
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
+ [; #927: key identity is the (kind, image) pair through the CODEC lane too —
+    the lowering funnel used to hard-code every eval-lane map key to string,
+    so {1: 'x'} and {'1': 'x'} shared one hash and cx:canonical of a map
+    holding both keys refused its own output as a duplicate key. Row 1 pins
+    the distinct addresses; row 2 pins the canonical round-trip; row 3 pins
+    the re-readable canonical image. ]
+ [case id=idh-034-map-key-kind-in-identity level=core
+  [tags identity-hash map-key kind codec-lane 927]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {1: 'a', '1': 'b'}] ([= [$cx:hash {1: 'x'}] [$cx:hash {'1': 'x'}]], [= [$cx:hash $m] [$cx:hash [$cx:parse [$cx:serialize $m]]]], [$cx:canonical $m])]
+#]]
+  [out-text [#
+(false, true, "{1: a, '1': b}\n")
+#]]
+ ]
+
+ [; #933: a bytes map key carries ::bytes in canonical form (no bytes image
+    auto-types to bytes), so canonical is a fixpoint and the bytes-keyed map
+    addresses apart from the int-keyed one. ]
+ [case id=idh-035-bytes-key-ascription-fixpoint level=core
+  [tags identity-hash map-key bytes ascription fixpoint 933]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {0x2a::bytes: 1}] ([$cx:canonical $m], [= [$cx:hash $m] [$cx:hash [$cx:parse [$cx:serialize $m]]]], [= [$cx:hash $m] [$cx:hash {0x2a: 1}]])]
+#]]
+  [out-text [#
+('{0x2a::bytes: 1}\n', true, false)
+#]]
+ ]
+]

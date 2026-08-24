@@ -1,4 +1,4 @@
-[test-suite name=json
+[test-suite name=json ring=1
   [doc [#
 conformance fixtures for cx-stdlib/json (spec/std-lib/json.md §6).
 
@@ -426,7 +426,7 @@ cx-err:CXER3103
 [$json:emit-pretty {a: 1}]
 #]]
   [out-text [#
-'{ "a": 1 }'
+'{\n  "a": 1\n}'
 #]]
  ]
 
@@ -440,7 +440,7 @@ cx-err:CXER3103
 [$json:emit-pretty {b: 2, a: 1}]
 #]]
   [out-text [#
-'{ "b": 2, "a": 1 }'
+'{\n  "b": 2,\n  "a": 1\n}'
 #]]
  ]
 
@@ -456,7 +456,7 @@ cx-err:CXER3103
 [$json:emit-with-opts {a: 1} {indent: 2}]
 #]]
   [out-text [#
-'{ "a": 1 }'
+'{\n  "a": 1\n}'
 #]]
  ]
 
@@ -660,4 +660,19 @@ false
 #]]
  ]
 
+ [case id=json-042-all-decimal-exactness level=core gate=enforced
+  [tags json parse-with-opts number-mode all-decimal exactness 17-digit 683]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/json']
+[?let [= $d [$json:parse-with-opts "0.12345678901234567891" {number-mode: "all-decimal"}]]
+[= $b [$json:parse-with-opts "99999999999999999999" {number-mode: "all-decimal"}]]
+  ($d, [= [+ $d 0.00000000000000000009] 0.12345678901234567900], $b, [= $b [+ 99999999999999999998 1]])]
+#]]
+  [out-text [#
+(0.12345678901234567891, true, 99999999999999999999::decimal, true)
+#]]
+ ]
 ]

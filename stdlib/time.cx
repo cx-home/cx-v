@@ -559,7 +559,7 @@
   [sig """-> [sequence string]"""]
   [summary """List the available IANA timezone identifiers."""]
   [example [code """[?lib 'cx-stdlib/time']
-[$time:list-timezones]"""] [expect """('UTC', 'Etc/UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Asia/Tokyo', 'Asia/Kolkata', 'Australia/Sydney')"""]]
+[$time:list-timezones]"""] [expect """(UTC, Etc/UTC, America/New_York, America/Chicago, America/Denver, America/Los_Angeles, Europe/London, Europe/Paris, Europe/Berlin, Asia/Tokyo, Asia/Kolkata, Australia/Sydney)"""]]
 ]
 [fn-doc name=is-leap-year scope=public purity=pure
   [sig """-> bool"""]

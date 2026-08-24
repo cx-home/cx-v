@@ -1,0 +1,8 @@
+erDiagram
+  user ||--|| profile : has
+  user {
+    int id "@"
+  }
+  profile {
+    string email "@"
+  }

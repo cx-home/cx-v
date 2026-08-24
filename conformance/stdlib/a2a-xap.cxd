@@ -1,4 +1,4 @@
-[test-suite name=a2a-xap
+[test-suite name=a2a-xap ring=2
   [doc [#
 Conformance fixtures for cx-x/a2a-xap — A2A tasks mapped onto the xap substrate
 (#6 Y2b, the "over-xap" layer). NB cx-x/a2a-xap is an EXPERIMENTAL x/-TIER module
@@ -39,7 +39,7 @@ the result (sequences in paren form, bools bare).
  [$ax:lifecycle [$ax:history $jr 1 3]]]
 #]]
    [out-text [#
-('submitted', 'working', 'completed')
+(submitted, working, completed)
 #]]
   ]
 
@@ -68,7 +68,7 @@ true
 [$ax:message-envelope {role: "user" text: "hi"}]
 #]]
    [out-text [#
-[do :a2a-message [payload {role: 'user', text: 'hi'}]]
+[do :a2a-message [payload {role: user, text: hi}]]
 #]]
   ]
 
@@ -117,6 +117,59 @@ true
 #]]
    [out-text [#
 'expired'
+#]]
+  ]
+
+  [case id=a2a-xap-008-propose-task-durable-pending-approval level=core
+   [tags a2a-xap propose-task input-required journal proposal tier1 stream-18 690 L140]
+   [meta [#
+note: input-required IS the durable pending-approval slot (stream 18):
+note: propose-task journals the transition CARRYING the proposal's
+note: Tier-1 address (what an out-of-band approval binds); the replayed
+note: lifecycle shows the path and the address survives replay —
+note: durable, tamper-evident, never a bespoke pending-store.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a-xap' :as ax]
+[?lib 'cx-stdlib/journal' :as journal]
+[?def refund-order scope=public impure [effects [write]] [returns int] ($order-id::string $amount::int 10) $amount]
+[?let [= $jr [$journal:open "mem://a2a-xap-008" "acme"]]
+  [= $p [$cx:propose refund-order {order-id: 'o-1', amount: 42} {}]]
+  [= $addr [$cx:hash $p]]
+  [= $e1 [$ax:propose-task $jr "t-1" $p]]
+  [= $e2 [$ax:record $jr "t-1" "completed"]]
+  [= $entries [$ax:history $jr 1 2]]
+  [flow [path [$ax:lifecycle $entries]]
+        [addr-carried [$eq [?let [= $ev [$first $entries]] [?let [= $t $ev/event] $t/@address]] $addr]]]]
+#]]
+   [out-text [#
+[flow [path (input-required, completed)] [addr-carried true]]
+#]]
+  ]
+
+  [case id=a2a-xap-009-approval-credential-binds-address level=core
+   [tags a2a-xap did vc approval proposal tier1 stream-18 690 L139 L140]
+   [meta [#
+note: the DID/VC approval substrate: a DID-signed credential whose
+note: delegation subject IS the proposal's Tier-1 address — the same
+note: delegation value shape the PEP consumes, verified fail-closed
+note: (grant-status) with no callback to the issuer.
+#]]
+   [in-cx [# [empty] #]]
+   [in-code [#
+[?lib 'cx-x/a2a-xap' :as ax]
+[?lib 'cx-stdlib/crypto' :as crypto]
+[?def refund-order scope=public impure [effects [write]] [returns int] ($order-id::string $amount::int 10) $amount]
+[?let [= $p [$cx:propose refund-order {order-id: 'o-1', amount: 42} {}]]
+ [= $addr [$cx:hash $p]]
+ [= $kp [$crypto:ed25519-keypair]]
+ [= $agent [$ax:agent-did $kp/@public]]
+ [= $cred [$ax:approval-credential $agent $kp/@private $agent $addr {id: "urn:a2a:approval:1" issued-at: 2026-06-16T12:00:00Z expires: 2026-06-16T13:00:00Z}]]
+ [$ax:grant-status $cred 2026-06-16T12:30:00Z]]
+#]]
+   [out-text [#
+'valid'
 #]]
   ]
 ]

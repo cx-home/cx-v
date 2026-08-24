@@ -1,0 +1,8 @@
+sequenceDiagram
+  participant INPUT
+  participant w
+  participant OUTPUT
+  activate w
+  participant ch
+  ch -->> w : msg (try, 50ms)
+  deactivate w

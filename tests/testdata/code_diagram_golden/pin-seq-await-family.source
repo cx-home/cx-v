@@ -1,0 +1,1 @@
+[?worker name="w" body=[?await-all $fs]]

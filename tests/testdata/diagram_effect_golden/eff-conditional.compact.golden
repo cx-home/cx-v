@@ -1,0 +1,12 @@
+flowchart TD
+  prog(["program"])
+  def_fetch["def fetch"]
+  eff_http_get[["http-get"]]
+  eff_env_var[["env-var"]]
+  cap_net{{"net --allow-net"}}
+  cap_env{{"env --allow-env"}}
+  def_fetch --> eff_http_get
+  prog --> eff_env_var
+  prog -.->|"call"| def_fetch
+  eff_http_get --> cap_net
+  eff_env_var --> cap_env

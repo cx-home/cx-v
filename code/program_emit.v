@@ -56,12 +56,29 @@ fn emit_program_node(mut b strings.Builder, node cx.ProgramNode) {
 		cx.ProgramBinding   { emit_program_binding(mut b, node) }
 		cx.ProgramCall      { emit_program_call(mut b, node) }
 		cx.ProgramPattern   { emit_program_pattern(mut b, node) }
-		cx.ProgramDirective { emit_program_directive(mut b, node) }
-		cx.ProgramForComp   { emit_program_for_comp(mut b, node) }
-		cx.ProgramLiteral   { emit_program_literal(mut b, node) }
+		// PS-1 (#886): the postfix step run on a directive / for-comp /
+		// literal / slice-literal RESULT emits glued to the closing
+		// bracket, exactly as the parser requires — one emission
+		// (emit_path_steps), shared with bindings and the CRS-1 calls.
+		// A step-less node appends zero bytes.
+		cx.ProgramDirective {
+			emit_program_directive(mut b, node)
+			emit_path_steps(mut b, node.path)
+		}
+		cx.ProgramForComp {
+			emit_program_for_comp(mut b, node)
+			emit_path_steps(mut b, node.path)
+		}
+		cx.ProgramLiteral {
+			emit_program_literal(mut b, node)
+			emit_path_steps(mut b, node.path)
+		}
 		cx.ProgramPathExpr  { emit_program_path_expr(mut b, node) }
 		cx.ProgramSliceAccess { emit_program_slice_access(mut b, node) }
-		cx.ProgramSliceLiteral { emit_program_slice_literal(mut b, node) }
+		cx.ProgramSliceLiteral {
+			emit_program_slice_literal(mut b, node)
+			emit_path_steps(mut b, node.path)
+		}
 		cx.ProgramWildcard  { emit_program_wildcard(mut b, node) }
 	}
 }
@@ -77,26 +94,50 @@ fn emit_program(mut b strings.Builder, p cx.Program) {
 fn emit_program_binding(mut b strings.Builder, n cx.ProgramBinding) {
 	b.write_string('\$')
 	b.write_string(n.name)
-	for step in n.path {
+	emit_path_steps(mut b, n.path)
+}
+
+// emit_path_steps emits a [135a] step run — shared by binding paths and
+// the CRS-1 call-result postfix (emit_program_call), so the two surfaces
+// stay ONE emission.
+fn emit_path_steps(mut b strings.Builder, path []cx.ProgramPathStep) {
+	for step in path {
+		// #925 (PYE-1a/1b): a computed step spells its binding — `.$k`,
+		// `/$k`, `//$k`, `@$k` — shared by every arm below.
+		cname := if step.computed_name != '' { '\$' + step.computed_name } else { '' }
 		match step.kind {
 			.child {
 				b.write_string('/')
-				b.write_string(step.name)
+				// A kind test replaces the name outright ([131b]); its
+				// spelling keeps its parens per canonical.md §2.12.4.
+				b.write_string(if step.kind_test != .none {
+					step.kind_test.spelling()
+				} else if cname != '' {
+					cname
+				} else {
+					step.name
+				})
 			}
 			.attr {
 				b.write_string('@')
-				b.write_string(step.name)
+				b.write_string(if cname != '' { cname } else { step.name })
 			}
 			.member {
 				b.write_string('.')
-				b.write_string(step.name)
+				b.write_string(if cname != '' { cname } else { step.name })
 			}
 			.wildcard_children {
 				b.write_string('/*')
 			}
 			.descendant {
 				b.write_string('//')
-				b.write_string(step.name)
+				b.write_string(if step.kind_test != .none {
+					step.kind_test.spelling()
+				} else if cname != '' {
+					cname
+				} else {
+					step.name
+				})
 			}
 			.descendant_wildcard {
 				b.write_string('//*')
@@ -147,6 +188,9 @@ fn emit_program_call(mut b strings.Builder, n cx.ProgramCall) {
 	} else if n.must_succeed {
 		b.write_string('!')
 	}
+	// Call-result postfix steps (RULED CRS-1) — emitted byte-adjacent to
+	// the closing `]` / postfix, exactly as the parser requires.
+	emit_path_steps(mut b, n.path)
 }
 
 // ── cx.ProgramPattern — structural shape match per §5 ──────────────────────────
@@ -574,6 +618,23 @@ fn emit_for_clause_src(mut b strings.Builder, c cx.ProgramForClause) {
 		.generator {
 			// `[in $x SRC]` (explicit), `[in SRC]` (anonymous, $_), or
 			// `[in PATTERN SRC]` (pattern-bind — c.expr carries the pattern).
+			// The bare pattern-generator shortcut (grammar [129b1]:
+			// bind='_', source=Pattern, no expr) MUST re-emit BARE — wrapped
+			// as `[in [user]]` the pattern re-parses as an element-literal
+			// SOURCE (construct-and-iterate), a semantics change the quote
+			// round-trip exposed (stream-2 W6).
+			mut has_pat_expr := false
+			if _ := c.expr {
+				has_pat_expr = true
+			}
+			if c.bind == '_' && !has_pat_expr {
+				if src := c.source {
+					if src is cx.ProgramPattern {
+						emit_program_node(mut b, src)
+						return
+					}
+				}
+			}
 			b.write_string('[in ')
 			if pat := c.expr {
 				emit_program_node(mut b, pat)
@@ -637,8 +698,9 @@ fn emit_for_clause_src(mut b strings.Builder, c cx.ProgramForClause) {
 			b.write_string(']')
 		}
 		.par     { b.write_string('[par]') }
-		.stream  { b.write_string('[stream]') }
+		.lazy    { b.write_string('[lazy]') }
 		.ordered { b.write_string('[ordered]') }
+		.fail_fast { b.write_string('[fail-fast]') }
 		.take {
 			b.write_string('[take ')
 			if e := c.expr {
@@ -654,14 +716,14 @@ fn emit_for_clause_src(mut b strings.Builder, c cx.ProgramForClause) {
 			b.write_string(']')
 		}
 		.takewhile {
-			b.write_string('[takewhile ')
+			b.write_string('[take-while ')
 			if e := c.expr {
 				emit_program_node(mut b, e)
 			}
 			b.write_string(']')
 		}
 		.dropwhile {
-			b.write_string('[dropwhile ')
+			b.write_string('[drop-while ')
 			if e := c.expr {
 				emit_program_node(mut b, e)
 			}
@@ -677,6 +739,7 @@ fn emit_program_literal(mut b strings.Builder, l cx.ProgramLiteral) {
 		.string_lit   { emit_quoted_string(mut b, l.str_val) }
 		.int_lit      { b.write_string(l.int_val.str()) }
 		.bigint_lit   { b.write_string(l.str_val) }
+		.decimal_lit  { b.write_string(l.str_val) }
 		.float_lit    { b.write_string(l.flt_val.str()) }
 		.bool_lit     { b.write_string(l.bool_val.str()) }
 		.duration_lit { b.write_string(l.dur_val) }
@@ -706,6 +769,12 @@ fn emit_program_literal(mut b strings.Builder, l cx.ProgramLiteral) {
 					b.write_string(l.keys[i])
 				}
 				b.write_string(': ')
+				// RULED: MSS-4 (#917): a declaration-only entry re-emits its
+				// `::T` spelling — the placeholder item is never the value.
+				if i < l.decl_kinds.len && l.decl_kinds[i] != '' {
+					b.write_string('::${l.decl_kinds[i]}')
+					continue
+				}
 				emit_program_node(mut b, l.items[i])
 			}
 			b.write_string('}')
@@ -858,6 +927,15 @@ fn emit_path_step(mut b strings.Builder, s cx.ProgramPathExprStep) {
 		b.write_string(path_axis_emit_name(s.axis))
 		b.write_string('::')
 	}
+	// NodeTest: a kind test ([131b]) is the whole test and outranks the
+	// name/namespace fields, which are empty whenever it is set.
+	if s.kind_test != .none {
+		b.write_string(s.kind_test.spelling())
+		for pred in s.predicates {
+			emit_path_predicate(mut b, pred)
+		}
+		return
+	}
 	// NodeTest per ns_kind.
 	match s.ns_kind {
 		.none {
@@ -909,10 +987,11 @@ fn emit_path_predicate(mut b strings.Builder, p cx.ProgramPathPredicate) {
 		.attr_test {
 			b.write_string('[')
 			emit_pattern_attr(mut b, cx.ProgramPatternAttr{
-				kind:  p.attr_kind
-				name:  p.attr_name
-				op:    p.attr_op
-				value: p.attr_value
+				kind:      p.attr_kind
+				name:      p.attr_name
+				op:        p.attr_op
+				value:     p.attr_value
+				type_name: p.type_name
 			})
 			b.write_string(']')
 		}

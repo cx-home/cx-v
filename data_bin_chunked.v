@@ -73,7 +73,9 @@ pub fn emit_data_bin_chunked(doc Document, opts ChunkedEmitOptions) ![]u8 {
 		return error('cxcol chunked: chunk_size must be > 0')
 	}
 	mut payload := []u8{cap: 256}
-	encode_header(mut payload)
+	// #918: the chunked lane shares the header — v2 when the document
+	// carries typed map keys or declaration-only entries.
+	encode_header(mut payload, document_needs_databin_ext(doc))
 	if name == '' {
 		// Anonymous table — emit at root.
 		encode_chunked_table(t, opts, mut payload)!
@@ -97,7 +99,7 @@ pub fn emit_data_bin_auto(doc Document, opts ChunkedEmitOptions) ![]u8 {
 	if _, _ := single_table_root_with_name(doc) {
 		return emit_data_bin_chunked(doc, opts)!
 	}
-	return emit_data_bin(doc)
+	return emit_data_bin(doc)!
 }
 
 // single_table_root inspects the Document and returns the top-level
@@ -136,35 +138,54 @@ fn encode_chunked_table(t DataTable, opts ChunkedEmitOptions, mut buf []u8) ! {
 		return error('cxcol chunked: empty col-spec')
 	}
 	buf << tag_table_chunked
-	encode_uvarint(mut buf, u64(t.cols.len))
-	for col in t.cols {
-		encode_string_value(col.name, mut buf)
-		buf << column_type_code(col.type_name)
-	}
 	// Chunked-table is strict columnar — project DataVal rows back to
 	// ScalarValue rows; errors on any collection-literal cells with
 	// a clear "use plain 0x60 form" diagnostic.
 	srows := dataval_rows_to_scalar_rows(t.rows) or {
 		return error('chunked-table writer (0x63): ${err.msg()} — collection-cell tables must encode through the plain `0x60` form (cx_to_data_bin auto-selects)')
 	}
+	// §3.10.5 in the chunked header (stream 17 W3c): a column with any
+	// null wraps 0x80 in the COL-SPEC (a whole-table decision — this
+	// writer sees every row; the STREAMING lane refuses nulls loudly,
+	// never coerces). Each row group's payload for such a column is
+	// then the §3.10.5 shape scoped to the group's rows.
+	encode_uvarint(mut buf, u64(t.cols.len))
+	mut codes := []u8{cap: t.cols.len}
+	for col_idx, col in t.cols {
+		mut code := column_type_code(col.type_name)
+		for row in srows {
+			if col_idx < row.len && row[col_idx] is NullValue {
+				code = col_nullable
+				break
+			}
+		}
+		codes << code
+		encode_string_value(col.name, mut buf)
+		// The 0x82 declared-name annotation rides IFF the declared
+		// spelling differs from the code's default render (#807(c) —
+		// same rule as the plain lane; for 0x80 headers the default is
+		// the inner/base code's render).
+		base := column_type_code(col.type_name)
+		encode_col_spec_type(col.type_name, code, base, mut buf)
+	}
 	mut row_idx := 0
 	for row_idx < srows.len {
 		mut end := row_idx + opts.chunk_size
 		if end > srows.len { end = srows.len }
-		encode_row_group(t.cols, srows[row_idx .. end], opts, mut buf)!
+		encode_row_group(t.cols, codes, srows[row_idx .. end], opts, mut buf)!
 		row_idx = end
 	}
 	// End-of-table marker — uvarint(0).
 	buf << u8(0)
 }
 
-fn encode_row_group(cols []TableColumn, rows [][]ScalarValue, opts ChunkedEmitOptions, mut buf []u8) ! {
+fn encode_row_group(cols []TableColumn, header_codes []u8, rows [][]ScalarValue, opts ChunkedEmitOptions, mut buf []u8) ! {
 	// Build the strict-canonical plain body: uvarint(row_count) +
 	// per-column payload column-major (no per-cell tags).
 	mut plain := []u8{cap: 64 + rows.len * cols.len * 4}
 	encode_uvarint(mut plain, u64(rows.len))
 	for col_idx, col in cols {
-		encode_col_payload_strict(col_idx, col, rows, mut plain)!
+		encode_col_payload_strict(col_idx, col, header_codes[col_idx], rows, mut plain)!
 	}
 	use_zstd := match opts.compress {
 		.never  { false }
@@ -193,8 +214,62 @@ fn encode_row_group(cols []TableColumn, rows [][]ScalarValue, opts ChunkedEmitOp
 	buf << wrapper
 }
 
-fn encode_col_payload_strict(col_idx int, col TableColumn, rows [][]ScalarValue, mut buf []u8) ! {
+fn encode_col_payload_strict(col_idx int, col TableColumn, header_code u8, rows [][]ScalarValue, mut buf []u8) ! {
 	code := column_type_code(col.type_name)
+	if header_code == col_nullable {
+		// §3.10.5 scoped to this group: inner code + null bitmap +
+		// packed non-null payload. The wrapper decision is the
+		// HEADER's (whole-table) — every group under an 0x80 header
+		// emits the wrapper, nulls in this group or not, so the
+		// reader is uniform per header code.
+		buf << code
+		mut bitmap := []u8{len: (rows.len + 7) / 8}
+		mut nonnull := []ScalarValue{cap: rows.len}
+		for ri, row in rows {
+			is_null := col_idx >= row.len || row[col_idx] is NullValue
+			if is_null {
+				bitmap[ri / 8] |= u8(1) << (ri % 8)
+			} else {
+				nonnull << row[col_idx]
+			}
+		}
+		buf << bitmap
+		if code == col_bool {
+			mut vals := []bool{cap: nonnull.len}
+			for v in nonnull {
+				vals << match v {
+					bool { v }
+					i64  { v != 0 }
+					else { false }
+				}
+			}
+			encode_bool_bits(vals, mut buf)
+			return
+		}
+		for v in nonnull {
+			encode_strict_cell(v, code, mut buf)!
+		}
+		return
+	}
+	if code == col_bool {
+		// §3.10.4 bit-packed bool columns (stream 17 W3 — the rise
+		// this arm's old per-byte comment reserved).
+		mut vals := []bool{cap: rows.len}
+		for row in rows {
+			mut b := false
+			if col_idx < row.len {
+				v := row[col_idx]
+				b = match v {
+					bool { v }
+					i64  { v != 0 }
+					else { false }
+				}
+			}
+			vals << b
+		}
+		encode_bool_bits(vals, mut buf)
+		return
+	}
 	for row in rows {
 		mut v := ScalarValue('')
 		if col_idx < row.len {
@@ -219,16 +294,19 @@ fn encode_strict_cell(v ScalarValue, code u8, mut buf []u8) ! {
 		}
 		tag_int8 {
 			n := scalar_to_i64(v)
+			check_int_cell_range(n, code)!
 			buf << u8(n)
 		}
 		tag_int16 {
 			n := scalar_to_i64(v)
+			check_int_cell_range(n, code)!
 			x := u16(u32(n))
 			buf << u8(x & 0xFF)
 			buf << u8((x >> 8) & 0xFF)
 		}
 		tag_int32 {
 			n := scalar_to_i64(v)
+			check_int_cell_range(n, code)!
 			encode_u32_le(mut buf, u32(n))
 		}
 		tag_int64 {
@@ -253,13 +331,16 @@ fn encode_strict_cell(v ScalarValue, code u8, mut buf []u8) ! {
 		tag_datetime {
 			// Spec §3.10.3 datetime column = 12 bytes/row, same wire as
 			// §3.6.1 minus the leading tag: i64 ns LE + i16 offset LE +
-			// u16 reserved (zero). Strict canonical normalizes offset
-			// to 0; we error on un-parseable / out-of-range cells.
+			// u16 reserved (zero). Transport carries the parsed offset
+			// (#807(d), arc-2 — unix_nanos stays UTC-normalized; the
+			// offset restores the local render); we error on
+			// un-parseable / out-of-range cells.
 			s := scalar_to_string_for_datetime(v)
-			ns, _ := parse_iso_datetime_canonical(s)!
+			ns, off := parse_iso_datetime_canonical(s)!
 			encode_u64_le(mut buf, u64(ns))
-			buf << u8(0)
-			buf << u8(0)
+			ou := u16(u32(off))
+			buf << u8(ou & 0xFF)
+			buf << u8((ou >> 8) & 0xFF)
 			buf << u8(0)
 			buf << u8(0)
 		}
@@ -268,16 +349,51 @@ fn encode_strict_cell(v ScalarValue, code u8, mut buf []u8) ! {
 			encode_uvarint(mut buf, u64(b.len))
 			buf << b
 		}
-		tag_true {
-			// Bool sentinel; pack 1 bit per row downstream. v0 emits one
-			// byte per row (0/1) — bit-packed columns (§3.10.4) lands
-			// alongside the streaming Table API in a follow-up phase.
-			b := match v {
-				bool { v }
-				i64  { v != 0 }
-				else { false }
+		// (bool columns bit-pack at COLUMN level per §3.10.4 —
+		// encode_col_payload_strict; no per-cell arm.)
+		col_uint8 {
+			n := scalar_to_i64(v)
+			check_int_cell_range(n, code)!
+			buf << u8(n)
+		}
+		col_uint16 {
+			n := scalar_to_i64(v)
+			check_int_cell_range(n, code)!
+			x := u16(n)
+			buf << u8(x & 0xFF)
+			buf << u8((x >> 8) & 0xFF)
+		}
+		col_uint32 {
+			n := scalar_to_i64(v)
+			check_int_cell_range(n, code)!
+			encode_u32_le(mut buf, u32(n))
+		}
+		col_uint64 {
+			n := scalar_to_i64(v)
+			check_int_cell_range(n, code)!
+			encode_u64_le(mut buf, u64(n))
+		}
+		col_float32 {
+			f := scalar_to_f64(v)
+			check_float_cell_exact(f, code)!
+			encode_u32_le(mut buf, math_f32_bits(f32(f)))
+		}
+		col_float16 {
+			f := scalar_to_f64(v)
+			check_float_cell_exact(f, code)!
+			x := f64_to_f16_bits(f)
+			buf << u8(x & 0xFF)
+			buf << u8((x >> 8) & 0xFF)
+		}
+		tag_bigint, tag_decimal, col_atom {
+			s := match v {
+				string { v }
+				i64    { v.str() }
+				f64    { v.str() }
+				else   { '' }
 			}
-			buf << u8(if b { 1 } else { 0 })
+			encode_uvarint(mut buf, u64(s.len))
+			buf << s.bytes()
 		}
 		else {
 			return error('cxcol chunked: unsupported column type code 0x${code:02x}')
@@ -341,6 +457,15 @@ fn scalar_to_bytes(v ScalarValue) []u8 {
 // this file's import surface minimal (the existing data_bin.v already
 // imports math and exposes encode_float64; we reuse encode_u64_le and
 // avoid double-importing math here).
+fn math_f32_bits(v f32) u32 {
+	return unsafe { *(&u32(&v)) }
+}
+
+fn math_f32_from_bits(bits u32) f32 {
+	b := bits
+	return unsafe { *(&f32(&b)) }
+}
+
 fn math_f64_bits(v f64) u64 {
 	return f64_to_bits(v)
 }
@@ -363,14 +488,20 @@ fn (mut r BinReader) read_chunked_table_payload() !DataVal {
 		return error('cxcol chunked: tag 0x63 with col_count=0; use 0x61 for empty tables')
 	}
 	mut cols := []TableColumn{cap: int(col_count)}
+	mut header_codes := []u8{cap: int(col_count)}
 	for _ in 0 .. int(col_count) {
 		key_tag := r.take_u8()!
 		if key_tag != tag_string {
 			return error('cxcol chunked: column name must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		name := r.read_string_payload()!
-		col_type_byte := r.take_u8()!
-		cols << TableColumn{ name: name, type_name: column_type_name_from_code(col_type_byte) }
+		declared, col_type_byte := r.read_col_spec_type()!
+		header_codes << col_type_byte
+		// A declared-name annotation wins (#807(c)); otherwise the
+		// code's default render (0x80 headers refine from the inner at
+		// row-group read, gated on the name still being empty).
+		type_name := if declared != '' { declared } else { column_type_name_from_code(col_type_byte) }
+		cols << TableColumn{ name: name, type_name: type_name }
 	}
 	mut rows := [][]ScalarValue{}
 	for {
@@ -386,12 +517,12 @@ fn (mut r BinReader) read_chunked_table_payload() !DataVal {
 		match body_tag {
 			body_tag_plain {
 				body := r.take(body_bytes_remaining)!
-				decode_row_group_body(body, cols, mut rows)!
+				decode_row_group_body(body, mut cols, header_codes, mut rows)!
 			}
 			body_tag_zstd {
 				wrapper := r.take(body_bytes_remaining)!
 				body := decompress_row_group(wrapper)!
-				decode_row_group_body(body, cols, mut rows)!
+				decode_row_group_body(body, mut cols, header_codes, mut rows)!
 			}
 			else {
 				return error('cxcol chunked: reserved body-tag 0x${body_tag:02x} (expected 0x01 or 0x90)')
@@ -406,7 +537,7 @@ fn (mut r BinReader) read_chunked_table_payload() !DataVal {
 	return DataVal(DataTable{ cols: cols, rows: scalar_rows_to_dataval_rows(rows), from_chunked: true })
 }
 
-fn decode_row_group_body(body []u8, cols []TableColumn, mut rows [][]ScalarValue) ! {
+fn decode_row_group_body(body []u8, mut cols []TableColumn, header_codes []u8, mut rows [][]ScalarValue) ! {
 	mut rg := BinReader{ buf: body, pos: 0, depth: 0, max_depth: int(cxcol_default_depth) }
 	row_count := rg.read_uvarint()!
 	mut group := [][]ScalarValue{cap: int(row_count)}
@@ -414,7 +545,53 @@ fn decode_row_group_body(body []u8, cols []TableColumn, mut rows [][]ScalarValue
 		group << []ScalarValue{cap: cols.len}
 	}
 	for col_idx, col in cols {
-		code := column_type_code(col.type_name)
+		code := if col_idx < header_codes.len { header_codes[col_idx] } else { column_type_code(col.type_name) }
+		if code == col_nullable {
+			// §3.10.5 scoped to this group: inner code + bitmap +
+			// packed non-nulls (bit-packed for bool inners).
+			inner := rg.take_u8()!
+			// Refine the column's type name from the inner code (the
+			// 0x80 header byte alone erases it).
+			if cols[col_idx].type_name == '' {
+				cols[col_idx].type_name = column_type_name_from_code(inner)
+			}
+			bitmap := rg.take((int(row_count) + 7) / 8)!
+			mut n_nonnull := 0
+			for ri in 0 .. int(row_count) {
+				if (bitmap[ri / 8] >> (ri % 8)) & 1 == 0 {
+					n_nonnull++
+				}
+			}
+			mut nonnull := []ScalarValue{cap: n_nonnull}
+			if inner == col_bool {
+				bits := rg.take((n_nonnull + 7) / 8)!
+				for i in 0 .. n_nonnull {
+					nonnull << ScalarValue(((bits[i / 8] >> (i % 8)) & 1) == 1)
+				}
+			} else {
+				for _ in 0 .. n_nonnull {
+					nonnull << rg.read_strict_cell(inner)!
+				}
+			}
+			mut vi := 0
+			for ri in 0 .. int(row_count) {
+				if (bitmap[ri / 8] >> (ri % 8)) & 1 == 1 {
+					group[ri] << ScalarValue(NullValue{})
+				} else {
+					group[ri] << nonnull[vi]
+					vi++
+				}
+			}
+			continue
+		}
+		if code == col_bool {
+			// §3.10.4 bit-packed bool columns.
+			bits := rg.take((int(row_count) + 7) / 8)!
+			for row_idx in 0 .. int(row_count) {
+				group[row_idx] << ScalarValue(((bits[row_idx / 8] >> (row_idx % 8)) & 1) == 1)
+			}
+			continue
+		}
 		for row_idx in 0 .. int(row_count) {
 			val := rg.read_strict_cell(code)!
 			group[row_idx] << val
@@ -475,9 +652,32 @@ fn (mut r BinReader) read_strict_cell(code u8) !ScalarValue {
 			b := r.read_bytes_payload()!
 			ScalarValue(b.bytestr())
 		}
-		tag_true {
-			b := r.take_u8()!
-			ScalarValue(b != 0)
+		// (bool columns read bit-packed at COLUMN level — decode_row_group_body.)
+		col_uint8 {
+			ScalarValue(i64(r.take_u8()!))
+		}
+		col_uint16 {
+			b := r.take(2)!
+			ScalarValue(i64(u16(b[0]) | (u16(b[1]) << 8)))
+		}
+		col_uint32 {
+			b := r.take(4)!
+			ScalarValue(i64(u32(b[0]) | (u32(b[1]) << 8) | (u32(b[2]) << 16) | (u32(b[3]) << 24)))
+		}
+		col_uint64 {
+			ScalarValue(i64(r.read_u64_le()!))
+		}
+		col_float32 {
+			b := r.take(4)!
+			bits := u32(b[0]) | (u32(b[1]) << 8) | (u32(b[2]) << 16) | (u32(b[3]) << 24)
+			ScalarValue(f64(math_f32_from_bits(bits)))
+		}
+		col_float16 {
+			b := r.take(2)!
+			ScalarValue(f16_bits_to_f64(u16(b[0]) | (u16(b[1]) << 8)))
+		}
+		tag_bigint, tag_decimal, col_atom {
+			ScalarValue(r.read_string_payload()!)
 		}
 		else {
 			return error('cxcol chunked: unsupported column type code 0x${code:02x}')
@@ -588,7 +788,7 @@ pub fn chunked_group_row_counts(framed []u8) ![]int {
 			return error('cxcol chunked: column name must be string (tag 0x30); got 0x${key_tag:02x}')
 		}
 		_ := r.read_string_payload()!
-		_ := r.take_u8()!  // col_type_byte
+		_, _ := r.read_col_spec_type()!  // declared-name annotation + col_type_byte
 	}
 	// row groups
 	mut row_counts := []int{}
@@ -651,4 +851,80 @@ fn decompress_row_group(wrapper []u8) ![]u8 {
 		return error('cxcol chunked: zstd frame decompressed to ${out.len} bytes; header declared ${uncomp_len}')
 	}
 	return out
+}
+
+// cxcol_nullable_inner_codes_pub walks one PLAIN row-group body just
+// far enough to report each §3.10.5 column's INNER code (stream 17
+// W3c — the Arrow bridge needs inner types at schema time). Non-0x80
+// columns report their header code unchanged; the body is not
+// otherwise interpreted beyond cursor-accurate skipping.
+pub fn cxcol_nullable_inner_codes_pub(plain []u8, header_codes []u8) ![]u8 {
+	mut rg := BinReader{ buf: plain, pos: 0, depth: 0, max_depth: int(cxcol_default_depth) }
+	row_count := int(rg.read_uvarint()!)
+	mut out := []u8{cap: header_codes.len}
+	for code in header_codes {
+		if code == col_nullable {
+			inner := rg.take_u8()!
+			out << inner
+			bitmap := rg.take((row_count + 7) / 8)!
+			mut n_nonnull := 0
+			for ri in 0 .. row_count {
+				if (bitmap[ri / 8] >> (ri % 8)) & 1 == 0 {
+					n_nonnull++
+				}
+			}
+			rg.skip_typed_cells(inner, n_nonnull)!
+			continue
+		}
+		out << code
+		if code == col_bool {
+			rg.take((row_count + 7) / 8)!
+		} else {
+			rg.skip_typed_cells(code, row_count)!
+		}
+	}
+	return out
+}
+
+// skip_typed_cells advances the cursor over N cells of one §3.10.3
+// payload code without materializing them.
+fn (mut r BinReader) skip_typed_cells(code u8, n int) ! {
+	match code {
+		col_bool {
+			r.take((n + 7) / 8)!
+		}
+		tag_int8, col_uint8 {
+			r.take(n)!
+		}
+		tag_int16, col_uint16, col_float16 {
+			r.take(2 * n)!
+		}
+		tag_int32, col_uint32, col_float32 {
+			r.take(4 * n)!
+		}
+		tag_int64, col_uint64, tag_float64 {
+			r.take(8 * n)!
+		}
+		tag_date {
+			r.take(4 * n)!
+		}
+		tag_datetime {
+			r.take(12 * n)!
+		}
+		tag_string, tag_bytes, tag_bigint, tag_decimal, col_atom {
+			for _ in 0 .. n {
+				ln := r.read_uvarint()!
+				r.take(int(ln))!
+			}
+		}
+		else {
+			return error('cxcol: cannot skip unknown column code 0x${code:02x}')
+		}
+	}
+}
+
+// column_type_name_from_code_pub re-exports the code → type-name map
+// for the Arrow bridge.
+pub fn column_type_name_from_code_pub(code u8) string {
+	return column_type_name_from_code(code)
 }

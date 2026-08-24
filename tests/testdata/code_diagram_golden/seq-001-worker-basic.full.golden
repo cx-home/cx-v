@@ -1,0 +1,7 @@
+sequenceDiagram
+  participant INPUT
+  participant task
+  participant OUTPUT
+  activate task
+  Note over task : [ok]
+  deactivate task

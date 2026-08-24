@@ -1,0 +1,13 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  lt["[= $x 1]"]
+  i{"if true"}
+  t["$x"]
+  i -- "true" --> t
+  t --> done
+  e["0"]
+  i -- "false" --> e
+  e --> done
+  lt --> i
+  start --> lt

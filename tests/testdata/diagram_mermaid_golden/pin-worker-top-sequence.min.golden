@@ -1,0 +1,4 @@
+%%cx:Wz93b3JrZXIgbmFtZT0idzEiIGJvZHk9Wz9yZWNlaXZlIGZyb209JGNoXV0=%%
+sequenceDiagram
+    Note over Caller: [?worker]
+    Note over Caller: [?receive]

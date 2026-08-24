@@ -1,0 +1,9 @@
+%%cx:Wz90cnktcmVjZWl2ZSBmcm9tPSRjaF0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["[?try-receive]"]
+    n4[/"channel $ch"/]
+    n4 -- "recv" --> n3
+    n1 --> n3
+    n3 --> n2

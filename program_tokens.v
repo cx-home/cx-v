@@ -8,7 +8,7 @@ module cx
 // Grammar reference: spec/grammar.ebnf productions [120]–[129]. The
 // ProgramDirName closed set in [127e] mirrors `directive_names` below — gate 3
 // of the §11.6 release gates verifies set-equality across this module,
-// the §4.1 registry, the EBNF, spec/ast.md, and spec/eval.md §12.
+// the §4.1 registry, the EBNF, spec/ast.md, and code.md.
 //
 // Co-evolves with the spec. Adding a directive requires a spec
 // change per spec/governance.md §10 and updates in all five sites.
@@ -56,8 +56,8 @@ pub enum ProgramTokenKind {
 	string_lit        // '...' or "..."
 	number_lit        // 123, -1.5, 1.5e10, etc.
 	bool_lit          // 'true' | 'false'
-	duration_lit      // 100ms, 5s, 1h30m, 2w (lexicon [L25] — exact span)
-	period_lit        // 3mo, 1y, 1y6mo (lexicon [L26] — calendar span)
+	duration_lit      // 100ms, 5s, 1h30m, 2w (lexicon [L27] — exact span)
+	period_lit        // 3mo, 1y, 1y6mo (lexicon [L28] — calendar span)
 	date_lit          // 2024-01-15 (lexicon §9 [L23] — ONE token)
 	datetime_lit      // 2024-01-15T10:30:00Z (lexicon §9 [L24] — ONE token)
 	// DATA↔PROGRAM seam: a pure-DATA construct embedded verbatim in program
@@ -65,6 +65,19 @@ pub enum ProgramTokenKind {
 	// declaration `[!…]` (DTD decls + `[!DOCTYPE …]`). `text` carries the WHOLE
 	// span (delimiters included); the parser delegates to `cx.parse_data_node`.
 	data_span
+	// #923 (RULED: BC-1): a bare attribute-value RUN — the whole ws-delimited
+	// token after a glued `name=` inside a `[…]` context, scanned with the
+	// DATA reading's attr-token rule (read_token_for_attr_into: up to
+	// whitespace / `]`). Emitted by the lexer's attr-value micro-mode so the
+	// program reading of `[server host=0.0.0.0]` is the data reading (the
+	// string '0.0.0.0'), never a greedy number parse that truncates to 0.0
+	// and spills phantom body items. `text` carries the run verbatim; the
+	// parser auto-types it through the data core. The lexer does NOT emit
+	// this for runs the program reading deliberately reads as expressions
+	// (leading `'` `"` `$` `(` `[` `{` `:`, runs containing `/` or `::`, or
+	// runs abutting `'` `"` `(` `[` `{` mid-run — quotes, bindings, calls,
+	// collections, CXPath, ascriptions keep their lanes).
+	bare_value
 	// End of input
 	eof
 }
@@ -109,14 +122,16 @@ pub fn (e LexError) msg() string {
 // membership is what the lexer checks.
 //
 // This list MUST agree with spec/grammar.ebnf [127e] ProgramDirName and
-// spec/eval.md §12.1–12.6 row count. Gate 3 verifies the equality.
+// code.md row count. Gate 3 verifies the equality.
 //
 // Changes: 'find' removed (retired); 'modify' added;
 // 'par-map' / 'par-reduce' renamed to 'map' / 'reduce';
 // Iterator combinator stdlib added (W3c): filter,
-// take, drop, zip, enumerate, chunks, concat, chain, cycle, scan,
+// take, drop, zip, enumerate, chunks, concat, cycle, scan,
 // flatten, partition, group-by; force-materialisation directives per
-// to-sequence, to-array, to-map.
+// to-sequence, to-array, to-map. 'chain' RETIRED (stream 13, L55):
+// it was the registry's ONLY alias (of 'concat') — one name per
+// directive; a '[?chain …]' head is an unknown directive → CXER0100.
 pub const directive_names = [
 	'match', 'for', 'for-array', 'for-map',
 	// 'try' RETIRED (SAP C3c, code.md §8.8 tombstone): handling unifies on
@@ -134,7 +149,7 @@ pub const directive_names = [
 	'lib', 'const',
 	// Iterator combinator stdlib (W3c)
 	'filter', 'take', 'drop', 'zip', 'enumerate', 'chunks',
-	'concat', 'chain', 'cycle', 'scan', 'flatten',
+	'concat', 'cycle', 'scan', 'flatten',
 	'partition', 'group-by',
 	// explicit force-materialisation
 	'to-sequence', 'to-array', 'to-map',
@@ -146,6 +161,9 @@ pub const directive_names = [
 	'worker', 'worker-handle',
 	'channel', 'send', 'receive', 'try-send', 'try-receive', 'close',
 	'select',
+	// the U1/U2 delivery-contract verbs (code.md §10.4.1/§10.4.6a;
+	// RULED: U1.11a / U2.1a — #762).
+	'subscribe', 'monitor',
 	'stop', 'wait-for',
 	'async', 'await', 'await-all', 'await-any', 'await-race',
 	'cancel', 'check-cancel', 'sleep',

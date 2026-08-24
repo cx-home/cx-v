@@ -21,6 +21,14 @@ import sync
 // closed, closing the reuse race. `cx_release_fd` clears the mark.
 type CxSseCloseFn = fn (int)
 
+// Up to this many independent SSE registries may register a close hook
+// (the generic topic registry and the XAP feed registry are two TODAY —
+// the original single global slot meant whichever registered last silently
+// disconnected the other from close notifications, leaving stale fds whose
+// numbers the OS then recycled onto fresh connections: cross-connection
+// frame writes and swallowed requests, #873).
+const cx_sse_close_cap = 4
+
 // CxDeferCloseFn — cx-private #275 (handlers off reactors): consulted by
 // close_conn BEFORE closing a socket. Returning true means a dispatch job for
 // this fd is in flight on an executor thread: picoev deregisters the fd from
@@ -31,8 +39,9 @@ type CxSseCloseFn = fn (int)
 type CxDeferCloseFn = fn (int) bool
 
 __global (
-	cx_held_fds            [max_fds]u8
-	cx_sse_on_close        CxSseCloseFn
+	cx_held_fds             [max_fds]u8
+	cx_sse_on_close         [cx_sse_close_cap]CxSseCloseFn
+	cx_sse_on_close_n       int
 	cx_dispatch_defer_close CxDeferCloseFn
 )
 
@@ -71,11 +80,32 @@ pub fn cx_is_held(fd int) bool {
 	return C.atomic_load_byte(&cx_held_fds[fd]) != 0
 }
 
-// cx_set_sse_on_close registers the cx callback invoked (with the fd) just
+// cx_set_sse_on_close registers a cx callback invoked (with the fd) just
 // before a held SSE connection is closed by picoev, so the cx layer can drop it
 // from its subscriber set synchronously and avoid pushing to a reused fd.
+// APPEND semantics (#873): every SSE registry in the process gets notified;
+// re-registering the same fn pointer is a no-op. Registration happens at
+// serve setup (single-threaded per listener boot), before any close can fire.
 pub fn cx_set_sse_on_close(cb CxSseCloseFn) {
-	cx_sse_on_close = cb
+	for i in 0 .. cx_sse_on_close_n {
+		if cx_sse_on_close[i] == cb {
+			return
+		}
+	}
+	if cx_sse_on_close_n < cx_sse_close_cap {
+		cx_sse_on_close[cx_sse_on_close_n] = cb
+		cx_sse_on_close_n++
+	}
+}
+
+// cx_notify_sse_close runs every registered SSE close hook for `fd` — the
+// one purge point every socket-close path must pass through BEFORE the fd
+// number can be recycled (#873). Idempotent: a registry without the fd
+// drops nothing.
+pub fn cx_notify_sse_close(fd int) {
+	for i in 0 .. cx_sse_on_close_n {
+		cx_sse_on_close[i](fd)
+	}
 }
 
 // cx_set_dispatch_defer_close registers the #275 in-flight-dispatch probe —

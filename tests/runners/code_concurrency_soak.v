@@ -36,6 +36,7 @@
 module main
 
 import code
+import platform as _
 import time
 import os
 
@@ -61,10 +62,12 @@ fn build_workload(messages int) string {
 	// trivial buffered send/receive validates the channel substrate's
 	// no-leak property; deeper traffic patterns land alongside the
 	// scheduler's true-parallel substrate.
+	// (#805/audit AF-5: the program carried the retired pre-reshape
+	// `[?let $x = … :in …]` + `:name/:to/:from` keyword spellings —
+	// unrunnable since the reshape; repaired to the enforced
+	// code.cxd channel forms, the W6 gate-14/16 pattern.)
 	_ = messages
-	return '[?let \$ch = [?channel :name "soak-ch" :buffer 1]
- :in [?let \$_ = [?send "msg" :to \$ch]
-      :in [?receive :from \$ch]]]'
+	return '[?let [= \$ch [?channel name="soak-ch" buffer=1]] [= \$_ [?send "msg" to=\$ch]] [?receive from=\$ch]]'
 }
 
 fn main() {

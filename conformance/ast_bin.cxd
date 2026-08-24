@@ -1,0 +1,104 @@
+[test-suite name=ast-bin ring=0
+  [doc [#
+# CX Conformance — binary AST codec (ast-bin)
+# Version: 1.0 — 2026-08-05 (corpus audit G4; C8/I0 repair)
+#
+# The first ast-bin fixtures in the corpus: the Ring-0 binary-AST codec
+# (ast-bin.md; vcx/cx/binary.v) previously had V-tests only, so it was
+# not runnable as a cross-binding gate. Two forms:
+#
+#   Golden (out-ast-bin-hex):  emit_ast_bin's payload bytes as hex,
+#                              4-byte [u32 LE size] framing stripped
+#                              (the out-data-bin-hex convention). The
+#                              lane also asserts determinism (two
+#                              emits, byte-identical).
+#   Round-trip (assert-ast-bin-roundtrip): bin_to_doc(emit_ast_bin(d))
+#                              re-emits identical CX text (the #464
+#                              lane).
+#
+# Golden bytes BLESSED from the shipped binary (2026-08-05): the wire
+# format is a frozen Ring-0 surface — v6 envelope for plain documents,
+# v9 only when an Element table record (0x17) is present. A golden
+# mismatch means the WIRE FORMAT moved, which is a compatibility event
+# (abi.md cap bits), never a routine re-bless.
+#
+# Document corpus: M5 commerce domain.
+#]]
+
+ [; ── Golden bytes (v6 envelope) + round-trip ── ]
+
+ [case id=astb-001-minimal-order level=core
+  [tags ast-bin golden v6]
+  [in-cx [#
+[order id=1]
+#]]
+  [out-ast-bin-hex [#
+060000010001050000006f7264657200000000000100020000006964010000003103000000696e7400000000
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=astb-002-nested-item level=core
+  [tags ast-bin golden v6 nested]
+  [in-cx [#
+[order id=1 [item sku=A qty=2]]
+#]]
+  [out-ast-bin-hex [#
+060000010001050000006f7264657200000000000100020000006964010000003103000000696e740000010001040000006974656d0000000000020003000000736b75010000004106000000737472696e67000003000000717479010000003203000000696e7400000000
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=astb-003-typed-scalars level=core
+  [tags ast-bin golden v6 typed]
+  [in-cx [#
+[shipment weight=1.25 shipped=2026-08-01 express=true]
+#]]
+  [out-ast-bin-hex [#
+06000001000108000000736869706d656e74000000000003000600000077656967687404000000312e323507000000646563696d616c000007000000736869707065640a000000323032362d30382d3031040000006461746500000700000065787072657373040000007472756504000000626f6f6c00000000
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [; ── Round-trip identity on richer shapes ── ]
+
+ [case id=astb-004-escapes-and-id-decl level=core
+  [tags ast-bin roundtrip escapes id-decl]
+  [in-cx [#
+[order #o-9 note="line1\nline2 with \"quotes\"" [item sku=SKU-100 qty=2]]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=astb-005-multi-doc level=core
+  [tags ast-bin roundtrip multi-doc]
+  [in-cx [#
+[order id=1]
+---
+[order id=2]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+
+ [case id=astb-006-table-v9-envelope level=core
+  [tags ast-bin roundtrip table v9]
+  [in-cx [#
+[inventory [table[sku::string on-hand::int]]
+  SKU-100 12
+  SKU-200 3]
+#]]
+  [assert-ast-bin-roundtrip [#
+1
+#]]
+ ]
+]

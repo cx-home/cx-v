@@ -46,7 +46,9 @@ import strings
 pub fn cx_code_tier2_hash(def_source string) !string {
 	def := cx.parse_def(def_source)!
 	stream, _ := normalize_def_node(def, map[string]bool{}, map[string]string{})!
-	return sha256.sum256(stream.bytes()).hex()
+	// I1 stream 19 (L31): Tier-2 addresses are tagged too — the caller's
+	// 'code:' prefix composes on top: code:sha2-256:<hex>.
+	return cx.cx_tag_address(cx.cx_default_hash_algo, sha256.sum256(stream.bytes()).hex())
 }
 
 // tier2_normalize_def returns the canonical normalized token stream of a single
@@ -105,7 +107,7 @@ pub fn cx_program_tier2_hashes(program_source string) !map[string]string {
 		if !cyclic {
 			n := comp[0]
 			stream, _ := normalize_def_node(defs[n], siblings, hashes)!
-			hashes[n] = sha256.sum256(stream.bytes()).hex()
+			hashes[n] = cx.cx_tag_address(cx.cx_default_hash_algo, sha256.sum256(stream.bytes()).hex())
 		} else {
 			hash_scc(comp, siblings, defs, mut hashes)!
 		}
@@ -113,38 +115,12 @@ pub fn cx_program_tier2_hashes(program_source string) !map[string]string {
 	return hashes
 }
 
-// ── Content-addressed code storage (pre-Phase-1 floor) ───────────────────────
-//
-// Code is stored in a DISTINCT namespace keyed by Tier-2 identity (never
-// conflated with Tier-1 data docs — they use the `code:` key prefix), so
-// alpha-/comment-/name-variants of the same definition dedup to a single stored
-// object. This is "def-blob storage by normalized hash" — the whole-program /
-// searchable index is Phase-1+ (#85/#86), not built here.
-
-// cx_code_store_put_def stores `def_source` under its Tier-2 code identity hash,
-// deduping variants to one object. Returns the Tier-2 hash (the lookup key).
-// The first representative stored for a given identity wins (content-addressed
-// puts are idempotent).
-pub fn cx_code_store_put_def(mut ms MemStore, def_source string) !string {
-	h := cx_code_tier2_hash(def_source)!
-	key := 'code:${h}'
-	// #128-A: store via the local-storage layer so code persists on EVERY local
-	// backend — including the object-graph (cxpack) backend, which bypasses the
-	// `docs` map (a direct `ms.docs[key]=…` would be silently dropped on persist).
-	// The source is stored verbatim as a raw-leaf object (code does not data-parse).
-	store_put_raw(mut ms, key, def_source)!
-	return h
-}
-
-// cx_code_store_get_def returns the stored source for a Tier-2 code hash, or
-// none if no definition of that identity has been stored.
-pub fn cx_code_store_get_def(ms &MemStore, tier2_hash string) ?string {
-	key := 'code:${tier2_hash}'
-	if !store_doc_present(ms, key) {
-		return none
-	}
-	return store_doc_text(ms, key) or { return none }
-}
+// ── Computation identity is PURE (F1'/A1, 2026-08-08) ────────────────────────
+// The computation-identity relation (cx_code_tier2_hash, below) is Ring-1
+// and store-free: it backs the [$cx:computation-id] claim
+// (`computes-as:<algo>:<hex>`) and the xap-dist exports check. It is an
+// index / recompute-and-compare relation, NEVER a storage key — code is
+// stored as an OPAQUE document (put-blob, raw-byte identity) on Ring 2.
 
 // hash_scc hashes a strongly-connected component (mutual recursion) as one
 // unit, then derives each member's hash positionally.
@@ -182,7 +158,7 @@ fn hash_scc(comp []string, siblings map[string]bool, defs map[string]cx.DefNode,
 	}
 	comp_hash := sha256.sum256(concat.str().bytes()).hex()
 	for m in comp {
-		hashes[m] = sha256.sum256('${comp_hash}#${position[m]}'.bytes()).hex()
+		hashes[m] = cx.cx_tag_address(cx.cx_default_hash_algo, sha256.sum256('${comp_hash}#${position[m]}'.bytes()).hex())
 	}
 }
 
@@ -192,6 +168,61 @@ struct SccMember {
 }
 
 // collect_program_defs gathers top-level `[?def …]` directives in source order.
+// cx_program_entry_computation_id resolves the F3(a) pushdown carriage's
+// entry def in a fetched OPAQUE program document (S6 §4.3) and returns
+// (entry_name, tagged_leaf_hash) — the SAME leaf-form computation identity
+// the pure [$cx:computation-id] builtin answers, computed on the PARSED def
+// (never re-emitted source: re-emission is not identity-safe for code, F1').
+// The document must be a program of [?def]s ONLY — a top-level non-def form
+// refuses here (the profile maps every refusal from this fn to CXER5025;
+// defs-only also means fetching a document can never run load-time effects,
+// so no capability question exists at fetch). entry='' resolves iff the
+// program holds exactly one def.
+pub fn cx_program_entry_computation_id(program_source string, entry string) !(string, string) {
+	prog := cx.parse_program(program_source)!
+	mut order := []string{}
+	mut defs := map[string]cx.DefNode{}
+	body := prog.body
+	match body {
+		cx.ProgramDirective {
+			if body.name != 'def' {
+				return error('the program document must hold [?def]s only (found [?${body.name}])')
+			}
+			add_def(body, mut order, mut defs)!
+		}
+		cx.ProgramLiteral {
+			if body.kind != .block {
+				return error('the program document must hold [?def]s only (found a ${body.kind} literal)')
+			}
+			for it in body.items {
+				if it is cx.ProgramDirective && it.name == 'def' {
+					add_def(it, mut order, mut defs)!
+					continue
+				}
+				return error('the program document must hold [?def]s only (found a top-level non-def form)')
+			}
+		}
+		else {
+			return error('the program document must hold [?def]s only')
+		}
+	}
+	if order.len == 0 {
+		return error('the program document holds no [?def]')
+	}
+	mut name := entry
+	if name == '' {
+		if order.len > 1 {
+			return error('entry= is required: the program document holds ${order.len} defs (${order.join(', ')})')
+		}
+		name = order[0]
+	}
+	def := defs[name] or {
+		return error('entry `${name}` names no def in the program document (defs: ${order.join(', ')})')
+	}
+	stream, _ := normalize_def_node(def, map[string]bool{}, map[string]string{})!
+	return name, cx.cx_tag_address(cx.cx_default_hash_algo, sha256.sum256(stream.bytes()).hex())
+}
+
 fn collect_program_defs(node cx.ProgramNode, mut order []string, mut defs map[string]cx.DefNode) ! {
 	match node {
 		cx.ProgramDirective {
@@ -236,9 +267,66 @@ fn normalize_def_node(def cx.DefNode, siblings map[string]bool, deps map[string]
 	}
 	e.b.write_string('def:')
 	e.b.write_string(def.params.len.str())
+	// I1 row 13 (L28 / audit C2): arity-and-shape-bearing signature
+	// fields JOIN the hash — two defs that cannot be called
+	// interchangeably must not share an address. Per-param shape tokens:
+	// named-param NAMES (part of the call contract — positional names
+	// stay alpha-normalized via the binder stack), the rest-kind flag
+	// (`($a $b)` vs `($a *$b)` collided pre-I1 — the live W-23 defect),
+	// and default VALUES in canonicalized form (rule 5: the same
+	// pipeline as the body tokens — never raw source). returns-type
+	// contributes its STRICT-CANONICAL SOURCE TEXT bytes (rule 3 — the
+	// one deliberate source-text exception, so the I5 TypeExpr parser
+	// repair is identity-neutral). purity/scope stay OUT (deployment
+	// metadata); every other clause or field is OUTSIDE Tier-2 —
+	// EXCLUDED-BY-DEFAULT, closed list (rule 4).
+	for p in def.params {
+		e.b.write_u8(`p`)
+		if p.is_named {
+			e.b.write_u8(`n`)
+			e.field(p.name)
+		}
+		if p.is_rest {
+			e.b.write_u8(`*`)
+		}
+		if dv := p.default {
+			e.b.write_u8(`=`)
+			if dprog := cx.parse_program(dv) {
+				e.emit(dprog.body)
+			} else {
+				e.field(dv)
+			}
+		}
+	}
+	if rt := def.returns_type_source {
+		e.b.write_u8(`R`)
+		e.field(t2_canonical_source(rt))
+	}
 	e.b.write_u8(`|`)
 	e.emit(body_prog.body)
 	return e.b.str(), e.refs
+}
+
+// t2_canonical_source normalizes a source-text-participating field (rule
+// 3's returns-type) to its strict-canonical SOURCE bytes: surrounding
+// whitespace trimmed, internal whitespace runs collapsed to one space —
+// formatting-insensitive (approved property b) without ever reading the
+// parsed slot.
+fn t2_canonical_source(src string) string {
+	mut out := []u8{cap: src.len}
+	mut in_ws := false
+	for c in src.trim_space().bytes() {
+		if c == ` ` || c == `\t` || c == `\n` || c == `\r` {
+			in_ws = true
+			continue
+		}
+		if in_ws && out.len > 0 {
+			out << ` `
+		}
+		in_ws = false
+		out << c
+	}
+	return out.bytestr()
 }
 
 // T2Emitter walks the program AST read-only, emitting the normalized stream.
@@ -291,10 +379,50 @@ fn (mut e T2Emitter) emit_binding(n cx.ProgramBinding) {
 		e.b.write_u8(`r`)
 		e.ref_name(n.name)
 	}
-	for step in n.path {
+	// #769 audit: pattern-position bindings carry a type test (`$v::int`,
+	// reachable through map patterns) and a rest-capture flag (`*$r`) —
+	// both distinguish computations. Presence-marked: expression-position
+	// bindings never carry either, so their bytes are unchanged.
+	if n.type_test != '' {
+		e.b.write_u8(`T`)
+		e.field(n.type_test)
+	}
+	if n.is_rest {
+		e.b.write_u8(`*`)
+	}
+	e.emit_path_steps(n.path)
+}
+
+// emit_path_steps writes a [135a] step run into the T2 preimage — shared
+// by binding paths, the CRS-1 call-result postfix, and the PS-1 result
+// postfix on every other bracketed value form (directives, for-comps,
+// literals, slice literals). PRESENCE-MARKED by construction: a path-less
+// node writes nothing here, so every pre-CRS-1/PS-1 preimage keeps its
+// exact bytes, while `[$f $x]@v` and `[$f $x]` remain distinct
+// computations (identity = pure function of canonical bytes,
+// core/canonical.md §1).
+fn (mut e T2Emitter) emit_path_steps(path []cx.ProgramPathStep) {
+	for step in path {
 		e.b.write_u8(`/`)
-		e.b.write_string(int(step.kind).str())
+		e.b.write_string(step.kind.str())
 		e.field(step.name)
+		// #925 (PYE-1a/1b): a computed step's binding name is identity-
+		// bearing — `$m.$k` and `$m.$j` are different programs. Presence-
+		// marked so literal steps keep their exact preimage bytes.
+		if step.computed_name != '' {
+			e.b.write_u8(`C`)
+			e.field(step.computed_name)
+		}
+		// [131b] kind test — PRESENCE-MARKED so the pre-existing
+		// name-test spelling keeps its exact preimage bytes (a step
+		// without a kind test writes nothing here, as before). Two kind
+		// tests on the same axis differ only in this field, so it has to
+		// be in the stream: `$x/text()` and `$x/element()` are not the
+		// same query.
+		if step.kind_test != .none {
+			e.b.write_u8(`K`)
+			e.b.write_string(step.kind_test.str())
+		}
 		for pred in step.predicates {
 			e.b.write_u8(`[`)
 			e.emit_predicate(pred)
@@ -303,12 +431,65 @@ fn (mut e T2Emitter) emit_binding(n cx.ProgramBinding) {
 	}
 }
 
+// t2_clause_meta writes one comprehension clause's metadata row: kind (IN
+// the preimage via c.kind.str()), bind, and — #769 audit — the [order-by]
+// DIRECTION, presence-marked so the implicit-asc spelling keeps its
+// pre-fix bytes (explicit `asc` vs implicit is a missed dedup, which the
+// contract allows; `asc` vs `desc` was a false merge, which it does not).
+// par_width/par_max stay OUT deliberately: under the ruled ordered-
+// reassembly theorem ([par] reassembles source order ALWAYS), [par 2] and
+// [par 4] are the same computation.
+fn (mut e T2Emitter) t2_clause_meta(c cx.ProgramForClause) {
+	e.b.write_u8(`|`)
+	e.b.write_string(c.kind.str())
+	e.field(c.bind)
+	if c.direction != '' {
+		e.b.write_u8(`d`)
+		e.field(c.direction)
+	}
+}
+
+// emit_slice_axis writes one slice axis: kind, then presence-marked
+// start/stop/step through the normal emit pipeline (de Bruijn binders apply,
+// so alpha-equivalent bounds still collapse). #769 (RULED (a) 2026-08-10):
+// the bounds distinguish computations, so they are IN the stream; the
+// presence markers keep every bound-free encoding at its pre-fix bytes.
+fn (mut e T2Emitter) emit_slice_axis(ax cx.SliceAxis) {
+	e.b.write_u8(`|`)
+	e.b.write_string(ax.kind.str())
+	if s := ax.start {
+		e.b.write_u8(`s`)
+		e.emit(s)
+	}
+	if s := ax.stop {
+		e.b.write_u8(`t`)
+		e.emit(s)
+	}
+	if s := ax.step {
+		e.b.write_u8(`p`)
+		e.emit(s)
+	}
+}
+
 fn (mut e T2Emitter) emit_predicate(p cx.ProgramPathPredicate) {
-	e.b.write_string(int(p.kind).str())
+	e.b.write_string(p.kind.str())
 	e.b.write_u8(`i`)
 	e.b.write_string(p.int_index.str())
 	e.field(p.attr_name)
 	e.field(p.attr_op)
+	// #769: attr_kind distinguishes `[@k]` from `[@!k]` (op is '' for both).
+	// Marked only off the .existence default so position/expr predicates and
+	// existence tests keep their pre-fix bytes.
+	if p.attr_kind != .existence {
+		e.b.write_u8(`k`)
+		e.field(p.attr_kind.str())
+	}
+	// #772 rider: the type-test TYPE NAME distinguishes computations from
+	// the same landing that makes eval honor it. Presence-marked.
+	if p.type_name != '' {
+		e.b.write_u8(`T`)
+		e.field(p.type_name)
+	}
 	if av := p.attr_value {
 		e.b.write_u8(`v`)
 		e.emit(av)
@@ -348,38 +529,64 @@ fn (mut e T2Emitter) emit(node cx.ProgramNode) {
 				}
 				e.emit(a)
 			}
+			// CRS-1 call-result postfix — presence-marked (see
+			// emit_path_steps): path-less calls keep their exact bytes.
+			e.emit_path_steps(node.path)
 			e.b.write_u8(`)`)
 		}
 		cx.ProgramLiteral {
 			e.emit_literal(node)
+			// PS-1 result postfix — presence-marked (see emit_path_steps):
+			// step-less literals keep their exact bytes; `[a 1]/b` and
+			// `[a 1]` are distinct computations.
+			e.emit_path_steps(node.path)
 		}
 		cx.ProgramDirective {
 			e.emit_directive(node)
+			// PS-1 result postfix — presence-marked, as above.
+			e.emit_path_steps(node.path)
 		}
 		cx.ProgramForComp {
+			// W7 (L100 tail): the payload nodes ride THE ONE walk
+			// (cx.for_comp_children) — the last identity-bearing traversal
+			// retired onto the single contract. Clause METADATA (kind — IN
+			// the preimage via c.kind.str() — and bind) is not enumerated by
+			// the walk; it is emitted from the clause rows as each clause's
+			// first payload node arrives, with metadata-only clauses (the
+			// erased-hint kinds carry no source/expr) flushed in row order so
+			// the stream stays byte-identical to the pre-retirement emission
+			// (C9: a moved hash is a defect, never a blessing).
 			e.b.write_string('(for')
-			e.b.write_string(int(node.outer_form).str())
-			e.b.write_string(int(node.yield_form).str())
-			for c in node.clauses {
-				e.b.write_u8(`|`)
-				e.b.write_string(int(c.kind).str())
-				e.field(c.bind)
-				if s := c.source {
-					e.b.write_u8(`s`)
-					e.emit(s)
+			e.b.write_string(node.outer_form.str())
+			e.b.write_string(node.yield_form.str())
+			mut emitted := -1
+			for item in cx.for_comp_children(node) {
+				match item.role {
+					.clause_source, .clause_expr {
+						for emitted < item.clause_idx {
+							emitted++
+							e.t2_clause_meta(node.clauses[emitted])
+						}
+						e.b.write_u8(if item.role == .clause_source { `s` } else { `e` })
+						e.emit(item.node)
+					}
+					.yield_node {
+						for emitted < node.clauses.len - 1 {
+							emitted++
+							e.t2_clause_meta(node.clauses[emitted])
+						}
+						e.b.write_string('|y')
+						e.emit(item.node)
+					}
+					.yield_value {
+						e.b.write_u8(`v`)
+						e.emit(item.node)
+					}
 				}
-				if ex := c.expr {
-					e.b.write_u8(`e`)
-					e.emit(ex)
-				}
-			}
-			e.b.write_string('|y')
-			e.emit(node.yield)
-			if yv := node.yield_value {
-				e.b.write_u8(`v`)
-				e.emit(yv)
 			}
 			e.b.write_u8(`)`)
+			// PS-1 result postfix — presence-marked (emit_path_steps).
+			e.emit_path_steps(node.path)
 		}
 		cx.ProgramPattern {
 			e.emit_pattern(node)
@@ -388,22 +595,36 @@ fn (mut e T2Emitter) emit(node cx.ProgramNode) {
 			e.b.write_string('(sa')
 			e.emit_binding(node.binding)
 			e.b.write_string(node.axes.len.str())
+			for ax in node.axes {
+				e.emit_slice_axis(ax)
+			}
 			e.b.write_u8(`)`)
 		}
 		cx.ProgramSliceLiteral {
 			e.b.write_string('(sl')
 			e.b.write_string(node.axes.len.str())
+			for ax in node.axes {
+				e.emit_slice_axis(ax)
+			}
 			e.b.write_u8(`)`)
+			// PS-1 result postfix — presence-marked (emit_path_steps).
+			e.emit_path_steps(node.path)
 		}
 		cx.ProgramPathExpr {
 			e.b.write_string('(px')
-			e.b.write_string(int(node.leading).str())
+			e.b.write_string(node.leading.str())
 			for s in node.steps {
 				e.b.write_u8(`|`)
-				e.b.write_string(int(s.axis).str())
+				e.b.write_string(s.axis.str())
 				e.field(s.name)
-				e.b.write_string(int(s.ns_kind).str())
+				e.b.write_string(s.ns_kind.str())
 				e.field(s.ns_prefix)
+				// Presence-marked, same reason as the binding-path arm:
+				// absent kind test → zero bytes → unmoved preimage.
+				if s.kind_test != .none {
+					e.b.write_u8(`K`)
+					e.b.write_string(s.kind_test.str())
+				}
 				e.field(s.bind)
 				for pred in s.predicates {
 					e.b.write_u8(`[`)
@@ -423,11 +644,17 @@ fn (mut e T2Emitter) emit(node cx.ProgramNode) {
 
 fn (mut e T2Emitter) emit_literal(l cx.ProgramLiteral) {
 	e.b.write_string('(L')
-	e.b.write_string(int(l.kind).str())
+	e.b.write_string(l.kind.str())
 	match l.kind {
-		.string_lit, .bigint_lit, .duration_lit, .period_lit, .date_lit, .datetime_lit,
-		.node_lit, .atom_lit {
+		.string_lit, .bigint_lit, .decimal_lit, .date_lit, .datetime_lit, .node_lit, .atom_lit {
 			e.field(l.str_val)
+		}
+		.duration_lit, .period_lit {
+			// #769 audit: these two kinds carry their payload in dur_val —
+			// emitting str_val (always empty here) merged EVERY duration
+			// and EVERY period. The kind tag above keeps the two families
+			// distinct from each other.
+			e.field(l.dur_val)
 		}
 		.int_lit {
 			e.field(l.int_val.str())
@@ -453,6 +680,13 @@ fn (mut e T2Emitter) emit_literal(l cx.ProgramLiteral) {
 					e.field(l.keys[i])
 				} else {
 					e.field('')
+				}
+				// RULED: MSS-4 (#917): a declaration-only entry contributes
+				// its `::T` kind to identity — never the inert placeholder
+				// (a decl and a literal-null entry must not collide).
+				if i < l.decl_kinds.len && l.decl_kinds[i] != '' {
+					e.field('::' + l.decl_kinds[i])
+					continue
 				}
 				e.emit(it)
 			}
@@ -611,7 +845,7 @@ fn t2_pattern_binds(p cx.ProgramPattern) []string {
 
 fn (mut e T2Emitter) emit_pattern(p cx.ProgramPattern) {
 	e.b.write_string('(p')
-	e.b.write_string(int(p.head.kind).str())
+	e.b.write_string(p.head.kind.str())
 	// A named head in result position is a call (parser yields a pattern for a
 	// bracketed result form, e.g. a recursive `[odd-p …]` inside `[?match]`),
 	// so a head naming a sibling def is a dependency — route through ref_name.
@@ -634,9 +868,21 @@ fn (mut e T2Emitter) emit_pattern(p cx.ProgramPattern) {
 	}
 	for a in p.attrs {
 		e.b.write_u8(`@`)
-		e.b.write_string(int(a.kind).str())
+		e.b.write_string(a.kind.str())
 		e.field(a.name)
 		e.field(a.op)
+		// #769: the comparison VALUE and the type-test TYPE NAME distinguish
+		// computations (`@role="admin"` vs `@role="guest"`; `@x::int` vs
+		// `@x::str`). Presence-marked: existence/absence attrs keep their
+		// pre-fix bytes.
+		if v := a.value {
+			e.b.write_u8(`v`)
+			e.emit(v)
+		}
+		if a.type_name != '' {
+			e.b.write_u8(`T`)
+			e.field(a.type_name)
+		}
 	}
 	for it in p.body {
 		e.b.write_u8(` `)
@@ -648,6 +894,14 @@ fn (mut e T2Emitter) emit_pattern(p cx.ProgramPattern) {
 				} else {
 					e.b.write_string('\$r')
 					e.field(it.name)
+				}
+				// #769 audit: same presence-marked fields as emit_binding.
+				if it.type_test != '' {
+					e.b.write_u8(`T`)
+					e.field(it.type_test)
+				}
+				if it.is_rest {
+					e.b.write_u8(`*`)
 				}
 			}
 			cx.ProgramPattern {

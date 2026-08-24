@@ -2,6 +2,7 @@ module main
 import cx
 
 import code
+import platform as _
 
 // ── program lexer conformance tests ──────────────────────────────────────────────
 //

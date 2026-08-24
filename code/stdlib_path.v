@@ -560,7 +560,7 @@ fn char_in_class(class string, ch u8) bool {
 
 // ── cross-platform separators (§3.7) ─────────────────────────────────
 
-fn path_separator() string {
+pub fn path_separator() string {
 	return if os.user_os() == 'windows' { '\\' } else { '/' }
 }
 

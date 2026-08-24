@@ -1,4 +1,4 @@
-[test-suite name=streaming-write
+[test-suite name=streaming-write ring=0
   [doc [#
 # CX Conformance — streaming-write API
 # Version: 0.3 — 2026-05-10 (JSON + YAML AST-shape emit, Phase 7.74j)
@@ -365,6 +365,29 @@ elements:
     items:
       - type: Text
         value: "hello"
+
+# ── Streaming YAML: decimal rides the tagged quoted form (#703 item B) ────────
+#]]
+ ]
+
+ [case id=sw-015b-yaml-decimal-exact level=core
+  [tags streaming-write yaml decimal exact 703]
+  [format [#
+yaml
+#]]
+  [events [#
+StartDoc
+StartElement acct
+Scalar decimal:1.10
+EndElement acct
+EndDoc
+#]]
+  [expect-ok-contains [#
+value: !!cx:decimal "1.10"
+
+# a BARE 1.10 reads back as a lossy float in every YAML parser; the
+# streaming lane rides the batch emitter's tagged form (defect B's YAML
+# half — the JSON half was fixed at I1, this half pins the parity).
 
 # ── Negative: W009 for TOML output (structural mismatch per §6.6.2) ───────────
 #]]

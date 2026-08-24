@@ -1,0 +1,4 @@
+erDiagram
+  user {
+    int id "@ 1"
+  }

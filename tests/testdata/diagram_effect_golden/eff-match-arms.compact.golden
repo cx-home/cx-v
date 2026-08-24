@@ -1,0 +1,14 @@
+flowchart TD
+  prog(["program"])
+  eff_env_var[["env-var"]]
+  eff_io_read_file[["io-read-file"]]
+  eff_io_write_file[["io-write-file"]]
+  cap_read{{"read --allow-read"}}
+  cap_write{{"write --allow-write"}}
+  cap_env{{"env --allow-env"}}
+  prog --> eff_env_var
+  prog -.-> eff_io_read_file
+  prog -.-> eff_io_write_file
+  eff_env_var --> cap_env
+  eff_io_read_file --> cap_read
+  eff_io_write_file --> cap_write

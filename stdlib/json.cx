@@ -67,7 +67,7 @@
   [sig """-> string"""]
   [summary """Emit a CXDM value as pretty-printed JSON with two-space indent, preserving map insertion order."""]
   [example [code """[?lib 'cx-stdlib/json']
-[$json:emit-pretty {a: 1}]"""] [expect """'{ "a": 1 }'"""]]
+[$json:emit-pretty {a: 1}]"""] [expect """'{\n  "a": 1\n}'"""]]
 ]
 [fn-doc name=emit-with-opts scope=public purity=pure
   [sig """-> string"""]

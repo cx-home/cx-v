@@ -1,4 +1,4 @@
-[test-suite name=i18n
+[test-suite name=i18n ring=1
   [doc [#
 conformance fixtures for cx-stdlib/i18n (spec/std-lib/i18n.md §6).
 
@@ -28,7 +28,7 @@ conformance fixtures for cx-stdlib/i18n (spec/std-lib/i18n.md §6).
 [$i18n:catalog-locales [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!", "fr": "Bonjour, {name} !"}}]]
 #]]
   [out-text [#
-('en', 'fr')
+(en, fr)
 #]]
  ]
 
@@ -42,7 +42,7 @@ conformance fixtures for cx-stdlib/i18n (spec/std-lib/i18n.md §6).
 [$i18n:catalog-keys [$i18n:catalog-from-map {"greeting": {"en": "Hello, {name}!"}, "farewell": {"en": "Bye, {name}!"}}]]
 #]]
   [out-text [#
-('greeting', 'farewell')
+(greeting, farewell)
 #]]
  ]
 
@@ -172,7 +172,7 @@ B
 [$i18n:catalog-locales [$i18n:catalog-from-map {"k": {"en": "A", "ru": "B"}}]]
 #]]
   [out-text [#
-('en', 'ru')
+(en, ru)
 #]]
  ]
 
@@ -686,7 +686,7 @@ cx-err:CXER3803
 :other
 #]]
  ]
- [case id=i18n-045-load-catalog-granted level=core gate=enforced grant='read write'
+ [case id=i18n-045-load-catalog-granted level=core gate=enforced grant='read write' packs=io
   [tags i18n load-catalog granted effort-b]
   [in-cx [#
 [empty]

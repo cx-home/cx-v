@@ -11,9 +11,10 @@
 #
 # A remote MCP tool composes as a Runnable (cx-x/run) via the call-site idiom:
 #     [$run:invoke [?fn ($args) [$mcp:call-tool $endpoint "get_weather" $args]] {city: "NYC"}]
-# (a `tool-proxy` factory that RETURNS this closure from the module is blocked by
-# the #45 closure-scoping family — Bug-2; the lib-qualified call-site [?fn] above
-# is the supported idiom, same as cx-x/llm.)
+# (#45 — the closure-escape bug that once blocked a returned `tool-proxy`
+# factory — is CLOSED (run.md §4.1): a returned closure now travels with its
+# defining environment. The lib-qualified call-site [?fn] above remains the
+# simplest supported idiom, same as cx-x/llm.)
 #
 # Pure protocol shaping (the *-request builders + the response extractors +
 # validate-args) is split from the effectful transport (rpc-call / list-tools /
@@ -30,7 +31,7 @@
 # initialize — the MCP handshake (first call on a session).
 [?def initialize-request scope=public pure [returns map] ($id::any $client-name::string $client-version::string)
   [$rpc:request $id "initialize"
-    {protocolVersion: "2024-11-05" capabilities: {} clientInfo: {name: $client-name version: $client-version}}]]
+    {protocolVersion: "2025-06-18" capabilities: {} clientInfo: {name: $client-name version: $client-version}}]]
 
 # list-tools — enumerate the server's tools (name, description, inputSchema).
 [?def list-tools-request scope=public pure [returns map] ($id::any)

@@ -1,0 +1,16 @@
+flowchart TD
+  classDef entry fill:#e8f5e9,stroke:#1b5e20;
+  classDef effect fill:#e8eaf6,stroke:#1a237e;
+  classDef cap fill:#ffebee,stroke:#b71c1c;
+  classDef unknown fill:#fff8e1,stroke:#ff6f00;
+  prog(["program"])
+  def_outer["def outer"]
+  def_inner["def inner"]
+  eff_io_read_file[["io-read-file"]]
+  cap_read{{"read --allow-read"}}
+  def_inner --> eff_io_read_file
+  prog -->|"call"| def_outer
+  eff_io_read_file --> cap_read
+  class prog entry;
+  class eff_io_read_file effect;
+  class cap_read cap;

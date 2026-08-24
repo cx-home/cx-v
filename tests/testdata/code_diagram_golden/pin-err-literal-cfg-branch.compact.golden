@@ -1,0 +1,11 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  i{"if [= 1 1]"}
+  t["[err]"]
+  i -- "true" --> t
+  t --> done
+  e["[ping]"]
+  i -- "false" --> e
+  e --> done
+  start --> i

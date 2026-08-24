@@ -1,4 +1,4 @@
-[test-suite name=validate
+[test-suite name=validate ring=1
   [doc [#
 Conformance fixtures for cx-stdlib/validate (spec/std-lib/validate.md §6).
 
@@ -449,8 +449,8 @@ cx-err:CXER1602
 #]]
   [in-code [#
 [?lib 'cx-stdlib/validate']
-[?def loud-check [returns bool] ($v::int)
-  [?io:print "side effect"]
+[?def loud-check impure [returns bool] ($v::int)
+  [$io:print "side effect"]
   true]
 [$validate:validate-shape
   [rec [score 4]]
@@ -492,20 +492,22 @@ cx-err:CXER1604
  # implementation; it asserts the error code on the canonical deep-nesting form.
  # (#466/#268 migration: the nested schema is a [schema …] CHILD of the field;
  # a self-referential schema is spelled via the $-value reference.)
- [case id=validate-025-shape-nested-depth-err level=extended
+ [case id=validate-025-shape-nested-depth-err level=extended gate=skip
   [tags validate validate-shape error CXER1605 nested depth]
+  [; R3.12 reachability analysis (2026-08-07): CXER1605 fires when the
+     VALIDATOR descends past 64 nested schemas — but the PARSER refuses any
+     element literal nested deeper than 64 first ("element nesting exceeds
+     limit (64)"), and an [extends …] cycle is CXER1603 before depth. So the
+     guard is unreachable from literal fixture input; a future case can reach
+     it only by CONSTRUCTING a >64-deep element value programmatically.
+     Skip-gated with the analysis recorded — the prof-018/CXER2103 pattern
+     (never a silent green: the original in-code did not even parse). ]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
 [?lib 'cx-stdlib/validate']
-[?const DEEP_SCHEMA [schema
-  [field name="child" type="element" $DEEP_SCHEMA]]]
-[$validate:validate-shape
-  [rec [child [child [child [child [child [child [child [child
-    [child [child [child [child [child [child [child [child
-      [child [child [child [child [leaf "x"]]]]]]]]]]]]]]]]]]]]]
-  DEEP_SCHEMA]
+[$validate:validate-shape [rec [leaf "x"]] [schema [field name="leaf" type="string"]]]
 #]]
   [out-err [#
 cx-err:CXER1605
@@ -723,11 +725,14 @@ cx-err:CXER1603
  ]
 
  # ─────────────────────────────────────────────────────────────────────
- # §3.2 validate-against — named schema (specified, not operable at v0.8.0)
+ # §3.2 validate-against + register-schema — the W4 registry re-rule
+ # (stream 16; shape_inference.md §3): names are hints, hashes are
+ # identity. register-schema binds name → content-hash and retains the
+ # canonical text; validate-against resolves name → hash → content,
+ # fail-closed at every hop (CXER1600 is a REAL resolution error).
  # ─────────────────────────────────────────────────────────────────────
 
- # Per §3.2: the named-schema registry is unpopulable at v0.8.0, so
- # validate-against ALWAYS raises CXER1600 E_VALIDATE_SCHEMA_NOT_FOUND.
+ # An unregistered name is a real not-found (no binding, no cx.lock pin).
  [case id=validate-032-against-not-found-err level=core
   [tags validate validate-against error CXER1600 not-found]
   [in-cx [#
@@ -741,6 +746,99 @@ cx-err:CXER1603
 #]]
   [out-err [#
 cx-err:CXER1600
+#]]
+ ]
+
+ # register → validate-against round trip: the registered [schema …]
+ # content takes the full validate-shape path ([ok …] on success).
+ [case id=validate-041-register-against-ok level=core
+  [tags validate register-schema validate-against happy registry]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $h [$validate:register-schema "Lead"
+              [schema [field name="email" type="string" required=true]]]]
+  [$validate:is-ok [$validate:validate-against [rec [email "a@b.co"]] "Lead"]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # The registered schema's violations surface identically to
+ # validate-shape ([invalid [violation …]] — data, never a thrown err).
+ [case id=validate-042-register-against-invalid level=core
+  [tags validate register-schema validate-against invalid registry]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $h [$validate:register-schema "Scored"
+              [schema [field name="score" type="int" min=0 max=100]]]]
+  [$validate:is-ok [$validate:validate-against [rec [score 250]] "Scored"]]]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ # register-schema returns the content-hash receipt — deterministic for
+ # fixed content (the E2 identity: sha-256 over strict-canonical text),
+ # and REBINDING a name is allowed (a hint-binding, not an identity):
+ # the second registration wins.
+ [case id=validate-043-register-rebind-last-wins level=core
+  [tags validate register-schema registry rebind]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $h1 [$validate:register-schema "R" [schema [field name="n" type="int" min=10]]]]
+  [?let [= $h2 [$validate:register-schema "R" [schema [field name="n" type="int" min=1]]]]
+    [$validate:is-ok [$validate:validate-against [rec [n 5]] "R"]]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # Registered content whose root is NOT [schema …] is a .cxs
+ # data-schema (schema.md) — validate-against dispatches on the
+ # content's own language. A conforming document answers [ok …].
+ [case id=validate-044-against-cxs-content level=core
+  [tags validate register-schema validate-against cxs registry]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $h [$validate:register-schema "Ports" "[schema of=ports mode=open]
+[ports [body [list u16] [req]]]"]]
+  [$validate:is-ok [$validate:validate-against [ports [80, 443]] "Ports"]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ # The .cxs dispatch reports diagnostics as violations — same
+ # inspectable [invalid …] vocabulary, one result surface.
+ [case id=validate-045-against-cxs-invalid level=core
+  [tags validate register-schema validate-against cxs invalid registry]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $h [$validate:register-schema "Ports" "[schema of=ports mode=open]
+[ports [body [list u16] [req]]]"]]
+  [$validate:is-ok [$validate:validate-against [ports ('nope')] "Ports"]]]
+#]]
+  [out-text [#
+false
 #]]
  ]
 
@@ -864,6 +962,74 @@ false
 #]]
   [out-text [#
 ('score: expected int, got "abc"')
+#]]
+ ]
+
+ [case id=validate-046-infer-validate-round-trip level=core
+  [tags validate schema-of infer round-trip registry stream-14 686 stream-16 688]
+  [meta [#
+note: the §11 infer→validate round-trip family (shape_inference):
+note: [$cx:schema-of] synthesizes the deterministic open-mode .cxs TEXT
+note: (the schema identity form — the SAME engine as cx schema infer);
+note: registering it and validating the SOURCE doc answers [ok]; an
+note: ill-typed doc REFUSES (is-ok false) — the negative leg is live
+note: enforcement, repaired at #813 (text bodies were invisible to the
+note: scalar body check; int-declared accepted any prose).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/validate']
+[?let [= $doc [rec [email "a@b.co"] [score 91]]]
+      [= $schema-text [$cx:schema-of $doc]]
+      [= $h [$validate:register-schema "Rec" $schema-text]]
+      [= $ok [$validate:is-ok [$validate:validate-against $doc "Rec"]]]
+      [= $neg [$validate:is-ok [$validate:validate-against [rec [email "x"] [score "high"]] "Rec"]]]
+  [probe [round-trip $ok] [neg $neg]]]
+#]]
+  [out-text [#
+[probe [round-trip true] [neg false]]
+#]]
+ ]
+
+ [case id=validate-047-schema-of-determinism level=core
+  [tags validate schema-of infer determinism stream-14 686 stream-16 688]
+  [meta [#
+note: same value twice → byte-identical .cxs text (determinism is
+note: STRING equality — the schema's identity form).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $doc [rec [email "a@b.co"] [score 91]]]
+  [$eq [$cx:schema-of $doc] [$cx:schema-of $doc]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=validate-048-schema-of-join-lattice level=core
+  [tags validate schema-of infer lattice join stream-14 686 stream-16 688]
+  [meta [#
+note: the ruled join lattice over a SEQUENCE corpus (a sequence argument
+note: reads as a corpus): int ⊔ float = float; int ⊔ decimal = the
+note: [or decimal int] union (decimal joins only decimal — 2.5 IS
+note: decimal, 2.5e0 is float; never widened to string).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $a [$cx:schema-of ([m [v 1]], [m [v 2.5e0]])]]
+      [= $b [$cx:schema-of ([m [v 1]], [m [v 2.5]])]]
+  [probe [int-float-is-float [$contains $a "[body float"]]
+         [int-decimal-is-union [$contains $b "[body [or decimal int]"]]]]
+#]]
+  [out-text [#
+[probe [int-float-is-float true] [int-decimal-is-union true]]
 #]]
  ]
 ]

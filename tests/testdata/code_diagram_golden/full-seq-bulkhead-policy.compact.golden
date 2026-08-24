@@ -1,0 +1,6 @@
+sequenceDiagram
+  participant w
+  activate w
+  Note over w : bulkhead
+  Note over w : [ok]
+  deactivate w

@@ -1,4 +1,4 @@
-[test-suite name=store
+[test-suite name=store ring=2
   [doc [#
 conformance fixtures for cx-stdlib/store (spec/std-lib/store.md §8).
 
@@ -121,7 +121,7 @@ true
 [?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [item "hello"]]]] [= $h2 [$store:put-doc $s [doc [item "hello"]]]] [$store:list-docs $s]]
 #]]
   [out-text [#
-('01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9')
+('sha2-256:6d8460dd10c5fb09c542c81d617efef1eba054a71755f4e1c96a6af7830ddeeb')
 #]]
  ]
 
@@ -135,7 +135,7 @@ true
 [?let [= $s [$store:open "mem://"]] [$store:put-doc $s [doc [item "hello"]]]]
 #]]
   [out-text [#
-'01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'
+'sha2-256:6d8460dd10c5fb09c542c81d617efef1eba054a71755f4e1c96a6af7830ddeeb'
 #]]
  ]
 
@@ -188,7 +188,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [$store:exists $s "deadbeef"]]
+[?let [= $s [$store:open "mem://"]] [$store:exists $s "sha2-256:0000000000000000000000000000000000000000000000000000000000000000"]]
 #]]
   [out-text [#
 false
@@ -202,10 +202,38 @@ false
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [$store:get-doc $s "deadbeef"]]
+[?let [= $s [$store:open "mem://"]] [$store:get-doc $s "sha2-256:0000000000000000000000000000000000000000000000000000000000000000"]]
 #]]
   [out-err [#
 cx-err:CXER1121
+#]]
+ ]
+
+ [case id=store-err-004-get-bare-hex-rejected level=core
+  [tags store mem get-doc CXER0130 bare-hex address-shape negative crypto-agility]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:get-doc $s "deadbeef"]]
+#]]
+  [out-err [#
+cx-err:CXER0130
+#]]
+ ]
+
+ [case id=store-err-005-get-unknown-algo-rejected level=core
+  [tags store mem get-doc CXER0131 address-shape fail-closed negative crypto-agility]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:get-doc $s "md5:d41d8cd98f00b204e9800998ecf8427e"]]
+#]]
+  [out-err [#
+cx-err:CXER0131
 #]]
  ]
 
@@ -230,7 +258,7 @@ cx-err:CXER1110
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open-opts "mem://" [map read-only="true"]]] [$store:delete-doc $s "deadbeef"]]
+[?let [= $s [$store:open-opts "mem://" [map read-only="true"]]] [$store:delete-doc $s "sha2-256:0000000000000000000000000000000000000000000000000000000000000000"]]
 #]]
   [out-err [#
 cx-err:CXER1110
@@ -300,7 +328,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [$store:delete-doc $s "deadbeef"]]
+[?let [= $s [$store:open "mem://"]] [$store:delete-doc $s "sha2-256:0000000000000000000000000000000000000000000000000000000000000000"]]
 #]]
   [out-text [#
 false
@@ -331,7 +359,7 @@ false
 [?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $a [$store:set-alias $s "latest" $h]] [$store:get-alias $s "latest"]]
 #]]
   [out-text [#
-'01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'
+'sha2-256:6d8460dd10c5fb09c542c81d617efef1eba054a71755f4e1c96a6af7830ddeeb'
 #]]
  ]
 
@@ -393,7 +421,7 @@ false
 [?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [= $a [$store:set-alias $s "latest" $h]] [$store:list-aliases $s]]
 #]]
   [out-text [#
-([alias name=latest hash='01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9'])
+([alias name=latest hash='sha2-256:6d8460dd10c5fb09c542c81d617efef1eba054a71755f4e1c96a6af7830ddeeb'])
 #]]
  ]
 
@@ -418,7 +446,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [$store:set-alias $s "x" "deadbeef"]]
+[?let [= $s [$store:open "mem://"]] [$store:set-alias $s "x" "sha2-256:0000000000000000000000000000000000000000000000000000000000000000"]]
 #]]
   [out-err [#
 cx-err:CXER1121
@@ -468,13 +496,22 @@ true
  ]
 
  [case id=store-code-001-put-get-def level=core
-  [tags store mem put-def get-def code-identity]
+  [tags store mem code-identity computation-id put-blob opaque f1-prime]
+  [; F1' (ruled 2026-08-08): code is an OPAQUE document — stored byte-exact
+     by put-blob (identity = hash of the RAW bytes). COMPUTATION identity
+     ("same function?") is orthogonal and survives storage trivially,
+     because the bytes do: the claim recomputed on the retrieved source
+     equals the claim on the original. The def here is the representative
+     that MANGLES through the structured path (string-literal body), so
+     this pins the opaque carriage, not a lucky canonicalization survivor.
+     Byte-exactness itself is pinned by store-blob-001; this replaces the
+     retired put-def/get-def round-trip. ]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [$eq [$store:get-def $s [$store:put-def $s '[?def f ($x) $x]']] '[?def f ($x) $x]']]
+[?let [= $s [$store:open "mem://"]] [= $src "[?def greet ($name) [str-format 'hello, {}' $name]]"] [$eq [$cx:computation-id [$store:get-blob $s [$store:put-blob $s $src]]] [$cx:computation-id $src]]]
 #]]
   [out-text [#
 true
@@ -482,16 +519,260 @@ true
  ]
 
  [case id=store-code-002-tier2-alpha-dedup level=core
-  [tags store mem put-def code-identity dedup]
+  [tags code-identity computation-id dedup]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x) $x]'] [$cx:computation-id '[?def f ($y) $y]']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [; ── Computation-identity participating-field pins (I1 manifest row 13;
+      audit C2 rule 6). Each pair records the shipped computation-identity
+      equality: default values + presence join the identity; arity-SHAPE
+      incl. rest-kind joins; returns-type contributes its strict-canonical
+      source bytes; arity and body are invariants that must NOT move. ]
+
+ [case id=store-code-003-tier2-default-values-distinct level=core
+  [tags code-identity computation-id i1 c2]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x=1) $x]'] [$cx:computation-id '[?def f ($x=2) $x]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-code-004-tier2-default-presence-distinct level=core
+  [tags code-identity computation-id i1 c2]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x) $x]'] [$cx:computation-id '[?def f ($x=1) $x]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-code-005-tier2-rest-kind-distinct level=core
+  [tags code-identity computation-id i1 c2 w23]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($a $b) $a]'] [$cx:computation-id '[?def f ($a *$b) $a]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-code-006-tier2-returns-type-distinct level=core
+  [tags code-identity computation-id i1 c2]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f [returns int] ($x) $x]'] [$cx:computation-id '[?def f [returns string] ($x) $x]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-code-007-tier2-arity-distinct-invariant level=core
+  [tags code-identity computation-id pre-i1 invariant c2]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($a) $a]'] [$cx:computation-id '[?def f ($a $b) $a]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-code-008-tier2-body-distinct-invariant level=core
+  [tags code-identity computation-id pre-i1 invariant c2]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x) $x]'] [$cx:computation-id '[?def f ($x) [+ $x 1]]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-code-009-tier2-named-param-name-distinct level=core
+  [tags code-identity computation-id i1 c2]
+  [; C2 rule 1: a NAMED parameter's name is part of the call contract
+     (the shipped named spelling is the `=`-default form) — two defs
+     whose named params differ only in NAME cannot be called
+     interchangeably and must not share an identity. Positional names
+     stay alpha-normalized (store-code-002). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f ($x=1) 7]'] [$cx:computation-id '[?def f ($y=1) 7]']]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=store-code-010-tier2-excluded-clause-invariant level=core
+  [tags code-identity computation-id i1 c2 excluded]
+  [; C2 rule 4 (closed participation list, EXCLUDED-by-default): a clause
+     not in the enumerated participating set — [throws] here — is OUTSIDE
+     computation identity; two defs differing only in it SHARE an identity. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq [$cx:computation-id '[?def f [returns int] ($a) $a]'] [$cx:computation-id '[?def f [returns int] [throws overflow] ($a) $a]']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+
+ [case id=store-blob-001-byte-exact-round-trip level=core
+  [tags store mem put-blob get-blob opaque f1-prime byte-exact]
+  [; F1' (ruled 2026-08-08): an OPAQUE document — CX code here — round-trips
+     BYTE-EXACT through put-blob/get-blob (identity = hash of the RAW bytes;
+     no canonicalization). This exact def MANGLES through put-doc-text (the
+     structured path — see store_verbatim_roundtrip_evidence_test.v). ]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-def $s '[?def f ($x) $x]']] [= $h2 [$store:put-def $s '[?def f ($y) $y]']] [$eq $h1 $h2]]
+[?let [= $s [$store:open "mem://"]] [= $src "[?def greet ($name) [str-format 'hello, {}' $name]]"] [$eq [$store:get-blob $s [$store:put-blob $s $src]] $src]]
 #]]
   [out-text [#
 true
+#]]
+ ]
+
+ [case id=store-blob-002-no-canonicalization level=core
+  [tags store mem put-blob get-blob opaque f1-prime]
+  [; a blob of NON-canonical data text stays byte-exact — the raw-bytes
+     identity rule never normalizes (contrast store-rt-*: the structured
+     path canonicalizes by contract). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $raw "[order   id=1    total=99.5]"] [$eq [$store:get-blob $s [$store:put-blob $s $raw]] $raw]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-blob-003-dedup-same-key level=core
+  [tags store mem put-blob dedup opaque f1-prime]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $src "[?def greet ($name) [str-format 'hello, {}' $name]]"] [$eq [$store:put-blob $s $src] [$store:put-blob $s $src]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-blob-004-get-absent-not-found level=core
+  [tags store mem get-blob CXER1121 opaque f1-prime]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:get-blob $s "sha2-256:0000000000000000000000000000000000000000000000000000000000000000"]]
+#]]
+  [out-err [#
+cx-err:CXER1121
+#]]
+ ]
+
+ [case id=store-blob-005-structured-read-refuses level=core
+  [tags store mem get-doc-text opaque f1-prime CXER0100]
+  [; F1' no-leak rule: a structured verb on an opaque key is ONE typed
+     refusal on every model — never model-divergent, never silent bytes. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:get-doc-text $s [$store:put-blob $s "raw bytes"]]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=store-blob-006-iter-and-query-walk-structured-only level=core
+  [tags store mem iter-docs query opaque f1-prime]
+  [; a mixed store: iter-docs yields the ONE structured entry (the blob is
+     get-blob's domain); query matches structured data only. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $b [$store:put-blob $s "[not parseable ["]] [= $d [$store:put-doc-text $s "[root [order id=1]]"]] ([$count [$store:iter-docs $s]], [$count [$store:query $s "//order"]], [$count [$store:list-docs $s]])]
+#]]
+  [out-text [#
+(1, 1, 2)
+#]]
+ ]
+
+ [case id=store-blob-007-delete-then-reput level=core
+  [tags store mem put-blob delete-doc opaque f1-prime]
+  [; the kind mark dies with the entry: delete-doc of a blob, then the SAME
+     bytes re-put, must re-store and read back — dedup never hits a deleted
+     entry. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $k [$store:put-blob $s "opaque payload"]] [= $del [$store:delete-doc $s $k]] [= $k2 [$store:put-blob $s "opaque payload"]] [$eq [$store:get-blob $s $k2] "opaque payload"]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-blob-008-modify-refuses level=core
+  [tags store mem modify-doc opaque f1-prime CXER0100]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:modify-doc $s [$store:put-blob $s "raw bytes"] [set-attr name=x value=1]]]
+#]]
+  [out-err [#
+cx-err:CXER0100
 #]]
  ]
 
@@ -589,7 +870,261 @@ true
 [?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [v 1]]]] [$store:status $s]]
 #]]
   [out-text [#
-[status backend=mem docs=1 objects=5 logical=5 distinct=5 unflushed=1]
+[status backend=mem docs=1 objects=5 logical=5 distinct=5 unflushed=1 [heads [stream name=docs pos=1]]]
+#]]
+ ]
+
+ [case id=store-status-002-refs-plane-head-set level=core
+  [tags store mem status heads head-set refs-plane 719]
+  [; the per-stream HEAD-SET (distributed_store L177: a staleness scalar is
+     insufficient; store.md's status sentence promises 'heads' and porcelain
+     emitted none — #719 item 1's local half). Streams are the E3 lineage
+     streams: 'docs' plus one 'aliases/<name>' per ref; a ref stream carries
+     its current head hash. The ahead/behind comparison against a peer rides
+     stream 9 (#681) — this is the local coordinate it compares. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [v 1]]]] [= $h2 [$store:put-doc $s [doc [v 2]]]] [= $a1 [$store:set-alias $s "main" $h1]] [= $a2 [$store:set-alias $s "main" $h2]] [?let [= $st [$store:status $s]] [= $ref $st/heads/stream[= $_@name 'aliases/main']] [= $docs $st/heads/stream[= $_@name 'docs']] ($ref/@pos, [$eq $ref/@hash $h2], $docs/@pos)]]
+#]]
+  [out-text [#
+(2, true, 2)
+#]]
+ ]
+
+ [case id=store-reconcile-001-fast-forward level=core gate=enforced
+  [tags store sync reconcile fast-forward stream-9 681 L175 L176]
+  [; ── stream 9 (distributed_store §4/§5): per-ref reconciliation of the
+     alias plane — the fast-forward leg of the discriminator pair. Ours
+     never moved past the common base while theirs did, so the advance
+     APPLIES: the target doc lands (content-addressed copy) and the ref
+     advances through the one live-mutation seam, durably. A second
+     reconcile is idempotent (identical=1, nothing applied twice). The
+     report is the balanced examination account: refs = identical +
+     advanced + ahead + conflicts.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let
+[= $a [$store:open "mem://rc-a"]]
+[= $b [$store:open "mem://rc-b"]]
+[= $d1 [$store:put-doc $a [order [id 1]]]]
+[= $d1b [$store:put-doc $b [order [id 1]]]]
+[= $x1 [$store:set-alias $a "head" $d1]]
+[= $x2 [$store:set-alias $b "head" $d1]]
+[= $d2 [$store:put-doc $a [order [id 1] [line "x"]]]]
+[= $x3 [$store:set-alias $a "head" $d2]]
+[= $ff [$store:reconcile-report $b $a]]
+[= $again [$store:reconcile-report $b $a]]
+  [probe [ff $ff] [target [$store:get-alias $b "head"]] [again $again]]]
+#]]
+  [out-text [#
+[probe [ff [reconcile-report ok=true refs=1 identical=0 advanced=1 ahead=0 conflicts=0 [advance name=head from='sha2-256:59f4fc9c5c13e45e4f86a3c3b89087184d8cb442c919adb6e633c376061cc056' to='sha2-256:312707dfc6c3239450adc15165c83202db4d98c2b6fba3ccceb4a54a17d6bc7b']]] [target 'sha2-256:312707dfc6c3239450adc15165c83202db4d98c2b6fba3ccceb4a54a17d6bc7b'] [again [reconcile-report ok=true refs=1 identical=1 advanced=0 ahead=0 conflicts=0]]]
+#]]
+ ]
+
+ [case id=store-reconcile-002-diverged-conflict-value level=core gate=enforced
+  [tags store sync reconcile conflict diverged stream-9 681 L174 L175 CXER5053]
+  [; ── stream 9 (distributed_store §3/§4): the diverged leg — BOTH sides
+     moved past the common base, so the ref applies NOTHING and the report
+     carries the ONE Ring-0 conflict value: [conflict subject=
+     kind=:diverged-advance [base position= hash=] [ours position= hash=
+     [diff …]] [theirs position= hash= [diff …]] [cas code=CXER1114
+     expect-pos= actual-pos=]]. The base is the NORMATIVE common base
+     (L174: greatest position at which both lineages record the same
+     target); ours/theirs carry navigable, PATCHABLE diffs against it —
+     the cx module's §5 law holds on the conflict's own payload
+     (patch(base, ours-diff) ≡ ours, probed [law true]); the value
+     canonicalizes and hashes stably ([stable true] — a data-profile
+     citizen); ours' ref is UNMOVED ([unmoved true] — diverged applies
+     nothing). The enforcing twin obeys the agreement law: raise ⟺ the
+     report says ok=false — CXER5053 E_SYNC_DIVERGED carrying every
+     [conflict] as err children.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/cx']
+[?let
+[= $a [$store:open "mem://rc3-a"]]
+[= $b [$store:open "mem://rc3-b"]]
+[= $d1 [$store:put-doc $a [order [id 1]]]]
+[= $d1b [$store:put-doc $b [order [id 1]]]]
+[= $x1 [$store:set-alias $a "head" $d1]]
+[= $x2 [$store:set-alias $b "head" $d1]]
+[= $d3 [$store:put-doc $a [order [id 1] [line "y"]]]]
+[= $x4 [$store:set-alias $a "head" $d3]]
+[= $d4 [$store:put-doc $b [order [id 1] [note "rush"]]]]
+[= $x5 [$store:set-alias $b "head" $d4]]
+[= $dv [$store:reconcile-report $b $a]]
+[= $conf $dv/conflict]
+[= $basedoc [$store:get-doc $b $conf/base/@hash]]
+[= $oursdoc [$store:get-doc $b $conf/ours/@hash]]
+[= $law [$cx:equal [$cx:patch $basedoc [$first $conf/ours/*]] $oursdoc]]
+[= $ctext [$cx:canonical [$cx:serialize $conf]]]
+[= $stable [$cx:equal [$cx:hash $ctext] [$cx:hash [$cx:canonical $ctext]]]]
+[= $unmoved [$cx:equal [$store:get-alias $b "head"] $d4]]
+[= $enf [?fallback [$store:reconcile $b $a] [recover-with [context] [code $err@code]]]]
+  [probe [diverged $dv] [law $law] [stable $stable] [unmoved $unmoved] [enforcing $enf]]]
+#]]
+  [out-text [#
+[probe [diverged [reconcile-report ok=false refs=1 identical=0 advanced=0 ahead=0 conflicts=1 [conflict subject=head kind=:diverged-advance [base position=1 hash='sha2-256:59f4fc9c5c13e45e4f86a3c3b89087184d8cb442c919adb6e633c376061cc056'] [ours position=2 hash=sha2-256:ab9d7a9879bcf3cf2493ed198944893dd954d402fcb7bb68f250a24f40075b08 [diff [change kind=element-added path='/order/note' after=note payload=subtree [after [note 'rush']]]]] [theirs position=2 hash='sha2-256:150a51655bdea44c80a0f7f4960573b09f51702c47f078310fb23b344124f03b' [diff [change kind=element-added path='/order/line' after=line payload=subtree [after [line 'y']]]]] [cas code=CXER1114 expect-pos=1 actual-pos=2]]]] [law true] [stable true] [unmoved true] [enforcing [code 'cx-err:CXER5053']]]
+#]]
+ ]
+
+ [case id=store-reconcile-003-resolution-merge-entry level=core gate=enforced
+  [tags store sync reconcile resolution merge-entry stream-9 681 L174]
+  [; ── stream 9 (distributed_store §3/§4, ruling L174): merge-as-an-entry.
+     A diverged ref resolves through the resolutions INPUT TABLE
+     ({resolutions: [resolve ref= target=]}): the join is RECORDED — a
+     stored [merge] doc naming base/ours/theirs as locator triples
+     (stream, position, hash — the #717 rule) plus the resolved target —
+     and the lineage ADOPTS theirs before advancing to the target, so the
+     NEXT reconcile finds theirs' tip as the common base and answers
+     AHEAD: converged, never a re-conflict (pure + replayable — identical
+     input + identical resolutions ⇒ identical end state). The lineage
+     stays LINEAR; no merge NODE exists — the join lives in an ordinary,
+     addressable, inspectable value. resolved= appears on the report only
+     when the seam engaged (the L119 posture).]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/cx']
+[?let
+[= $a [$store:open "mem://mr-a"]]
+[= $b [$store:open "mem://mr-b"]]
+[= $d1 [$store:put-doc $a [order [id 1]]]]
+[= $d1b [$store:put-doc $b [order [id 1]]]]
+[= $x1 [$store:set-alias $a "head" $d1]]
+[= $x2 [$store:set-alias $b "head" $d1]]
+[= $d3 [$store:put-doc $a [order [id 1] [line "y"]]]]
+[= $x4 [$store:set-alias $a "head" $d3]]
+[= $d4 [$store:put-doc $b [order [id 1] [note "rush"]]]]
+[= $x5 [$store:set-alias $b "head" $d4]]
+[= $dm [$store:put-doc $b [order [id 1] [line "y"] [note "rush"]]]]
+[= $r [$store:reconcile-report $b $a {resolutions: [resolve ref="head" target=$dm]}]]
+[= $rv [$first $r/*]]
+[= $rec [$store:get-doc $b $rv/@record]]
+[= $again [$store:reconcile-report $b $a]]
+[= $t [$cx:equal [$store:get-alias $b "head"] $dm]]
+  [probe [resolved $r] [record $rec] [again $again] [target $t]]]
+#]]
+  [out-text [#
+[probe [resolved [reconcile-report ok=true refs=1 identical=0 advanced=0 ahead=0 conflicts=0 resolved=1 [resolved name=head to='sha2-256:766f390f523fa864a370bf0fecd7e0b2d6309e63654941e95d05ebcb204b88c7' record=sha2-256:d642b04715c7e0dbcced6f0e4ee2431c85339a9b97a3418dfe3d08af9e9f9d4a]]] [record [merge ref=head [base stream='aliases/head' position=1 hash='sha2-256:59f4fc9c5c13e45e4f86a3c3b89087184d8cb442c919adb6e633c376061cc056'] [ours stream='aliases/head' position=2 hash=sha2-256:ab9d7a9879bcf3cf2493ed198944893dd954d402fcb7bb68f250a24f40075b08] [theirs stream='aliases/head' position=2 hash='sha2-256:150a51655bdea44c80a0f7f4960573b09f51702c47f078310fb23b344124f03b'] [target hash='sha2-256:766f390f523fa864a370bf0fecd7e0b2d6309e63654941e95d05ebcb204b88c7']]] [again [reconcile-report ok=true refs=1 identical=0 advanced=0 ahead=1 conflicts=0]] [target true]]
+#]]
+ ]
+
+ [case id=store-pull-002-split-and-agreement level=core gate=enforced
+  [tags store sync pull fetch split stream-9 681 719 L176 CXER5053]
+  [; ── stream 9 (distributed_store §5, L176 — #719 items 4+5): the
+     pull/fetch split, on the record. PULL = FETCH + per-ref
+     reconciliation: the first pull moves objects + doc-refs AND
+     fast-forwards the alias plane (the composed [pull-result ok=
+     [heads …] [reconcile-report …]] — head-set-bearing, never a bare
+     counter). Under divergence the ENFORCING pull raises CXER5053
+     carrying the [conflict] (its fetch half already landed — partial
+     success is the design); pull-report answers the same composition as
+     data (ok=false). FETCH stays the immutable-plane verb (objects +
+     doc-refs only, heads-bearing). A transferred doc is a LIVE insert:
+     it feeds the E3 docs stream exactly like a local put (docs pos
+     counts pulled + fetched + local docs — a changes-since consumer
+     over a synced store sees every landed doc).]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let
+[= $a [$store:open "mem://pl-a"]]
+[= $b [$store:open "mem://pl-b"]]
+[= $d1 [$store:put-doc $a [order [id 1]]]]
+[= $x1 [$store:set-alias $a "head" $d1]]
+[= $p1 [$store:pull $b $a]]
+[= $t [$store:get-alias $b "head"]]
+[= $d2 [$store:put-doc $a [order [id 1] [line "x"]]]]
+[= $x2 [$store:set-alias $a "head" $d2]]
+[= $d4 [$store:put-doc $b [order [id 1] [note "n"]]]]
+[= $x5 [$store:set-alias $b "head" $d4]]
+[= $div [?fallback [$store:pull $b $a] [recover-with [context] [refused [code $err@code] [$count $err/*]]]]]
+[= $rep [$store:pull-report $b $a]]
+[= $f [$store:fetch $b $a]]
+  [probe [first-pull $p1] [ff-target [$eq $t $d1]] [diverged $div] [report-ok $rep/@ok] [fetch $f]]]
+#]]
+  [out-text [#
+[probe [first-pull [pull-result objects=5 refs=1 ok=true [heads [stream name='aliases/head' pos=1 hash='sha2-256:59f4fc9c5c13e45e4f86a3c3b89087184d8cb442c919adb6e633c376061cc056'] [stream name=docs pos=1]] [reconcile-report ok=true refs=1 identical=0 advanced=1 ahead=0 conflicts=0 [advance name=head from='' to='sha2-256:59f4fc9c5c13e45e4f86a3c3b89087184d8cb442c919adb6e633c376061cc056']]]] [ff-target true] [diverged [refused [code 'cx-err:CXER5053'] 1]] [report-ok false] [fetch [fetch-result objects=0 refs=2 [heads [stream name='aliases/head' pos=2 hash='sha2-256:23b6269f0ab5dd75c6d6ddffe3bd5d50b7a6604ec8758870bac69c09c5942a0c'] [stream name=docs pos=3]]]]]
+#]]
+ ]
+
+ [case id=store-status-003-peer-ahead-behind level=core gate=enforced
+  [tags store sync status ahead-behind peer stream-9 681 719 L177]
+  [; ── stream 9 (L177 — #719 item 1 complete): status opts.peer engages
+     the ahead/behind classification — the DRY reconcile examination
+     (nothing applied) against a peer handle. Per branch-class alias
+     stream: :identical / :ahead (ours moved past the common base) /
+     :behind (the fast-forward case) / :diverged (both moved), with each
+     side's OWN dense E3 position (positions are local coordinates —
+     the CLASSIFICATION is the cross-store fact; a staleness scalar is
+     ruled insufficient, the per-stream HEAD-SET is the answer).]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let
+[= $a [$store:open "mem://st3-a"]]
+[= $b [$store:open "mem://st3-b"]]
+[= $d1 [$store:put-doc $a [order [id 1]]]]
+[= $d1b [$store:put-doc $b [order [id 1]]]]
+[= $x1 [$store:set-alias $a "main" $d1]]
+[= $x2 [$store:set-alias $b "main" $d1]]
+[= $d2 [$store:put-doc $a [order [id 1] [line "x"]]]]
+[= $x3 [$store:set-alias $a "main" $d2]]
+[= $d4 [$store:put-doc $b [order [id 2]]]]
+[= $x4 [$store:set-alias $b "extra" $d4]]
+[= $d5 [$store:put-doc $b [order [id 1] [note "n"]]]]
+[= $x5 [$store:set-alias $b "boat" $d1]]
+[= $x6 [$store:set-alias $a "boat" $d1]]
+[= $x7 [$store:set-alias $b "boat" $d5]]
+[= $x8 [$store:set-alias $a "boat" $d2]]
+[= $st [$store:status $b {peer: $a}]]
+  [probe [status $st]]]
+#]]
+  [out-text [#
+[probe [status [status backend=mem docs=3 objects=13 logical=16 distinct=13 unflushed=3 [heads [stream name='aliases/boat' pos=2 hash='sha2-256:23b6269f0ab5dd75c6d6ddffe3bd5d50b7a6604ec8758870bac69c09c5942a0c'] [stream name='aliases/extra' pos=1 hash='sha2-256:3c8f5f782a4735fa4313e262e55a07755f13c89fb663775914f748c5ed7d1f75'] [stream name='aliases/main' pos=1 hash='sha2-256:59f4fc9c5c13e45e4f86a3c3b89087184d8cb442c919adb6e633c376061cc056'] [stream name=docs pos=3]] [peer url='mem://st3-a' identical=0 ahead=1 behind=1 diverged=1 [stream name='aliases/boat' state=:diverged ours-pos=2 theirs-pos=2] [stream name='aliases/extra' state=:ahead ours-pos=1 theirs-pos=0] [stream name='aliases/main' state=:behind ours-pos=1 theirs-pos=2]]]]]
+#]]
+ ]
+
+ [case id=store-replica-001-declaration-profile level=core gate=enforced
+  [tags store sync replica consistency declaration stream-9 681 L177 M8 CXER4990]
+  [; ── stream 9 (audit M8 — stream 7's replica profile, received): a
+     handle opened with replica: "true" is a REPLICA surface whose
+     guarantee advert is the replica set — it CAN declare
+     :prefix-consistent (chain-checkable), :at-seq-pinned (up to the
+     synced head), and :monotonic-reads; it MUST refuse
+     :read-your-writes and :linearizable-ref (offline ref advance is
+     exactly where the conflict values land). The refusals are
+     WIRING-TIME (CXER4990 at open — never a runtime surprise); the
+     accepted floor echoes on the handle.]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let
+[= $refused [?fallback [$store:open-opts "mem://rep-1" {replica: "true" consistency: (:read-your-writes)}] [recover-with [context] [code $err@code]]]]
+[= $refused2 [?fallback [$store:open-opts "mem://rep-1" {replica: "true" consistency: (:linearizable-ref)}] [recover-with [context] [code $err@code]]]]
+[= $ok [$store:open-opts "mem://rep-2" {replica: "true" consistency: (:prefix-consistent, :at-seq-pinned, :monotonic-reads)}]]
+  [probe [ryw $refused] [linref $refused2] [profile $ok@consistency]]]
+#]]
+  [out-text [#
+[probe [ryw [code 'cx-err:CXER4990']] [linref [code 'cx-err:CXER4990']] [profile ':prefix-consistent :at-seq-pinned :monotonic-reads']]
 #]]
  ]
 
@@ -632,6 +1167,62 @@ cx-err:CXER1709
 #]]
   [out-text [#
 1
+#]]
+ ]
+
+ [case id=store-log-002-advance-order level=core
+  [tags store mem log porcelain e3 lineage i5-stream4]
+  [doc [#
+#708 fixed: store:log reports PER-REF ADVANCE ORDER - one row per
+recorded act, not one row per held doc-ref. put A, put B, delete A =
+THREE rows; the retract is an act in the history (docs-plane pos 3),
+never a silent disappearance. This is the E3 lineage the wire feed
+reads too (one log, two readers - the local view and the remote
+subscription can never disagree).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]]
+  [= $h1 [$store:put-doc $s [doc [v 1]]]]
+  [= $h2 [$store:put-doc $s [doc [v 2]]]]
+  [= $del [$store:delete-doc $s $h1]]
+  [= $l [$store:log $s]]
+  [= $r [$first $l//ref[= $_@kind "retract"]]]
+  [seq [$count $l] [$text $r/@pos] [$text $r/@plane]]]
+#]]
+  [out-text [#
+[seq 3 '3' 'docs']
+#]]
+ ]
+
+ [case id=store-log-003-branch-advances-appear level=core
+  [tags store mem log porcelain e3 branch-force lineage i5-stream4]
+  [doc [#
+E3 position semantics (semantic_value_model §4): aliases are per-name
+streams with dense positions - branch then branch-force on one name
+are pos 1 and pos 2, and the FORCE advance APPEARS in the history (an
+invisible force-move hollows the audit story).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]]
+  [= $h1 [$store:put-doc $s [doc [v 1]]]]
+  [= $h2 [$store:put-doc $s [doc [v 2]]]]
+  [= $b1 [$store:branch $s "main" $h1]]
+  [= $b2 [$store:branch-force $s "main" $h2]]
+  [= $l [$store:log $s]]
+  [?for [in $r $l//ref[= $_@plane "aliases"]]
+    [yield [$text $r/@pos]]]]
+#]]
+  [out-text [#
+'1'
+'2'
 #]]
  ]
 
@@ -810,6 +1401,25 @@ true
 #]]
  ]
 
+ [; E3/L84 (I5 stream 1 W5): a non-fast-forward `branch` move is THE
+    ref-conflict — CXER1114, the ONE optimistic-concurrency code
+    (store.md §6.2; the wire refs-set/alias CAS and the journal's
+    expect-pos raise the SAME code — one vocabulary). ]
+ [case id=store-branch-003-cas-conflict level=core
+  [tags store mem branch cas CXER1114 e3 i5-s1]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [v 1]]]] [= $h2 [$store:put-doc $s [doc [v 2]]]] [= $b1 [$store:branch $s "main" $h1]]
+  [$store:branch $s "main" $h2]]
+#]]
+  [out-err [#
+cx-err:CXER1114
+#]]
+ ]
+
  [case id=store-branch-002-force-moves level=core
   [tags store mem branch branch-force porcelain]
   [in-cx [#
@@ -834,7 +1444,7 @@ true
 [?let [= $s [$store:open "mem://"]] [= $h1 [$store:put-doc $s [doc [item "a"]]]] [= $h2 [$store:put-doc $s [doc [item "b"]]]] [$store:list-docs $s]]
 #]]
   [out-text [#
-('5983f412523c65a91811045dcec65275781457f0d986c09600740ca91cc96762', 'c04da92110f3dab497ddbc323581161da20b797a508958d8a624ef9f23a4de23')
+('sha2-256:be1d34c4efb99664ba2d8501eda35ccce04faafde3ffc21a1dc6820017d6b7bd', 'sha2-256:78629e193db27cf629a8e9c357d4b8ef0c6d22a5bb8ad3a33e5188d3ee8fd0dd')
 #]]
  ]
 
@@ -848,7 +1458,7 @@ true
 [?let [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s [doc [item "hello"]]]] [$store:iter-docs $s]]
 #]]
   [out-text [#
-([entry hash='01699895b66541c3d480d15af00e3ef54bbc723378919018101dc57bed4b00f9' [doc [item 'hello']]])
+([entry hash='sha2-256:6d8460dd10c5fb09c542c81d617efef1eba054a71755f4e1c96a6af7830ddeeb' [doc [item 'hello']]])
 #]]
  ]
 
@@ -1001,6 +1611,375 @@ true
 #]]
  ]
 
+ [case id=store-020-query-flat-provenance-tuples level=core
+  [tags store query mem cxpath planar l97]
+  [; L97 flat provenance-bearing relation: one [result doc= source= MATCH]
+     tuple per MATCH — the multi-match doc yields TWO tuples (the retired
+     doc-keyed nesting yielded one [result] per doc); doc= is the containing
+     document's content address, source= is store-url#cxpath. Tuple order =
+     doc insertion order x document order. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://flatq"]] [= $h1 [$store:put-doc $s [users [user name=al] [user name=bo]]]] [= $h2 [$store:put-doc $s [root [user name=cy]]]] [$store:query $s "//user"]]
+#]]
+  [out-text [#
+([result doc='sha2-256:49b5b783474fc557326738a6e15aef98585b573e195006bb24577ec9fce2b092' source='mem://flatq#//user' [user name=al]], [result doc='sha2-256:49b5b783474fc557326738a6e15aef98585b573e195006bb24577ec9fce2b092' source='mem://flatq#//user' [user name=bo]], [result doc='sha2-256:419ece31678d2867eea20972a9f7c6eeb676a9d928cedb0dcc78e38a2a8201ab' source='mem://flatq#//user' [user name=cy]])
+#]]
+ ]
+
+ [case id=store-022-query-multi-segment-path level=core
+  [tags store query mem cxpath multiseg document-node]
+  [; multi-segment name paths walk STEPWISE from the DOCUMENT node (#768):
+     /rec/meta/src anchors at the root (named rec) then walks children;
+     //meta/src = src children of meta elements at any depth; /meta/src is
+     EMPTY (the root is rec, not meta — absolute paths address the root,
+     never silently its children). The pre-fix engine matched the LAST
+     segment's name only ([src stray] answered /meta/src). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://mseg"]] [= $h1 [$store:put-doc $s [rec [meta [src alpha]] [src stray]]]] ([$store:query $s "/rec/meta/src"], [$store:query $s "//meta/src"], [$count [$store:query $s "/meta/src"]])]
+#]]
+  [out-text [#
+(([result doc='sha2-256:06dbe1d2eacc5dc2adb09d0d0451b62727a38a36eb9e96431cf381716a6adfec' source='mem://mseg#/rec/meta/src' [src 'alpha']]), ([result doc='sha2-256:06dbe1d2eacc5dc2adb09d0d0451b62727a38a36eb9e96431cf381716a6adfec' source='mem://mseg#//meta/src' [src 'alpha']]), 0)
+#]]
+ ]
+
+ [case id=store-025-query-per-entity-root level=core
+  [tags store query source mem cxpath document-node planar]
+  [; document-node anchoring (#768): a per-entity document — the root IS the
+     entity — is queryable by name: //order matches each [order …] root
+     (descendant-or-self includes the root), /order selects it absolutely,
+     and [$store:source] scans it as a planar generator source with no
+     wrapping convention. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://ent"]] [= $h1 [$store:put-doc $s [order sku=a [line qty=2]]]] [= $h2 [$store:put-doc $s [order sku=b [line qty=1]]]] ([$count [$store:query $s "//order"]], [$count [$store:query $s "/order"]], [$store:source $s "//order/line"])]
+#]]
+  [out-text [#
+(2, 2, ([line qty=2], [line qty=1]))
+#]]
+ ]
+
+ [case id=store-023-source-payload-scan level=core
+  [tags store source mem cxpath planar l97]
+  [; [$store:source] = the same CXPath scan as query, returning the matched
+     VALUES only (the tuples' payloads, same order, no provenance wrapper) —
+     THE store-side generator source form for planar comprehensions
+     (code.md 7.8; backs the fn-doc example verbatim). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://src"]] [= $h1 [$store:put-doc $s [orders [order sku=a total=5] [order sku=b total=7]]]] [$store:source $s "//order"]]
+#]]
+  [out-text [#
+([order sku=a total=5], [order sku=b total=7])
+#]]
+ ]
+
+ [case id=store-024-source-planar-revenue-by-region level=core
+  [tags store source mem planar m5 group-by aggregate l97 document-node]
+  [; the ruled M5 worked example (planar_algebra.md) LIVE over a real store:
+     a planar comprehension whose generator scans [$store:source], joined by
+     correlated unnest ($o/line), grouped by a navigated key, aggregated with
+     $sum over $group — east = 2*10+1*5+4*25 = 125, west = 12. The docs are
+     NATURAL per-entity roots ([order …] IS the doc) — queryable by name
+     under document-node anchoring (#768), no wrapping convention. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://m5"]]
+  [= $h1 [$store:put-doc $s [order [line qty=2 price=10] [line qty=1 price=5] [customer region=east]]]]
+  [= $h2 [$store:put-doc $s [order [line qty=4 price=25] [customer region=east]]]]
+  [= $h3 [$store:put-doc $s [order [line qty=1 price=12] [customer region=west]]]]
+  [?for [in $o [$store:source $s "//order"]] [in $l $o/line]
+    [= $r [* $l@qty $l@price]]
+    [group-by $o/customer/@region]
+    [yield [row region=$key revenue=[$sum $group/r]]]]]
+#]]
+  [out-text [#
+[row region=east revenue=125]
+[row region=west revenue=12]
+#]]
+ ]
+
+ [; ── Quoted planar queries (stream-2 L99, store.md §6.2): [$store:query]
+    accepts a QUOTED planar comprehension — membership-gated (CXER0120),
+    executed by the sandboxed [?eval] under the narrowed cap set (the
+    `eval` grant is the host-capability layer), authorize-before-execute
+    over the statically extracted slice set. The corpus membership
+    negatives land HERE (the ruled entry-5 sequencing, W6 half). ── ]
+ [case id=store-026-planar-query-quoted-m5 level=core grant='eval'
+  [tags store query planar quoted m5 l99 stream-2]
+  [; the ruled M5 revenue example through the LIVE quoted-query verb —
+     same store, same ruled numbers as store-024, but the comprehension
+     arrives as a value and executes in the L99 sandbox. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq26"]]
+  [= $h1 [$store:put-doc $s [order [line qty=2 price=10] [line qty=1 price=5] [customer region=east]]]]
+  [= $h2 [$store:put-doc $s [order [line qty=4 price=25] [customer region=east]]]]
+  [= $h3 [$store:put-doc $s [order [line qty=1 price=12] [customer region=west]]]]
+  [$store:query $s [?quote [?for [in $o [$store:source $s "//order"]] [in $l $o/line]
+    [= $r [* $l@qty $l@price]]
+    [group-by $o/customer/@region]
+    [yield [row region=$key revenue=[$sum $group/r]]]]]]]
+#]]
+  [out-text [#
+([row region=east revenue=125], [row region=west revenue=12])
+#]]
+ ]
+
+ [case id=store-027-planar-query-eval-cap-denied level=core
+  [tags store query planar quoted capability deny l99 stream-2 CXER0271]
+  [; the HOST-CAPABILITY layer: no `eval` grant (the empty deny-lane
+     default) — the sandboxed executor refuses BEFORE anything runs.
+     mem:// itself is capability-free, so the refusal is exactly the
+     executor's gate. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq27"]]
+  [$store:query $s [?quote [?for [in $o [$store:source $s "//order"]] [yield $o]]]]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=store-028-planar-query-ambient-refused level=core
+  [tags store query planar quoted membership negative ambient l99 stream-2 CXER0120]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq28"]]
+  [$store:query $s [?quote [?for [user] [yield 1]]]]]
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=store-029-planar-query-impure-refused level=core
+  [tags store query planar quoted membership negative purity l99 stream-2 CXER0120]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq29"]]
+  [$store:query $s [?quote [?for [in $o [$store:source $s "//order"]] [where [> [$random] 0.5]] [yield $o]]]]]
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=store-030-planar-query-eval-body-refused level=core
+  [tags store query planar quoted membership negative eval l99 stream-2 CXER0120]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq30"]]
+  [$store:query $s [?quote [?for [in $o [$store:source $s "//order"]] [yield [?eval "1"]]]]]]
+#]]
+  [out-err [#
+cx-err:CXER0120
+#]]
+ ]
+
+ [case id=store-031-planar-query-nonliteral-path-refused level=core
+  [tags store query planar quoted slice-extraction negative l99 stream-2 CXER1709]
+  [; authorize-before-execute needs a STATIC slice set — a computed source
+     path defeats extraction and refuses honestly. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq31"]] [= $p "//order"]
+  [$store:query $s [?quote [?for [in $o [$store:source $s $p]] [yield $o]]]]]
+#]]
+  [out-err [#
+cx-err:CXER1709
+#]]
+ ]
+
+ [case id=store-032-planar-query-formal-handle-names level=core grant='eval'
+  [tags store query planar quoted handle formal-parameter l99 stream-2]
+  [; handle names in a quoted query are FORMAL parameters — a quote
+     captures no environment, so EVERY store-source handle name binds to
+     the QUERIED store at execution (identically local and remote): the
+     quoted text says $t, the call site queries $s, and the query runs
+     against $s. A journal source refuses (the twin below). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq32"]]
+  [= $h [$store:put-doc $s [order id=7]]]
+  [$store:query $s [?quote [?for [in $o [$store:source $t "//order"]] [yield $o]]]]]
+#]]
+  [out-text [#
+([order id=7])
+#]]
+ ]
+
+ [case id=store-032b-planar-query-journal-source-refused level=core
+  [tags store query planar quoted journal negative l99 stream-2 CXER1709]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq32b"]]
+  [$store:query $s [?quote [?for [in $e [$journal:source $j "orders"]] [yield $e]]]]]
+#]]
+  [out-err [#
+cx-err:CXER1709
+#]]
+ ]
+
+ [case id=store-033-explain-query-plan-cross-pin level=core
+  [tags store explain-query planar quoted plan-address l99 l93 stream-2]
+  [; the introspection twin executes NOTHING (no eval grant here) and its
+     plan= IS the §7.9 plan address — pinned equal to cx:plan-address of
+     the same source text. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq33"]]
+  [= $qp [$store:explain-query $s [?quote [?for [in $o [$store:source $s "//order"]] [yield $o]]]]]
+  [$eq $qp@plan [$cx:plan-address '[?for [in $o [$store:source $s "//order"]] [yield $o]]']]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=store-034-explain-query-slices-and-rewrites level=core
+  [tags store explain-query planar quoted slices rewrites l99 l96 stream-2]
+  [; the slice set is extracted statically (kind/handle/path) and the L96
+     rewrite report rides the same element — an order-by/where pair shows
+     one APPLIED σ-pushdown (the honest-reporting surface). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://pq34"]]
+  [= $qp [$store:explain-query $s [?quote [?for [in $o [$store:source $s "//order"]]
+    [order-by $o@n] [where [= $o@k "x"]] [yield $o]]]]]
+  [report slices=[$count $qp//slice]
+    pushdown=[$count $qp//applied[= $_@kind "sigma-pushdown-below-tau"]]
+    [p $qp//slice/@path]]]
+#]]
+  [out-text [#
+[report slices=1 pushdown=1 [p ([path '//order'])]]
+#]]
+ ]
+
+ [case id=store-037-explain-query-fn-doc-example level=core
+  [tags store explain-query planar quoted fn-doc l99 stream-2]
+  [; the fn-doc example, byte-verbatim (guide-check backing). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [= $qp [$store:explain-query $s [?quote [?for [in $o [$store:source $s "//order"]] [yield $o]]]]] [$count $qp//slice]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=store-035-planar-query-authz-permit level=core grant='eval'
+  [tags store query planar quoted authz permit l99 stream-2]
+  [; the AUTHZ-SLICE layer, permit lane: a delegation of `read` over the
+     extracted slice admits the query; the relation flows. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/authz']
+[?let [= $s [$store:open "mem://pq35"]]
+  [= $h [$store:put-doc $s [order id=1]]]
+  [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-q1 [tenant acme] [from [principal dana]] [to [agent q-runner]]
+      [capabilities [read]] [over '//order'] [assurance :t1] [signature sig-dana]]]]
+  [$store:query $s [?quote [?for [in $o [$store:source $s "//order"]] [yield $o]]]
+    opts={authz: $az, actor: [agent q-runner], tenant: 'acme'}]]
+#]]
+  [out-text [#
+([order id=1])
+#]]
+ ]
+
+ [case id=store-036-planar-query-authz-deny level=core
+  [tags store query planar quoted authz deny fail-closed l99 stream-2 CXER4700]
+  [; the AUTHZ-SLICE layer, deny lane: no delegation for the actor — the
+     check denies, the refusal carries CXER4700 with the [deny] as cause,
+     and NOTHING executes (no eval grant here: authorize-before-execute
+     fires before the executor's own capability gate). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/authz']
+[?let [= $s [$store:open "mem://pq36"]]
+  [= $az [$authz:store {tenant: 'acme'}]]
+  [$store:query $s [?quote [?for [in $o [$store:source $s "//order"]] [yield $o]]]
+    opts={authz: $az, actor: [agent ghost], tenant: 'acme'}]]
+#]]
+  [out-err [#
+cx-err:CXER4700
+#]]
+ ]
+
+ [case id=store-021-query-attr-axis-flat-tuple level=core
+  [tags store query mem cxpath attribute planar l97]
+  [; a trailing attribute-axis step yields the attribute VALUE (a scalar) as
+     the tuple's single child — same flat relation, scalar payload. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://flata"]] [= $h1 [$store:put-doc $s [users [user name=al] [user name=bo]]]] [$store:query $s "//user/@name"]]
+#]]
+  [out-text [#
+([result doc='sha2-256:49b5b783474fc557326738a6e15aef98585b573e195006bb24577ec9fce2b092' source='mem://flata#//user/@name' 'al'], [result doc='sha2-256:49b5b783474fc557326738a6e15aef98585b573e195006bb24577ec9fce2b092' source='mem://flata#//user/@name' 'bo'])
+#]]
+ ]
+
  [; ── (C) remote byte-source backends (#91/#106/#78) — deny-by-default lane +
     backend-status checks behind a `net` grant. The `net` capability gate is the
     FIRST thing for every remote scheme (security.md §2): an ungranted `open`
@@ -1037,14 +2016,18 @@ cx-err:CXER0271
 #]]
  ]
 
- [case id=store-022-open-csrp-cap-denied level=core
-  [tags store open remote cx-store csrp capability CXER0271]
+ [case id=store-022-open-service-cap-denied level=core
+  [tags store open remote cx-store xsp capability CXER0271]
+  [; deny-by-default on the service wire: opening the XSP store profile
+     (THE store wire) without a net grant is refused BEFORE any dial. The
+     retired cx-store+http(s) tokens no longer name a transport (stream-4
+     S3); the live scheme is cx-store:// / cx-store+xsp://. ]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[$store:open "cx-store+http://127.0.0.1:9099/teststore/"]
+[$store:open "cx-store+xsp://127.0.0.1:9099/teststore/"]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -1158,29 +2141,384 @@ cx-err:CXER1100
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [$count [$store:get-doc-text $s "0000000000000000000000000000000000000000000000000000000000000000"]]]
+[?let [= $s [$store:open "mem://"]] [$count [$store:get-doc-text $s "sha2-256:0000000000000000000000000000000000000000000000000000000000000000"]]]
 #]]
   [out-text [#
 0
 #]]
  ]
 
- [; csrp-handle is the CSRP reference-server per-request handler (#78). It does
-    socket I/O (reads the request, writes the response), so it is net-gated;
-    under the empty capability set the gate denies (CXER0271). A live exchange
-    can't be fixtured here — the cx↔cx round trip lives in store_csrp_test.v. ]
- [case id=store-029-csrp-handle-cap-denied level=core
-  [tags store csrp-handle capability CXER0271]
+ [; store-029 (csrp-handle cap-denied) RETIRED with the CSRP data plane
+    (stream-4 S3): the verb is gone — the store service wire is the XSP
+    store profile (cx-store://) with the gRPC edge. ]
+
+ [; ── the computation-identity cache (stream 5, #677 — L102/L106,
+    computation_identity.md). The [computation] record is constructed
+    IN-LANGUAGE from shipped pieces (cx:computation-id, cx:hash, store
+    addresses, cx:env, caps); the cache is an alias in the
+    computation/<addr> namespace on the EXISTING alias verbs — no new
+    store API. Admission into that namespace validates FAIL-LOUD:
+    the name must be the record Tier-1 address of a stored, well-shaped
+    record (CXER1117); the record fn must resolve to a stored def that
+    declares pure AND passes the checker, with the Tier-2 claim
+    recomputing (CXER1118); the aliased result must not be a
+    never-cacheable err class — the CXER0270-0279 runtime-environment
+    band + host-tunable CXER0153 (CXER1119). Assertions are
+    version-agnostic (no literal addresses: cx:env varies by build). ]
+
+ [case id=store-comp-001-m5-end-to-end level=core
+  [tags store computation cache m5 L102 L106 stream-5]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[$store:csrp-handle [exchange state=open url='tcp://0.0.0.0:8080'] [$store:open "mem://"]]
+[?def price-order scope=public pure [returns float] ($o) [* $o/qty $o/price]]
+[?let
+ [= $src '[?def price-order scope=public pure [returns float] ($o) [* $o/qty $o/price]]']
+ [= $s [$store:open 'mem://m5']]
+ [= $fsrc [$store:put-blob $s $src]]
+ [= $order [$store:put-doc-text $s '[order [qty 3] [price 4.5]]']]
+ [= $rec {computation: {fn: {code: [$cx:computation-id $src], source: $fsrc}, inputs: {order: $order}, env: [$cx:env], caps: [$caps]}}]
+ [= $rid [$store:put-doc $s $rec]]
+ [= $price [$price-order [order [qty 3] [price 4.5]]]]
+ [= $result [$store:put-doc $s [total $price]]]
+ [= $set [$store:set-alias $s [$concat 'computation/' $rid] $result]]
+ [= $hit [$store:get-alias $s [$concat 'computation/' $rid]]]
+ [= $rec2 {computation: {fn: {code: [$cx:computation-id $src], source: $fsrc}, inputs: {order: [$store:put-doc-text $s '[order [qty   3] [price   4.5]]']}, env: [$cx:env], caps: [$caps]}}]
+ [r [$eq [$cx:hash $rec] $rid]
+    [$eq $hit $result]
+    [$eq [$store:get-doc $s $hit] [total 13.5]]
+    [$eq [$cx:hash $rec2] $rid]]]
+#]]
+  [out-text [#
+[r true true true true]
+#]]
+ ]
+note: the four assertions — the record doc address IS its plain Tier-1
+note: (put-doc of canonical text = cx:hash, no computation: prefix, no
+note: new registry row); the explicit store-mediated lookup returns the
+note: bound result; the cached value reads back; and a REFORMATTED order
+note: (same canonical text) yields the SAME computation address — the
+note: M5 reformat-is-a-hit property, with zero literal addresses so the
+note: case is build-version-agnostic.
+
+ [case id=store-comp-002-impure-fn-refused level=core
+  [tags store computation cache negative impure CXER1118 L106 stream-5]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let
+ [= $src '[?def f scope=public impure [returns any] ($x) $x]']
+ [= $s [$store:open 'mem://imp']]
+ [= $fsrc [$store:put-blob $s $src]]
+ [= $in [$store:put-doc $s [v 1]]]
+ [= $rec {computation: {fn: {code: [$cx:computation-id $src], source: $fsrc}, inputs: {x: $in}, env: [$cx:env], caps: [$caps]}}]
+ [= $rid [$store:put-doc $s $rec]]
+ [= $result [$store:put-doc $s [v 1]]]
+ [$store:set-alias $s [$concat 'computation/' $rid] $result]]
 #]]
   [out-err [#
-cx-err:CXER0271
+cx-err:CXER1118
 #]]
  ]
 
+ [case id=store-comp-003-non-record-name-refused level=core
+  [tags store computation cache negative shape CXER1117 L106 stream-5]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let
+ [= $s [$store:open 'mem://shape']]
+ [= $doc [$store:put-doc $s [order [qty 1]]]]
+ [$store:set-alias $s [$concat 'computation/' $doc] $doc]]
+#]]
+  [out-err [#
+cx-err:CXER1117
+#]]
+ ]
+
+ [case id=store-comp-004-uncacheable-result-refused level=core
+  [tags store computation cache negative never-cached CXER1119 L106 stream-5]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?def g scope=public pure [returns any] ($x) $x]
+[?let
+ [= $src '[?def g scope=public pure [returns any] ($x) $x]']
+ [= $s [$store:open 'mem://nc']]
+ [= $fsrc [$store:put-blob $s $src]]
+ [= $in [$store:put-doc $s [v 1]]]
+ [= $rec {computation: {fn: {code: [$cx:computation-id $src], source: $fsrc}, inputs: {x: $in}, env: [$cx:env], caps: [$caps]}}]
+ [= $rid [$store:put-doc $s $rec]]
+ [= $bad [$store:put-doc-text $s "[err code='cx-err:CXER0273' message='evaluation budget exceeded']"]]
+ [$store:set-alias $s [$concat 'computation/' $rid] $bad]]
+#]]
+  [out-err [#
+cx-err:CXER1119
+#]]
+ ]
+note: budget exhaustion is input-INDEPENDENT state (the never-cached
+note: class): caching it would serve a host artifact as the computation
+note: answer. Input-dependent [err]s (divide-by-zero) remain cacheable —
+note: they are deterministic per the pure => deterministic theorem.
+
+ [case id=store-comp-005-env-axis-discriminates level=core
+  [tags store computation identity env-axis L103 stream-5]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let
+ [= $e [$cx:env]]
+ [= $mk [?fn $rt {computation: {fn: {code: 'computes-as:sha2-256:ab', source: 'sha2-256:cd'}, inputs: {x: 'sha2-256:ef'}, env: {builtins: $e/builtins, runtime: $rt, schema-dialect: '0.8'}, caps: {}}}]]
+ [r [$eq [$cx:hash [$mk '1.0.0']] [$cx:hash [$mk '1.0.0']]]
+    [$eq [$cx:hash [$mk '1.0.0']] [$cx:hash [$mk '1.0.1']]]]]
+#]]
+  [out-text [#
+[r true false]
+#]]
+ ]
+note: the patch-bump axis pinned without a rebuild: identical records
+note: hash identically; a runtime PATCH difference alone moves the
+note: address (a patch can fix a determinism bug — cold cache, never a
+note: wrong answer).
+
+ [case id=store-comp-006-field-order-irrelevant level=core
+  [tags store computation identity canonicalization map L102 stream-5]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$eq
+ [$cx:hash {computation: {fn: {code: 'computes-as:sha2-256:ab', source: 'sha2-256:cd'}, inputs: {x: 'sha2-256:ef'}, env: {runtime: '1.0.0'}, caps: {}}}]
+ [$cx:hash {computation: {caps: {}, env: {runtime: '1.0.0'}, inputs: {x: 'sha2-256:ef'}, fn: {source: 'sha2-256:cd', code: 'computes-as:sha2-256:ab'}}}]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+note: the L102 map-shaped-record rationale pinned: field containers are
+note: maps, self-canonicalizing under the canonical key sort — no
+note: bespoke field order to specify or drift.
+
+ [case id=store-comp-007-meta-does-not-move-id level=core
+  [tags store computation identity meta L102 stream-5 708]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let
+ [= $s [$store:open 'mem://meta']]
+ [= $plain [$store:put-doc $s [order [qty 3]]]]
+ [= $meta  [$store:put-doc $s [?meta {reviewed: true} [order [qty 3]]]]]
+ [$eq $plain $meta]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+note: meta-does-not-participate at the STORE boundary (the #708 item-1
+note: lane-1 exclusion riding into the record: a VALUE annotated [?meta]
+note: keeps its store address, so the computation address holds — the M5
+note: meta => hit negative, pinned via input-address equality. The lane-1
+note: form is the EVALUATED annotation (idh-032); a raw-text document
+note: carrying a literal [?meta …] node is data, not an annotation.
+
+
+ [# ── store-cst-001..004: the stream-7 consistency floor on store open
+       (consistency_vocabulary.md L122/L123/F5, #679/#714): declare-and-verify
+       at open-opts, the F5 linearizable-ref write discipline, and the shared
+       teaching-refusal authority. ──────────────────────────────────────── #]
+
+ [case id=store-cst-001-floor-declared-satisfied level=core gate=enforced
+  [tags store consistency floor declare-and-verify stream-7 679 L123]
+  [; the store floor: tokens the surface advertises are accepted at open,
+     echoed on the handle, and the handle behaves normally. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open-opts "mem://" {consistency: (:linearizable-ref, :read-your-writes, :monotonic-reads)}]]
+[= $h [$store:put-doc $s [doc [item "x"]]]]
+  [floor tokens=$s@consistency ok=[$store:exists $s $h]]]
+#]]
+  [out-text [#
+[floor tokens=':linearizable-ref :read-your-writes :monotonic-reads' ok=true]
+#]]
+ ]
+
+ [case id=store-cst-002-linearizable-ref-write-discipline level=core gate=enforced
+  [tags store consistency linearizable-ref F5 CXER4990 discriminator-pair stream-7 679 714]
+  [; the F5 pair on one root: an UNDECLARED handle keeps the silent LWW
+     set-alias (pre-vocabulary behavior); a declaring handle refuses
+     expect-less set-alias AND branch-force at stage write, while plain
+     branch (fast-forward guarded — the CAS discipline) stays available. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $u [$store:open "mem://"]]
+[= $h1 [$store:put-doc $u [doc [v 1]]]]
+[= $h2 [$store:put-doc $u [doc [v 2]]]]
+[= $a1 [$store:set-alias $u "head" $h1]]
+[= $a2 [$store:set-alias $u "head" $h2]]
+[= $d [$store:open-opts "mem://" {consistency: (:linearizable-ref)}]]
+[= $g1 [$store:put-doc $d [doc [v 1]]]]
+[= $b [$store:branch $d "main" $g1]]
+[= $r1 [?fallback [$store:set-alias $d "main" $g1]
+  [recover-with [refused op=set-alias code=$err/@code stage=$err/context/stage token=$err/context/token]]]]
+[= $r2 [?fallback [$store:branch-force $d "main" $g1]
+  [recover-with [refused op=branch-force code=$err/@code]]]]
+  [pair lww=[$store:get-alias $u "head"] branch-name=$b@name $r1 $r2]]
+#]]
+  [out-text [#
+[pair lww='sha2-256:34bb7bd03048150a5f9b3fc52fb264f378d71d6f03a1ac0b0bfbdab43d1dac35' branch-name=main [refused op=set-alias code=cx-err:CXER4990 stage=:write token=:linearizable-ref] [refused op=branch-force code=cx-err:CXER4990]]
+#]]
+ ]
+
+ [case id=store-cst-003-linearizable-ref-delete-refused level=core gate=enforced
+  [tags store consistency linearizable-ref delete-alias F5 CXER4990 stream-7 679 714]
+  [; ref deletion has no expect-bearing form, so a declaring handle refuses
+     it — CAS-only means CAS-only. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $d [$store:open-opts "mem://" {consistency: (:linearizable-ref)}]]
+[= $h [$store:put-doc $d [doc [v 1]]]]
+[= $b [$store:branch $d "main" $h]]
+[?fallback [$store:delete-alias $d "main"]
+  [recover-with [refused code=$err/@code stage=$err/context/stage token=$err/context/token]]]]
+#]]
+  [out-text [#
+[refused code=cx-err:CXER4990 stage=:write token=:linearizable-ref]
+#]]
+ ]
+
+ [case id=store-cst-004-teaching-refusal-shared-authority level=core gate=enforced
+  [tags store consistency exactly-once teaching-refusal CXER4990 stream-7 679 L122]
+  [; ONE vocabulary authority across surfaces: the store floor answers the
+     SAME exactly-once teaching refusal as the journal floor, naming
+     [idempotent]. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?fallback [$store:open-opts "mem://" {consistency: (:exactly-once)}]
+  [recover-with [refused code=$err/@code token=$err/context/token answer=$err/context/answer]]]
+#]]
+  [out-text [#
+[refused code=cx-err:CXER4990 token=:exactly-once answer='[idempotent]']
+#]]
+ ]
+
+ [case id=store-mig-001-batch-migration-mechanics level=core gate=enforced
+  [tags store migration modify-doc using dedup claim stream-21 693 L148 L152]
+  [; stored-doc migration = get, pure transform, put, ref advance — and
+     stores migrate in BATCH, non-destructively by construction: the
+     transform is modify-doc with a pure using-FN; the new doc gets its
+     own content address; the OLD doc remains addressable (immutable
+     substrate — nothing is overwritten, migration is always additive);
+     re-migrating the unchanged doc yields the SAME address (dedup makes
+     it free); and the migration provenance is a Lane-2 claim VALUE
+     linking new to old BY CONTENT ADDRESS — a plain stored value, never
+     store metadata, the same hash-linkage discipline the journal's
+     supersedes vocabulary uses. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://se-mig1"]]
+[= $h1 [$store:put-doc $s [order id="A-1" total=107]]]
+[= $h2 [$store:modify-doc $s $h1 [using [?fn ($d) [order id=$d@id subtotal=[- $d@total 10] tax=10]]]]]
+[= $od [$store:get-doc $s $h1]]
+[= $old-alive [= $od@total 107]]
+[= $h3 [$store:modify-doc $s $h1 [using [?fn ($d) [order id=$d@id subtotal=[- $d@total 10] tax=10]]]]]
+[= $claim [migrated-from hash=$h1 to=$h2]]
+[= $ch [$store:put-doc $s $claim]]
+[= $back [$store:get-doc $s $ch]]
+  [probe distinct=[!= $h1 $h2] old-alive=$old-alive dedup=[= $h2 $h3] claim-links=[= $back@hash $h1]]]
+#]]
+  [out-text [#
+[probe distinct=true old-alive=true dedup=true claim-links=true]
+#]]
+ ]
+
+ [; ── stream 20 (#692, erasure_compliance §3/§4): the reserved subject
+    vocabulary on the write surface. A payload carrying subject= MUST carry a
+    ≥128-bit CSPRNG nonce= (the digest-oracle defense) — missing/short/derived
+    = CXER4619, never a warning (audit C7: dedup/parity witnesses alone pass
+    for nonce=1). Custody is fail-closed: a plaintext store refuses a subject
+    declaration it could never crypto-shred (CXER1144). The sealed round-trip
+    + shred + rotation-balance behavior is pinned at the V layer
+    (store_subject_test.v) — it needs env KEK custody.]
+
+ [case id=store-subject-001-nonce-required level=core gate=enforced
+  [tags store erasure subject nonce CXER4619]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:put-doc $s [order subject="did:ex:dana" [item "x"]]]]
+#]]
+  [out-err [#
+cx-err:CXER4619
+#]]
+ ]
+
+ [case id=store-subject-002-short-nonce-refused level=core gate=enforced
+  [tags store erasure subject nonce CXER4619]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:put-doc $s [order subject="did:ex:dana" nonce="1" [item "x"]]]]
+#]]
+  [out-err [#
+cx-err:CXER4619
+#]]
+ ]
+
+ [case id=store-subject-003-derived-nonce-refused level=core gate=enforced
+  [tags store erasure subject nonce CXER4619]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:put-doc $s [order subject="did:ex:dana-8f2c1a90" nonce="did:ex:dana-8f2c1a90" [item "x"]]]]
+#]]
+  [out-err [#
+cx-err:CXER4619
+#]]
+ ]
+
+ [case id=store-subject-004-plaintext-unsupported level=core gate=enforced
+  [tags store erasure subject custody CXER1144]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]] [$store:put-doc $s [order subject="did:ex:dana" nonce="f3a9c2e77b104d5c8e6f0a1b2c3d4e5f" [item "x"]]]]
+#]]
+  [out-err [#
+cx-err:CXER1144
+#]]
+ ]
 ]

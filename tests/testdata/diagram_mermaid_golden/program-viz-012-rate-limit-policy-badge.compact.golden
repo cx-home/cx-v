@@ -1,0 +1,7 @@
+%%cx:Wz9yYXRlLWxpbWl0IHJhdGU9MTAgd2luZG93PTFzIG5hbWU9InZpei1ybCIgW2NhbGwgZW5kcG9pbnQ9JHVybF1d%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3[["[?rate-limit] :rate 10 :window 1s …"]]
+    n1 --> n3
+    n3 --> n2

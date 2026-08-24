@@ -46,6 +46,12 @@ pub fn tokenize(source string) ![]ProgramToken {
 		lex.pos = 3
 	}
 	mut toks := []ProgramToken{cap: 64}
+	// #923 (RULED: BC-1) attr-value micro-mode state: the innermost bracket
+	// KIND (`[` vs `(` vs `{`) decides whether an `ident=` pair is attribute
+	// surface. Only `[…]` contexts carry attributes (elements, [?directives],
+	// patterns); inside `(…)` the same bytes are a named call argument whose
+	// value is an expression, so the run rule must not fire there.
+	mut ctx := []u8{cap: 16}
 	for {
 		lex.skip_ws_and_comments()!
 		if lex.pos >= lex.src.len {
@@ -56,9 +62,227 @@ pub fn tokenize(source string) ![]ProgramToken {
 			}
 			return toks
 		}
-		toks << lex.next_token()!
+		mut t := lex.next_token()!
+		match t.kind {
+			// `[?name` and `[` both open a `]`-closed context; data_span /
+			// comment spans are self-contained (balanced) and never touch ctx.
+			.lbrack, .ldirective, .directive_name { ctx << `[` }
+			.lparen { ctx << `(` }
+			.lbrace { ctx << `{` }
+			.rbrack, .rparen, .rbrace {
+				if ctx.len > 0 {
+					ctx.delete_last()
+				}
+			}
+			else {}
+		}
+		// #935 (the #923/BC-1 class, one slot over): a scalar-shaped token
+		// with GLUED RESIDUE — a number whose lexed extent ends byte-adjacent
+		// to `.` or `-` (`0.0` + `.0.0`, `1.2` + `.3`, `1` + `-2`), or an
+		// ident abutting `.` (`v1` + `.2.3`) — is not a token boundary any
+		// valid program construct produces; it is the start of one
+		// ws-delimited BARE RUN that the data reading carries whole. Re-scan
+		// the run as ONE bare_value token. Clean tokens (`[par 2]`,
+		// `{1: x}`, `$xs[1:2]`, `1::int`, `$m.k`) never trigger: the residue
+		// byte must be glued, `.`/`-` only, and only after the scalar-shaped
+		// kinds below — never after `$`-rooted bindings, closers, or inside
+		// `(`/`{` contexts.
+		if ctx.len > 0 && ctx.last() == `[` && lex.pos < lex.src.len {
+			nb := lex.src[lex.pos]
+			// A token preceded by a binding/path sigil is a binding name or
+			// a step name (`$m.k`, `$doc/a.b`, `@x.y`, `:atom.name`,
+			// `ns:local.z`) — its glued `.` is the NEXT STEP, never residue.
+			prev_is_sigil := toks.len > 0 && toks.last().kind in [ProgramTokenKind.dollar,
+				.dot, .slash, .double_slash, .at, .at_bang, .colon, .double_colon]
+			trigger := !prev_is_sigil && match t.kind {
+				.number_lit, .date_lit, .datetime_lit, .duration_lit, .period_lit,
+				.bool_lit {
+					nb == `.` || nb == `-`
+				}
+				.ident {
+					// `-` is an ident character (already absorbed); only a
+					// glued `.` extends an ident into a run.
+					nb == `.`
+				}
+				else {
+					false
+				}
+			}
+			if trigger {
+				rt := lex.scan_glued_residue_run(t)!
+				if rt.kind == .bare_value {
+					t = rt
+				}
+			}
+		}
+		toks << t
+		// #923 (RULED: BC-1): after a glued `ident=` inside a `[…]` context,
+		// an immediately-following bare value is ONE [L70]-style run read
+		// with the data reading's attr-token rule — never a greedy number /
+		// temporal / atom tokenization of the same bytes. See
+		// scan_bare_attr_value for the carve-outs that keep the program
+		// reading's deliberate expression lanes.
+		if t.kind == .eq && toks.len >= 2 && ctx.len > 0 && ctx.last() == `[` {
+			prev := toks[toks.len - 2]
+			if prev.kind == .ident && t.pos.offset == prev.pos.offset + prev.text.len
+				&& lex.pos < lex.src.len && !is_ws(lex.src[lex.pos]) {
+				bt := lex.scan_bare_attr_value()!
+				if bt.kind == .bare_value {
+					toks << bt
+				}
+			}
+		}
 	}
 	return toks
+}
+
+// scan_glued_residue_run implements the #935 body-run rule: the cursor sits
+// on the residue byte right after a scalar-shaped token `t`; the run is the
+// bytes from t's START to the next body separator (whitespace, `]`, or `,`
+// — the comma splits BODY items, unlike the attr rule). Returns an
+// `.eof`-kind sentinel — consuming nothing — when the run abuts a
+// structural byte (`'` `"` `(` `[` `{` `)` `}`) or carries `::`/`:`/`/`/
+// `=`/`@`/`$`: those shapes keep today's tokenization whole (ascriptions,
+// paths, attrs, bindings — never invent a split neither reader has).
+fn (mut l Lexer) scan_glued_residue_run(t ProgramToken) !ProgramToken {
+	none_tok := ProgramToken{ kind: .eof, text: '', pos: t.pos }
+	mut end := l.pos
+	for end < l.src.len {
+		c := l.src[end]
+		if is_ws(c) || c == `]` || c == `,` {
+			break
+		}
+		if c == `'` || c == `"` || c == `(` || c == `[` || c == `{` || c == `)`
+			|| c == `}` || c == `:` || c == `/` || c == `=` || c == `@` || c == `$` {
+			return none_tok
+		}
+		end++
+	}
+	run := t.text + l.src[l.pos..end].bytestr()
+	for l.pos < end {
+		l.advance()
+	}
+	return ProgramToken{
+		kind: .bare_value
+		text: run
+		pos:  t.pos
+	}
+}
+
+// scan_bare_attr_value implements the #923 (RULED: BC-1) attr-value run.
+// The cursor sits on the first byte after a glued `name=`. Returns an
+// `.eof`-kind sentinel — consuming nothing — when the value belongs to one
+// of the program reading's deliberate expression lanes; otherwise consumes
+// the whole run (the DATA rule: up to whitespace or `]`,
+// read_token_for_attr_into's terminator set) and returns it as one
+// `bare_value` token.
+//
+// Lanes that stay expressions (return none):
+//   • leading `'` / `"`  — quoted strings
+//   • leading `$`        — bindings
+//   • leading `(` `[` `{` — calls-in-parens, bracketed exprs / [#…#], maps
+//   • leading `:`        — atom values (`a=:ok`; the data reading carries
+//     the string ':ok' — a recorded divergence, the program atom lane wins)
+//   • a run containing `::` — postfix ascription (`a=1::int` types the
+//     value in the program reading; the data reading carries the string)
+//   • a run abutting `'` `"` `(` `[` `{` mid-run — `a=f(x)` stays a call,
+//     `a=b'c'`-shaped runs keep today's reading (never invent a THIRD
+//     split neither reader has)
+//   • a run containing `/` whose prefix up to the first `/` is a path head
+//     (empty, `.`, `..`, or a QName chain) — CXPath surface (`select=//a/b`,
+//     `a=a/b`); any OTHER `/`-bearing run refuses LOUD with the
+//     quote-the-value hint (`a=1.2.3/x` used to mangle silently)
+fn (mut l Lexer) scan_bare_attr_value() !ProgramToken {
+	start := l.snapshot_position()
+	none_tok := ProgramToken{ kind: .eof, text: '', pos: start }
+	b0 := l.src[l.pos]
+	if b0 == `'` || b0 == `"` || b0 == `$` || b0 == `(` || b0 == `[` || b0 == `{`
+		|| b0 == `:` {
+		return none_tok
+	}
+	mut end := l.pos
+	mut has_slash := false
+	mut has_dcolon := false
+	for end < l.src.len {
+		c := l.src[end]
+		if is_ws(c) || c == `]` {
+			break
+		}
+		if c == `'` || c == `"` || c == `(` || c == `[` || c == `{` {
+			// mid-run structural byte: keep today's tokenization whole.
+			return none_tok
+		}
+		if c == `/` {
+			has_slash = true
+		}
+		if c == `:` && end + 1 < l.src.len && l.src[end + 1] == `:` {
+			has_dcolon = true
+		}
+		end++
+	}
+	if has_dcolon {
+		return none_tok
+	}
+	if end == l.pos {
+		// Empty run — the `=` abuts a terminator (`]`), e.g. the trailing
+		// `=` of a base64 BODY token (`[data::bytes SGVsbG8=]`). Not an
+		// attribute value; keep today's tokenization whole (the data
+		// reading carries the whole token as a body scalar).
+		return none_tok
+	}
+	run := l.src[l.pos..end].bytestr()
+	if has_slash {
+		prefix := run.all_before('/')
+		if is_bare_run_path_head(prefix) {
+			return none_tok
+		}
+		if prefix.ends_with(':') {
+			// scheme-shaped (`https://…`) — the parser's
+			// fold_bare_attr_value already refuses these with the
+			// attr-named quote-the-value hint; keep that lane whole.
+			return none_tok
+		}
+		return LexError{
+			message: "a bare `=${run}` attribute value is read as an expression, where `/` starts a CXPath step and `${prefix}` is not a step name — quote the value (='${run}') to carry the literal string (cx-err:CXER0100)"
+			pos:     start
+		}
+	}
+	for l.pos < end {
+		l.advance()
+	}
+	return ProgramToken{
+		kind: .bare_value
+		text: run
+		pos:  start
+	}
+}
+
+// is_bare_run_path_head reports whether the text before a bare run's first
+// `/` can head a CXPath expression: empty (`=/x`, `=//a/b`), a relative
+// step (`.`, `..`), or a QName chain (`a`, `ns:local`). Anything else —
+// digits, dots, mixed runs — is not path surface and the run refuses loud.
+fn is_bare_run_path_head(prefix string) bool {
+	if prefix == '' || prefix == '.' || prefix == '..' {
+		return true
+	}
+	mut seg_start := true
+	for c in prefix.bytes() {
+		if c == `:` {
+			seg_start = true
+			continue
+		}
+		if seg_start {
+			if !is_name_start(c) {
+				return false
+			}
+			seg_start = false
+			continue
+		}
+		if !(is_name_char(c) && c != `.`) {
+			return false
+		}
+	}
+	return !seg_start
 }
 
 // snapshot_position captures the cursor's current line/col/offset.
@@ -387,6 +611,14 @@ fn (mut l Lexer) next_token() !ProgramToken {
 			if is_name_start(c) {
 				return l.read_identifier_or_duration(start)
 			}
+			if c >= 0x80 {
+				// I1 L22: full-Unicode identifiers per [L10a] — same ranges
+				// as the data parser, so the two engines agree on every name.
+				cp, sz := utf8_cp_at(l.src, l.pos)
+				if sz > 0 && is_name_start_cp(cp) {
+					return l.read_identifier_or_duration(start)
+				}
+			}
 			return LexError{
 				message: "unexpected character ${c.ascii_str()} (byte 0x${c:02x})"
 				pos:     start
@@ -522,10 +754,29 @@ fn (mut l Lexer) read_entity_span(start Position) !ProgramToken {
 // `duration_lit`; otherwise as `ident` or `bool_lit`.
 fn (mut l Lexer) read_identifier_or_duration(start Position) !ProgramToken {
 	name_start := l.pos
-	for l.pos < l.src.len && is_ident_part(l.src[l.pos]) {
-		l.advance()
+	for l.pos < l.src.len {
+		b := l.src[l.pos]
+		if is_ident_part(b) {
+			l.advance()
+		} else if b >= 0x80 {
+			// I1 L22: full-Unicode identifier continuation ([L10b], minus
+			// the `.`/`:` the program tokenizer emits as its own tokens).
+			cp, sz := utf8_cp_at(l.src, l.pos)
+			if sz == 0 {
+				break
+			}
+			ok := if l.pos == name_start { is_name_start_cp(cp) } else { is_name_char_cp(cp) }
+			if !ok {
+				break
+			}
+			for _ in 0 .. sz {
+				l.advance()
+			}
+		} else {
+			break
+		}
 	}
-	text := l.src[name_start..l.pos].bytestr()
+	text := cx_nfc_name(l.src[name_start..l.pos].bytestr())
 	match text {
 		'true', 'false' {
 			return ProgramToken{ kind: .bool_lit, text: text, pos: start }

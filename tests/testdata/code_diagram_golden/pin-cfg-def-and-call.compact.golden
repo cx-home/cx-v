@@ -1,0 +1,15 @@
+flowchart TD
+  subgraph helper
+    hs[/"def helper"/]
+    he([exit])
+    hb["[+ $n 1]"]
+  hs --> hb
+  hb --> he
+  end
+  subgraph main
+    ms[/"def main"/]
+    me([exit])
+    mb["[helper 1]"]
+  ms --> mb
+  mb --> me
+  end

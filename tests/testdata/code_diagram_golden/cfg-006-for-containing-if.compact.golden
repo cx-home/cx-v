@@ -1,0 +1,14 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  lh{{"for $u :in /users/user"}}
+  i{"if $u@active"}
+  t["$u"]
+  i -- "true" --> t
+  t --> lh
+  e["'skip'"]
+  i -- "false" --> e
+  e --> lh
+  lh -- "binds $u" --> i
+  start --> lh
+  lh --> done

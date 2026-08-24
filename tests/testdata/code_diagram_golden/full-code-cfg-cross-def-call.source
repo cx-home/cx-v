@@ -1,0 +1,2 @@
+[?def greet ($name) [concat "hi " $name]]
+[?def main () [greet "world"]]

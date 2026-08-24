@@ -36,6 +36,7 @@ pub fn apply_lossless_structure(n Node) Node {
 					key_type:  entry.key_type
 					key_value: entry.key_value
 					value:     apply_lossless_structure(entry.value)
+					decl_kind: entry.decl_kind
 				}
 			}
 			m := MapNode{
@@ -494,6 +495,7 @@ fn ll_plain_map(m MapNode) Node {
 		}
 	}
 	mut ktypes := map[string]string{}
+	mut decls := map[string]string{}
 	mut entries := []MapEntry{cap: m.entries.len}
 	for entry in m.entries {
 		if k := ll_entry_key(entry) {
@@ -505,11 +507,47 @@ fn ll_plain_map(m MapNode) Node {
 					continue // consume the sidecar entry
 				}
 			}
+			// RULED: MSS-4 (#917): the `cx:decl` sidecar restores
+			// declaration-only entries — their object slot carries JSON
+			// null purely for order; the sidecar is what separates
+			// declared-ABSENT from a genuine null value.
+			if k == 'cx:decl' {
+				if dm := ll_key_type_map(entry.value) {
+					for kk, dk in dm {
+						decls[kk] = dk
+					}
+					continue // consume the sidecar entry
+				}
+			}
 		}
 		entries << entry
 	}
 	for i, entry in entries {
 		k := ll_entry_key(entry) or { continue }
+		if dk := decls[k] {
+			mut de := MapEntry{
+				key_type:  entry.key_type
+				key_value: entry.key_value
+				value:     Node(ScalarNode{
+					data_type: .null_type
+					value:     ScalarValue(NullValue{})
+				})
+				decl_kind: dk
+			}
+			if tn := ktypes[k] {
+				if re := ll_retype_key(k, tn) {
+					de.key_type = re.kt
+					de.key_value = re.kv
+				}
+			} else {
+				unescaped := ll_unescape_key(k)
+				if unescaped != k {
+					de.key_value = ScalarValue(unescaped)
+				}
+			}
+			entries[i] = de
+			continue
+		}
 		if tn := ktypes[k] {
 			if re := ll_retype_key(k, tn) {
 				kt, kv := re.kt, re.kv
@@ -517,6 +555,7 @@ fn ll_plain_map(m MapNode) Node {
 					key_type:  kt
 					key_value: kv
 					value:     entry.value
+					decl_kind: entry.decl_kind
 				}
 				continue
 			}
@@ -527,6 +566,7 @@ fn ll_plain_map(m MapNode) Node {
 				key_type:  entry.key_type
 				key_value: ScalarValue(unescaped)
 				value:     entry.value
+				decl_kind: entry.decl_kind
 			}
 		}
 	}
@@ -590,6 +630,26 @@ fn ll_retype_key(text string, type_name string) ?LlKeyRetype {
 			return LlKeyRetype{
 				kt: st
 				kv: ScalarValue(text)
+			}
+		}
+		// Ascribed numeric keys (L47, a7de7583) — decimal/bigint keys are
+		// verbatim string carriers; the sidecar names the kind, the image
+		// is already canonical (found via the #917 MSS example matrix: the
+		// emit side always recorded these, this import arm was missing, so
+		// a decimal/bigint key silently degraded to a STRING key across
+		// the lossless JSON/YAML lane).
+		'decimal' {
+			norm := normalize_decimal_token(text) or { return none }
+			return LlKeyRetype{
+				kt: .decimal_type
+				kv: ScalarValue(norm)
+			}
+		}
+		'bigint' {
+			norm := normalize_bigint_token(text) or { return none }
+			return LlKeyRetype{
+				kt: .bigint_type
+				kv: ScalarValue(norm)
 			}
 		}
 		else {

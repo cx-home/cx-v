@@ -9,8 +9,10 @@ import cx
 // Their bodies bottom out in native primitives implemented in V. Rather
 // than crowd the language-core `invoke_builtin` set, each module
 // contributes its primitives in its own `vcx/code/stdlib_<mod>.v` file
-// as a function `<mod>_stdlib_builtin(name, args) ?cx.Node`, and adds one
-// line to the chain below.
+// as a function `<mod>_stdlib_builtin(name, args) ?cx.Node`. A RING-1
+// module adds one line to the chain below; a RING-2 pack registers via
+// ring2_register.v into the I3 registry probe instead (cx_partition.md
+// §3 — the evaluator holds no direct reference to Ring-2 dispatchers).
 //
 // `stdlib_builtin` is consulted by `dispatch_call` AFTER the core
 // `invoke_builtin` set, so a core builtin always wins on a name clash.
@@ -32,15 +34,34 @@ fn stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if r := bytes_stdlib_builtin(name, args) { return r }
 	if r := path_stdlib_builtin(name, args) { return r }
 	if r := hash_stdlib_builtin(name, args) { return r }
-	if r := env_stdlib_builtin(name, args) { return r }
-	if r := random_stdlib_builtin(name, args) { return r }
+	if r := diagram_stdlib_builtin(name, args) { return r }
+	// Ring-1 local-effect packs (§4; I4 profile gates): each chain entry is
+	// compiled out with its pack (`-d cx_no_pack_<name>`), so an excluded
+	// pack's names fall through to the undefined-callable refusal — the same
+	// not-in-subset class as Ring-2 names in a platform-less artifact.
+	$if !cx_no_pack_env ? {
+		if r := env_stdlib_builtin(name, args) { return r }
+	}
+	$if !cx_no_pack_random ? {
+		if r := random_stdlib_builtin(name, args) { return r }
+	}
 	if r := uuid_stdlib_builtin(name, args) { return r }
 	if r := format_stdlib_builtin(name, args) { return r }
-	if r := time_stdlib_builtin(name, args) { return r }
-	if r := store_stdlib_builtin(name, args) { return r }
-	if r := sql_stdlib_builtin(name, args) { return r }
-	$if cx_db_redis ? {
-		if r := redis_stdlib_builtin(name, args) { return r }
+	$if !cx_no_pack_time ? {
+		if r := time_stdlib_builtin(name, args) { return r }
+	}
+	// Ring-2 packs (store/sql/redis/email/net/http/bus/journal/fabric/
+	// session/authz/did/vc/xap/xap-dist/xsp/xsp-auth) dispatch through
+	// the I3 registry — registered at init by ring2_register.v, probed
+	// once here in the pre-split chain order (entries are name-gated
+	// and pack name-sets disjoint, so the collapsed position is
+	// behavior-identical; see ring_registry.v).
+	if r := ring2_stdlib_builtin(name, args) { return r }
+	// http CLIENT pack (Ring 1, §4 cli profile — seam H): the serve half
+	// registers via ring2_register.v; name sets are disjoint, so sitting
+	// after the registry probe is behavior-identical.
+	$if !cx_no_pack_http_client ? {
+		if r := http_client_stdlib_builtin(name, args) { return r }
 	}
 	if r := json_stdlib_builtin(name, args) { return r }
 	if r := re_stdlib_builtin(name, args) { return r }
@@ -50,32 +71,28 @@ fn stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if r := geo_stdlib_builtin(name, args) { return r }
 	if r := mime_stdlib_builtin(name, args) { return r }
 	if r := validate_stdlib_builtin(name, args) { return r }
-	if r := email_stdlib_builtin(name, args) { return r }
 	if r := html_stdlib_builtin(name, args) { return r }
 	if r := i18n_stdlib_builtin(name, args) { return r }
 	if r := locale_stdlib_builtin(name, args) { return r }
 	if r := ft_stdlib_builtin(name, args) { return r }
 	if r := similar_stdlib_builtin(name, args) { return r }
-	if r := log_stdlib_builtin(name, args) { return r }
+	$if !cx_no_pack_log ? {
+		if r := log_stdlib_builtin(name, args) { return r }
+	}
 	if r := test_stdlib_builtin(name, args) { return r }
-	if r := io_stdlib_builtin(name, args) { return r }
-	if r := net_stdlib_builtin(name, args) { return r }
-	if r := http_stdlib_builtin(name, args) { return r }
+	$if !cx_no_pack_io ? {
+		if r := io_stdlib_builtin(name, args) { return r }
+	}
 	if r := prof_stdlib_builtin(name, args) { return r }
-	if r := process_stdlib_builtin(name, args) { return r }
-	if r := bus_stdlib_builtin(name, args) { return r }
-	if r := journal_stdlib_builtin(name, args) { return r }
-	if r := fabric_stdlib_builtin(name, args) { return r }
-	if r := session_stdlib_builtin(name, args) { return r }
-	if r := authz_stdlib_builtin(name, args) { return r }
-	if r := did_stdlib_builtin(name, args) { return r }
-	if r := vc_stdlib_builtin(name, args) { return r }
-	if r := sched_stdlib_builtin(name, args) { return r }
-	if r := term_stdlib_builtin(name, args) { return r }
-	if r := xap_stdlib_builtin(name, args) { return r }
-	if r := xap_dist_stdlib_builtin(name, args) { return r }
-	if r := xsp_stdlib_builtin(name, args) { return r }
-	if r := xsp_auth_stdlib_builtin(name, args) { return r }
+	$if !cx_no_pack_process ? {
+		if r := process_stdlib_builtin(name, args) { return r }
+	}
+	$if !cx_no_pack_sched ? {
+		if r := sched_stdlib_builtin(name, args) { return r }
+	}
+	$if !cx_no_pack_term ? {
+		if r := term_stdlib_builtin(name, args) { return r }
+	}
 	if r := jsonschema_stdlib_builtin(name, args) { return r }
 	// Registry-driven codec surface (cx/xml/yaml/toml/md + binary). Chained
 	// LAST so a dedicated module (json/csv/url/html) wins any name clash.

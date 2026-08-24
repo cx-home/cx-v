@@ -13,6 +13,7 @@
 module main
 
 import code
+import platform as _
 import time
 import sync
 import os

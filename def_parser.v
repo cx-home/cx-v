@@ -178,6 +178,19 @@ pub fn parse_def(source string) !DefNode {
 	mut returns_type_expr := ?TypeExpr(none)
 	mut scope := ?string(none)
 	mut throws_type := ?string(none)
+	// Command clauses (grammar [152d–h], stream 6 L109). At most one
+	// occurrence of each clause kind per def — a repeat is a parse error.
+	mut has_effects := false
+	mut effects := []DefEffectItem{}
+	mut requires := []string{}
+	mut preconditions := []string{}
+	mut is_idempotent := false
+	mut has_requires_at := false
+	mut requires_at_stream := ''
+	mut requires_at_seq := i64(0)
+	mut requires_at_hash := ''
+	mut idem_window := ''
+	mut compensates := ''
 	// Purity tracking. Default is `.pure_` when
 	// neither `:pure` nor `:impure` appears. We track which side
 	// (if any) has been seen so we can reject the conflicting
@@ -213,9 +226,12 @@ pub fn parse_def(source string) !DefNode {
 						return error('CXDEF_PARSE: [returns] missing type expression')
 					}
 					returns_type_source = rt
-					if parsed := parse_type_expr(rt) {
-						returns_type_expr = parsed
+					// Stream 16 W1 (L65): a structural parse failure is a
+					// LOUD diagnostic, never a silently-dropped slot.
+					parsed := parse_type_expr(rt) or {
+						return error('CXDEF_PARSE: [returns] type expression: ${err.msg()}')
 					}
+					returns_type_expr = parsed
 				}
 				'throws' {
 					tt := def_read_type_expr(mut c)!
@@ -224,8 +240,93 @@ pub fn parse_def(source string) !DefNode {
 					}
 					throws_type = tt
 				}
+				'effects' {
+					// [152f] EffectsClause — THE command discriminator.
+					// Zero items = an empty declared effect set (legal).
+					if has_effects {
+						return error('CXDEF_PARSE: duplicate [effects] clause — at most one per [?def] (grammar [152a])')
+					}
+					has_effects = true
+					effects = def_parse_effect_items(mut c)!
+				}
+				'requires' {
+					// [152d] RequiresClause — >=1 authority requirement.
+					if requires.len > 0 {
+						return error('CXDEF_PARSE: duplicate [requires] clause — at most one per [?def] (grammar [152a])')
+					}
+					requires = def_parse_requirements(mut c)!
+					if requires.len == 0 {
+						return error('CXDEF_PARSE: [requires] needs at least one requirement (grammar [152d])')
+					}
+				}
+				'preconditions' {
+					// [152e] PreconditionsClause — >=1 predicate expr,
+					// captured verbatim (the PathPredicate.source convention).
+					if preconditions.len > 0 {
+						return error('CXDEF_PARSE: duplicate [preconditions] clause — at most one per [?def] (grammar [152a])')
+					}
+					preconditions = def_parse_precondition_exprs(mut c)!
+					if preconditions.len == 0 {
+						return error('CXDEF_PARSE: [preconditions] needs at least one predicate expression (grammar [152e])')
+					}
+				}
+				'idempotent' {
+					// [152g] IdempotentClause — optional [window DUR] child.
+					if is_idempotent {
+						return error('CXDEF_PARSE: duplicate [idempotent] clause — at most one per [?def] (grammar [152a])')
+					}
+					is_idempotent = true
+					idem_window = def_parse_idempotent_window(mut c)!
+				}
+				'requires-at' {
+					// [152i] RequiresAtClause (stream 10, L156/M26): the
+					// cross-stream precondition PIN — the locator triple
+					// PLUS the expected position, evaluated as a B3
+					// admission read at the commit point (never a fold
+					// input; the engine cannot evaluate it — Ring 1 holds
+					// no journal — so an unadmitted invocation refuses).
+					if has_requires_at {
+						return error('CXDEF_PARSE: duplicate [requires-at] clause — at most one per [?def] (grammar [152a])')
+					}
+					has_requires_at = true
+					for {
+						c.skip_ws()
+						if c.at_end() || c.peek() == `]` {
+							break
+						}
+						key := def_read_name(mut c)
+						if key.len == 0 || c.at_end() || c.peek() != `=` {
+							return error('CXDEF_PARSE: [requires-at] expects stream=… seq=… hash=… attribute pairs (grammar [152i])')
+						}
+						c.advance() // consume `=`
+						val := def_read_scope_token(mut c)!
+						match key {
+							'stream' { requires_at_stream = val }
+							'seq' { requires_at_seq = val.i64() }
+							'hash' { requires_at_hash = val }
+							else {
+								return error('CXDEF_PARSE: [requires-at] unknown attribute `${key}` (expected stream, seq, hash)')
+							}
+						}
+					}
+					if requires_at_stream.len == 0 || requires_at_hash.len == 0
+						|| requires_at_seq < 1 {
+						return error('CXDEF_PARSE: [requires-at] needs all three of stream=, seq>=1, hash= — the locator triple plus the expected position (a bare hash is not a locator)')
+					}
+				}
+				'compensates' {
+					// [152h] CompensatesClause — one target Name.
+					if compensates.len > 0 {
+						return error('CXDEF_PARSE: duplicate [compensates] clause — at most one per [?def] (grammar [152a])')
+					}
+					c.skip_ws()
+					compensates = def_read_name(mut c)
+					if compensates.len == 0 {
+						return error('CXDEF_PARSE: [compensates] missing target command name (grammar [152h])')
+					}
+				}
 				else {
-					return error('CXDEF_UNKNOWN_MODIFIER: unknown `[${clause} …]` modifier clause (expected `returns` or `throws`)')
+					return error('CXDEF_UNKNOWN_MODIFIER: unknown `[${clause} …]` modifier clause (expected `returns`, `throws`, `requires`, `preconditions`, `effects`, `idempotent`, `compensates`, or `requires-at`)')
 				}
 			}
 			c.skip_ws()
@@ -303,6 +404,15 @@ pub fn parse_def(source string) !DefNode {
 	// Suppress unused-var warning when :throws slot is absent — the
 	// `[throws T]` clause sets it but it is not yet on DefNode.
 	_ = throws_type
+	// Purity-default resolution for commands (§12.2.7, stream-6 R5): a
+	// non-empty [effects] on an UNANNOTATED def implies `impure`
+	// (declaring effects IS declaring impurity — requiring a redundant
+	// `impure` bareword would be ceremony). An EXPLICIT `pure` is left
+	// standing so the registration-site contract check can raise the
+	// CXER0239 contradiction (one authority for the typed error).
+	if has_effects && effects.len > 0 && !pure_seen && !impure_seen {
+		purity = .impure_
+	}
 
 	// Parameter list — `(` … `)`.
 	if c.peek() != `(` {
@@ -344,12 +454,210 @@ pub fn parse_def(source string) !DefNode {
 		returns_type_expr:   returns_type_expr
 		scope:               scope
 		purity:              purity
+		purity_explicit:     pure_seen || impure_seen
 		source:              source
+		has_effects:         has_effects
+		effects:             effects
+		requires:            requires
+		preconditions:       preconditions
+		is_idempotent:       is_idempotent
+		idem_window:         idem_window
+		compensates:         compensates
+		has_requires_at:     has_requires_at
+		requires_at_stream:  requires_at_stream
+		requires_at_seq:     requires_at_seq
+		requires_at_hash:    requires_at_hash
 		loc:                 DefLoc{
 			start: 0
 			end:   source.len
 		}
 	}
+}
+
+// ── Command-clause sub-readers (grammar [152d–h], stream 6 L109) ─────────────
+
+// def_read_scope_token reads one requirement / scope-literal token at the
+// cursor: a quoted string (returned WITHOUT the quotes — the literal's
+// content) or a bare run of non-space, non-`]` bytes (host globs /
+// path roots / capability barewords — richer than an identifier Name,
+// e.g. `api.example.com:443`).
+fn def_read_scope_token(mut c DefParseCursor) !string {
+	if c.at_end() {
+		return ''
+	}
+	b := c.peek()
+	if b == `'` || b == `"` {
+		quote := b
+		c.advance()
+		start := c.pos
+		for !c.at_end() && c.peek() != quote {
+			if c.peek() == `\\` {
+				c.advance()
+				if !c.at_end() {
+					c.advance()
+				}
+				continue
+			}
+			c.advance()
+		}
+		if c.at_end() {
+			return error('CXDEF_PARSE: unterminated string literal in command clause')
+		}
+		tok := c.src[start..c.pos].bytestr()
+		c.advance() // closing quote
+		return tok
+	}
+	start := c.pos
+	for !c.at_end() {
+		nb := c.peek()
+		if def_is_space(nb) || nb == `]` || nb == `[` {
+			break
+		}
+		c.advance()
+	}
+	return c.src[start..c.pos].bytestr()
+}
+
+// def_parse_effect_items parses the body of `[effects …]` after the
+// clause label: zero or more `[CAP scope*]` items ([152f′]). The cursor
+// stops AT the clause's closing `]` (consumed by the shared clause
+// epilogue in parse_def).
+fn def_parse_effect_items(mut c DefParseCursor) ![]DefEffectItem {
+	mut items := []DefEffectItem{}
+	for {
+		c.skip_ws()
+		if c.at_end() {
+			return error('CXDEF_PARSE: unterminated [effects …] clause')
+		}
+		if c.peek() == `]` {
+			return items
+		}
+		if c.peek() != `[` {
+			return error('CXDEF_PARSE: [effects] items are `[CAP scope*]` elements (grammar [152f′]), got `${c.peek().ascii_str()}`')
+		}
+		c.advance() // consume item `[`
+		c.skip_ws()
+		cap := def_read_label(mut c)
+		if cap.len == 0 {
+			return error('CXDEF_PARSE: [effects] item missing capability name (grammar [152f″])')
+		}
+		mut scopes := []string{}
+		for {
+			c.skip_ws()
+			if c.at_end() {
+				return error('CXDEF_PARSE: unterminated [effects] item `[${cap} …]`')
+			}
+			if c.peek() == `]` {
+				c.advance() // close the item
+				break
+			}
+			tok := def_read_scope_token(mut c)!
+			if tok.len == 0 {
+				return error('CXDEF_PARSE: malformed scope literal in [effects] item `[${cap} …]`')
+			}
+			scopes << tok
+		}
+		items << DefEffectItem{
+			cap:    cap
+			scopes: scopes
+		}
+	}
+	return items
+}
+
+// def_parse_requirements parses the body of `[requires …]` after the
+// clause label: one or more requirement tokens ([152d′] — `cap:`
+// address string literals or capability barewords). The cursor stops
+// AT the clause's closing `]`.
+fn def_parse_requirements(mut c DefParseCursor) ![]string {
+	mut reqs := []string{}
+	for {
+		c.skip_ws()
+		if c.at_end() {
+			return error('CXDEF_PARSE: unterminated [requires …] clause')
+		}
+		if c.peek() == `]` {
+			return reqs
+		}
+		tok := def_read_scope_token(mut c)!
+		if tok.len == 0 {
+			return error('CXDEF_PARSE: malformed requirement token in [requires …] (grammar [152d′])')
+		}
+		reqs << tok
+	}
+	return reqs
+}
+
+// def_parse_precondition_exprs parses the body of `[preconditions …]`
+// after the clause label: one or more predicate ProgramExprs captured
+// VERBATIM (the PathPredicate.source convention — structural parsing
+// happens where the predicate is evaluated). The cursor stops AT the
+// clause's closing `]`.
+fn def_parse_precondition_exprs(mut c DefParseCursor) ![]string {
+	mut exprs := []string{}
+	for {
+		c.skip_ws()
+		if c.at_end() {
+			return error('CXDEF_PARSE: unterminated [preconditions …] clause')
+		}
+		if c.peek() == `]` {
+			return exprs
+		}
+		if c.peek() == `[` {
+			// balanced bracket span, verbatim (def_read_type_expr's
+			// capture handles nesting + string shielding).
+			span := def_read_type_expr(mut c)!
+			if span.len == 0 {
+				return error('CXDEF_PARSE: malformed predicate expression in [preconditions …]')
+			}
+			exprs << span
+			continue
+		}
+		tok := def_read_scope_token(mut c)!
+		if tok.len == 0 {
+			return error('CXDEF_PARSE: malformed predicate expression in [preconditions …]')
+		}
+		exprs << tok
+	}
+	return exprs
+}
+
+// def_parse_idempotent_window parses the optional `[window DUR]` child
+// of `[idempotent …]` ([152g′]). Returns the verbatim duration token
+// ('' when no window is declared). The cursor stops AT the clause's
+// closing `]`.
+fn def_parse_idempotent_window(mut c DefParseCursor) !string {
+	c.skip_ws()
+	if c.at_end() {
+		return error('CXDEF_PARSE: unterminated [idempotent …] clause')
+	}
+	if c.peek() == `]` {
+		return ''
+	}
+	if c.peek() != `[` {
+		return error('CXDEF_PARSE: [idempotent] admits one optional [window DUR] child (grammar [152g]), got `${c.peek().ascii_str()}`')
+	}
+	c.advance() // consume `[`
+	c.skip_ws()
+	label := def_read_label(mut c)
+	if label != 'window' {
+		return error('CXDEF_PARSE: [idempotent] admits one optional [window DUR] child (grammar [152g′]), got `[${label} …]`')
+	}
+	c.skip_ws()
+	dur := def_read_scope_token(mut c)!
+	if dur.len == 0 {
+		return error('CXDEF_PARSE: [window] missing duration (grammar [152g′])')
+	}
+	c.skip_ws()
+	if c.at_end() || c.peek() != `]` {
+		return error('CXDEF_PARSE: missing closing `]` on [window …]')
+	}
+	c.advance() // close [window …]
+	c.skip_ws()
+	if c.at_end() || c.peek() != `]` {
+		return error('CXDEF_PARSE: [idempotent] admits ONE [window DUR] child (grammar [152g])')
+	}
+	return dur
 }
 
 // ── Sub-readers ───────────────────────────────────────────────────────────────

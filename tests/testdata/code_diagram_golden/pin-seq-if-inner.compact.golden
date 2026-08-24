@@ -1,0 +1,7 @@
+sequenceDiagram
+  participant w
+  activate w
+  participant ch
+  w ->>+ ch : 'a'
+  w ->> ch : 'b'
+  deactivate w

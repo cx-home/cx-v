@@ -115,13 +115,48 @@ fn data_error_is_further(data_err_msg string, prog_err IError) bool {
 // it. The output is the strict canonical text per spec/canonical.md
 // §1.2.
 pub fn cx_text_canonical(input string) !string {
-	doc := parse(input)!
+	// I1 identity epoch (stream 12, L30/W-27): a legal multi-document CX
+	// file HAS a canonical form — each document's strict-canonical fragment,
+	// joined by the bare `\n---\n` separator line. parse_stream reads a
+	// single document identically to parse (same lexer, `---` recognized
+	// only at top level), so single-document bytes are unchanged.
+	docs := parse_stream(input)!
+	mut parts := []string{cap: docs.len}
+	for d in docs {
+		parts << cx_canonical_doc_text(d)!
+	}
+	// I1 identity epoch (campaign stream 12, W-14): strict-canonical text
+	// ends with EXACTLY ONE trailing LF and the Tier-1 hash covers it —
+	// canonical bytes are a complete POSIX text file, so `cx hash FILE` of
+	// a canonical file and the address of its content can never differ by
+	// an invisible final byte again. Uniform across every document, so
+	// canonical EQUALITY is unchanged; every digest moves once, at I1.
+	return parts.join('\n---\n') + '\n'
+}
+
+// cx_canonical_doc_text runs the full strict-canonical pipeline over ONE
+// Document and returns its LF-trimmed canonical fragment. The single source
+// of truth for the pass order — the text lane (cx_text_canonical) and the
+// data-bin identity lane (cx_data_bin_hash, §3.12.2 "same canonical
+// pipeline") both compose it.
+fn cx_canonical_doc_text(doc Document) !string {
 	resolved := resolve_anchors_doc(doc)!
 	mut stripped := canonicalize_doc(resolved)
 	canonicalize_namespaces(mut stripped)
 	canonicalize_ids(mut stripped)
 	canonicalize_collection_literals(mut stripped)
-	return emit_cx(stripped)
+	// I1 identity epoch (stream 12, W-7/L20): one instant, one address —
+	// offset datetimes rewrite to UTC-Z; trailing fractional zeros strip.
+	canonicalize_datetimes(mut stripped)
+	// I1 identity epoch (stream 12, row 2): redundant `::T` ascriptions strip
+	// — an annotation that bare re-typing of the body image reproduces is a
+	// second spelling of the same value, hence a second Tier-1 address.
+	// After the datetime pass so the re-type oracle judges final images.
+	canonicalize_annotations(mut stripped)
+	// I1 W-3 (§1.3): NaN/±Inf have no canonical form — refuse loudly
+	// rather than emit `+inf.0` bytes that cannot re-parse.
+	reject_nonfinite_floats(stripped)!
+	return emit_cx(stripped).trim_right('\n')
 }
 
 // resolve_anchors_doc performs the strict-canonical anchor resolution pass
@@ -140,6 +175,18 @@ pub fn cx_text_canonical(input string) !string {
 // items followed by the host's. A dangling MergeRef is a no-op strip (lint L003
 // is warn-level, abi.md), while a dangling Alias or any cyclic reference is a
 // hard error (no resolved form exists → no canonical form, §1.3).
+// resolve_document is the PUBLIC Resolved-AST entry (ast.md "Parse AST vs.
+// Resolved AST"; ruling ANC-1 2026-08-20): the SEMANTIC reading that the
+// evaluator's document seams and every lossy projection (JSON / YAML / TOML /
+// MD / CSV / TSV / PSV) work from. It is the same pass strict canonical
+// composes (cx_canonical_doc_text), so query, projection, and identity agree
+// on one resolved form. The lossless lanes — `cx fmt`, default CX output,
+// the XML cx:* carry (conversions.md), and --lossless — stay on the Parse
+// AST and preserve authored anchors/merges as presentation.
+pub fn resolve_document(doc Document) !Document {
+	return resolve_anchors_doc(doc)
+}
+
 fn resolve_anchors_doc(doc Document) !Document {
 	mut table := map[string]Element{}
 	// One scan populates the anchor table AND reports whether any anchor / alias /
@@ -311,12 +358,14 @@ fn resolve_anchor_element(e Element, table map[string]Element, mut stack []strin
 	return canon
 }
 
-// cx_text_hash returns the lowercase hex SHA-256 of the strict
-// canonical text bytes.
+// cx_text_hash returns the SELF-DESCRIBING Tier-1 address of the strict
+// canonical text bytes — `sha2-256:<lowercase-hex>` (I1 stream 19,
+// L31/L32: multiformats-named tagged addresses; bare hex is not an
+// address any more).
 pub fn cx_text_hash(input string) !string {
 	canonical := cx_text_canonical(input)!
 	digest := sha256.sum256(canonical.bytes())
-	return digest.hex()
+	return cx_tag_address(cx_default_hash_algo, digest.hex())
 }
 
 // cx_text_hash_algo returns the lowercase hex digest of the strict
@@ -331,13 +380,19 @@ pub fn cx_text_hash(input string) !string {
 pub fn cx_text_hash_algo(input string, algo string) !string {
 	canonical := cx_text_canonical(input)!
 	b := canonical.bytes()
-	return match algo {
-		'sha256' { sha256.sum256(b).hex() }
-		'sha384' { sha512.sum384(b).hex() }
-		'sha512' { sha512.sum512(b).hex() }
-		'blake3' { blake3.sum256(b).hex() }
-		else { error('unsupported hash algorithm `${algo}`') }
+	// I1 stream 19 (L35): ONE registry, multiformats names. The legacy
+	// private spellings (`sha256`, `b3`) are gone — fail-loud, no
+	// dual-accept (the registry error names the valid rows).
+	hex := match algo {
+		'sha2-256' { sha256.sum256(b).hex() }
+		'sha2-384' { sha512.sum384(b).hex() }
+		'sha2-512' { sha512.sum512(b).hex() }
+		'blake3'   { blake3.sum256(b).hex() }
+		else {
+			return error('unrecognized hash algorithm `${algo}` — registry: sha2-256 (default), sha2-384, sha2-512, blake3 (cx-err:CXER0131)')
+		}
 	}
+	return cx_tag_address(algo, hex)
 }
 
 // cx_text_eq returns true iff the strict canonical of `a` equals the
@@ -366,17 +421,18 @@ pub fn cx_text_eq(a string, b string) !bool {
 // surface is purely an entry-point composition.
 pub fn cx_data_bin_hash(input []u8) !string {
 	doc := parse_data_bin(input)!
-	mut stripped := canonicalize_doc(doc)
-	canonicalize_namespaces(mut stripped)
-	canonicalize_ids(mut stripped)
-	canonicalize_collection_literals(mut stripped)
-	canonical_text := emit_cx(stripped)
+	// I1: compose the SAME per-document pipeline as cx_text_hash — §3.12.2
+	// promises identical treatment, and the lane had drifted (it was
+	// missing the datetime + annotation passes and the W-14 trailing LF,
+	// so the same logical document hashed differently through data-bin).
+	canonical_text := cx_canonical_doc_text(doc)! + '\n'
 	digest := sha256.sum256(canonical_text.bytes())
-	return digest.hex()
+	return cx_tag_address(cx_default_hash_algo, digest.hex())
 }
 
 // canonicalize_doc returns a new Document with presentation-only
-// nodes stripped: Comment, RawText, CXDirective, XMLDecl, BlockContent.
+// nodes stripped: Comment, CXDirective, XMLDecl, BlockContent. RawText
+// `[# … #]` is content and is PRESERVED (I1 W-5).
 // Anchor/merge metadata on Elements is also dropped (v0 — see note at
 // top of file).
 fn canonicalize_doc(d Document) Document {
@@ -403,8 +459,15 @@ fn canonicalize_doc(d Document) Document {
 // None if it should be dropped from the parent's items list.
 fn canonicalize_node(n Node) ?Node {
 	match n {
-		CommentNode, RawTextNode, CXDirectiveNode, XMLDeclNode {
+		CommentNode, CXDirectiveNode, XMLDeclNode {
 			return none
+		}
+		RawTextNode {
+			// I1 W-5: RawText `[# … #]` is CONTENT, not presentation —
+			// stripping it made `[a [#raw#]]` and `[a]` share an address
+			// (a data-loss collision). Strict canonical preserves it
+			// verbatim per canonical.md §2.10.
+			return n
 		}
 		BlockContentNode {
 			// BlockContent is presentation; expand its items in place
@@ -492,11 +555,14 @@ fn canonicalize_collection_nodes(mut nodes []Node) {
 
 // map_entry_cmp implements the canonical-form key ordering rules
 // from spec/canonical.md §2.11.1. The primary sort is by type-tag
-// name (bool < bytes < date < datetime < float < int < string); ties
-// break by lexicographic Unicode order of the canonical-string
-// serialization of the key value. Map keys are restricted to
-// strings — the type-tag tie-break is in place for the
-// CX code 3.1 widening but exercises rarely today.
+// NAME — the ten admissible key kinds are every CXDM scalar kind but
+// `atom` (bigint < bool < bytes < date < datetime < decimal < float <
+// int < null < string); ties break by lexicographic Unicode order of
+// the canonical-string serialization of the key value. Reading the
+// order off the tag name is what keeps this correct without a
+// hand-kept list: decimal/bigint slotted in by construction when I1
+// promoted them to full kinds (#777's spec catch-up trued the
+// enumeration, not the rule).
 fn map_entry_cmp(a &MapEntry, b &MapEntry) int {
 	a_tag := map_key_type_tag_name(a.key_type)
 	b_tag := map_key_type_tag_name(b.key_type)

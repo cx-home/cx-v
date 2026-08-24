@@ -1,0 +1,13 @@
+erDiagram
+  DOCUMENT {
+    int node_count "5"
+    int type_count "3"
+    int max_depth "2"
+  }
+  a ||--|| b : has
+  a {
+  }
+  b {
+    string c
+    string note "appears 2× depth 1"
+  }

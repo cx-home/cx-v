@@ -9,23 +9,39 @@
 # transport is the real cx-stdlib/http server (`[$http:serve url handler]`) — the
 # handler is an ordinary [?def] that reads the request body, dispatches on the
 # JSON-RPC method, runs the tool, and returns a [response] carrying the emitted
-# JSON-RPC reply. (A handler is a [?def], whose body resolves its scope correctly
-# when invoked by the serve loop — unlike a returned [?fn], so this sidesteps the
-# #45 closure-scoping family. A GENERIC tool registry — tool closures stored in
-# data + dispatched by name — does want #45; until then dispatch directly on the
-# method/name with [?if], as the demo server in v08_mcp_server_real_test.v shows.)
+# JSON-RPC reply. (The old #45 closure-scoping blocker on a generic tool registry
+# is CLOSED; the registry pattern is buildable — the demo server in
+# v08_mcp_server_real_test.v shows direct dispatch, and tools/list now derives
+# from the module source itself via cx-x/tools, so no hand-kept registry exists
+# to drift.)
+#
+# Protocol target: the 2025-06-18 MCP revision — ONE target, no
+# revision-conditional emission (stream 18, L138). tools/list entries carry
+# outputSchema, annotations (hints), and _meta (the Tier-1/Tier-2 addresses +
+# schema ids + cap: requirements) per the L142 field mappings.
 #
 # THE DIFFERENTIATOR (#6 Y1, ties #7's PEP): a tool handler is ordinary CX, so its
 # effects are gated by CX CAPABILITIES at the effect point — a tool that reads a
 # file / opens a socket is DENIED (CXER0271) unless the server process was granted
 # that capability (`--allow-read` / `--allow-net=…`). The language enforces the
 # tool sandbox; the server maps a denied effect to an isError tool result.
+# Annotations are HINTS (the one-way lossy-downward rule, L142): enforcement is
+# at the effect point and the propose boundary, never the client's beliefs.
+#
+# THE PROPOSE-ONLY BOUNDARY (stream 18, L113/L139/L140): an MCP tools/call NEVER
+# executes a command — the boundary forces propose mode. propose-call constructs
+# the proposal (cx:propose) and the reply carries the CANONICAL proposal text +
+# its Tier-1 address (what an out-of-band approval binds; MCP elicitation is an
+# explicit NON-GOAL for approvals — the signing interaction never sits on the
+# agent's client). A principal approves out-of-band; commit re-checks everything.
 #
 # stdio transport + the full initialize-handshake session lifecycle are later
 # increments; this covers the request→response core over HTTP.
 
 [?lib 'cx-stdlib/jsonrpc' :as rpc]
 [?lib 'cx-stdlib/json' :as json]
+[?lib 'cx-stdlib/fp' :as fp]
+[?lib 'cx-x/tools' :as tools]
 
 # ── request reading ────────────────────────────────────────────────────────────
 # method-of — the JSON-RPC method of a parsed request ("initialize"/"tools/list"/…).
@@ -48,11 +64,68 @@
 # initialize-result — the MCP `initialize` success reply.
 [?def initialize-result scope=public pure [returns map] ($id::any $name::string $version::string)
   [$rpc:success $id
-    {protocolVersion: "2024-11-05" capabilities: {tools: {}} serverInfo: {name: $name version: $version}}]]
+    {protocolVersion: "2025-06-18" capabilities: {tools: {}} serverInfo: {name: $name version: $version}}]]
 
 # tools-list-result — a tools/list success reply wrapping a [tools] array.
 [?def tools-list-result scope=public pure [returns map] ($id::any $tools::any)
   [$rpc:success $id {tools: $tools}]]
+
+# ── the projection adapter (stream 18: descriptor → MCP tool JSON) ─────────────
+# tool-json-of — ONE cx-x/tools descriptor element → the 2025-06-18 MCP tool
+# entry. The MCP adapter's lossy ruling (L141/L142): the authority story is
+# carried, not enforced, by the wire — [meta] projects into _meta (source =
+# Tier-1 def-text address, code = Tier-2 computes-as, the schema ids, and the
+# cap: requirements) for sophisticated clients; annotations are HINTS.
+[?def tool-json-of scope=public pure [returns map] ($d::element)
+  [?let [= $a $d/annotations]
+        [= $base-meta
+          {source: [$string $d/meta/source],
+           code: [$string $d/meta/code],
+           inputSchemaId: [$string $d/meta/input-schema-id],
+           outputSchemaId: [$string $d/meta/output-schema-id],
+           requires: [$fp:map [?else $d/meta/requires ()] [?fn ($r) [$string $r]]]}]
+        [= $meta [?if [$exists [?else $d/meta/returns-type ()]]
+                   [then [$cx:merge $base-meta {returnsType: [$string $d/meta/returns-type]}]]
+                   [else $base-meta]]]
+    {name: $d@name,
+     description: [$string $d/description],
+     inputSchema: $d/input-schema,
+     outputSchema: $d/output-schema,
+     annotations: {readOnlyHint: $a@read-only,
+                   idempotentHint: $a@idempotent,
+                   destructiveHint: $a@destructive,
+                   openWorldHint: $a@open-world},
+     _meta: $meta}]]
+
+# tools-for — module source text → the tools/list array (the projection derived
+# at LIST TIME from the source the module system itself loads — no materialized
+# manifest, L141). A projection failure (missing [summary], malformed source)
+# propagates as its [err] — never a silent empty tool list.
+[?def tools-for scope=public pure [returns any] ($source::string)
+  [?let [= $ds [$tools:descriptors-of $source]]
+    [?match $ds
+      [case [err @code=$c] $ds]
+      [else [$fp:map $ds [?fn ($d) [$tool-json-of $d]]]]]]]
+
+# ── the propose-only tools/call boundary (stream 18, L113/L139/L140) ───────────
+# propose-result — the tools/call reply for a PROPOSED command: one text content
+# block carrying the proposal's CANONICAL CX text (the identity-bearing form —
+# the Tier-1 address recomputes from these bytes) and structuredContent carrying
+# the address an out-of-band approval binds. isError:false — a proposal is the
+# SUCCESSFUL outcome of a propose-only boundary.
+[?def propose-result scope=public pure [returns map] ($id::any $proposal::element)
+  [$rpc:success $id
+    {content: ({type: "text" text: [$cx:serialize $proposal]}),
+     structuredContent: {address: [$cx:hash $proposal]},
+     isError: false}]]
+
+# propose-call — the whole boundary in one step: construct the proposal for a
+# command + args record (cx:propose — never executes the body; preconditions
+# evaluate, the effect set resolves, the args record normalizes) and shape the
+# reply. A refused proposal (unknown args, false precondition, non-command)
+# raises its CXER411x — the handler maps it to tool-error.
+[?def propose-call scope=public pure [returns map] ($id::any $command::function $args::map)
+  [$propose-result $id [$cx:propose $command $args {}]]]
 
 # tool-result — a tools/call success reply carrying one text content block.
 [?def tool-result scope=public pure [returns map] ($id::any $text::string)
@@ -71,17 +144,23 @@
 
 # ── docs ───────────────────────────────────────────────────────────────────────
 [module-doc name=mcp-server
-  [scope """Minimal MCP server helpers (EXPERIMENTAL x/ tier, #6 Y1) — the server
-   counterpart to cx-x/mcp. Pure request readers (method-of, id-of, tool-name-of,
-   tool-args-of) + response builders (initialize-result, tools-list-result,
-   tool-result, tool-error, protocol-error) composed from cx-stdlib/jsonrpc + json.
-   The transport is the real cx-stdlib/http server: a [?def] handler reads the
-   request, dispatches on the method, runs the tool, and returns a [response]. The
-   differentiator (ties #7's PEP): a tool handler is ordinary CX, so its effects are
-   gated by CX capabilities at the effect point — a tool is denied (CXER0271) unless
-   the server was granted that capability, which the server maps to an isError tool
-   result. A generic tool registry (closures-in-data) awaits the #45 closure fix;
-   direct [?if] dispatch on method/name works today."""]]
+  [scope """Minimal MCP server helpers (EXPERIMENTAL x/ tier, #6 Y1; stream 18) — the
+   server counterpart to cx-x/mcp, at the 2025-06-18 protocol revision (one
+   target). Pure request readers (method-of, id-of, tool-name-of, tool-args-of) +
+   response builders (initialize-result, tools-list-result, tool-result,
+   tool-error, protocol-error) composed from cx-stdlib/jsonrpc + json. tools/list
+   derives from module source at list time via cx-x/tools (tool-json-of maps one
+   descriptor to the MCP entry with outputSchema, annotation hints, and _meta
+   carrying the Tier-1/Tier-2 addresses, schema ids, and cap: requirements;
+   tools-for maps a whole module — a projection failure propagates, never a
+   silent empty list). The tools/call boundary is PROPOSE-ONLY: propose-call /
+   propose-result construct the cx:propose proposal and reply with its canonical
+   text + Tier-1 address (what an out-of-band approval binds) — the command body
+   never runs on this path. The differentiator (ties #7's PEP): a tool handler is
+   ordinary CX, so its effects are gated by CX capabilities at the effect point —
+   a denied effect (CXER0271) maps to an isError tool result. The transport is
+   the real cx-stdlib/http server: a [?def] handler reads the request, dispatches
+   on the method, and returns a [response]."""]]
 [fn-doc name=method-of scope=public purity=pure
   [sig """-> string"""]
   [summary """The JSON-RPC method of a parsed request."""]]
@@ -100,6 +179,22 @@
 [fn-doc name=tools-list-result scope=public purity=pure
   [sig """-> map"""]
   [summary """Build a tools/list success reply wrapping a tools array."""]]
+[fn-doc name=tool-json-of scope=public purity=pure
+  [sig """($d::element) -> map"""]
+  [summary """Map ONE cx-x/tools descriptor to the 2025-06-18 MCP tool entry (name/description/inputSchema/outputSchema + annotation hints + _meta with Tier-1 source, Tier-2 code, schema ids, cap: requirements)."""]
+  [param-doc name=d """A [tool …] descriptor element from cx-x/tools:descriptors-of."""]]
+[fn-doc name=tools-for scope=public purity=pure
+  [sig """($source::string) -> any"""]
+  [summary """Module source text → the tools/list array, derived at list time via cx-x/tools (no materialized manifest). A projection failure propagates its [err] — never a silent empty list."""]
+  [param-doc name=source """The module source text (the same bytes the module loader reads)."""]]
+[fn-doc name=propose-result scope=public purity=pure
+  [sig """($id::any $proposal::element) -> map"""]
+  [summary """Shape the propose-only tools/call reply: canonical proposal text as the content block + structuredContent.address = the proposal's Tier-1 address (what an out-of-band approval binds)."""]]
+[fn-doc name=propose-call scope=public purity=pure
+  [sig """($id::any $command::function $args::map) -> map"""]
+  [summary """The propose-only tools/call boundary in one step: cx:propose the command with the name-keyed args record (never executes the body) and shape the reply. A refused proposal raises CXER411x for the handler to map to tool-error."""]
+  [param-doc name=command """The command function value (an [effects]-bearing def)."""]
+  [param-doc name=args """The name-keyed argument record (the MCP arguments object)."""]]
 [fn-doc name=tool-result scope=public purity=pure
   [sig """-> map"""]
   [summary """Build a tools/call success reply with one text content block (isError:false)."""]]

@@ -149,11 +149,11 @@ fn walk_for_modify(node cx.ProgramNode, source string, mut diags []json2.Any) {
 			}
 		}
 		cx.ProgramForComp {
-			for clause in node.clauses {
-				if src := clause.source { walk_for_modify(src, source, mut diags) }
-				if expr := clause.expr { walk_for_modify(expr, source, mut diags) }
+			// L100: THE ONE traversal (was blind to the `[yield-map K V]`
+			// value node).
+			for item in cx.for_comp_children(node) {
+				walk_for_modify(item.node, source, mut diags)
 			}
-			walk_for_modify(node.yield, source, mut diags)
 		}
 		cx.ProgramPattern {
 			for child in node.body {

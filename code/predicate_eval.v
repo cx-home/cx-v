@@ -56,6 +56,13 @@ pub mut:
 	value          ?string                 // scalar payload for scalar/string/bool/int items
 	attrs          map[string]string       // attribute map for element-kind items
 	children_count int                     // arity (used by count(*) style predicates later)
+	// src_idx is the CALLER's correlation tag (#803/#805 machinery
+	// diet): eval_predicate_filter passes survivors through verbatim,
+	// so a caller that stamps its source index here reads survivors
+	// back in O(1) instead of re-correlating by field equality
+	// (the old clone-and-item_eq dance). Default 0 — harmless for
+	// callers that never read it.
+	src_idx        int
 }
 
 // ── Value (internal, evaluator-side) ─────────────────────────────────────────
@@ -210,13 +217,25 @@ pub fn ebv(v Value) !bool {
 // the `_` identifier is reserved — any user binding whose name begins
 // with `$_` is rejected here as a programmer error.
 fn build_scope(item &Item, index int, len int, context PredicateEvalContext) !BindingScope {
-	mut scope := BindingScope{
+	validated := validate_context_bindings(context)!
+	return BindingScope{
 		context_item: item
 		position:     index + 1 // 1-based
 		last:         len
-		bindings:     map[string]Value{}
+		bindings:     validated
 	}
-	for name, value in context.bindings {
+}
+
+// validate_context_bindings checks the reserved-name rules once and
+// returns the caller's binding map for ALIASED sharing across every
+// per-candidate scope (#803/#805 machinery diet: the old build_scope
+// allocated + copied a map PER CANDIDATE — ~87 K map allocations per
+// predicate step over the gate-30.5 envelope — although the body
+// evaluator only ever READS scope.bindings and the map is usually
+// empty on the dispatcher path). Callers building scopes in a loop
+// should call this once and construct BindingScope directly.
+fn validate_context_bindings(context PredicateEvalContext) !map[string]Value {
+	for name, _ in context.bindings {
 		// Per gate 36.7 + D2: the bare identifier `_` is
 		// reserved for the implicit `$_` context-item binding; user
 		// `:bind` captures MUST use any other NCName. Names that
@@ -225,9 +244,8 @@ fn build_scope(item &Item, index int, len int, context PredicateEvalContext) !Bi
 		if name == '_' || name.starts_with('\$') {
 			return error('PREDICATE_EVAL: binding name `${name}` collides with reserved `\$_` family')
 		}
-		scope.bindings[name] = value
 	}
-	return scope
+	return context.bindings
 }
 
 // ── Public entry point ───────────────────────────────────────────────────────
@@ -260,10 +278,18 @@ pub fn eval_predicate_filter(candidates []Item, predicate &cx.PredicateExpr, con
 	// Eager materialisation — `candidates` is already
 	// a V slice (which is by-value). We re-allocate the filtered
 	// result rather than mutating in place to keep the function
-	// pure-functional.
+	// pure-functional. The context bindings validate ONCE and every
+	// per-candidate scope ALIASES the same map (read-only in the body
+	// evaluator — the per-candidate map alloc+copy was pure churn).
+	validated := validate_context_bindings(context)!
 	mut out := []Item{cap: candidates.len}
 	for i, cand in candidates {
-		scope := build_scope(&cand, i, candidates.len, context)!
+		scope := BindingScope{
+			context_item: &cand
+			position:     i + 1
+			last:         candidates.len
+			bindings:     validated
+		}
 		result := eval_predicate_body(predicate, scope)!
 		if ebv(result)! {
 			out << cand

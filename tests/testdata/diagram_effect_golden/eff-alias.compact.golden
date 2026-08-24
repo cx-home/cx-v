@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  eff_io_read_file[["io-read-file"]]
+  cap_read{{"read --allow-read"}}
+  prog --> eff_io_read_file
+  eff_io_read_file --> cap_read

@@ -1,4 +1,4 @@
-[test-suite name=url
+[test-suite name=url ring=1
   [doc [#
 conformance fixtures for cx-stdlib/url (spec/std-lib/url.md §6).
 

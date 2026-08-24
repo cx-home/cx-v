@@ -91,6 +91,7 @@ fn redact_secrets(n cx.Node) cx.Node {
 					key_type:  e.key_type
 					key_value: e.key_value
 					value:     redact_secrets(e.value)
+					decl_kind: e.decl_kind
 				}
 			}
 			return cx.MapNode{ entries: entries }
@@ -115,6 +116,17 @@ pub fn render(n cx.Node, target string) !string {
 		}
 	}
 	t := if target == '' { 'text' } else { target }
+	// RULED: MSS-4 (#917): declaration-only map entries `{k: ::T}` have no
+	// image on the lossy render targets — refuse (ANC-1 seam discipline),
+	// never null or drop. cx/text and round-trip xml carry them.
+	if t !in ['text', 'cx', 'xml'] {
+		if hit := cx.first_map_declaration_key(n) {
+			return EvalError{
+				code:    'cx-err:CXER0100'
+				message: 'declaration-only map entry `${hit}` has no lossy ${t} image — declarations carry through cx, xml, and the --lossless sidecar modes (cx-err:CXER0100)'
+			}
+		}
+	}
 	match t {
 		'text', 'cx' { return render_canonical(n) }
 		'json'       { return render_json(n) }
@@ -152,6 +164,11 @@ pub fn render(n cx.Node, target string) !string {
 // the same output at Phase 3.11 — both are canonical CX. They diverge
 // once richer formatting lands (text gets unquoted-when-possible scalar
 // rendering; cx stays strictly canonical).
+// render_canonical is THE §11.1a EV-RESULT-IMAGE producer (normative,
+// spec/core/code.md — rules R1–R6): the same image the `cx` run
+// surface prints for the default text target AND the image the
+// conformance harness grades out-text against (stream 22 W1 unified
+// both on this one function; the harness carries no mirror renderer).
 pub fn render_canonical(n cx.Node) string {
 	return render_node(n)
 }
@@ -160,6 +177,11 @@ fn render_node(n cx.Node) string {
 	match n {
 		cx.TextNode {
 			return n.value
+		}
+		// I1 row 9 (L78): the authorable variable hole renders `$name` —
+		// the same spelling the data emitter produces.
+		cx.HoleNode {
+			return '\$${n.name}'
 		}
 		cx.ScalarNode {
 			return render_scalar(n)
@@ -223,6 +245,23 @@ pub fn render_node_to(mut b strings.Builder, n cx.Node) {
 		cx.Element {
 			render_element_to(mut b, n)
 		}
+		// #804 leg 2 — THE HOT ARM. A lazy record whose span the scan
+		// certified as already-canonical (804-1d) writes those bytes
+		// straight through the recorded rewrite offsets: no parse, no
+		// AST, no allocation. Anything else materialises and renders
+		// like the element it is.
+		//
+		// This fires on the record's PROVENANCE — "these bytes are
+		// already the canonical image" — and never on the shape of the
+		// program. `[yield $u]` is fast here because it demands no
+		// structure, not because anything recognises it.
+		cx.LazyRecord {
+			if n.canonical {
+				render_lazy_canonical_to(mut b, n)
+			} else {
+				render_element_to(mut b, n.force_or_panic())
+			}
+		}
 		cx.SequenceNode { b.write_string(cx.cx_emit_sequence_inline(n, true)) }
 		cx.ArrayNode    { b.write_string(cx.cx_emit_array_inline(n, true)) }
 		cx.MapNode      { b.write_string(cx.cx_emit_map_inline(n, true)) }
@@ -275,6 +314,15 @@ fn render_scalar_to(mut b strings.Builder, n cx.ScalarNode) {
 	// integer re-parses back to bigint (D-H auto-promotion), so this is
 	// lossless.
 	if n.data_type == .bigint_type {
+		if n.value is string {
+			b.write_string(n.value as string)
+			return
+		}
+	}
+	// I1 stream 11 (2b): decimal scalars are NUMERIC — render bare; a bare
+	// fixed-point image re-parses back to decimal, so this is lossless
+	// (quoting it would flip the kind to string on re-parse).
+	if n.data_type == .decimal_type {
 		if n.value is string {
 			b.write_string(n.value as string)
 			return
@@ -397,16 +445,23 @@ fn render_element_to(mut b strings.Builder, n cx.Element) {
 	if n.name == cx_map_name {
 		// `__cx_map__` element: child items are entry elements with
 		// name=key, items=[value]. Emit as `{k: v, k: v}`. Keys go through
-		// the shared envelope-lane rule (cx.cx_emit_envelope_map_key, #495)
-		// so a $-leading / colon-bearing key quotes and re-parses as itself.
+		// the shared envelope-lane rule (cx.cx_emit_envelope_map_key_typed,
+		// #495 + #777) so a $-leading / colon-bearing key quotes and
+		// re-parses as itself, and a KIND-stamped key re-parses as its own
+		// kind rather than as whatever its image auto-types to.
 		b.write_string('{')
 		mut first := true
 		for it in n.items {
 			if it is cx.Element {
 				if !first { b.write_string(', ') }
 				first = false
-				b.write_string(cx.cx_emit_envelope_map_key(it.name))
+				b.write_string(cx.cx_emit_envelope_map_key_typed(it.name, map_entry_key_kind(it)))
 				b.write_string(': ')
+				// RULED: MSS-4 (#917): declaration-only entry → `k: ::T`.
+				if dk := map_entry_decl_kind(it) {
+					b.write_string('::${dk}')
+					continue
+				}
 				if it.items.len > 0 {
 					render_seq_item_to(mut b, it.items[0])
 				}
@@ -531,7 +586,7 @@ fn render_body_item_to(mut b strings.Builder, n cx.Node) {
 	render_node_to(mut b, n)
 }
 
-fn render_scalar(n cx.ScalarNode) string {
+pub fn render_scalar(n cx.ScalarNode) string {
 	// atoms render with leading `:` from the wrapper's
 	// data_type; see render_scalar_to for the rationale.
 	if n.data_type == .atom_type {
@@ -541,6 +596,12 @@ fn render_scalar(n cx.ScalarNode) string {
 	}
 	// bigint renders bare (numeric); see render_scalar_to for the rationale.
 	if n.data_type == .bigint_type {
+		if n.value is string {
+			return n.value as string
+		}
+	}
+	// decimal renders bare (I1 2b — numeric; quoting would flip the kind).
+	if n.data_type == .decimal_type {
 		if n.value is string {
 			return n.value as string
 		}
@@ -726,16 +787,23 @@ fn render_element(n cx.Element) string {
 	// marker carries map entries as child elements (name=key,
 	// items=[value]) per the program-side eval_map representation.
 	// Keys go through the shared envelope-lane rule
-	// (cx.cx_emit_envelope_map_key, #495) so a $-leading /
-	// colon-bearing key quotes and re-parses as itself.
+	// (cx.cx_emit_envelope_map_key_typed, #495 + #777) so a $-leading /
+	// colon-bearing key quotes and re-parses as itself, and a KIND-stamped
+	// key re-parses as its own kind.
 	if n.name == cx_map_name {
 		mut parts := []string{cap: n.items.len}
 		for it in n.items {
 			if it is cx.Element {
+				key_str := cx.cx_emit_envelope_map_key_typed(it.name, map_entry_key_kind(it))
+				// RULED: MSS-4 (#917): a declaration-only entry renders
+				// `k: ::T` — declared kind, value ABSENT (never null).
+				if dk := map_entry_decl_kind(it) {
+					parts << '${key_str}: ::${dk}'
+					continue
+				}
 				val_str := if it.items.len > 0 {
 					render_seq_item(it.items[0])
 				} else { '' }
-				key_str := cx.cx_emit_envelope_map_key(it.name)
 				parts << '${key_str}: ${val_str}'
 			}
 		}
@@ -821,10 +889,76 @@ fn render_seq_item(n cx.Node) string {
 		}
 		return n.value
 	}
+	// #831 (RULED: 831-1a′): a STRING SCALAR in item position renders
+	// bare-when-safe through the SAME authority as the data lane
+	// (cx.cx_collection_string). code.md §11.1a R6 has always been the
+	// normative rule here — "a string renders BARE iff it is bare-safe AND
+	// does not auto-type" — and quoting unconditionally was below it.
+	//
+	// The earlier attempt (#790/790-1a, 2026-08-15) was reverted for moving
+	// the result-image goldens, on the reading that §11.1a meant "program
+	// results quote their strings". R6 says the opposite; what the goldens
+	// pinned was the pre-R6 behavior. The reason it is safe to land NOW is
+	// that the safe SET was the actual defect: it was computed for the data
+	// reading alone, so the shared rule emitted `{k: a b}` / `{k: a.b}` /
+	// `{k: https://a.com}` — canonical text the PROGRAM reader cannot read
+	// back. cx_collection_bare_safe narrows it to the intersection of the
+	// two readings, so adopting it here converges the two surfaces onto a
+	// spelling that BOTH can read, instead of onto the broken one.
+	if n is cx.ScalarNode && n.data_type == .string_type {
+		sv := match n.value {
+			string { n.value as string }
+			else { cx.scalar_value_str_public(n.value) }
+		}
+		return cx.cx_collection_string(sv)
+	}
+	// #917/MSS-7 exposed (pre-existing): decimal/bigint scalars in item
+	// position carry their ascription exactly when the bare image would
+	// re-type (annotation-iff-retyping) — `(2::decimal)` emitted `(2)`,
+	// a silent re-type to int. ONLY those kinds route through the
+	// data lane's rule: its canonical float image is the exponent form,
+	// which the program result lane deliberately does not use.
+	// #933: bytes joins them — it rendered as a QUOTED STRING here
+	// (`(0x2a::bytes, ok)` emitted `('0x2a', ok)`), a silent re-type to
+	// string the data lane never had.
+	if n is cx.ScalarNode && (n.data_type == .decimal_type || n.data_type == .bigint_type
+		|| n.data_type == .bytes_type) {
+		return cx.cx_typed_collection_scalar_public(n)
+	}
 	return render_node(n)
 }
 
 // render_seq_item_to is the streaming counterpart to `render_seq_item`.
+// render_lazy_canonical_to writes a certified-canonical span's bytes into
+// the builder, substituting `'` at each recorded delimiter offset.
+//
+// It writes RUNS rather than going through `cx.apply_rewrites`, which
+// returns a String and so copies the span once per rewritten record. On the
+// §11.4.4 workload every record is rewritten, and the ceiling probe measured
+// that one allocation at 22% of the achievable throughput (315.8 -> 246.9
+// MB/s). This is the reason the seam is a writer.
+fn render_lazy_canonical_to(mut b strings.Builder, l cx.LazyRecord) {
+	// ONE memmove, then patch the delimiters in place (#804 leg 5).
+	//
+	// Writing runs between the rewrite offsets meant one memmove per run —
+	// five of them for a typical gate record with two strings, each moving
+	// ~20 bytes, so the per-call overhead dominated the copy. Profiling put
+	// `_platform_memmove` at ~223 samples on this path. Copying the span
+	// whole and then storing four bytes over it is one large move plus four
+	// stores.
+	//
+	// `strings.Builder` is a `[]u8`, so the bytes just written are directly
+	// addressable at `base + (offset - l.start)`.
+	base := b.len
+	unsafe { b.write_ptr(&l.src[l.start], l.end - l.start) }
+	for i in 0 .. l.rewrites.len {
+		k := base + (l.rewrites.get(i) - l.start)
+		if k >= base && k < b.len {
+			b[k] = `'`
+		}
+	}
+}
+
 fn render_seq_item_to(mut b strings.Builder, n cx.Node) {
 	if n is cx.Element && n.name == '' {
 		if n.items.len == 1 {
@@ -846,6 +980,15 @@ fn render_seq_item_to(mut b strings.Builder, n cx.Node) {
 			return
 		}
 		b.write_string(n.value)
+		return
+	}
+	// (the streaming twin follows render_seq_item — see its 790-1a
+	// execution note; the tried bare-when-safe arm was reverted.)
+	// #917/MSS-7: the same typed-collection-scalar rule as the
+	// non-streaming twin (decimal/bigint/bytes ascription carry, #933).
+	if n is cx.ScalarNode && (n.data_type == .decimal_type || n.data_type == .bigint_type
+		|| n.data_type == .bytes_type) {
+		b.write_string(cx.cx_typed_collection_scalar_public(n))
 		return
 	}
 	render_node_to(mut b, n)
@@ -1358,6 +1501,22 @@ fn map_marker_to_node(e cx.Element) cx.Node {
 	mut entries := []cx.MapEntry{cap: e.items.len}
 	for it in e.items {
 		if it is cx.Element {
+			// RULED: MSS-4 (#917): a declaration-only envelope entry carries
+			// its kind on meta.decl_kind — value ABSENT, never the guard item.
+			if it.meta != unsafe { nil } {
+				if dk := it.meta.decl_kind {
+					entries << cx.MapEntry{
+						key_type:  .string_type
+						key_value: cx.ScalarValue(it.name)
+						value:     cx.Node(cx.ScalarNode{
+							data_type: .null_type
+							value:     cx.ScalarValue(cx.NullValue{})
+						})
+						decl_kind: dk
+					}
+					continue
+				}
+			}
 			val := if it.items.len == 1 {
 				flatten_node(it.items[0])
 			} else if it.items.len == 0 {
@@ -1372,9 +1531,27 @@ fn map_marker_to_node(e cx.Element) cx.Node {
 					items: it.items.map(flatten_node(it))
 				})
 			}
+			// #918: a STAMPED key kind (#777 — meta carries it when the kind
+			// does not follow from the image, and always on an ascribed key)
+			// survives the lowering; the old hard-coded .string_type
+			// string-degraded {1.10::decimal: x} in every lane fed by this
+			// normalizer. STAMPED ONLY, deliberately: this normalizer also
+			// lowers JSON-imported envelopes whose keys are strings BY
+			// DEFINITION and whose cx:key-type sidecar is consumed AFTER
+			// this pass — an image-autotype fallback here re-typed 'true'/
+			// '1' string keys and broke the #475 sidecar consumption.
+			mut kt := cx.ScalarType.string_type
+			mut kv := cx.ScalarValue(it.name)
+			if kind := map_entry_key_kind(it) {
+				if kind != 'string' {
+					sn := cx.coerce_scalar_public(kind, it.name)
+					kt = sn.data_type
+					kv = sn.value
+				}
+			}
 			entries << cx.MapEntry{
-				key_type:  .string_type
-				key_value: cx.ScalarValue(it.name)
+				key_type:  kt
+				key_value: kv
 				value:     val
 			}
 		}

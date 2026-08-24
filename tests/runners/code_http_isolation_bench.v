@@ -47,6 +47,7 @@
 module main
 
 import code
+import platform as _
 import cx
 import net
 import net.http

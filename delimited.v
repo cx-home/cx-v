@@ -77,7 +77,9 @@ pub fn to_psv(src string) !string {
 // supplied single-char delimiter. The delimiter must not be `\r`,
 // `\n`, `"`, `'`, or `\\` (D6).
 pub fn to_delimited(src string, delim u8) !string {
-	doc := parse(src)!
+	// Delimited output is always a lossy projection → semantic document
+	// (Resolved AST, ANC-1): aliased/merged rows project as their content.
+	doc := resolve_document(parse(src)!)!
 	mut opts := default_emit_options()
 	opts.delimiter = delim
 	return emit_delimited(doc, opts)

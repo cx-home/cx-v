@@ -1,4 +1,4 @@
-[test-suite name=crypto
+[test-suite name=crypto ring=1
   [doc [#
 conformance fixtures for cx-stdlib/crypto (spec/std-lib/crypto.md §6).
 
@@ -1092,7 +1092,7 @@ cx-err:CXER3717
 #]]
  ]
 
- [case id=crypto-071-jwt-verify-rs256 level=core gate=enforced
+ [case id=crypto-071-jwt-verify-rs256 level=core gate=enforced packs=time
   [tags crypto jwt-verify rs256 claims]
   [in-cx [#
 [empty]
@@ -1107,7 +1107,7 @@ cx-err:CXER3717
 #]]
  ]
 
- [case id=crypto-072-jwt-verify-es256 level=core gate=enforced
+ [case id=crypto-072-jwt-verify-es256 level=core gate=enforced packs=time
   [tags crypto jwt-verify es256 claims]
   [in-cx [#
 [empty]
@@ -1122,7 +1122,7 @@ cx-err:CXER3717
 #]]
  ]
 
- [case id=crypto-073-jwt-verify-eddsa level=core gate=enforced
+ [case id=crypto-073-jwt-verify-eddsa level=core gate=enforced packs=time
   [tags crypto jwt-verify eddsa claims]
   [in-cx [#
 [empty]
@@ -1137,7 +1137,7 @@ cx-err:CXER3717
 #]]
  ]
 
- [case id=crypto-074-jwt-rs384 level=core gate=enforced
+ [case id=crypto-074-jwt-rs384 level=core gate=enforced packs=time
   [tags crypto jwt-verify rs384]
   [in-cx [#
 [empty]
@@ -1152,7 +1152,7 @@ cx-err:CXER3717
 #]]
  ]
 
- [case id=crypto-075-jwt-rs512 level=core gate=enforced
+ [case id=crypto-075-jwt-rs512 level=core gate=enforced packs=time
   [tags crypto jwt-verify rs512]
   [in-cx [#
 [empty]
@@ -1167,7 +1167,7 @@ cx-err:CXER3717
 #]]
  ]
 
- [case id=crypto-076-jwt-alg-none level=core gate=enforced
+ [case id=crypto-076-jwt-alg-none level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3713 alg-none]
   [in-cx [#
 [empty]
@@ -1182,7 +1182,7 @@ cx-err:CXER3713
 #]]
  ]
 
- [case id=crypto-077-jwt-alg-not-allowed level=core gate=enforced
+ [case id=crypto-077-jwt-alg-not-allowed level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3713 expected-alg]
   [in-cx [#
 [empty]
@@ -1197,7 +1197,7 @@ cx-err:CXER3713
 #]]
  ]
 
- [case id=crypto-078-jwt-tampered-sig level=core gate=enforced
+ [case id=crypto-078-jwt-tampered-sig level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3710 tampered]
   [in-cx [#
 [empty]
@@ -1212,7 +1212,7 @@ cx-err:CXER3710
 #]]
  ]
 
- [case id=crypto-079-jwt-expired level=core gate=enforced
+ [case id=crypto-079-jwt-expired level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3711 expired]
   [in-cx [#
 [empty]
@@ -1227,7 +1227,7 @@ cx-err:CXER3711
 #]]
  ]
 
- [case id=crypto-080-jwt-expired-within-leeway level=core gate=enforced
+ [case id=crypto-080-jwt-expired-within-leeway level=core gate=enforced packs=time
   [tags crypto jwt-verify leeway]
   [in-cx [#
 [empty]
@@ -1242,7 +1242,7 @@ cx-err:CXER3711
 #]]
  ]
 
- [case id=crypto-081-jwt-future-nbf level=core gate=enforced
+ [case id=crypto-081-jwt-future-nbf level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3712 nbf]
   [in-cx [#
 [empty]
@@ -1257,7 +1257,7 @@ cx-err:CXER3712
 #]]
  ]
 
- [case id=crypto-082-jwt-wrong-iss level=core gate=enforced
+ [case id=crypto-082-jwt-wrong-iss level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3715 iss]
   [in-cx [#
 [empty]
@@ -1272,7 +1272,7 @@ cx-err:CXER3715
 #]]
  ]
 
- [case id=crypto-083-jwt-wrong-aud level=core gate=enforced
+ [case id=crypto-083-jwt-wrong-aud level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3715 aud]
   [in-cx [#
 [empty]
@@ -1287,7 +1287,7 @@ cx-err:CXER3715
 #]]
  ]
 
- [case id=crypto-084-jwt-kid-not-found level=core gate=enforced
+ [case id=crypto-084-jwt-kid-not-found level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3714 kid]
   [in-cx [#
 [empty]
@@ -1302,7 +1302,7 @@ cx-err:CXER3714
 #]]
  ]
 
- [case id=crypto-085-jwt-kty-mismatch level=core gate=enforced
+ [case id=crypto-085-jwt-kty-mismatch level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3719 kty-alg]
   [in-cx [#
 [empty]
@@ -1317,7 +1317,7 @@ cx-err:CXER3719
 #]]
  ]
 
- [case id=crypto-086-jwt-require-absent level=core gate=enforced
+ [case id=crypto-086-jwt-require-absent level=core gate=enforced packs=time
   [tags crypto jwt-verify CXER3709 require]
   [in-cx [#
 [empty]
@@ -1361,7 +1361,7 @@ cx-err:CXER0271
  ]
 
 
- [case id=crypto-089-jwt-verify-nonurlsafe-key-rejected level=core gate=enforced
+ [case id=crypto-089-jwt-verify-nonurlsafe-key-rejected level=core gate=enforced packs=time
   [tags crypto jwt-verify base64url strict CXER3718 hostile]
   [doc [#
 HOSTILE (minor): the JWK/JWT base64url decoder claimed "strict" but accepted

@@ -1,4 +1,4 @@
-[test-suite name=geo
+[test-suite name=geo ring=1
   [doc [#
 conformance fixtures for cx-stdlib/geo (spec/std-lib/geo.md §6).
 

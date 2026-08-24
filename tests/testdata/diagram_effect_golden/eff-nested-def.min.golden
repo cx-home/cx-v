@@ -1,0 +1,4 @@
+flowchart TD
+  prog(["program"])
+  cap_read{{"read"}}
+  prog -.->|"charged only in a def nothing calls"| cap_read

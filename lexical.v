@@ -204,6 +204,102 @@ pub fn is_ident_part(b u8) bool {
 	return is_name_start(b) || is_digit(b) || b == `-`
 }
 
+// ── Full-Unicode names (I1 L22 / wart W-9) ───────────────────────────────────
+//
+// The grammar has admitted full-Unicode names since [L10a]/[L10b]
+// (lexicon.ebnf §2 — the XML NameStartChar/NameChar ranges minus `:`); the
+// parsers were ASCII-only, so `[café]` silently degraded. The codepoint
+// predicates below are the grammar's OWN fixed ranges — no Unicode database
+// involved. NFC normalization of names (L23) is a separate pass layered on
+// top; these predicates only decide membership.
+
+// utf8_cp_at decodes the UTF-8 sequence starting at src[i], returning
+// (codepoint, byte_length). byte_length 0 = INVALID encoding: truncated
+// sequence, bad continuation byte, overlong form, encoded surrogate
+// (U+D800–U+DFFF), or a value above U+10FFFF — the L23 validity set.
+pub fn utf8_cp_at(src []u8, i int) (rune, int) {
+	b0 := src[i]
+	if b0 < 0x80 {
+		return rune(b0), 1
+	}
+	if b0 < 0xc2 {
+		// 0x80–0xBF: bare continuation; 0xC0/0xC1: always-overlong leads.
+		return rune(0), 0
+	}
+	if b0 < 0xe0 {
+		if i + 1 >= src.len || (src[i + 1] & 0xc0) != 0x80 {
+			return rune(0), 0
+		}
+		return rune((u32(b0 & 0x1f) << 6) | u32(src[i + 1] & 0x3f)), 2
+	}
+	if b0 < 0xf0 {
+		if i + 2 >= src.len || (src[i + 1] & 0xc0) != 0x80 || (src[i + 2] & 0xc0) != 0x80 {
+			return rune(0), 0
+		}
+		cp := (u32(b0 & 0x0f) << 12) | (u32(src[i + 1] & 0x3f) << 6) | u32(src[i + 2] & 0x3f)
+		if cp < 0x800 {
+			return rune(0), 0 // overlong
+		}
+		if cp >= 0xd800 && cp <= 0xdfff {
+			return rune(0), 0 // encoded surrogate
+		}
+		return rune(cp), 3
+	}
+	if b0 < 0xf5 {
+		if i + 3 >= src.len || (src[i + 1] & 0xc0) != 0x80 || (src[i + 2] & 0xc0) != 0x80
+			|| (src[i + 3] & 0xc0) != 0x80 {
+			return rune(0), 0
+		}
+		cp := (u32(b0 & 0x07) << 18) | (u32(src[i + 1] & 0x3f) << 12) | (u32(src[i + 2] & 0x3f) << 6) | u32(src[i + 3] & 0x3f)
+		if cp < 0x10000 || cp > 0x10ffff {
+			return rune(0), 0 // overlong / out of range
+		}
+		return rune(cp), 4
+	}
+	return rune(0), 0 // 0xF5–0xFF: lead bytes for values above U+10FFFF
+}
+
+// is_name_start_cp — [L10a] NameStartChar for non-ASCII codepoints (the
+// ASCII arm stays in the byte-level is_name_start fast path).
+pub fn is_name_start_cp(cp rune) bool {
+	c := u32(cp)
+	return (c >= 0xc0 && c <= 0xd6) || (c >= 0xd8 && c <= 0xf6)
+		|| (c >= 0xf8 && c <= 0x2ff) || (c >= 0x370 && c <= 0x37d)
+		|| (c >= 0x37f && c <= 0x1fff) || (c >= 0x200c && c <= 0x200d)
+		|| (c >= 0x2070 && c <= 0x218f) || (c >= 0x2c00 && c <= 0x2fef)
+		|| (c >= 0x3001 && c <= 0xd7ff) || (c >= 0xf900 && c <= 0xfdcf)
+		|| (c >= 0xfdf0 && c <= 0xfffd) || (c >= 0x10000 && c <= 0xeffff)
+}
+
+// is_name_char_cp — [L10b] NameChar continuation extras for non-ASCII
+// codepoints: NameStartChar plus U+00B7, combining marks U+0300–U+036F,
+// and U+203F–U+2040.
+pub fn is_name_char_cp(cp rune) bool {
+	c := u32(cp)
+	return is_name_start_cp(cp) || c == 0xb7
+		|| (c >= 0x300 && c <= 0x36f) || (c >= 0x203f && c <= 0x2040)
+}
+
+// validate_utf8 scans the whole input and returns the byte offset of the
+// first invalid UTF-8 sequence, or none when the input is valid. L23: the
+// data parse entries enforce validity up front, so no invalid byte can
+// reach a name, a value, or the canonical byte stream.
+pub fn validate_utf8(src []u8) ?int {
+	mut i := 0
+	for i < src.len {
+		if src[i] < 0x80 {
+			i++
+			continue
+		}
+		_, sz := utf8_cp_at(src, i)
+		if sz == 0 {
+			return i
+		}
+		i += sz
+	}
+	return none
+}
+
 // is_all_digits reports whether every byte of `s` is an ASCII decimal digit.
 // Helper for the date/datetime recognizers.
 pub fn is_all_digits(s string) bool {

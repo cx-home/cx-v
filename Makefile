@@ -34,7 +34,7 @@ $(RE2_SHIM_LIB): deps/re2_shim/re2_shim.cc deps/re2_shim/re2_shim.h
 # cmd/main.v + the tests import BOTH `cx` (this package root) and `code` (the
 # eval/stdlib module in code/). We stage a temporary _modules/ with a symlink
 # per module so VMODULES resolves both regardless of the shell's VMODULES.
-MODSETUP = mkdir -p _modules && ln -sfn $$(pwd) _modules/cx && ln -sfn $$(pwd)/code _modules/code && ln -sfn $$(pwd)/transport _modules/transport
+MODSETUP = mkdir -p _modules && ln -sfn $$(pwd) _modules/cx && ln -sfn $$(pwd)/code _modules/code && ln -sfn $$(pwd)/platform _modules/platform && ln -sfn $$(pwd)/transport _modules/transport
 
 # NOTE: not `-prod`. `-prod` turns V warnings into errors, and the cmd/ LSP
 # files carry benign unused-import warnings (same class as cx-home/cx-private#13);

@@ -570,16 +570,28 @@ fn handle_code_lens(msg LspMessage, mut state LspState) {
 }
 
 fn is_cx_code_directive(name string) bool {
-	// Closed registry per spec/code.md §4.1 (39 directives).
+	// The FULL closed registry per spec/code.md §4.1 (80 directives) —
+	// found stale at the release-cut docs audit (2026-08-20): this list carried only the
+	// pre-reshape 37 names, so semantic tokens missed [?modify], the
+	// quote family, every iterator combinator, and the module/security
+	// directives. Kept in the registry's own order for diffability.
 	directives := [
-		'match', 'for', 'let', 'fn', 'def', 'if',
-		'pipe', 'map', 'reduce',
+		'match', 'modify', 'with-open', 'with-scope', 'str', 'element',
+		'attr', 'entry', 'name', 'quote', 'unquote', 'splice', 'eval',
+		'for', 'for-array', 'for-map', 'let', 'fn', 'def', 'lib', 'const',
+		'do', 'loop', 'if', 'else', 'pipe', 'map', 'reduce', 'filter',
+		'take', 'drop', 'zip', 'enumerate', 'chunks', 'concat', 'cycle',
+		'scan', 'flatten', 'partition', 'group-by', 'to-sequence',
+		'to-array', 'to-map', 'view', 'views',
 		'retry', 'timeout', 'circuit-breaker', 'fallback', 'rate-limit',
-		'bulkhead', 'sleep',
-		'http-service', 'service-handle', 'http-client', 'stop', 'wait-for',
+		'bulkhead',
+		'http-service', 'service-handle', 'http-client',
+		'worker', 'worker-handle', 'subscribe', 'monitor',
 		'channel', 'send', 'receive', 'try-send', 'try-receive', 'close',
-		'select', 'worker', 'worker-handle', 'cancel', 'check-cancel',
+		'select', 'stop', 'wait-for',
 		'async', 'await', 'await-all', 'await-any', 'await-race',
+		'cancel', 'check-cancel', 'sleep',
+		'with-error-hook', 'with-caps', 'secret', 'reveal', 'meta',
 	]
 	for d in directives {
 		if d == name { return true }
@@ -589,11 +601,108 @@ fn is_cx_code_directive(name string) bool {
 
 // ── inlayHint ────────────────────────────────────────────────────────
 //
-// Return an empty list. Inferred-type hints arrive later
-// once cx-eval's type inference exposes a hint-ready API.
+// Declared-flow type hints across [?pipe] stages (stream 16 W5 — the
+// Layer-B surface at the LSP dial): before each stage whose PREVIOUS
+// stage is an in-file [?def] with a declared [returns T], render
+// `«T»` — the declared type of the value flowing INTO the stage.
+// Declarations are the contract (modular; no inference beyond them).
 
 fn handle_inlay_hint(msg LspMessage, mut state LspState) {
-	write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+	params := msg.params as map[string]json2.Any
+	td := params['textDocument'] or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	} as map[string]json2.Any
+	uri := td['uri'] or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	}.str()
+	doc_text := state.docs[uri] or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	}
+	prog := cx.parse_program(doc_text) or {
+		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
+		return
+	}
+	mut returns_of := map[string]string{}
+	inlay_collect_def_returns(prog.body, mut returns_of)
+	mut hints := []json2.Any{}
+	inlay_walk_pipes(prog.body, returns_of, mut hints)
+	write_lsp_response(msg.id, json2.Any(hints))
+}
+
+fn inlay_collect_def_returns(node cx.ProgramNode, mut returns_of map[string]string) {
+	if node is cx.ProgramDirective {
+		if node.name == 'def' {
+			for sl in node.slots {
+				if sl.label == 'raw-source' {
+					v := sl.value
+					if v is cx.ProgramLiteral && v.kind == .string_lit {
+						if def := cx.parse_def(v.str_val) {
+							returns_of[def.name] = def.returns_type_source or { '' }
+						}
+					}
+				}
+			}
+		}
+		for sl in node.slots {
+			inlay_collect_def_returns(sl.value, mut returns_of)
+		}
+	} else if node is cx.ProgramLiteral {
+		for it in node.items {
+			inlay_collect_def_returns(it, mut returns_of)
+		}
+	} else if node is cx.Program {
+		inlay_collect_def_returns(node.body, mut returns_of)
+	}
+}
+
+fn inlay_walk_pipes(node cx.ProgramNode, returns_of map[string]string, mut hints []json2.Any) {
+	if node is cx.ProgramDirective {
+		if node.name == 'pipe' && node.slots.len >= 3 {
+			mut prev_ret := ''
+			for i in 1 .. node.slots.len {
+				stage := node.slots[i].value
+				mut cur_ret := ''
+				if stage is cx.ProgramCall {
+					if prev_ret != '' {
+						hints << inlay_hint_at(stage.pos, '«${prev_ret}» ')
+					}
+					cur_ret = returns_of[stage.name] or { '' }
+				}
+				prev_ret = cur_ret
+			}
+		}
+		for sl in node.slots {
+			inlay_walk_pipes(sl.value, returns_of, mut hints)
+		}
+	} else if node is cx.ProgramLiteral {
+		for it in node.items {
+			inlay_walk_pipes(it, returns_of, mut hints)
+		}
+	} else if node is cx.ProgramCall {
+		for a in node.args {
+			inlay_walk_pipes(a, returns_of, mut hints)
+		}
+	} else if node is cx.Program {
+		inlay_walk_pipes(node.body, returns_of, mut hints)
+	}
+}
+
+fn inlay_hint_at(pos cx.Position, label string) json2.Any {
+	mut position := map[string]json2.Any{}
+	// Parser positions are 1-based; LSP positions are 0-based.
+	hl := if pos.line > 0 { pos.line - 1 } else { 0 }
+	hc := if pos.col > 0 { pos.col - 1 } else { 0 }
+	position['line'] = json2.Any(i64(hl))
+	position['character'] = json2.Any(i64(hc))
+	mut h := map[string]json2.Any{}
+	h['position'] = json2.Any(position)
+	h['label'] = json2.Any(label)
+	h['kind'] = json2.Any(i64(1)) // Type
+	h['paddingRight'] = json2.Any(false)
+	return json2.Any(h)
 }
 
 // ── signatureHelp ────────────────────────────────────────────────────
@@ -643,14 +752,21 @@ struct DirectiveSignature {
 
 fn signature_for_directive(name string) ?DirectiveSignature {
 	return match name {
-		'if'      { DirectiveSignature{label: '[?if cond :then expr :else expr]', doc: 'Conditional', params: ['cond', ':then expr', ':else expr']} }
-		'for'     { DirectiveSignature{label: '[?for x in coll :let ... :where ... :return ...]', doc: 'FLWOR iteration', params: ['x in coll', ':let', ':where', ':order-by', ':group-by', ':count', ':while', ':return']} }
-		'let'     { DirectiveSignature{label: '[?let :name value :in body]', doc: 'Lexical binding', params: [':name value', ':in body']} }
-		'fn'      { DirectiveSignature{label: '[?fn :params [x y] :body expr]', doc: 'First-class function', params: [':params', ':body']} }
-		'match'   { DirectiveSignature{label: '[?match value :case pat result :else default]', doc: 'Pattern matching', params: ['value', ':case', ':else']} }
-		'def'     { DirectiveSignature{label: '[?def name value]', doc: 'Top-level definition', params: ['name', 'value']} }
-		'include' { DirectiveSignature{label: '[?include "path"]', doc: 'Sandboxed file inclusion (spec/include.md)', params: ['path']} }
-		'eval'    { DirectiveSignature{label: '[?eval cx-source :caps ?]', doc: 'Sandboxed nested evaluation', params: ['source', ':caps']} }
+		// Clause-child forms — the colon-slot signatures these replace
+		// advertised syntax the parser REJECTS (#711 item 5, stream-2 W2).
+		'if'      { DirectiveSignature{label: '[?if cond [then expr] [else expr]]', doc: 'Conditional', params: ['cond', '[then expr]', '[else expr]']} }
+		'for'     { DirectiveSignature{label: '[?for [in \$x coll] [where P] [yield E]]', doc: 'Comprehension (§7.2)', params: ['[in \$x coll]', '[= \$y E]', '[where P]', '[order-by E]', '[group-by E]', '[take N]', '[par]', '[yield E]']} }
+		'let'     { DirectiveSignature{label: '[?let [= \$name value] body]', doc: 'Lexical binding (flat multi-binding)', params: ['[= \$name value]', 'body']} }
+		'fn'      { DirectiveSignature{label: '[?fn (\$x \$y) body]', doc: 'First-class function', params: ['(\$params)', 'body']} }
+		'match'   { DirectiveSignature{label: '[?match value [case P R] [when PRED R] [else R]]', doc: 'Pattern matching', params: ['value', '[case P R]', '[when PRED R]', '[else R]']} }
+		'def'     { DirectiveSignature{label: '[?def name (\$params) body]', doc: 'Module-level function (§8.7)', params: ['name', '(\$params)', 'body']} }
+		// `[?include …]` is the DATA-document parse-time form (code.md
+		// §13); the CODE-program form is `[?cx include "path"]`. The old
+		// signature named only the first and called it file inclusion
+		// generally, which is wrong in a code buffer.
+		'include' { DirectiveSignature{label: '[?include [\'path.cx\']]', doc: 'Parse-time inclusion in a DATA document (spec/include.md)', params: ['[\'path\']']} }
+		'cx'      { DirectiveSignature{label: '[?cx include "path.cx"]', doc: 'Self-host directive (code-program inclusion, cx:* module fns)', params: ['include "path"', 'cx:hash VALUE', 'cx:parse SOURCE']} }
+		'eval'    { DirectiveSignature{label: '[?eval TREE [context MAP] [opts {...}]]', doc: 'Sandboxed nested evaluation (§6.4.4)', params: ['TREE', '[context MAP]', '[opts MAP]']} }
 		else      { none }
 	}
 }

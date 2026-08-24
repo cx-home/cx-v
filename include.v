@@ -31,7 +31,7 @@ pub mut:
 	// short-circuits in that case).
 	root          string
 	// Maximum include-stack depth. Default 8 per spec/include.md §7.
-	// Element-nesting limit (max_depth=64 per spec/policies.md §5.4)
+	// Element-nesting limit (max_depth=64; spec/03-approved/core/limits.md §2)
 	// is independent.
 	max_depth     int
 	// Absolute path of the file currently containing a directive being

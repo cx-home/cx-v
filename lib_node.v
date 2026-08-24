@@ -260,29 +260,25 @@ pub fn lib_node_hash(n LibNode) string {
 
 // ── JSON projection ───────────────────────────────────────────────────────────
 
-// lib_node_to_json returns the AST-JSON projection of a LibNode.
-// The shape:
+// lib_node_to_json returns the AST-JSON projection of a LibNode
+// (ast.md "LibNode" shape). The shape:
 //
 //   {
-//     "type":            "ProgramLibExpr",
-//     "resolver-kind":   "file" | "registered" | "https",
+//     "type":            "LibNode",
 //     "resolver":        "<resolver_source>",
-//     "alias":           "<name>",                          // omit when none
+//     "resolver_kind":   "file" | "registered" | "https",
+//     "as":              "<name>",                          // omit when none
 //     "only":            ["a","b","c"],                     // omit when none
 //     "source":          "<src>",                           // omit when none
 //     "loc":             { "start": N, "end": M }           // omit when none
 //   }
-//
-// "ProgramLibExpr" is the parser-internal JSON `type` tag; at the
-// AST-bin boundary the projection will collapse to `"LibNode"` per
-// the spec when the wire slot lands.
 pub fn lib_node_to_json(n LibNode) string {
 	mut pairs := []string{}
-	pairs << '"type":"ProgramLibExpr"'
-	pairs << '"resolver-kind":${json_str(resolver_kind_str(n.resolver_kind))}'
+	pairs << '"type":"LibNode"'
 	pairs << '"resolver":${json_str(n.resolver_source)}'
+	pairs << '"resolver_kind":${json_str(resolver_kind_str(n.resolver_kind))}'
 	if a := n.alias {
-		pairs << '"alias":${json_str(a)}'
+		pairs << '"as":${json_str(a)}'
 	}
 	if names := n.only_imports {
 		mut items := []string{}

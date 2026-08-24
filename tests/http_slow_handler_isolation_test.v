@@ -6,7 +6,7 @@ import testenv
 import time
 
 // http_slow_handler_isolation_test.v — BEHAVIORAL guard for cx-private #275(b)
-// (handlers off reactors; xap_architecture §11).
+// (handlers off reactors; http.md §14).
 //
 // A handler that blocks on a slow upstream must not freeze the serve plane.
 // Pre-fix, handler evaluation ran ON the picoev reactor threads: min(4, cores)

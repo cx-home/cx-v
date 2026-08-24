@@ -206,11 +206,11 @@ pub fn const_node_hash(c ConstNode) string {
 
 // ── JSON projection ───────────────────────────────────────────────────────────
 
-// const_node_to_json returns the AST-JSON projection of a ConstNode.
-// The shape:
+// const_node_to_json returns the AST-JSON projection of a ConstNode
+// (ast.md "ConstNode" shape). The shape:
 //
 //   {
-//     "type":   "ProgramConstExpr",
+//     "type":   "ConstNode",
 //     "name":   "<NAME>",
 //     "value":  "<src>",
 //     "lazy":   true,                            // omit when false
@@ -219,16 +219,12 @@ pub fn const_node_hash(c ConstNode) string {
 //     "loc":    { "start": N, "end": M }         // omit when none
 //   }
 //
-// "ProgramConstExpr" is the parser-internal JSON `type` tag; at the
-// AST-bin boundary the projection will collapse to `"ConstNode"` per
-// the spec when the wire slot lands.
-//
 // Phase 2.12 Part 2 leaves value_source as a verbatim source string;
 // the Phase 2.16 graft replaces it with a structural ProgramExpr
 // subtree, extending the wire shape rather than breaking it.
 pub fn const_node_to_json(c ConstNode) string {
 	mut pairs := []string{}
-	pairs << '"type":"ProgramConstExpr"'
+	pairs << '"type":"ConstNode"'
 	pairs << '"name":${json_str(c.name)}'
 	pairs << '"value":${json_str(c.value_source)}'
 	if c.lazy {

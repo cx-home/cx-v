@@ -29,7 +29,8 @@
    (carries the verbatim crypto fault) / 4802 no-tenant / 4803 no-principal
    / 4804 invalid-or-detached-session-op / 4805 rebind-refused / 4806
    insecure-transport / 4807 no-token / 4808 csrf-missing / 4809
-   csrf-mismatch / 4810 cookie-insecure-context / 4811 cookie-unsafe-flags.
+   csrf-mismatch / 4810 cookie-insecure-context / 4811 cookie-unsafe-flags
+   / 4812 anonymous-refused (attach-guest under a policy with no floor).
 
    The trailing $opts::map {} / $cfg::map {} / $client::map {} are
    DEFAULTED positional parameters (grammar.ebnf [153b]).
@@ -51,6 +52,19 @@
    child as M4, hold the session locally. N-IDENT-1: no session binds
    without proof. ]
 [?def attach-xsp    scope=public impure [returns element] ($m1::element $m2::element $m3::element $cfg::map $client::map {}) [$session-attach-xsp $m1 $m2 $m3 $cfg $client]]
+[; attach-guest — the FOURTH attach transport (#857 / GA-1): a session-
+   establishing act for the principal that proves NOTHING — the deployment's
+   anonymous floor (xap_identity_model §4.7). cfg carries the floor principal
+   (`anonymous-floor`, whose presence IS the policy admission) and the
+   `tenant`; no floor configured → the typed CXER4812 refusal (the production
+   default). Mints the SAME [session] through the SAME cookie adapter as
+   attach-cookie (HttpOnly/Secure/SameSite + CSRF synchronizer), registered
+   so of/from-cookie/by-id resolve it; per-visitor INDEPENDENT (guests never
+   mirror). A later proven attach over the guest cookie REMINTS the id
+   (privilege-transition fixation defense) — the pre-login id never survives
+   login. The floor is a real (principal, tenant) the authz PEP gates like
+   any other: no anonymous commit by default. ]
+[?def attach-guest  scope=public impure [returns element] ($req::element $cfg::map)                   [$session-attach-guest $req $cfg]]
 [?def detach        scope=public impure [returns null]    ($session::element)                        [$session-detach $session]]
 [?def detach-client scope=public impure [returns element] ($session::element $client-id::string)     [$session-detach-client $session $client-id]]
 [?def touch         scope=public impure [returns element] ($session::element $client-id::string)     [$session-touch $session $client-id]]
@@ -91,7 +105,7 @@
 
 [; co-located docs (seeded — refine in place). ]
 [module-doc name=session
-  [scope """The server-held (principal, tenant) session for a web app. A small, durable association between a verified external identity and a tenant-scoped principal — established by attach, looked up by of, and torn down by detach. One session can carry multiple concurrent clients (a human's browser and their agent mirror-attach to it) and survives the death of any individual client. Two attach transports converge on one session model: Bearer tokens for agents and service clients, and an opaque-session-id cookie (with synchronizer-token CSRF defense) for browsers. It delegates all token verification to crypto and all transport to http, adding no cryptography or sockets of its own."""]]
+  [scope """The server-held (principal, tenant) session for a web app. A small, durable association between a verified external identity and a tenant-scoped principal — established by attach, looked up by of, and torn down by detach. One session can carry multiple concurrent clients (a human's browser and their agent mirror-attach to it) and survives the death of any individual client. The attach transports converge on one session model: Bearer tokens for agents and service clients, an opaque-session-id cookie (with synchronizer-token CSRF defense) for browsers, DID/XSP proofs for peers — and attach-guest for the proofless anonymous floor, minting the same cookie-carried session for pre-login state. It delegates all token verification to crypto and all transport to http, adding no cryptography or sockets of its own."""]]
 [fn-doc name=attach scope=public purity=impure
   [sig """-> element"""]
   [summary """Verify the request's Bearer token and mirror-attach a client to its (principal, tenant) session."""]
@@ -123,6 +137,12 @@
 [fn-doc name=attach-xsp scope=public purity=impure
   [sig """-> element"""]
   [summary """Attach from a completed XSP-AUTH handshake: verify M1/M2/M3, extract the proven principal (or the anonymous floor), honor the §4.9 attach selector, and return [xsp-attached [session …] [confirm [xsp-auth …]]]."""]
+]
+[fn-doc name=attach-guest scope=public purity=impure
+  [sig """-> element"""]
+  [summary """Establish a session at the deployment's anonymous floor — no proof required, same cookie adapter and CSRF synchronizer; refuses with CXER4812 when the policy admits no floor, and the id remints on the login transition."""]
+  [example [code """[?lib 'cx-stdlib/session']
+[?let [= $pair [$session:attach-guest [request scheme="https"] {anonymous-floor: "web-public" tenant: "shop"}]] [= $s [$first $pair]] [?let [= $p [$session:principal $s]] $p@id]]"""] [expect """'web-public'"""]]
 ]
 [fn-doc name=list scope=public purity=impure
   [sig """-> element"""]

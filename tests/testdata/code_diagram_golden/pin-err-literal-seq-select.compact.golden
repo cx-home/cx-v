@@ -1,0 +1,9 @@
+sequenceDiagram
+  participant w
+  activate w
+  alt timeout (50ms)
+    w ->> w : timeout (50ms)
+  else default
+    Note over w: default
+  end
+  deactivate w

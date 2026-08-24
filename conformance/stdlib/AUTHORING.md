@@ -62,7 +62,7 @@ Rules:
     atoms `:NAME`; non-string scalars bare (`42`, `true`, `null`).
   Comparison is whitespace-normalised token-by-token. **Author expected outputs
   by running `cx eval` on the program (or re-derive with the `CX_BLESS=1` gate
-  mode + `scripts/apply_blesses.py`) — `cx eval` IS the single oracle.**
+  mode + `scripts/apply_blesses.cx`) — `cx eval` IS the single oracle.**
 
 ## Coverage target (per function)
 1. **Happy path** — at least one representative call with the spec's expected

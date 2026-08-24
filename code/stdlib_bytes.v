@@ -39,7 +39,7 @@ const bytes_length_ceiling = i64(4294967295)
 // ── value helpers ───────────────────────────────────────────────────────────
 
 // bytes_node wraps a raw byte buffer as a CXDM bytes scalar.
-fn bytes_node(buf []u8) cx.Node {
+pub fn bytes_node(buf []u8) cx.Node {
 	return cx.Node(cx.ScalarNode{
 		value:     cx.ScalarValue(buf.bytestr())
 		data_type: cx.ScalarType.bytes_type
@@ -47,7 +47,7 @@ fn bytes_node(buf []u8) cx.Node {
 }
 
 // string_node wraps a string as a CXDM string scalar.
-fn bytes_string_node(s string) cx.Node {
+pub fn bytes_string_node(s string) cx.Node {
 	return cx.Node(cx.ScalarNode{
 		value:     cx.ScalarValue(s)
 		data_type: cx.ScalarType.string_type
@@ -55,7 +55,7 @@ fn bytes_string_node(s string) cx.Node {
 }
 
 // int_node wraps an i64 as a CXDM int scalar.
-fn bytes_int_node(n i64) cx.Node {
+pub fn bytes_int_node(n i64) cx.Node {
 	return cx.Node(cx.ScalarNode{
 		value:     cx.ScalarValue(n)
 		data_type: cx.ScalarType.int_type
@@ -74,7 +74,7 @@ fn bytes_bool_node(b bool) cx.Node {
 // Accepts both .bytes_type and .string_type payloads (both carry a string
 // ScalarValue) so a string literal can stand in for a bytes value in
 // composition. Returns none for non-scalar or non-string-payload nodes.
-fn arg_bytes(n cx.Node) ?[]u8 {
+pub fn arg_bytes(n cx.Node) ?[]u8 {
 	if n is cx.ScalarNode {
 		v := n.value
 		if v is string {
@@ -85,7 +85,7 @@ fn arg_bytes(n cx.Node) ?[]u8 {
 }
 
 // arg_string extracts a UTF-8 string from a string/bytes scalar arg.
-fn arg_string(n cx.Node) ?string {
+pub fn arg_string(n cx.Node) ?string {
 	if n is cx.ScalarNode {
 		v := n.value
 		if v is string {
@@ -96,7 +96,7 @@ fn arg_string(n cx.Node) ?string {
 }
 
 // arg_int extracts an i64 from an int scalar arg.
-fn arg_int(n cx.Node) ?i64 {
+pub fn arg_int(n cx.Node) ?i64 {
 	if n is cx.ScalarNode {
 		v := n.value
 		if v is i64 {
@@ -132,7 +132,7 @@ fn bytes_seq_node(parts [][]u8) cx.Node {
 
 // ── dispatch ──────────────────────────────────────────────────────────────
 
-fn bytes_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
+pub fn bytes_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	match name {
 		// §3.1 inspection
 		'bytes-length' {

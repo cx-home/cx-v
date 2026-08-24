@@ -1,4 +1,4 @@
-[test-suite name=session
+[test-suite name=session ring=2
   [doc [#
 conformance fixtures for cx-stdlib/session (spec/02-inprogress/xap/stdlib_session.md §10).
 
@@ -37,6 +37,9 @@ conformance fixtures for cx-stdlib/session (spec/02-inprogress/xap/stdlib_sessio
               round-trip + rotate + clear-cookie
      025-031  CSRF: token read + verify pass/missing/mismatch + Bearer-exempt
      032-045  negatives: 4801/4802/4803/4804/4805/4806/4807/4810/4811
+     057-060  attach-guest (GA-1 / #857): the anonymous-floor transport —
+              floor binding, 4812 policy refusal, remint-on-login,
+              guest CSRF-guarded
 #]]
 
  [case id=session-001-attach-binds-principal-tenant level=core gate=enforced
@@ -580,7 +583,7 @@ cx-err:CXER4804
 [?lib 'cx-stdlib/crypto']
 [?lib 'cx-stdlib/time']
 [?lib 'cx-stdlib/strings']
-[?let [= $jwks [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"]] [?let [= $now [$time:datetime 2023 11 14 22 13 20]] [?let [= $pair [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: $jwks tenant-claim: "aud" now: $now}]] [?let [= $s [$first $pair]] [?let [= $cv [$strings:join ("__Host-cxsid=", $s@id) ""]] [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"] [header name="Cookie" [?attr value $cv]]]] {jwks: $jwks tenant-claim: "iss" now: $now}]]]]]]]
+[?let [= $jwks [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"]] [?let [= $now [$time:datetime 2023 11 14 22 13 20]] [?let [= $pair [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"]]] {jwks: $jwks tenant-claim: "aud" now: $now}]] [?let [= $s [$first $pair]] [?let [= $cv [$strings:join ("__Host-cxsid=", $s@id) ""]] [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"] [header name="Cookie" [?attr value $cv]]]] {jwks: $jwks tenant-claim: "iss" now: $now}]]]]]]
 #]]
   [out-err [#
 cx-err:CXER4805
@@ -1210,6 +1213,84 @@ example.
 #]]
   [out-text [#
 'ABSENT'
+#]]
+ ]
+
+ [case id=session-057-attach-guest-floor-binding level=core gate=enforced
+  [tags session attach-guest anonymous-floor guest fn-doc]
+  [doc [#
+attach-guest (GA-1 / #857) — the fourth attach transport: a session at the
+deployment's anonymous floor (xap_identity_model §4.7), no proof required.
+cfg carries the floor principal (`anonymous-floor` — its presence IS the
+policy admission) and the tenant; the minted [session] binds that real
+(principal, tenant) and rides the SAME cookie adapter as attach-cookie.
+Backs the [fn-doc name=attach-guest] example.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/session']
+[?let [= $pair [$session:attach-guest [request scheme="https"] {anonymous-floor: "web-public" tenant: "shop"}]] [= $s [$first $pair]] [?let [= $p [$session:principal $s]] $p@id]]
+#]]
+  [out-text [#
+'web-public'
+#]]
+ ]
+
+ [case id=session-058-attach-guest-refused-without-floor level=core gate=enforced
+  [tags session attach-guest CXER4812 anonymous-refused policy]
+  [doc [#
+REFUSAL IS THE COMMON CASE (§4.7): a deployment whose attach policy admits
+no anonymous floor (no `anonymous-floor` in cfg — the production default)
+refuses attach-guest CLEANLY with the typed CXER4812, naming the policy.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/session']
+[$session:attach-guest [request scheme="https"] {tenant: "shop"}]
+#]]
+  [out-err [#
+cx-err:CXER4812
+#]]
+ ]
+
+ [case id=session-059-attach-guest-remints-on-login level=core gate=enforced
+  [tags session attach-guest remint privilege-transition fixation]
+  [doc [#
+REMINT ON PRIVILEGE TRANSITION (GA-1 property 1, §2.8.4): an anonymous
+session that logs in does not keep its pre-login id. The proven
+attach-cookie over a request whose cookie names the live guest session
+invalidates the guest id server-side (by-id → absence) and establishes the
+proven session under a FRESHLY MINTED id. Output: reminted?:old-id-state:
+new-principal.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/session']
+[?lib 'cx-stdlib/crypto']
+[?lib 'cx-stdlib/time']
+[?lib 'cx-stdlib/strings']
+[?let [= $gpair [$session:attach-guest [request scheme="https"] {anonymous-floor: "web-public" tenant: "my-api"}]] [= $g [$first $gpair]] [= $gid $g@id] [= $cv [$strings:join ("__Host-cxsid=", $gid) ""]] [= $pair2 [$session:attach-cookie [request scheme="https" [headers [header name="Authorization" value="Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InJzYS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlci0xIiwiYXVkIjoibXktYXBpIiwiZXhwIjoxNzAwMDAzNjAwLCJuYmYiOjE2OTk5OTk5OTAsImlhdCI6MTY5OTk5OTk5MH0.e4bn1A_a5Q0_4IZxKWipmmrUCCdmNkiTUs071mBMtMVXb68RGPtV2FTR1nRWvM3Zw2XTMuBsk_Y1HPinat_2JQkm3s90lltrErpYOky6Nwm6ha57BxQ0Sg5kWxuQF5KhWUqHzePIVDTfkr0WeN591nDTDn6VuajLaHn2pjXBsaJ0reT6mh6v40UQcBW-yy-XOfrsMeGVj_qZd1UmlE81XN957rjPENcPpH2E1SHfVhu3fQP3QZapxtdMADgWmryw_z5O2lDIIWb7miT0siXRCDjVEhDzKH6Hsf1aUPcYx9x44o1B5OBpX6z1uM1SP0qaOZu6x26H0AbHj84nIISE1A"] [header name="Cookie" [?attr value $cv]]]] {jwks: [$crypto:jwks-parse "{\"keys\":[{\"kid\":\"rsa-1\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"n\":\"jdwwBcaMZQLoSNYGNEm3l03HIQqpRIv0eqLUNUCkyv7ysVw4i6vZgdYxcdU0D3kSvUCIjH-icqk4PCDx5AwkeNp55Nqt6wKXDv9TH5pr-Wc3BWmZ1sEOEwyN8QlI8_5EpY3i1w5tysDdeFuiR7BOjpkD49RZzF0YajmocsB4_jXoZcldVNCOChXAbEfOw-BtjFJRN0N3EksymF4azkey8Q3rX07sXkRHavRfAOnowH119RL1V-Xmk_DUX8wSR-2zdlp8FxitJWPgbMmnszsTgEQrThTwsuMrndqzJ_nQ7HTnuK2LXEFmFwXw9NADspq2ZnQmZiN7CXnEYG8WCApzxw\",\"e\":\"AQAB\"}]}"] tenant-claim: "aud" now: [$time:datetime 2023 11 14 22 13 20]}]] [= $s2 [$first $pair2]] [?let [= $p2 [$session:principal $s2]] [$strings:join ([$string [not [= $gid $s2@id]]], ":", [?else [$session:by-id $gid] "GONE"], ":", $p2@id) ""]]]
+#]]
+  [out-text [#
+'true:GONE:user-1'
+#]]
+ ]
+
+ [case id=session-060-attach-guest-csrf-guarded level=core gate=enforced
+  [tags session attach-guest csrf CXER4808 guest]
+  [doc [#
+A guest session is COOKIE-SHAPED (GA-1b): its only credential is the
+ambient session cookie, so the synchronizer CSRF defense applies exactly as
+for attach-cookie — a state-changing intent with no submitted token is the
+CXER4808 refusal, never the Bearer no-op exemption.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/session']
+[?let [= $pair [$session:attach-guest [request scheme="https"] {anonymous-floor: "web-public" tenant: "shop"}]] [= $s [$first $pair]] [$session:csrf-verify [request scheme="https"] $s {}]]
+#]]
+  [out-err [#
+cx-err:CXER4808
 #]]
  ]
 

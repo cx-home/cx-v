@@ -43,6 +43,9 @@ fn xml_indent(depth int) string {
 fn emit_xml_node(n Node, depth int, lossless bool, mut out []string) {
 	match n {
 		Element          { emit_xml_element(n, depth, lossless, mut out) }
+		// As with JSON: the canonical span is CX text, so the XML
+		// serialisation always materialises (#804 leg 2).
+		LazyRecord       { emit_xml_element(n.force_or_panic(), depth, lossless, mut out) }
 		TextNode         { out << xml_escape_text(n.value) }
 		ScalarNode       { out << xml_scalar_text(n) }
 		CommentNode      { out << '${xml_indent(depth)}<!--${n.value}-->\n' }
@@ -52,6 +55,9 @@ fn emit_xml_node(n Node, depth int, lossless bool, mut out []string) {
 		EntityRefNode    { out << '&${n.name};' }
 		RawTextNode      { emit_xml_raw_text(n, mut out) }
 		AliasNode        { out << '${xml_indent(depth)}<cx:alias name="${n.name}"/>\n' }
+		// The hole's XML projection is the emitter-internal cx: carrier
+		// (L78: the lift is never the identity substrate).
+		HoleNode         { out << '${xml_indent(depth)}<cx:var name="${n.name}"/>\n' }
 		EntityDeclNode   { emit_xml_entity_decl(n, depth, mut out) }
 		ElementDeclNode  { out << '${xml_indent(depth)}<!ELEMENT ${n.name} ${n.contentspec}>\n' }
 		AttlistDeclNode  { emit_xml_attlist_decl(n, depth, mut out) }
@@ -80,6 +86,12 @@ fn emit_xml_node(n Node, depth int, lossless bool, mut out []string) {
 			// materialize to Sequence form at the host
 			// (XML) boundary. Renders memo as `<cx:seq>…</cx:seq>`.
 			emit_xml_sequence(iterator_to_sequence(n), depth, lossless, mut out)
+		}
+		PathNode     {
+			// Same PI convention as MatchNode/ModifyNode (grafted
+			// I5-s17 W6): no XML-native equivalent for a CXPath value.
+			src := n.source or { '' }
+			out << '${xml_indent(depth)}<?cx:path ${xml_escape_attr(src)}?>\n'
 		}
 		MatchNode    {
 			// No XML-native equivalent for the
@@ -154,6 +166,12 @@ fn emit_xml_map(n MapNode, depth int, lossless bool, mut out []string) {
 			''
 		} else {
 			' cx:key-type="${scalar_type_name(entry.key_type)}"'
+		}
+		// RULED: MSS-4 (#917): a declaration-only entry carries its kind as
+		// cx:decl-kind and NO value content — value ABSENT, never null.
+		if entry.decl_kind != '' {
+			out << '<cx:entry cx:key="${xml_escape_attr(key_str)}"${key_type_attr} cx:decl-kind="${xml_escape_attr(entry.decl_kind)}"/>'
+			continue
 		}
 		out << '<cx:entry cx:key="${xml_escape_attr(key_str)}"${key_type_attr}>'
 		emit_xml_inline_node(entry.value, lossless, mut out)
@@ -313,7 +331,37 @@ fn emit_xml_element(e Element, depth int, lossless bool, mut out []string) {
 
 	if is_inline {
 		out << '${ind}<${e.name}${attr_str}>'
-		for item in e.items { emit_xml_inline_node(item, lossless, mut out) }
+		// A bare body run around an ENTITY REF was whitespace-SEPARATED in
+		// the CX source, and losing that separator fused words —
+		// '[note Cheese &amp; Pepper]' emitted 'Cheese&amp;Pepper' (#878,
+		// ENT-1 rider). Insert one space at an EntityRef boundary — and
+		// ONLY there: adjacent quoted strings keep the documented collapse
+		// idiom ('[x "a" "b"]' → 'ab'), and only when neither side already
+		// carries the boundary whitespace, so data-lane TextNodes (which
+		// preserve their spaces: 'Cheese ' + &amp; + ' Pepper') never
+		// double up. Element boundaries stay untouched.
+		mut prev_texty := false
+		mut prev_entity := false
+		mut prev_trail_ws := false
+		for item in e.items {
+			texty := item is TextNode || item is ScalarNode || item is EntityRefNode
+			entity := item is EntityRefNode
+			mut piece := []string{}
+			emit_xml_inline_node(item, lossless, mut piece)
+			s := piece.join('')
+			starts_ws := s.len > 0 && (s[0] == ` ` || s[0] == `\n` || s[0] == `\t`)
+			if texty && prev_texty && (entity || prev_entity) && !prev_trail_ws && !starts_ws
+				&& s.len > 0 {
+				out << ' '
+			}
+			out << s
+			if s.len > 0 {
+				last := s[s.len - 1]
+				prev_trail_ws = last == ` ` || last == `\n` || last == `\t`
+			}
+			prev_texty = texty
+			prev_entity = entity
+		}
 		out << '</${e.name}>\n'
 	} else {
 		out << '${ind}<${e.name}${attr_str}>\n'
@@ -554,6 +602,12 @@ fn emit_xml_map_inline(n MapNode, lossless bool, mut out []string) {
 			''
 		} else {
 			' cx:key-type="${scalar_type_name(entry.key_type)}"'
+		}
+		// RULED: MSS-4 (#917): declaration-only entry — cx:decl-kind, no
+		// value content (value ABSENT, never null).
+		if entry.decl_kind != '' {
+			out << '<cx:entry cx:key="${xml_escape_attr(key_str)}"${key_type_attr} cx:decl-kind="${xml_escape_attr(entry.decl_kind)}"/>'
+			continue
 		}
 		out << '<cx:entry cx:key="${xml_escape_attr(key_str)}"${key_type_attr}>'
 		emit_xml_inline_node(entry.value, lossless, mut out)

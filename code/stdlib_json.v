@@ -461,8 +461,18 @@ fn (mut p JsonParser) parse_number() ?cx.Node {
 	if p.number_mode == 'string' {
 		return jnode_str(raw)
 	}
-	if p.number_mode == 'all-float' || p.number_mode == 'all-decimal' {
+	if p.number_mode == 'all-float' {
 		return json_float(raw.f64())
+	}
+	if p.number_mode == 'all-decimal' {
+		// I1 stream 11 (defect D): the documented EXACT mode is genuinely
+		// exact — the JSON digits become a fixed-point decimal, no f64
+		// round-trip (it was aliased to lossy all-float).
+		img := cx.cx_decimal_image_from_json_number(raw) or {
+			p.fail(json_err_malformed, 'E_JSON_MALFORMED: invalid number')
+			return none
+		}
+		return cx.Node(cx.ScalarNode{ data_type: cx.ScalarType.decimal_type, value: cx.ScalarValue(img) })
 	}
 	// auto
 	if is_float {
@@ -844,7 +854,7 @@ fn new_json_parser(s string, opts map[string]cx.Node) JsonParser {
 	}
 }
 
-fn json_do_parse(s string, opts map[string]cx.Node) cx.Node {
+pub fn json_do_parse(s string, opts map[string]cx.Node) cx.Node {
 	max_bytes := json_opt_int(opts, 'max-bytes', 0)
 	if max_bytes > 0 && s.len > max_bytes {
 		return mk_err(json_err_bytes, 'E_JSON_BYTES_EXCEEDED: ${s.len} > ${max_bytes}')

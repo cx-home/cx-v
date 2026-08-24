@@ -1,4 +1,4 @@
-[test-suite name=email
+[test-suite name=email ring=2
   [doc [#
 conformance fixtures for cx-stdlib/email (spec/std-lib/email.md §6/§7).
 

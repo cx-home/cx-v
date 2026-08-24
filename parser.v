@@ -5,8 +5,9 @@ import strconv
 // ── Parser struct ─────────────────────────────────────────────────────────────
 
 // max_recursion_depth bounds nesting in parse_element to prevent
-// stack-overflow DoS on adversarial input. Default per
-// spec/policies.md §5.4. Configurable in a future minor revision.
+// stack-overflow DoS on adversarial input. Normative home:
+// spec/03-approved/core/limits.md §2 (the old spec/policies.md
+// citation was a ghost — corrected at the release-cut docs audit, #876).
 const max_recursion_depth = 64
 
 struct Parser {
@@ -16,11 +17,18 @@ mut:
 	line  int
 	col   int
 	depth int  // current element-nesting depth; tracked by parse_element
+	// track_pos — record each element's source position on its
+	// ElementMeta (#792). OFF by default: meta is lazily allocated, so
+	// stamping every element would cost an ElementMeta allocation per
+	// element on every parse in the system. Only parse_cx_positioned
+	// turns it on, for the one consumer that needs it (schema-validation
+	// diagnostics, which otherwise report 0:0).
+	track_pos bool
 	// declared_templates tracks `?def name …` declarations seen so far
 	// during parsing. Used by parse_pi_or_decl to distinguish template-
 	// call invocations `[?template-name args]` (parse as EvalDirective)
 	// from foreign processing instructions like `[?php …]` (parse as
-	// PI). Per spec/eval.md §3.7 templates must be declared before use;
+	// PI). Per code.md templates must be declared before use;
 	// this set is populated as ?def directives are encountered.
 	declared_templates map[string]bool
 	// quote_scratch is a parser-owned reusable byte buffer used by
@@ -58,8 +66,12 @@ mut:
 	// from the bytes; only string-valued tokens still allocate).
 	attr_scratch []u8
 	// in_schema marks that the current document is a schema (`.cxs`):
-	// set when a `[?cx schema-of …]` / `[?cx schema-name …]` /
-	// `[?cx schema-mode …]` / `[?cx frag …]` pragma is parsed. While set,
+	// set when the FIRST top-level element is the `[schema of=…]`
+	// header (spec/schema.md §2, I5 stream 1 — see
+	// maybe_flag_schema_header), or when one of the RETIRED
+	// `[?cx schema-*]` / `[?cx frag]` pragmas is parsed (kept only so
+	// legacy text parses far enough to hit the S009 retirement
+	// diagnostic at schema load). While set,
 	// `:T` type-tag validation (/ CXER0107) is suspended,
 	// because the schema sublanguage (spec/schema.md §51–56) deliberately
 	// reuses the `:T` slot for its own content-model vocabulary
@@ -82,9 +94,15 @@ mut:
 }
 
 fn new_parser(src string) Parser {
+	b := src.bytes()
+	// I1 W-10 (lexicon §0): a LEADING UTF-8 BOM (EF BB BF) is an encoding
+	// artifact, not content — consume it so it neither survives into
+	// canonical output nor moves the document's address. A BOM anywhere
+	// else in bare content is CXER0100 (see read_token / read_token_into).
+	start := if b.len >= 3 && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf { 3 } else { 0 }
 	return Parser{
-		src:   src.bytes()
-		pos:   0
+		src:   b
+		pos:   start
 		line:  1
 		col:   1
 		depth: 0
@@ -118,11 +136,16 @@ fn (mut p Parser) intern_name_src(start int, end int) string {
 		if eq { return s }
 	}
 	// Miss: allocate one canonical string and append to pool.
+	// I1 L23: NAMES normalize to NFC here — two spellings of one name are
+	// ONE name (and one address). ASCII names return unchanged on the
+	// cx_nfc_name fast path, so the hot pool path is untouched. (An NFD
+	// source spelling misses the raw-byte pool compare and re-normalizes —
+	// correct, merely a duplicate pool entry.)
 	mut buf := []u8{cap: n}
 	for i in 0 .. n {
 		buf << p.src[start + i]
 	}
-	out := buf.bytestr()
+	out := cx_nfc_name(buf.bytestr())
 	p.name_pool << out
 	return out
 }
@@ -193,6 +216,9 @@ fn (mut p Parser) peek_skip_ws() u8 {
 // or triple-quoted in either delimiter). Position is at the opening
 // quote. Returns the string value.
 fn (mut p Parser) read_quoted_for_doc() !string {
+	if p.at_raw_triple() {
+		return p.read_raw_triple_str()!
+	}
 	if p.pos + 2 < p.src.len && p.src[p.pos] == `'` && p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
 		return p.read_triple_quoted_str()!
 	}
@@ -214,7 +240,7 @@ fn (mut p Parser) read_quoted_for_doc() !string {
 //
 // Used by parse_document to support both bare-text documents (the
 // doc-top rule) and CX code that interleave literal text with
-// `[?=…]` / `[?Name …]` forms at the top level (spec/eval.md §2.1).
+// `[?=…]` / `[?Name …]` forms at the top level (code.md).
 fn (mut p Parser) read_top_text_run() (string, u8) {
 	start := p.pos
 	mut end := p.pos
@@ -347,7 +373,33 @@ fn (mut p Parser) read_line_comment_value() string {
 
 // ── Public parse entry points ─────────────────────────────────────────────────
 
+// ParseLimits — the embedding-side guard set (spec/03-approved/core/limits.md
+// §2; ruling LIM-2). One member today: max_input_bytes bounds the top-level
+// source so an embedder gets a typed refusal instead of an OOM mid-parse
+// (parse cost is linear in input, so this is the only caller-facing bound
+// with any teeth — every non-caller-controlled cost is structurally capped).
+// 0 = unbounded (the default: the caller already holds the buffer).
+pub struct ParseLimits {
+pub:
+	max_input_bytes int
+}
+
+// parse_limited — parse under an embedding-supplied guard set. Never an
+// environment variable; a limits surface that varies with ambient process
+// state is itself an attack surface (limits.md §1).
+pub fn parse_limited(src string, limits ParseLimits) !Document {
+	if limits.max_input_bytes > 0 && src.len > limits.max_input_bytes {
+		return error('input exceeds max_input_bytes: ${src.len} > ${limits.max_input_bytes} (spec/03-approved/core/limits.md §2)')
+	}
+	return parse(src)
+}
+
 pub fn parse(src string) !Document {
+	// I1 L23: UTF-8 validity is enforced up front — no invalid byte can
+	// reach a name, a value, or the canonical byte stream.
+	if off := validate_utf8(src.bytes()) {
+		return error('invalid UTF-8 at byte offset ${off} — CX text is UTF-8 (cx-err:CXER0100)')
+	}
 	mut p := new_parser(src)
 	doc := p.parse_document()!
 	// Lexer-driven multi-doc detection: parse_document consumes a `---`
@@ -366,6 +418,10 @@ pub fn parse(src string) !Document {
 }
 
 pub fn parse_stream(src string) ![]Document {
+	// I1 L23: same up-front UTF-8 validity as parse().
+	if off := validate_utf8(src.bytes()) {
+		return error('invalid UTF-8 at byte offset ${off} — CX text is UTF-8 (cx-err:CXER0100)')
+	}
 	mut p := new_parser(src)
 	mut docs := []Document{}
 	for {
@@ -414,6 +470,32 @@ pub fn parse_cx(src string) !ParseResult {
 	return ParseResult{ multi: docs, is_multi: true }
 }
 
+// parse_cx_positioned is parse_cx with element source positions recorded
+// on ElementMeta (#792) — readable via `Element.pos()`. Same grammar,
+// same tree, same canonical bytes and same Tier-1 identity: positions are
+// presentation, exactly like the anchor/comment trivia, and the canonical
+// emitters name the meta fields they read, so this one is inert to them.
+//
+// It is a SEPARATE door rather than a default because meta is lazily
+// allocated: stamping every element would add an ElementMeta allocation
+// per element to every parse in the system. Callers that report source
+// locations to a human (schema validation) opt in; nothing else pays.
+//
+// Multi-document input takes the same stream path parse_cx does, which
+// does not carry the flag — positions are single-document today, which
+// is all `cx validate` accepts (it refuses multi-doc input outright).
+pub fn parse_cx_positioned(src string) !ParseResult {
+	mut p := new_parser(src)
+	p.track_pos = true
+	doc := p.parse_document()!
+	p.skip_ws()
+	if p.at_end() {
+		return ParseResult{ single: doc, is_multi: false }
+	}
+	docs := parse_stream(src)!
+	return ParseResult{ multi: docs, is_multi: true }
+}
+
 // ── Document parser ───────────────────────────────────────────────────────────
 
 fn (mut p Parser) parse_document() !Document {
@@ -452,6 +534,7 @@ fn (mut p Parser) parse_document() !Document {
 					prolog << n
 				} else {
 					elements << n
+					p.maybe_flag_schema_header(n, elements)
 					if n is InterpolationNode || n is EvalDirectiveNode {
 						allow_top_text = true
 					}
@@ -489,6 +572,7 @@ fn (mut p Parser) parse_document() !Document {
 		}
 		mut doc := Document{ prolog: prolog, doctype: doctype, elements: elements }
 		resolve_namespaces(mut doc)
+		validate_reserved_ns_bindings(doc)!
 		resolve_ids(doc)!
 		return doc
 	}
@@ -498,7 +582,7 @@ fn (mut p Parser) parse_document() !Document {
 	// (`'hi'`, `"hi"`, `'''hi'''`), `[`/`&` node-start bytes, or EOF.
 	// Quoted-scalar openers produce a single-node scalar document.
 	// Non-bracket prose engages "mixed-text mode" — top-level Text runs
-	// may interleave with bracketed nodes per spec/eval.md §2.1.
+	// may interleave with bracketed nodes per code.md.
 	if elements.len == 0 && !p.at_end() {
 		b := p.peek_skip_ws()
 		if b == `'` || b == `"` {
@@ -523,6 +607,22 @@ fn (mut p Parser) parse_document() !Document {
 				}
 				allow_top_text = true
 			}
+		} else if b == `(` && p.peek_is_sequence_literal_at_paren() {
+			// #906 — a top-level `(…)` sequence literal is a Sequence node,
+			// not document text. Exactly the shape the `{…}` branch above
+			// already gives map literals, and guarded the same way, so a
+			// parenthesised run that is NOT a sequence literal still falls
+			// through to the bare-text path unchanged (a comma-less `(x)`
+			// stays text by the rule ASP-1 recorded).
+			//
+			// Without this the same bytes meant three different things:
+			// `(1, 2, 3)` nested in an element body read as a sequence, the
+			// PROGRAM reader evaluated it as a sequence, and the DATA reader
+			// at top level returned the STRING "(1, 2, 3)" — silently, and
+			// stably enough to survive canonicalization and take a content
+			// address. Found via the playground rendering the string's raw
+			// tokens as eleven scalars.
+			elements << p.parse_sequence_literal()!
 		} else if b == `]` {
 			// A top-level `]` with no matching opener is a stray close — a
 			// structural error, not document text (grammar GR-STRAY-CLOSE).
@@ -578,6 +678,7 @@ fn (mut p Parser) parse_document() !Document {
 			if k.is_bracket_open() || k == .amp {
 				n := p.parse_node()!
 				elements << n
+				p.maybe_flag_schema_header(n, elements)
 			} else {
 				text, _ := p.read_top_text_run()
 				if text.len > 0 {
@@ -604,6 +705,7 @@ fn (mut p Parser) parse_document() !Document {
 		}
 		n := p.parse_node()!
 		elements << n
+		p.maybe_flag_schema_header(n, elements)
 		// A `[?=…]` interpolation or `[?Name …]` eval-directive at top
 		// level signals a CX program; switch to mixed mode so any
 		// following prose attaches as Text rather than erroring.
@@ -614,6 +716,7 @@ fn (mut p Parser) parse_document() !Document {
 
 	mut doc := Document{ prolog: prolog, doctype: doctype, elements: elements }
 	resolve_namespaces(mut doc)
+	validate_reserved_ns_bindings(doc)!
 	resolve_ids(doc)!
 	return doc
 }
@@ -734,6 +837,10 @@ fn (mut p Parser) parse_table_rows(cols []TableColumn) ![][]TableCellValue {
 // downstream emitters but is not enforced at this layer.
 fn (mut p Parser) read_table_cell(col_type string) !TableCellValue {
 	b := p.peek()
+	if p.at_raw_triple() {
+		s := p.read_raw_triple_str()!
+		return TableCellValue(s)
+	}
 	if b == `'` {
 		// Quoted; check for triple-quoted form first.
 		if p.pos + 3 <= p.src.len && p.src[p.pos] == `'`
@@ -1051,7 +1158,7 @@ fn (mut p Parser) parse_bracket_node() !Node {
 	// the comma-array path; a top-level comma makes body_is_typed_list false, so
 	// `[1, 2]` still routes through parse_array_literal. Element heads (`[a …]`)
 	// never reach here — `a` is a name-start, dispatched below.
-	if b != `?` && !is_opaque_sigil && p.body_is_typed_list() {
+	if b != `?` && !is_opaque_sigil && p.body_is_typed_list(true) {
 		items := p.parse_self_delim_body()!
 		p.expect(`]`)!
 		return Node(ArrayNode{ items: items })
@@ -1064,7 +1171,16 @@ fn (mut p Parser) parse_bracket_node() !Node {
 		`;` { p.parse_comment()! }
 		`#` { p.parse_raw_text()! }
 		`!` { p.parse_decl()! }
-		`*` { p.parse_alias()! }
+		`*` {
+			// I1 row 8 (L80): a DELIMITED `*` (followed by ws or `]`) is
+			// the operator-head element `*`; a glued `*name` stays the
+			// alias reference it has always been.
+			if p.pos + 1 >= p.src.len || is_ws(p.src[p.pos + 1]) || p.src[p.pos + 1] == `]` {
+				p.parse_element()!
+			} else {
+				p.parse_alias()!
+			}
+		}
 		`|` { p.parse_block_content()! }
 		else {
 			p.parse_element()!
@@ -1110,17 +1226,35 @@ fn (mut p Parser) parse_pi_or_decl() !Node {
 // nodes; evaluators dispatch the subset their declared CX code version
 // supports and error on the rest.
 //
-// Control-flow directives (CX code 1.0, spec/eval.md §3): `if`, `for`,
-// `with`, `cond`, `include`, `def`, `use`.
-// Built-in filter directives (CX code 1.0, spec/eval.md §4): the frozen
+// Control-flow directives (CX code 1.0, code.md): `if`, `for`,
+// `include`, `def`.
+// Built-in filter directives (CX code 1.0, code.md): the frozen
 // filter set is reserved as EvalNames because filter invocations use
 // the `?`-prefixed bracket form (`[?upper x]`, `[?trim x]`).
-// CX code 3.1 control-flow: `let`, `fn`, `match`, `try`.
+// CX code 3.1 control-flow: `let`, `fn`, `match`.
 fn is_cx_eval_name(name string) bool {
 	return match name {
-		// CX code 1.0 control-flow + A13/A14 FLWOR windows
-		'if', 'for', 'for-tumbling', 'for-sliding',
-		'with', 'cond', 'include', 'def', 'use',
+		// CX code 1.0 control-flow.
+		// `for-tumbling` / `for-sliding` (the A13/A14 FLWOR window heads)
+		// were RESERVED here with no evaluator dispatch — stream 13 deleted
+		// the implementation and L98 (planar_algebra.md, RULED 2026-08-05)
+		// retires the reservation: windows are out of v1, and the future
+		// form is CLAUSES under `[?for]` (`[tumbling …]`), never new heads
+		// (single-surface rule). Removing them costs no loudness: an
+		// unreserved `[?name …]` head raises the same "unknown directive —
+		// not in §4.1 registry" CXER0100 the reserved-but-undispatched head
+		// already raised (pinned, stream-2 W2).
+		//
+		// `with` / `cond` / `use` RETIRE here for the same reason and by the
+		// same rule (RULED 760-1a). Each parsed as an EvalDirective and was
+		// then refused by the §4.1 registry, so the reservation bought
+		// nothing but a promise the language does not keep: a name the
+		// grammar reserves and the evaluator cannot dispatch. (`try` retires
+		// with them, from the CX code 3.1 group below — it is additionally a
+		// deliberately-retired surface, guarded by `make
+		// check-no-legacy-try`.) `include` and `def` STAY: both dispatch.
+		'if', 'for',
+		'include', 'def',
 		// CX code 1.0 string filters (§4.1)
 		'upper', 'lower', 'trim', 'length', 'concat', 'join', 'replace',
 		// CX code 1.0 numeric filters (§4.2)
@@ -1137,8 +1271,6 @@ fn is_cx_eval_name(name string) bool {
 		'hours-from-time', 'minutes-from-time', 'seconds-from-time',
 		// CX code 1.0 type filters (§4.5)
 		'type-of', 'default',
-		// CX code 1.0 encoding filters (§4.6)
-		'escape-html', 'escape-url', 'safe-url', 'raw',
 		// CX code 3.1 aggregate filters
 		'sum', 'count', 'min', 'max', 'avg',
 		// XQuery 4.0 standard fn: namespace (per xquery_40_parity.md §C)
@@ -1243,8 +1375,9 @@ fn is_cx_eval_name(name string) bool {
 		'log:level', 'log:with-context',
 		// inspect: module-discovery (DD13/EE7)
 		'inspect:module-available', 'inspect:module-version', 'inspect:functions',
-		// CX code 3.1 control-flow
-		'let', 'fn', 'match', 'try' { true }
+		// CX code 3.1 control-flow (`try` RETIRED — RULED 760-1a; see the
+		// control-flow group at the top of this match)
+		'let', 'fn', 'match' { true }
 		else { false }
 	}
 }
@@ -1415,21 +1548,77 @@ fn find_attr_value(attrs []Attribute, name string) ?string {
 	return none
 }
 
-fn (mut p Parser) parse_cx_directive() !Node {
-	attrs := p.read_directive_attr_list_until(`]`)!
-	// a schema pragma marks the whole document as a schema,
-	// suspending `:T` type-tag validation for its body (see Parser.in_schema).
-	// The first positional attr names the pragma verb.
-	if attrs.len > 0 {
-		verb := attrs[0].name
-		if verb == 'schema-of' || verb == 'schema-name' || verb == 'schema-mode'
-		   || verb == 'frag' {
-			p.in_schema = true
+// maybe_flag_schema_header flags the document as a schema when its FIRST
+// top-level element is the `[schema …]` header carrying an `of` attribute
+// (spec/schema.md §1/§2, I5 stream 1 — the header element replaced the
+// retired `[?cx schema-*]` pragmas as the schema marker). Setting
+// Parser.in_schema suspends `:T` type-tag validation for the schema
+// sublanguage in every LATER top-level declaration; the header itself
+// carries no `:T` slots, so post-append flagging is in time.
+fn (mut p Parser) maybe_flag_schema_header(n Node, elements []Node) {
+	if p.in_schema { return }
+	if n !is Element { return }
+	// Only the FIRST top-level element can be the header; bail as soon
+	// as a second element exists (O(1) after that point).
+	mut count := 0
+	for e in elements {
+		if e is Element {
+			count++
+			if count > 1 { return }
 		}
 	}
+	if count != 1 { return }
+	el := n as Element
+	if el.name != 'schema' { return }
+	for a in el.attrs {
+		if a.name == 'of' {
+			p.in_schema = true
+			return
+		}
+	}
+}
+
+// cx_pragma_registry — the CLOSED [?cx] key set (grammar [34]; ruling
+// CXP-1, 2026-08-20 — the historical "open by design" clause is retired:
+// an unknown pragma key was the silent-acceptance class the language
+// refuses everywhere else, demonstrated by [?cx output-target=html]
+// passing inert while documentation taught it as escaping).
+//   include      — parse-time file inclusion (core/code.md §13)
+//   schema       — attach a .cxs schema (core/schema.md §13)
+//   version      — declared CX language version (reader-facing metadata)
+//   lint-disable / lint-enable — lint scoping (cx lint)
+// The retired schema pragmas (schema-of/schema-name/schema-mode/frag)
+// stay PARSE-TOLERATED so a legacy schema text reaches the targeted
+// S009 diagnostic at schema load instead of dying here.
+const cx_pragma_registry = ['include', 'schema', 'version', 'lint-disable', 'lint-enable']
+const cx_pragma_legacy = ['schema-of', 'schema-name', 'schema-mode', 'frag']
+
+fn (mut p Parser) parse_cx_directive() !Node {
+	attrs := p.read_directive_attr_list_until(`]`)!
+	// RETIRED schema pragmas (I5 stream 1): `[?cx schema-*]`/`[?cx frag]`
+	// are rejected at schema load (S009 — schema metadata is body data,
+	// spec/schema.md §2). They still SET the in_schema flag here so a
+	// legacy schema text parses far enough to reach that targeted
+	// diagnostic instead of dying on a `:T` sublanguage tag (CXER0107).
+	// The live detection is the `[schema of=…]` header element — see
+	// maybe_flag_schema_header.
+	if attrs.len == 0 {
+		return error('${p.line}:${p.col}: [?cx] carries no pragma key — the closed registry is include | schema | version | lint-disable | lint-enable (grammar [34], CXP-1)')
+	}
+	verb := attrs[0].name
+	if verb == 'output-target' {
+		return error('${p.line}:${p.col}: [?cx output-target] is reserved and NOT implemented — output is not escaped by it; remove the pragma until context-aware output escaping ships (CXP-1)')
+	}
+	if verb !in cx_pragma_registry && verb !in cx_pragma_legacy {
+		return error('${p.line}:${p.col}: unknown [?cx] pragma key `${verb}` — the closed registry is include | schema | version | lint-disable | lint-enable (grammar [34], CXP-1)')
+	}
+	if verb in cx_pragma_legacy {
+		p.in_schema = true
+	}
 	// Optional `&anchor` after the attr list, then optional
-	// child nodes (parsed identically to element content). Used by
-	// `[?cx frag &name [body :TYPE :flags]]` per spec/schema.md §8.
+	// child nodes (parsed identically to element content). Added for
+	// the retired `[?cx frag &name [body :TYPE :flags]]` form (legacy
+	// texts still parse; schema load rejects them, spec/schema.md §8).
 	mut anchor := ?string(none)
 	p.skip_ws()
 	if !p.at_end() && p.peek() == `&` {
@@ -1449,11 +1638,11 @@ fn (mut p Parser) parse_cx_directive() !Node {
 
 // read_directive_attr_list_until accepts both keyed (`name=value`) and
 // positional (`name` alone) forms. Positional names land as Attribute
-// entries with an empty value, which lets `[?cx schema-of server]` and
-// `[?cx schema-mode open]` parse uniformly with `[?cx schema=path]` and
-// `[?cx lint-disable=L001]`. Schema directive consumers read the first
-// positional attr as the directive name and subsequent positional
-// attrs as args.
+// entries with an empty value, so verb-style directives (e.g. the
+// retired `[?cx schema-of server]`) parse uniformly with
+// `[?cx schema=path]` and `[?cx lint-disable=L001]`. Directive
+// consumers read the first positional attr as the directive name and
+// subsequent positional attrs as args.
 fn (mut p Parser) read_directive_attr_list_until(stop u8) ![]Attribute {
 	mut attrs := []Attribute{}
 	for {
@@ -1463,12 +1652,11 @@ fn (mut p Parser) read_directive_attr_list_until(stop u8) ![]Attribute {
 		// so the caller can parse them as a separate phase. Used by
 		// `[?cx frag &name [body ...]]`.
 		if p.peek() == `&` || p.peek() == `[` { break }
-		// A quoted positional argument — e.g. the title in
-		// `[?cx schema-name 'Book schema v1']` (spec/schema.md §2). Stored
-		// with an empty name and the text in `value`; directive consumers
-		// read it positionally via directive_arg_text, and the emitter
-		// re-quotes it. Without this branch read_name fail-fasts on the
-		// leading quote ("expected name") and the whole schema load aborts.
+		// A quoted positional argument (e.g. `[?cx lint-disable 'why']`).
+		// Stored with an empty name and the text in `value`; directive
+		// consumers read it positionally, and the emitter re-quotes it.
+		// Without this branch read_name fail-fasts on the leading quote
+		// ("expected name") and the whole directive parse aborts.
 		if p.peek() == `'` || p.peek() == `"` {
 			qval := p.read_quoted()!
 			attrs << Attribute{ name: '', value: ScalarValue(qval) }
@@ -1830,13 +2018,35 @@ fn (mut p Parser) parse_charref() !Node {
 
 fn (mut p Parser) parse_element() !Node {
 	// v3.4 adversarial defense: bound element nesting to prevent
-	// stack overflow on deeply nested input. spec/policies.md §5.4.
+	// stack overflow on deeply nested input (spec/03-approved/core/limits.md §2).
 	p.depth++
 	if p.depth > max_recursion_depth {
 		return error('${p.line}:${p.col}: element nesting exceeds limit (${max_recursion_depth})')
 	}
 	defer { p.depth-- }
-	raw_name := p.read_name()!
+	// #792: the element's reported position is its NAME token — the
+	// first thing a reader looks for when a diagnostic names an element.
+	// Captured before the name is consumed; `none` unless tracking is on,
+	// which keeps ElementMeta unallocated on the ordinary path.
+	elem_pos := if p.track_pos {
+		?Position(Position{ offset: p.pos, line: p.line, col: p.col })
+	} else {
+		?Position(none)
+	}
+	// I1 row 8 (L80, audit C4): a DELIMITED operator char — one of the
+	// seven heads `+ - * / = < >` followed by whitespace or `]` — IS the
+	// element name. Pre-epoch, five of these silently stringified through
+	// the array lane and two ("*", ">") errored here with "expected name";
+	// every operator-headed document changes meaning AND address at I1
+	// (the oph-001…007 pins flip with this commit).
+	raw_name := if p.peek() in [u8(`+`), `-`, `*`, `/`, `=`, `<`, `>`]
+		&& (p.pos + 1 >= p.src.len || is_ws(p.src[p.pos + 1]) || p.src[p.pos + 1] == `]`) {
+		op := p.peek().ascii_str()
+		p.advance()
+		op
+	} else {
+		p.read_name()!
+	}
 	// QName / reserved-prefix lexical rules (lexicon §2). A data-mode name folds
 	// single `:` (`prefix:local`); but a QName admits AT MOST ONE colon — `a:b:c`
 	// is malformed (CXERLEX-QNAME). And the `cx:` prefix is reserved entirely for
@@ -1846,11 +2056,8 @@ fn (mut p Parser) parse_element() !Node {
 	if colon_count > 1 {
 		return error(p.make_error("malformed QName `${raw_name}` — a QName admits at most one `:` (cx-err:CXERLEX-QNAME)"))
 	}
-	if colon_count == 1 {
-		prefix := raw_name.all_before(':')
-		if prefix == 'cx' {
-			return error(p.make_error("reserved namespace prefix `cx:` in `${raw_name}` — the `cx:` prefix is reserved for the serializer and may not be authored (cx-err:E210)"))
-		}
+	if msg := reserved_prefix_refusal(raw_name) {
+		return error(p.make_error(msg))
 	}
 	name := normalize_doc_element_name(raw_name)
 	mut anchor := ?string(none)
@@ -1891,7 +2098,14 @@ fn (mut p Parser) parse_element() !Node {
 			// `[; … ]` block comment: trivia — consume, keep for lossless
 			// re-emit, and CONTINUE the ElementMeta run (#455).
 			p.advance() // consume '['
-			head_comments << p.parse_comment()!
+			// Stamp WHERE in the meta run it sat (#829 remainder) — the
+			// attribute count at this point. Kept only if an attribute
+			// actually follows; see the prune below.
+			mut hc := p.parse_comment()!
+			if mut hc is CommentNode {
+				hc.meta_attr_index = ?int(attrs.len)
+			}
+			head_comments << hc
 			continue
 		}
 		if kind == .rbrack || kind == .lbrack || kind == .ldirective
@@ -1952,7 +2166,11 @@ fn (mut p Parser) parse_element() !Node {
 				// #455 retains the `[; … ]` block form above. Trivia still:
 				// it does not end the meta run and strict canonical strips it.
 				lval := p.read_line_comment_value()
-				head_comments << CommentNode{ value: lval, is_line: true }
+				head_comments << CommentNode{
+					value:           lval
+					is_line:         true
+					meta_attr_index: ?int(attrs.len) // #829 remainder — see the block form above
+				}
 				continue
 			}
 			saved_pos3 := p.pos
@@ -2013,6 +2231,18 @@ fn (mut p Parser) parse_element() !Node {
 				break
 			}
 			ta := p.read_type_annotation()!
+			// RULED: TA-1 (#911) — lexicon [L50]: a TypeAnnotation binds
+			// GLUED to the token on its left. The spaced form `[port ::u16]`
+			// was never a decision: skip_ws at the top of this meta loop ran
+			// before the `::` check, so the DATA reader silently accepted and
+			// normalized a spelling the PROGRAM reader refuses outright — two
+			// readers disagreeing about a form the spec does not define (the
+			// #793 silent-acceptance class, and the reader asymmetry behind
+			// #910's headline error). The glued form is already the canonical
+			// emit; refuse loudly, naming the one-character fix.
+			if save_colon_pos > 0 && is_ws(p.src[save_colon_pos - 1]) {
+				return error(p.make_error('type annotation must be glued to its name — write `${name}::${ta}`, not `${name} ::${ta}` (lexicon [L50]) (cx-err:CXER0100)'))
+			}
 			data_type = ta
 			break
 		}
@@ -2062,7 +2292,7 @@ fn (mut p Parser) parse_element() !Node {
 					// The explicit ascription is coercion-CHECKED, exactly
 					// like an ascribed body scalar (grammar [55]; M-ERR-2 /
 					// D-H, #465/#466): a token that cannot coerce to T is
-					// CXER0109 and an out-of-range sized integer is
+					// CXER0290 and an out-of-range sized integer is
 					// CXERLEX-RANGE — never a silent 0 / clamp (the old
 					// scalar_value_from_str path read `n::int=abc` as 0).
 					sn := p.coerce_scalar_checked(tname, val_str)!
@@ -2132,6 +2362,49 @@ fn (mut p Parser) parse_element() !Node {
 		}
 	}
 
+	// #829 remainder: drop the meta-zone stamp from any comment that no
+	// attribute followed. Such a comment already re-emits correctly as a
+	// leading body item — and in the multiline lane that IS its own line,
+	// which round-trips today. Only a comment an attribute follows was being
+	// hoisted past it, and only that one needs lifting back into the meta run.
+	//
+	// This sits directly after the ElementMeta loop, NOT next to the
+	// items.prepend below, because the `[table[…]]` clause returns its
+	// element from inside this function well before that point and would
+	// otherwise carry unpruned stamps (core.cxd 048).
+	for i in 0 .. head_comments.len {
+		hn := head_comments[i]
+		if hn is CommentNode {
+			mut c := hn
+			if idx := c.meta_attr_index {
+				if idx >= attrs.len {
+					c.meta_attr_index = none
+					head_comments[i] = c
+				}
+			}
+		}
+	}
+
+	// I1 identity epoch (stream 12, W-19/L24): duplicate attribute names on
+	// one element are a PARSE ERROR (cx-err:E214) — silently-accepted
+	// duplicates gave one document two meanings (last-wins vs first-wins is
+	// implementation lore), and duplicate xmlns declarations created an
+	// UNSTABLE canonical sort tie (nondeterministic canonical bytes, the
+	// direct identity hazard). xmlns decls are attributes, so one check
+	// covers both.
+	if attrs.len > 1 {
+		mut seen_names := map[string]bool{}
+		for a in attrs {
+			if a.name == '' {
+				continue // positional quoted values carry no name
+			}
+			if a.name in seen_names {
+				return error(p.make_error('duplicate attribute `${a.name}` on element `${name}` — one element declares each attribute (and each xmlns) at most once (cx-err:E214)'))
+			}
+			seen_names[a.name] = true
+		}
+	}
+
 	// 3a (lexicon §collections [L83]): the element head is now fixed and the
 	// cursor sits at the body. A body that opens with a top-level `,` means
 	// the head was IMMEDIATELY followed by a comma — `[web, prod]` / `[web,]`
@@ -2194,6 +2467,7 @@ fn (mut p Parser) parse_element() !Node {
 			merge:     merge
 			id:        id
 			data_type: ?string('table')
+			pos:       elem_pos
 		}, attrs, head_comments).with_table(&TableData{ cols: cols, rows: rows })
 	}
 
@@ -2211,14 +2485,18 @@ fn (mut p Parser) parse_element() !Node {
 		body, dt := finalize_comma_array(raw)
 		items = body.clone()
 		final_dt = dt
-	} else if !is_annotated && p.body_is_typed_list() {
+	} else if !is_annotated && p.body_is_typed_list(false) {
 		// §9 [L25a/b] TYPED LIST: a no-comma body of 2+ tokens whose every bare
 		// scalar token auto-types (number / atom / bool / date) or is quoted,
 		// with child elements interleaving as mixed content. Each token is typed
 		// in place → N discrete typed children with NO element array type. This
 		// is the @CHOICE-1 "one layer" replacement for the old whitespace
 		// auto-array (G-BODY-2/3, M-SCALAR-ITEM). A run with any bareword stays
-		// prose and routes to parse_body instead. See body_is_typed_list.
+		// prose and routes to parse_body instead. RULED: ASP-3 (#909):
+		// ws-delimited `(…)`/map-shaped `{…}` literals are discrete tokens here
+		// too — `[k 1 (2, 3)]` is two children with the int intact (the prose
+		// lane restringified it, and the shape is ENGINE OUTPUT via ux-016).
+		// See body_is_typed_list.
 		items = p.parse_self_delim_body()!
 		p.expect(`]`)!
 	} else {
@@ -2236,6 +2514,8 @@ fn (mut p Parser) parse_element() !Node {
 		// discrete children, classified above by body_is_typed_list (@CHOICE-1).
 	}
 	// #455: head comments precede every parsed body item in source order.
+	// (Their #829-remainder meta-zone stamps were pruned right after the
+	// ElementMeta loop above.)
 	if head_comments.len > 0 {
 		items.prepend(head_comments)
 	}
@@ -2285,6 +2565,7 @@ fn (mut p Parser) parse_element() !Node {
 		id:        id
 		body_ref:  body_ref
 		data_type: final_dt
+		pos:       elem_pos
 	}, attrs, items)
 }
 
@@ -2361,6 +2642,35 @@ const valid_type_tag_set = [
 	'table',
 ]
 
+// kind_only_tag_set holds the [157] KindName members that are NOT scalar
+// ascription tags — the CXDM node/collection kinds plus the top/union kinds
+// and the [157a] refinements missing from the scalar tag set. Together with
+// valid_type_tag_set (minus the internal 'table' marker) they form the
+// vocabulary a map-entry DECLARATION draws from (RULED: MSS-4 — a
+// declaration is a kind CONSTRAINT, the [140g] bind-pattern semantics, not
+// a coercion).
+const kind_only_tag_set = [
+	'element', 'sequence', 'map', 'iterator', 'array',
+	'document', 'text', 'scalar-node', 'comment', 'pi', 'directive',
+	'function', 'path', 'any', 'number',
+	'instant', 'secret',
+]
+
+// is_valid_kind_tag reports whether `name` (optionally `[]`-suffixed) is
+// admissible in a map-entry declaration `{k: ::T}` (RULED: MSS-4): the
+// [157] KindName vocabulary. 'table' is the internal table-block marker,
+// never a declarable kind.
+pub fn is_valid_kind_tag(name string) bool {
+	mut base := name
+	if base.ends_with('[]') {
+		base = base[..base.len - 2]
+	}
+	if base == 'table' {
+		return false
+	}
+	return base in valid_type_tag_set || base in kind_only_tag_set
+}
+
 // ── Body parser ───────────────────────────────────────────────────────────────
 
 fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
@@ -2382,6 +2692,20 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 	// the join space is applied by the NEXT consuming branch (erasure
 	// semantics — `a [; c ] b` ≡ `a b`) and never trails the run.
 	mut pending_join_ws := false
+	// #829: a comment seen while a text run is still BUFFERED must not jump
+	// ahead of it. text_buf flushes late (at a child element or end of body)
+	// while a comment was appended to `items` immediately, so `[a text [;c]]`
+	// parsed as [Comment, Text] — the comment did not move forward, the text
+	// arrived late. Comments seen mid-buffer are held here and released at
+	// the flush, AFTER the text node.
+	//
+	// If more text arrives before that flush the comment is MID-RUN, and it
+	// is released immediately in its historical LEADING position: placing it
+	// correctly would require splitting the run, and #469 forbids that in
+	// those words — splitting moves the strict-canonical hash (Tier-1). So
+	// this fixes the trailing shape and leaves the mid-run shape exactly as
+	// it was, with no Tier-1 exposure.
+	mut pending_comments := []Node{}
 
 	for {
 		if p.at_end() { break }
@@ -2433,18 +2757,48 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 			// space on the run. The next consuming branch applies it.
 			pending_join_ws = pending_join_ws || (had_ws && text_buf.len > 0)
 			p.advance() // consume '['
-			items << p.parse_comment()!
+			mut c := p.parse_comment()!
+			if text_buf.len > 0 {
+				// #829 (RULED: 829-1c): remember WHERE in the run this
+				// comment sat. Presentation only — canonical strips
+				// comments, so the run stays ONE text node and the
+				// Tier-1 hash is untouched (#469).
+				if mut c is CommentNode {
+					c.run_offset = ?int(text_buf.len)
+				}
+				pending_comments << c
+			} else {
+				items << c
+			}
 			continue
 		}
 		join_ws := had_ws || pending_join_ws
 		pending_join_ws = false
+		// Text (or anything else) resumes with a comment held → it was
+		// MID-RUN. Release it now, in front of the run, exactly where it
+		// landed before #829: correcting it needs a run split, and that
+		// moves Tier-1 (#469).
+		// #829 (RULED: 829-1c): a mid-run comment is NO LONGER released
+		// in front of the run. It keeps its recorded run_offset and rides
+		// the flush below, after the text node, so the lossless emitter can
+		// re-place it inside the run without splitting the node.
 
 		if kind == .lbrack || kind == .ldirective || kind == .raw_span || kind == .block_span {
 			has_child_element = true
+			// The separator space between a text run and a following
+			// child stays IN the run's value: it is LOAD-BEARING for the
+			// XML projection of mixed prose (`[p text [b bold]]` must
+			// project `text <b>` — a #795-batch trim attempt regressed
+			// exactly that and was reverted; the #791 schema-lane repair
+			// lives in the schema reader, not here).
 			if join_ws && text_buf.len > 0 && text_buf.last() != ` ` { text_buf << ` ` }
 			if text_buf.len > 0 {
 				items << TextNode{ value: text_buf.bytestr() }
 				text_buf = []u8{}
+				if pending_comments.len > 0 {
+					items << pending_comments
+					pending_comments = []Node{}
+				}
 			}
 			child := p.parse_bracket_node()!
 			items << child
@@ -2456,8 +2810,16 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 			if text_buf.len > 0 {
 				items << TextNode{ value: text_buf.bytestr() }
 				text_buf = []u8{}
+				if pending_comments.len > 0 {
+					items << pending_comments
+					pending_comments = []Node{}
+				}
 			}
-			if b == `'` && p.pos + 3 <= p.src.len && p.src[p.pos] == `'` && p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
+			if b == `r` {
+				// .triple_span with an `r` lead byte = the RAW form (I1 L58).
+				s := p.read_raw_triple_str()!
+				items << Node(TextNode{ value: s })
+			} else if b == `'` && p.pos + 3 <= p.src.len && p.src[p.pos] == `'` && p.src[p.pos+1] == `'` && p.src[p.pos+2] == `'` {
 				n := p.read_triple_quoted()!
 				items << n
 			} else if b == `"` && p.pos + 3 <= p.src.len && p.src[p.pos] == `"` && p.src[p.pos+1] == `"` && p.src[p.pos+2] == `"` {
@@ -2496,6 +2858,10 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 					if text_buf.len > 0 {
 						items << TextNode{ value: text_buf.bytestr() }
 						text_buf = []u8{}
+						if pending_comments.len > 0 {
+							items << pending_comments
+							pending_comments = []Node{}
+						}
 					}
 					items << n
 					after_non_text = true
@@ -2515,6 +2881,10 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 			if text_buf.len > 0 {
 				items << TextNode{ value: text_buf.bytestr() }
 				text_buf = []u8{}
+				if pending_comments.len > 0 {
+					items << pending_comments
+					pending_comments = []Node{}
+				}
 			}
 			items << p.parse_sequence_literal()!
 			after_non_text = true
@@ -2524,12 +2894,45 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 			if text_buf.len > 0 {
 				items << TextNode{ value: text_buf.bytestr() }
 				text_buf = []u8{}
+				if pending_comments.len > 0 {
+					items << pending_comments
+					pending_comments = []Node{}
+				}
 			}
 			items << p.parse_map_literal()!
 			after_non_text = true
 			continue
 		}
 
+		// I1 row 9 (L78): a bare delimited `$name` token is the authorable
+		// variable HOLE — a discrete structural node in the self-delimiting
+		// class, never part of a prose run. The STRING "$name" spells
+		// '$name' (needs-quote covers $-leading images), so the two carry
+		// different canonical bytes and different addresses. `$x.y` /
+		// `$x/y` (path-bearing spellings) are NOT holes — they stay text.
+		if !is_inferred_array && !is_array && b == `$` {
+			if hole_len := p.peek_hole_len() {
+				if text_buf.len > 0 {
+					items << TextNode{ value: text_buf.bytestr() }
+					text_buf = []u8{}
+					if pending_comments.len > 0 {
+						items << pending_comments
+						pending_comments = []Node{}
+					}
+				}
+				name := p.src[p.pos + 1..p.pos + hole_len].bytestr()
+				for _ in 0 .. hole_len {
+					p.advance()
+				}
+				items << HoleNode{ name: name }
+				// NOT after_non_text: the emit-side sibling join supplies
+				// the space between a hole and its neighbors
+				// (cx_build_inline_body joins with ' '), so the following
+				// text run must not carry a leading join space as VALUE.
+				after_non_text = false
+				continue
+			}
+		}
 		if !is_inferred_array && !is_array {
 			// Text-accumulation hot path: read the token's bytes
 			// directly into text_buf, skipping the read_token() →
@@ -2581,6 +2984,14 @@ fn (mut p Parser) parse_body(type_ann ?string) ![]Node {
 			}
 		}
 		items << TextNode{ value: text_val }
+	}
+	// #829: the end-of-body flush. A comment held while the run was still
+	// buffered is released HERE, after the text node — this is the trailing
+	// shape (`[a text [;c]]`) the issue is about. The early `return items`
+	// paths above are the scalar / typed-body lanes, and each is guarded on
+	// items.len == 0, so none of them can be holding a comment.
+	if pending_comments.len > 0 {
+		items << pending_comments
 	}
 
 	return items
@@ -2644,8 +3055,16 @@ fn (p &Parser) body_is_flat_comma_array() bool {
 // content). The presence of even one BAREWORD (a bare token that does NOT
 // auto-type, e.g. `the`, `Version`, `it's`) makes the whole body PROSE instead —
 // it routes to parse_body and merges into a Text run (G-BODY-1, conformance
-// 009/014). A top-level comma (→ [L25c] comma path) or a `(`/`{`/`&` introducer
-// (collection / entity → parse_body, which handles those) also disqualifies it.
+// 009/014). A top-level comma (→ [L25c] comma path) or an `&` entity introducer
+// also disqualifies it. `(`/`{`: a ws-delimited sequence literal or map-shaped
+// brace span is a discrete token in BOTH positions — the headless array
+// dispatch (RULED: ASP-2 #903) and element bodies (RULED: ASP-3 #909, which
+// extended ASP-2 there: `[k 1 (2, 3)]` is the element `k` with two children,
+// where the prose lane restringified the int to `'1 '`). The one headless-only
+// carve-out: a name-shaped FIRST token followed by a structure keeps the
+// element reading (`[true (2, 3)]` is the element `true`); an element BODY has
+// no element reading to protect, and the ux-016 engine-output shape
+// (`[list false (verb, …) …]`) starts with the name-shaped bool `false`.
 // Quote regions, child brackets and line comments are skipped so their interiors
 // don't count. Pure lookahead — p.pos is unchanged.
 //
@@ -2653,10 +3072,25 @@ fn (p &Parser) body_is_flat_comma_array() bool {
 // SUPERSEDES the old whitespace auto-array (try_auto_array, which produced a
 // single `T[]`-typed element) — a typed list is now N discrete typed CHILDREN
 // with no element array type, per the formal witnesses (G-BODY-2/3, M-SCALAR-ITEM).
-fn (p &Parser) body_is_typed_list() bool {
+fn (p &Parser) body_is_typed_list(headless bool) bool {
 	mut i := p.pos
 	mut at_tok_start := true
 	mut tokens := 0
+	// RULED: ASP-2 (#903) / ASP-3 (#909) — a `(…)`/`{…}` literal is a
+	// discrete token, in the headless array position (ASP-2) and in element
+	// bodies (ASP-3), so `[1 (2, 3)]` is two items and `[k 1 (2, 3)]` is the
+	// element `k` with two children — exactly like `[1 [?=@x]]` already was.
+	// Before, the bail-out below sent the run to the comma/prose path, which
+	// glued it into ONE item and mangled the leading value per type (int 1 →
+	// the string '1 ', trailing space and all; bools, atoms, quoted strings
+	// and holes corrupted the same way) — silently, stably under
+	// canonicalization, and REACHABLE FROM ENGINE OUTPUT (ux-016 renders
+	// `[list false (verb, …) …]`, which failed its own re-parse, the #704
+	// class). The first-token guard below is HEADLESS-ONLY: it preserves the
+	// element reading of `[true (2, 3)]` (name-shaped head + structure →
+	// element, per the ASP-1 scope note); an element body has no element
+	// reading to protect.
+	mut first_tok_namelike := false
 	for i < p.src.len {
 		c := p.src[i]
 		if c == `]` { break } // body terminator (top level)
@@ -2671,9 +3105,35 @@ fn (p &Parser) body_is_typed_list() bool {
 			continue
 		}
 		if c == `,` { return false } // top-level comma → [L25c] comma path
-		// Collection / entity introducers route to parse_body (it already images
-		// `(`/`{` literals and `&` entity-refs correctly — e.g. G-MARKUP-1).
-		if c == `(` || c == `{` || c == `&` { return false }
+		// Entity refs route to parse_body (it already images `&` correctly).
+		if c == `&` { return false }
+		if c == `(` || c == `{` {
+			if headless && first_tok_namelike {
+				return false
+			}
+			if c == `{` && !span_is_map_shaped(p.src, i) {
+				return false
+			}
+			// A structure span counts as a token only when WHITESPACE-
+			// delimited on both sides — a glued span (`(1, 2)[0]`,
+			// `(1, 2)(3, 4)`) keeps its historical one-item mixed reading
+			// via the comma path, matching the slot rule's "glued runs are
+			// one item" (the CXPath kind-test idiom depends on it).
+			if i > p.pos && !is_ws(p.src[i - 1]) {
+				return false
+			}
+			j := skip_bracket_region(p.src, i)
+			if j >= p.src.len {
+				return false // unbalanced — let the comma path refuse loudly
+			}
+			if !is_ws(p.src[j]) && p.src[j] != `]` {
+				return false
+			}
+			i = j
+			tokens++
+			at_tok_start = true
+			continue
+		}
 		// A child element `[…]` (or `[#…#]` / `[|…|]`) is admitted as a list item
 		// (mixed content, G-BODY-2). Skip its balanced span and count it.
 		if c == `[` {
@@ -2701,9 +3161,28 @@ fn (p &Parser) body_is_typed_list() bool {
 				}
 				i++
 			}
-			tok := p.src[start..i].bytestr()
-			if try_autotype(tok) == none {
-				return false // a bareword → prose, not a typed-list item
+			// The classifier tests the token as a SPAN of `p.src` — this is
+			// pure lookahead whose result is thrown away, and materialising
+			// every token as a string here was the heaviest allocation in the
+			// §11.6 gate-15 profile: a body of N tokens paid N `bytestr()`
+			// calls before the real parse re-read the same N tokens (#804).
+			span := p.src[start..i]
+			if try_autotype_bytes(span) == none {
+				// I1 row 9 (L78): a variable-hole token `$name` is
+				// SELF-DELIMITING — it joins the [L25b] discrete class
+				// exactly like a quoted string, so `[+ $x 2]` is a hole
+				// plus a typed int, not prose.
+				if !is_hole_token_bytes(span) {
+					return false // a bareword → prose, not a typed-list item
+				}
+			}
+			if tokens == 1 && span.len > 0 && is_name_start(span[0]) {
+				// ASP-2: a name-shaped first token (`true`, `false`,
+				// `null`) keeps the element reading when a structure
+				// follows — HEADLESS position only (see the guard above);
+				// in an element body the same token is just a bool/null
+				// child (ASP-3).
+				first_tok_namelike = true
 			}
 			at_tok_start = true
 			continue
@@ -2712,6 +3191,41 @@ fn (p &Parser) body_is_typed_list() bool {
 		i++
 	}
 	return tokens >= 2
+}
+
+// span_is_map_shaped reports whether the `{` at src[start] opens a map
+// literal shape — `{}` empty, or a depth-0 `:` before the matching `}` —
+// from an arbitrary index (ASP-2: the positional twin of
+// peek_is_map_literal_at_brace, for the typed-list detector's lookahead).
+fn span_is_map_shaped(src []u8, start int) bool {
+	mut i := start + 1
+	for i < src.len && is_ws(src[i]) { i++ }
+	if i < src.len && src[i] == `}` { return true }
+	mut depth := 0
+	mut quote := u8(0)
+	for i < src.len {
+		b := src[i]
+		if quote != 0 {
+			if b == `\\` && i + 1 < src.len { i += 2; continue }
+			if b == quote { quote = 0 }
+			i++
+			continue
+		}
+		if b == `'` || b == `"` {
+			quote = b
+			i++
+			continue
+		}
+		if depth == 0 {
+			if b == `:` { return true }
+			if b == `}` { return false }
+		}
+		if b == `[` || b == `(` || b == `{` { depth++; i++; continue }
+		if b == `]` || b == `)` { if depth > 0 { depth-- }; i++; continue }
+		if b == `}` { if depth > 0 { depth-- }; i++; continue }
+		i++
+	}
+	return false
 }
 
 // skip_bracket_region returns the index just past the balanced bracket span that
@@ -2788,6 +3302,26 @@ fn (mut p Parser) parse_self_delim_body() ![]Node {
 			items << child
 			continue
 		}
+		// RULED: ASP-2 (#903) / ASP-3 (#909) — a `(…)`/`{…}` literal is a
+		// discrete typed-list item (a token position has no prose lane,
+		// per the #810 lone-group rule for slots). Reached from BOTH
+		// detector call sites: the headless-array dispatch (ASP-2) and
+		// element bodies (ASP-3).
+		if b == `(` {
+			items << p.parse_sequence_literal()!
+			continue
+		}
+		if b == `{` {
+			items << p.parse_map_literal()!
+			continue
+		}
+		if p.at_raw_triple() {
+			// RAW triple-quoted string (I1 L58) — a quoted string in the
+			// self-delimiting sense, same as the plain triple forms.
+			s := p.read_raw_triple_str()!
+			items << self_delim_string_node(TextNode{ value: s })
+			continue
+		}
 		if b == `'` || b == `"` {
 			if p.pos + 3 <= p.src.len && p.src[p.pos] == `'`
 				&& p.src[p.pos + 1] == `'` && p.src[p.pos + 2] == `'` {
@@ -2810,14 +3344,49 @@ fn (mut p Parser) parse_self_delim_body() ![]Node {
 		// (mid-token `'`/`"` apostrophes included, e.g. `it's`) — only a
 		// LEADING quote (handled above) opens a quoted string. The detector
 		// guarantees no `,`/`[`/`(`/`{`/`&` appears at top level here.
-		tok := p.read_self_delim_token()!
-		if scalar := try_autotype(tok) {
+		// The token is classified as a SPAN and materialised only by the arm
+		// that keeps its text. A typed scalar keeps a VALUE, not the token, so
+		// the common case — every item of a typed list — now costs no token
+		// string at all (#804).
+		start, end := p.read_self_delim_span()!
+		span := p.src[start..end]
+		if scalar := try_autotype_bytes(span) {
 			items << Node(scalar)
+		} else if is_hole_token_bytes(span) {
+			// I1 row 9 (L78): the variable hole is a discrete
+			// self-delimiting item (`[+ $x 2]` = hole + int 2).
+			items << Node(HoleNode{ name: p.src[start + 1..end].bytestr() })
 		} else {
-			items << Node(TextNode{ value: tok })
+			items << Node(TextNode{ value: span.bytestr() })
 		}
 	}
 	return items
+}
+
+// is_hole_token reports whether a whole delimited token is the authorable
+// variable-hole spelling `$name` (I1 row 9, L78): `$` + NameStart +
+// simple NameChars — no `.`/`:` path or QName continuation.
+fn is_hole_token(tok string) bool {
+	return is_hole_token_bytes(unsafe { bytes_view(tok) })
+}
+
+// is_hole_token_bytes is the implementation — the byte face exists so the
+// typed-list classifier can test a span of `p.src` without materialising it
+// (#804); see is_atom_name_bytes.
+fn is_hole_token_bytes(tok []u8) bool {
+	if tok.len < 2 || tok[0] != `$` {
+		return false
+	}
+	if !is_name_start(tok[1]) {
+		return false
+	}
+	for i := 2; i < tok.len; i++ {
+		c := tok[i]
+		if !is_name_char(c) || c == `.` || c == `:` {
+			return false
+		}
+	}
+	return true
 }
 
 // read_self_delim_token reads one bare self-delimiting body token: from the
@@ -2825,18 +3394,38 @@ fn (mut p Parser) parse_self_delim_body() ![]Node {
 // does NOT stop at `'`/`"` — a quote inside a bare token is a literal
 // apostrophe (`it's`), not a new item; a token-leading quote is dispatched by
 // the caller before this is reached.
+// A self-delimiting token is a CONTIGUOUS run of source bytes, so it is
+// read as one slice of `src` rather than accumulated byte-by-byte into a
+// growing buffer (#804). The old shape cost a realloc chain per token
+// (a zero-capacity []u8 doubling 0→1→2→4→…) plus the final copy; this
+// costs the copy alone. Same bytes, same stopping rule, same line/col
+// bookkeeping — the loop still advances through `p.advance()`, and a
+// token can never contain a newline because whitespace terminates it.
+//
+// Gate-15's JSON-shape corpus is dominated by exactly these tokens, and
+// this reader's array growth was the single heaviest allocation site in
+// the profile.
 fn (mut p Parser) read_self_delim_token() !string {
-	mut s := []u8{}
+	start, end := p.read_self_delim_span()!
+	return p.src[start..end].bytestr()
+}
+
+// read_self_delim_span is the reader proper: it advances past the token and
+// returns its `[start, end)` bounds in `p.src`, leaving the caller to decide
+// whether the token's TEXT is needed at all. A typed-list item keeps a parsed
+// value rather than the token, so on the gate-15 corpus almost none of them
+// need it (#804).
+fn (mut p Parser) read_self_delim_span() !(int, int) {
+	start := p.pos
 	for !p.at_end() {
 		b := p.peek()
 		if is_ws(b) || b == `]` { break }
-		s << b
 		p.advance()
 	}
-	if s.len == 0 {
+	if p.pos == start {
 		return error(p.make_error('expected token in element body'))
 	}
-	return s.bytestr()
+	return start, p.pos
 }
 
 // self_delim_string_node normalizes a triple-quoted result node into a string
@@ -3007,6 +3596,20 @@ fn try_autotype_bytes(buf []u8) ?ScalarNode {
 	if n == 4 && buf[0] == `n` && buf[1] == `u` && buf[2] == `l` && buf[3] == `l` {
 		return ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) }
 	}
+	// atom — `:NAME` (lexicon [L40]). Mirrors `try_autotype`'s arm exactly,
+	// reserved-name rejection included, and sits in the same relative position
+	// (a hex prefix or a numeric shape can never begin with `:`). Recognised
+	// here so an atom-dominated body — the §11.6 gate-15 record shape is half
+	// atoms — never materialises the token as a string just to classify it;
+	// the one remaining allocation is the atom's own name, which the
+	// ScalarValue has to own anyway (#804).
+	if n >= 2 && buf[0] == `:` && is_atom_pattern_name_bytes(buf[1..]) {
+		name := buf[1..].bytestr()
+		if name == 'true' || name == 'false' || name == 'null' {
+			return none
+		}
+		return ScalarNode{ data_type: .atom_type, value: ScalarValue(name) }
+	}
 	// Decide shape with a single pass over bytes — record whether the
 	// token looks like an int, a float, or something else (date / hex /
 	// string fallback).
@@ -3058,25 +3661,30 @@ fn try_autotype_bytes(buf []u8) ?ScalarNode {
 			// leading-zero rule — defer to string path
 			return try_autotype(buf.bytestr())
 		}
-		// parse_int on bytes via bytestr — we still allocate one string
-		// here on the int path, but only because strconv lives over
-		// `string`. The amortised win vs. always-allocate is still ~2×
-		// when bool / null / float / non-numeric paths dominate. This
-		// branch only fires for plain decimal ints; on the gate-15
-		// corpus that's ~1/3 of attribute tokens (`:id N`, `:port P`).
-		s := buf.bytestr()
-		if v := parse_i64_checked(s) {
+		// The in-range decimal int now costs NO allocation at all: the
+		// checked parse reads the digits straight off the span (#804).
+		// Only the over-i64 promotion below, which has to keep the literal
+		// text as its value, materialises a string.
+		if v := parse_i64_checked_bytes(buf) {
 			return ScalarNode{ data_type: .int_type, value: ScalarValue(v) }
 		}
 		// [L20]/D-H: over-i64 well-formed decimal int → bigint (drop a
 		// redundant leading `+`), matching the string-surface try_autotype.
+		s := buf.bytestr()
 		bigint_str := if s.starts_with('+') { s[1..] } else { s }
 		return ScalarNode{ data_type: .bigint_type, value: ScalarValue(bigint_str) }
 	}
-	// A float needs a digit mantissa — a digit-less token (bare `e`/`.`)
-	// must NOT atof64 to 0.0; defer it to the string path → Text (D3).
+	// A numeric fraction needs a digit mantissa — a digit-less token (bare
+	// `e`/`.`) must NOT atof64 to 0.0; defer it to the string path (D3).
 	if (has_dot || has_exp) && has_digit && !has_underscore {
 		s := buf.bytestr()
+		// I1 stream 11 (2b): fixed-point → DECIMAL (scale preserved);
+		// exponent form → float. Mirrors try_autotype's arm exactly.
+		if !has_exp {
+			if norm := normalize_decimal_token(s) {
+				return ScalarNode{ data_type: .decimal_type, value: ScalarValue(norm) }
+			}
+		}
 		fv := strconv.atof64(s) or { return none }
 		return ScalarNode{ data_type: .float_type, value: ScalarValue(fv) }
 	}
@@ -3133,25 +3741,43 @@ fn try_autotype(tok string) ?ScalarNode {
 		bigint_str := if cleaned.starts_with('+') { cleaned[1..] } else { cleaned }
 		return ScalarNode{ data_type: .bigint_type, value: ScalarValue(bigint_str) }
 	}
-	// float — must contain '.' or an exponent marker to distinguish from int,
-	// AND must contain at least one digit so a digit-less token (bare `e`/`E`/
-	// `.`, `e+`, …) is NOT a float. `strconv.atof64` leniently returns 0.0 for
-	// such tokens (the `[name e]` → 0.0 bug); lexicon [L20b] Float requires an
-	// Integer mantissa, so a digit-less token falls through to Text instead.
+	// datetime / date — checked BEFORE the float arm (I1 epoch, stream 12,
+	// the W-7 typing companion): a fractional datetime contains '.', and the
+	// float arm's atof64-failure path returned `none` (→ string) instead of
+	// falling through, so `2026-08-05T10:00:00.500Z` string-typed everywhere
+	// while its fraction-less sibling typed datetime — same instant, two
+	// TYPES, unbounded addresses. Temporal forms are whole-token anchored,
+	// calendar-validated, and always carry 'T'+':' / '-'-separated shapes no
+	// valid float can, so the reorder is disjoint.
+	if is_datetime(tok) {
+		return ScalarNode{ data_type: .datetime_type, value: ScalarValue(tok) }
+	}
+	if is_date(tok) {
+		return ScalarNode{ data_type: .date_type, value: ScalarValue(tok) }
+	}
+	// numeric fraction — must contain '.' or an exponent marker to
+	// distinguish from int, AND must contain at least one digit so a
+	// digit-less token (bare `e`/`E`/`.`, `e+`, …) is NOT numeric.
+	// `strconv.atof64` leniently returns 0.0 for such tokens (the
+	// `[name e]` → 0.0 bug); [L20b] requires an Integer mantissa.
+	//
+	// I1 stream 11 (OWNER RULING 2b, 2026-08-05): a bare FIXED-POINT
+	// fraction is a DECIMAL — exact by default, scale preserved (`1.50`
+	// keeps its cents-precision; the financial-first, SQL-literal
+	// reading). Exponent-form literals are FLOATS, so the two kinds are
+	// lexically self-describing (canonical floats always carry the
+	// exponent — the amended §2.5).
 	if cleaned.contains('.') || cleaned.contains('e') || cleaned.contains('E') {
 		if !has_ascii_digit(cleaned) {
 			return none
 		}
+		if !cleaned.contains('e') && !cleaned.contains('E') {
+			if norm := normalize_decimal_token(tok) {
+				return ScalarNode{ data_type: .decimal_type, value: ScalarValue(norm) }
+			}
+		}
 		fv := strconv.atof64(cleaned) or { return none }
 		return ScalarNode{ data_type: .float_type, value: ScalarValue(fv) }
-	}
-	// datetime
-	if is_datetime(tok) {
-		return ScalarNode{ data_type: .datetime_type, value: ScalarValue(tok) }
-	}
-	// date
-	if is_date(tok) {
-		return ScalarNode{ data_type: .date_type, value: ScalarValue(tok) }
 	}
 	// duration / period (lexicon [L25]/[L26]): a whole-token integer+unit span.
 	// `100ms`/`1h30m`/`2w` → duration; `3mo`/`1y` → period. The verbatim CX
@@ -3169,6 +3795,16 @@ fn try_autotype(tok string) ?ScalarNode {
 // tag namespaces, `:order.placed`). No leading/trailing dot, no `..`, and
 // every segment starts like an Ident.
 pub fn is_atom_name(s string) bool {
+	return is_atom_name_bytes(unsafe { bytes_view(s) })
+}
+
+// is_atom_name_bytes is the single implementation of the [L40] atom-name
+// grammar; `is_atom_name` is the string face of it. The byte face exists so
+// the parser can test a token that is still a span of `p.src` — the §11.6
+// gate-15 corpus is atom-dominated (`:id`, `:name`, `:host`, …), and going
+// through the string face cost a `bytestr()` for the token plus a `[1..]`
+// substring for the name on EVERY atom (#804).
+pub fn is_atom_name_bytes(s []u8) bool {
 	if s.len == 0 { return false }
 	mut seg_start := true
 	for i in 0 .. s.len {
@@ -3193,16 +3829,38 @@ pub fn is_atom_name(s string) bool {
 	return !seg_start // a trailing '.' leaves an empty final segment
 }
 
+// bytes_view is a NON-OWNING `[]u8` over a string's bytes — no copy, no
+// allocation. It exists so a `string`-faced predicate can delegate to its
+// `[]u8` implementation without paying `s.bytes()`. Read-only: never append
+// through it, never store it, never let it outlive `s`.
+@[inline]
+@[unsafe]
+fn bytes_view(s string) []u8 {
+	mut v := []u8{}
+	unsafe {
+		v.data = s.str
+		v.len = s.len
+		v.cap = s.len
+	}
+	return v
+}
+
 // is_atom_pattern_name admits everything is_atom_name does PLUS a single
 // terminal `.*` glob segment (`:order.*`) — the bus.md §2.2 prefix-glob
 // spelling ([L40] `('.' '*')?`, #397). The star is legal ONLY as the entire
 // final segment; it has no meaning at the atom level (one opaque name) —
 // pattern consumers (bus) assign the glob semantics.
 pub fn is_atom_pattern_name(s string) bool {
-	if s.ends_with('.*') {
-		return s.len > 2 && is_atom_name(s[..s.len - 2])
+	return is_atom_pattern_name_bytes(unsafe { bytes_view(s) })
+}
+
+// is_atom_pattern_name_bytes — the byte face of is_atom_pattern_name, for the
+// same reason is_atom_name_bytes exists.
+pub fn is_atom_pattern_name_bytes(s []u8) bool {
+	if s.len >= 2 && s[s.len - 2] == `.` && s[s.len - 1] == `*` {
+		return s.len > 2 && is_atom_name_bytes(s[..s.len - 2])
 	}
-	return is_atom_name(s)
+	return is_atom_name_bytes(s)
 }
 
 fn coerce_scalar(et string, tok string) ScalarNode {
@@ -3262,14 +3920,17 @@ fn coerce_scalar(et string, tok string) ScalarNode {
 		// precision preserved. Host bindings convert to decimal types
 		// per spec/misc/type-mapping.md §2.
 		'decimal' {
-			cleaned := strip_underscores(tok) or { tok }
-			ScalarNode{ data_type: .decimal_type, value: ScalarValue(cleaned) }
+			// I1 stream 11: normalize when the token conforms (§6 — table
+			// cells and importer lanes ride this arm); verbatim fallback
+			// keeps the fn infallible for the codec importers.
+			norm := normalize_decimal_token(tok) or { strip_underscores(tok) or { tok } }
+			ScalarNode{ data_type: .decimal_type, value: ScalarValue(norm) }
 		}
 		// v3.4 arbitrary-precision integer — stored as string; auto-
 		// promoted from int when the value exceeds i64 range.
 		'bigint' {
-			cleaned := strip_underscores(tok) or { tok }
-			ScalarNode{ data_type: .bigint_type, value: ScalarValue(cleaned) }
+			norm := normalize_bigint_token(tok) or { strip_underscores(tok) or { tok } }
+			ScalarNode{ data_type: .bigint_type, value: ScalarValue(norm) }
 		}
 		// Temporal spans (lexicon [L25]/[L26]) — stored verbatim; the explicit
 		// annotation forces the type even when the lexical form is ambiguous.
@@ -3304,34 +3965,49 @@ fn coerce_scalar(et string, tok string) ScalarNode {
 // coerce_scalar_checked is the fallible twin of coerce_scalar for the EXPLICITLY
 // type-ascribed body path (`[n::int abc]`, `[p::u8 999]`). Where coerce_scalar
 // silently fell back to 0 on a malformed numeric, this raises:
-//   - CXER0109 — the token cannot be coerced to the ascribed type (M-ERR-2).
+//   - CXER0290 — the token cannot be coerced to the ascribed type (M-ERR-2).
 //   - CXERLEX-RANGE — a sized integer value is outside the type's range
 //     (@CHOICE-5b; LR-RANGE-1).
 // For every type whose coercion cannot fail (string / bool / date / atom / …)
 // it delegates verbatim to coerce_scalar, so accepted values stay byte-stable.
+//
+// RULED: MSS-3 item 7 (#917): the checking core is the receiver-less
+// coerce_scalar_strict, shared with the PROGRAM reader so both readings
+// enforce identical ascription rules; this method adds source position.
 fn (p &Parser) coerce_scalar_checked(et string, tok string) !ScalarNode {
+	return coerce_scalar_strict(et, tok) or { return error(p.make_error(err.msg())) }
+}
+
+// coerce_scalar_strict is the position-free checking core — see
+// coerce_scalar_checked above.
+pub fn coerce_scalar_strict(et string, tok string) !ScalarNode {
 	match et {
 		'int', 'i8', 'i16', 'i32', 'i64' {
 			v := parse_int_strict(tok) or {
-				return error(p.make_error('cannot coerce `${tok}` to ${et} (cx-err:CXER0109)'))
+				return error('cannot coerce `${tok}` to ${et} (cx-err:CXER0290)')
 			}
 			if !int_in_range(v, et) {
-				return error(p.make_error('integer ${v} out of range for `${et}` (cx-err:CXERLEX-RANGE)'))
+				return error('integer ${v} out of range for `${et}` (cx-err:CXERLEX-RANGE)')
 			}
 			return ScalarNode{ data_type: .int_type, value: ScalarValue(v) }
 		}
 		'u8', 'u16', 'u32', 'u64' {
 			v := parse_int_strict(tok) or {
-				return error(p.make_error('cannot coerce `${tok}` to ${et} (cx-err:CXER0109)'))
+				return error('cannot coerce `${tok}` to ${et} (cx-err:CXER0290)')
 			}
 			if !int_in_range(v, et) {
-				return error(p.make_error('integer ${v} out of range for `${et}` (cx-err:CXERLEX-RANGE)'))
+				return error('integer ${v} out of range for `${et}` (cx-err:CXERLEX-RANGE)')
 			}
 			return ScalarNode{ data_type: .int_type, value: ScalarValue(v) }
 		}
 		'float', 'f16', 'f32', 'f64' {
 			fv := try_coerce_float_token(tok) or {
-				return error(p.make_error('cannot coerce `${tok}` to ${et} (cx-err:CXER0109)'))
+				return error('cannot coerce `${tok}` to ${et} (cx-err:CXER0290)')
+			}
+			// I1 W-3: a literal whose value overflows to ±Inf (or is NaN)
+			// has no §2.5 form — fail loud instead of minting `+inf.0`.
+			if !cx_f64_is_finite(fv) {
+				return error('`${tok}` overflows ${et} — non-finite floats have no canonical form (canonical.md §1.3/§2.5) (cx-err:CXER0290)')
 			}
 			return ScalarNode{ data_type: .float_type, value: ScalarValue(fv) }
 		}
@@ -3343,7 +4019,7 @@ fn (p &Parser) coerce_scalar_checked(et string, tok string) !ScalarNode {
 			// instead of minting an atom the atom grammar cannot spell
 			// (its render `:0x2a` would not re-parse — a bijection break).
 			name := try_coerce_atom_token(tok) or {
-				return error(p.make_error('cannot coerce `${tok}` to atom — not a valid atom name (lexicon [L40]) (cx-err:CXER0109)'))
+				return error('cannot coerce `${tok}` to atom — not a valid atom name (lexicon [L40]) (cx-err:CXER0290)')
 			}
 			return ScalarNode{ data_type: .atom_type, value: ScalarValue(name) }
 		}
@@ -3351,17 +4027,250 @@ fn (p &Parser) coerce_scalar_checked(et string, tok string) !ScalarNode {
 			// OWNER RULING (#466 item 3): decimal / bigint are BASE-10
 			// value types — a hex token under the ascription is a mistake
 			// and REJECTS loudly (M-ERR-2), never stored verbatim.
-			// try_coerce_base10_verbatim_token is the single home shared
-			// with the program evaluator's ascription path.
-			sn := try_coerce_base10_verbatim_token(et, tok) or {
-				return error(p.make_error('cannot coerce hex literal `${tok}` to ${et} — ${et} is a base-10 value type (cx-err:CXER0109)'))
+			if is_hex_int_token(tok) {
+				return error('cannot coerce hex literal `${tok}` to ${et} — ${et} is a base-10 value type (cx-err:CXER0290)')
 			}
-			return sn
+			// I1 stream 11 (L39 defect G + L45 §6): strict lexical
+			// validation + canonical normalization. `::decimal hello-world`
+			// parsed silently before; exponent-form decimals are
+			// scale-ambiguous and reject; `+`/redundant leading zeros/
+			// negative zero normalize away (scale preserved).
+			if et == 'decimal' {
+				norm := normalize_decimal_token(tok) or {
+					return error('cannot coerce `${tok}` to decimal — fixed-point base-10 literal required (sign? digits (`.` digits)?; exponent form is scale-ambiguous) (cx-err:CXER0290)')
+				}
+				return ScalarNode{ data_type: .decimal_type, value: ScalarValue(norm) }
+			}
+			norm := normalize_bigint_token(tok) or {
+				return error('cannot coerce `${tok}` to bigint — base-10 integer literal required (cx-err:CXER0290)')
+			}
+			return ScalarNode{ data_type: .bigint_type, value: ScalarValue(norm) }
+		}
+		'duration', 'period' {
+			// I1 stream 11 (L39 defect G): typed carriers validate their
+			// lexical form — `::duration hello` parsed silently before.
+			kind := temporal_span_kind(tok) or {
+				return error('cannot coerce `${tok}` to ${et} — not a temporal span (lexicon [L25]/[L26]) (cx-err:CXER0290)')
+			}
+			want := if et == 'duration' { ScalarType.duration_type } else { ScalarType.period_type }
+			if kind != want {
+				return error('`${tok}` is a ${scalar_type_name(kind)} span, not ${et} (cx-err:CXER0290)')
+			}
+			return coerce_scalar(et, tok)
+		}
+		// RULED: MSS-3 item 1 (#917): every remaining arm is CHECKED — the
+		// old else-fallthrough let bool/date/datetime/bytes/null coerce
+		// garbage silently, so whether a malformed ascription errored or
+		// INVENTED a value depended on the type name ('prose ::bool' → false
+		// at rc=0 while 'prose ::int' errored).
+		'bool' {
+			if tok != 'true' && tok != 'false' {
+				return error('cannot coerce `${tok}` to bool — `true` or `false` required (cx-err:CXER0290)')
+			}
+			return coerce_scalar(et, tok)
+		}
+		'date' {
+			if !is_date(tok) {
+				return error('cannot coerce `${tok}` to date — `YYYY-MM-DD` required (lexicon [L23]) (cx-err:CXER0290)')
+			}
+			return coerce_scalar(et, tok)
+		}
+		'datetime' {
+			if !is_datetime(tok) {
+				return error('cannot coerce `${tok}` to datetime — ISO-8601 form required (lexicon [L24]) (cx-err:CXER0290)')
+			}
+			return coerce_scalar(et, tok)
+		}
+		'bytes' {
+			// The shipped bytes carrier is the `0x…` hex literal (#457 —
+			// the source spelling is kept verbatim); base64 is admitted as
+			// the interchange spelling. Anything else refuses.
+			if is_hex_int_token(tok) {
+				return coerce_scalar(et, tok)
+			}
+			_ := base64_to_bytes_hex(tok) or {
+				return error('cannot coerce `${tok}` to bytes — `0x…` hex or base64 content required (cx-err:CXER0290)')
+			}
+			return coerce_scalar(et, tok)
+		}
+		'null' {
+			if tok != 'null' {
+				return error('cannot coerce `${tok}` to null — only `null` itself has the null type (cx-err:CXER0290)')
+			}
+			return coerce_scalar(et, tok)
 		}
 		else {
+			// 'string' and the internal 'table' marker: a single token is
+			// always a valid string carrier; table rides its own block path.
 			return coerce_scalar(et, tok)
 		}
 	}
+}
+
+// normalize_decimal_token validates + normalizes a decimal literal per
+// L45/§6: fixed-point only (exponent form is scale-ambiguous → none),
+// underscores stripped, no `+`, exactly one leading integer digit run with
+// redundant zeros stripped (leading zero REQUIRED for fractions: `.5` →
+// `0.5`), negative zero normalizes positive with its scale preserved,
+// trailing fraction zeros PRESERVED (scale is data).
+// decimal_token_is_canonical reports whether `tok` is ALREADY exactly
+// what normalize_decimal_token would build from it (#804). The rebuild
+// costs about five allocations — strip_underscores, the sign split, the
+// int/frac split, the leading-zero trim, and two concatenations — and on
+// an already-canonical token every one of them reproduces the input
+// byte-for-byte. Gate-15's JSON-shape corpus carries a decimal per
+// record, so that is a per-record tax paid to change nothing.
+//
+// Canonical means: no `+`, no underscores, a non-empty int part with no
+// redundant leading zero, a non-empty all-digit fraction when a `.` is
+// present, and no `-` on a zero value (all the rewrites the slow path
+// below performs). One pass, no allocation.
+fn decimal_token_is_canonical(tok string) bool {
+	if tok.len == 0 {
+		return false
+	}
+	mut i := 0
+	mut neg := false
+	if tok[0] == `-` {
+		neg = true
+		i = 1
+	} else if tok[0] == `+` {
+		return false // a leading '+' is always stripped
+	}
+	int_start := i
+	mut int_len := 0
+	mut frac_len := 0
+	mut seen_dot := false
+	mut all_zero := true
+	for ; i < tok.len; i++ {
+		c := tok[i]
+		if c == `.` {
+			if seen_dot {
+				return false
+			}
+			seen_dot = true
+			continue
+		}
+		if c < `0` || c > `9` {
+			return false // underscore, exponent, hex, anything else
+		}
+		if c != `0` {
+			all_zero = false
+		}
+		if seen_dot {
+			frac_len++
+		} else {
+			int_len++
+		}
+	}
+	if int_len == 0 {
+		return false // '.5' gains its '0'
+	}
+	if int_len > 1 && tok[int_start] == `0` {
+		return false // '007' loses its leading zeros
+	}
+	if seen_dot && frac_len == 0 {
+		return false // '1.' is not a decimal token
+	}
+	if neg && all_zero {
+		return false // '-0.0' loses its sign
+	}
+	return true
+}
+
+pub fn normalize_decimal_token(tok string) ?string {
+	if decimal_token_is_canonical(tok) {
+		return tok
+	}
+	cleaned := strip_underscores(tok) or { tok }
+	mut s := cleaned
+	mut neg := false
+	if s.starts_with('+') {
+		s = s[1..]
+	} else if s.starts_with('-') {
+		neg = true
+		s = s[1..]
+	}
+	if s.len == 0 {
+		return none
+	}
+	mut int_part := s
+	mut frac := ''
+	if idx := s.index('.') {
+		int_part = s[..idx]
+		frac = s[idx + 1..]
+		if frac.len == 0 || !is_all_digits(frac) {
+			return none
+		}
+	}
+	if int_part.len == 0 {
+		int_part = '0'
+	} else if !is_all_digits(int_part) {
+		return none
+	}
+	mut ip := int_part.trim_left('0')
+	if ip.len == 0 {
+		ip = '0'
+	}
+	mut all_zero := ip == '0'
+	if all_zero {
+		for c in frac {
+			if c != `0` {
+				all_zero = false
+				break
+			}
+		}
+	}
+	mut out := if neg && !all_zero { '-' } else { '' }
+	out += ip
+	if frac.len > 0 {
+		out += '.' + frac
+	}
+	return out
+}
+
+// normalize_bigint_token validates + normalizes a bigint literal per L45:
+// base-10 digits only, underscores stripped, no `+`, no leading zeros,
+// negative zero normalizes positive.
+pub fn normalize_bigint_token(tok string) ?string {
+	cleaned := strip_underscores(tok) or { tok }
+	mut s := cleaned
+	mut neg := false
+	if s.starts_with('+') {
+		s = s[1..]
+	} else if s.starts_with('-') {
+		neg = true
+		s = s[1..]
+	}
+	if s.len == 0 || !is_all_digits(s) {
+		return none
+	}
+	mut d := s.trim_left('0')
+	if d.len == 0 {
+		d = '0'
+	}
+	if neg && d != '0' {
+		return '-' + d
+	}
+	return d
+}
+
+// try_split_postfix_ascription splits a collection-position token
+// `value::T` at its LAST `::` when T is a valid non-array scalar type tag
+// (I1 stream 11, L43 — #485 reversed: CX text is a complete carrier for
+// its own type system in map-value / array-item / map-key positions).
+// Returns none when the token carries no ascription (it stays whatever the
+// bare rules say).
+fn try_split_postfix_ascription(tok string) ?(string, string) {
+	idx := tok.last_index('::') or { return none }
+	if idx == 0 || idx + 2 >= tok.len {
+		return none
+	}
+	typ := tok[idx + 2..]
+	if typ.ends_with('[]') || typ == 'table' || !is_valid_type_tag(typ) {
+		return none
+	}
+	return tok[..idx], typ
 }
 
 // try_coerce_base10_verbatim_token coerces a token under an explicit
@@ -3430,25 +4339,54 @@ pub fn coerce_scalar_public(et string, tok string) ScalarNode {
 // did not fit i64. Input is `[+-]?` then decimal digits — callers strip `_`
 // and reject leading zeros, so the canonical i64 string is a faithful compare.
 fn parse_i64_checked(signed_body string) ?i64 {
-	v := signed_body.parse_int(10, 64) or { return none }
-	// Normalize the input to its canonical decimal form (drop sign symbol +
-	// leading zeros) so the round-trip compare detects only true clamps, not
-	// cosmetic differences. Leading zeros are legal under an explicit `::int`
-	// (`02134` → 2134); only a magnitude that doesn't fit i64 must fail.
-	neg := signed_body.starts_with('-')
-	mut mag := signed_body
-	if mag.starts_with('+') || mag.starts_with('-') {
-		mag = mag[1..]
-	}
-	mag = mag.trim_left('0')
-	if mag == '' {
-		mag = '0'
-	}
-	norm := if neg && mag != '0' { '-' + mag } else { mag }
-	if v.str() != norm {
+	return parse_i64_checked_bytes(unsafe { bytes_view(signed_body) })
+}
+
+// parse_i64_checked_bytes is the implementation. The magnitude accumulates in
+// u64 against the signed limit, so the boundary is decided by arithmetic
+// rather than by the old re-stringify compare (`v.str() != norm`), which
+// allocated up to four strings per integer token — a leading-zero trim, a sign
+// concatenation, and the `i64.str()` itself. On the §11.6 gate-15 corpus every
+// record carries two integers, so that round trip was a per-record allocation
+// cluster (#804). Same acceptance set as before: `[+-]?` then decimal digits
+// only, leading zeros tolerated (legal under an explicit `::int`); any other
+// byte, an empty magnitude, or an over-i64 magnitude → none.
+fn parse_i64_checked_bytes(buf []u8) ?i64 {
+	if buf.len == 0 {
 		return none
 	}
-	return v
+	mut i := 0
+	mut neg := false
+	if buf[0] == `+` || buf[0] == `-` {
+		neg = buf[0] == `-`
+		i = 1
+	}
+	if i >= buf.len {
+		return none
+	}
+	// i64 min's magnitude is one larger than i64 max's.
+	limit := if neg { u64(9223372036854775807) + 1 } else { u64(9223372036854775807) }
+	mut mag := u64(0)
+	for ; i < buf.len; i++ {
+		c := buf[i]
+		if c < `0` || c > `9` {
+			return none
+		}
+		d := u64(c - `0`)
+		// mag*10 + d <= limit, decided without ever forming the overflowing
+		// product.
+		if mag > (limit - d) / 10 {
+			return none
+		}
+		mag = mag * 10 + d
+	}
+	if neg {
+		if mag == u64(9223372036854775807) + 1 {
+			return i64(-9223372036854775807 - 1)
+		}
+		return -i64(mag)
+	}
+	return i64(mag)
 }
 
 // parse_int_strict parses a CX integer token (optional sign, decimal or `0x` hex,
@@ -3517,7 +4455,7 @@ pub fn try_coerce_int_token(tok string, et string) ?i64 {
 
 // try_coerce_float_token parses a CX float token under an explicit `::float`
 // (or sized-float) ascription, returning none when the token cannot coerce
-// (M-ERR-2 / CXER0109). The SINGLE home of the ascribed-float guards —
+// (M-ERR-2 / CXER0290). The SINGLE home of the ascribed-float guards —
 // coerce_scalar_checked's float arm and the program evaluator's annotated-
 // element coercion both delegate here, so a token like `0x2a` fails
 // identically in both engines (atof64 leniently returns 0.0 for a digit-less
@@ -3590,6 +4528,22 @@ fn (mut p Parser) lex_name() ?Token {
 		}
 		if is_name_char(b) {
 			p.advance()
+		} else if b >= 0x80 {
+			// I1 L22 (W-9): full-Unicode names per [L10a]/[L10b] — decode
+			// the codepoint and test the grammar's ranges (start-set for the
+			// first character, continuation-set after). Invalid UTF-8 cannot
+			// reach here (validate_utf8 runs at the parse entries).
+			cp, sz := utf8_cp_at(p.src, p.pos)
+			if sz == 0 {
+				break
+			}
+			ok := if p.pos == start { is_name_start_cp(cp) } else { is_name_char_cp(cp) }
+			if !ok {
+				break
+			}
+			for _ in 0 .. sz {
+				p.advance()
+			}
 		} else {
 			break
 		}
@@ -3715,12 +4669,28 @@ fn (mut p Parser) lex_value_run() ?Token {
 // path (gate-15 streaming bench).
 fn (mut p Parser) read_token_into(mut buf []u8) ! {
 	t := p.lex_value_run() or { return error(p.make_error('expected token')) }
+	p.reject_mid_bom(t.pos.offset, t.end)!
 	buf << p.src[t.pos.offset..t.end]
 }
 
 fn (mut p Parser) read_token() !string {
 	t := p.lex_value_run() or { return error(p.make_error('expected token')) }
+	p.reject_mid_bom(t.pos.offset, t.end)!
 	return p.src[t.pos.offset..t.end].bytestr()
+}
+
+// reject_mid_bom errors on a UTF-8 BOM (EF BB BF) inside a bare content
+// token — I1 W-10 (lexicon §0): only the LEADING file BOM is consumed
+// (new_parser); anywhere else the invisible U+FEFF would silently join a
+// bare value. Quoted values are verbatim and unaffected (their bytes never
+// route through here).
+fn (p &Parser) reject_mid_bom(start int, end int) ! {
+	for i := start; i <= end - 3; i++ {
+		if p.src[i] == 0xef && p.src[i + 1] == 0xbb && p.src[i + 2] == 0xbf {
+			return error(p.make_error('byte-order mark (U+FEFF) inside content — a BOM is only recognized as the first bytes of the file (cx-err:CXER0100)'))
+		}
+	}
+	return
 }
 
 // split_ws_quote_bracket splits `s` on ASCII whitespace, treating
@@ -3872,6 +4842,10 @@ fn (mut p Parser) read_attr_list_until(stop u8) ![]Attribute {
 fn (mut p Parser) read_attr_value() !string {
 	if p.at_end() { return error(p.make_error('expected attr value')) }
 	b := p.peek()
+	// RAW triquote `r'''…'''` / `r"""…"""` (I1 L58) — verbatim body.
+	if p.at_raw_triple() {
+		return p.read_raw_triple_str()!
+	}
 	// Triquote `'''…'''` is permitted in attribute value position
 	// (spec [55a] amendment lifting the [10b] ban). Detect by peeking the
 	// third quote BEFORE the regular quoted path so `attr='''…'''` reads
@@ -3924,6 +4898,11 @@ fn (mut p Parser) read_attr_value_typed() !(ScalarValue, ?string) {
 			tname := p.src[p.pos + 1..scan].bytestr()
 			return error(p.make_error("retired colon-typed attribute value `:${tname}=…` — use the glued name-side type form `name::${tname}=value` (grammar [26]/[55])")), none
 		}
+	}
+	// RAW triquote `r'''…'''` / `r"""…"""` (I1 L58) in attribute position.
+	if p.at_raw_triple() {
+		s := p.read_raw_triple_str()!
+		return ScalarValue(s), ?string(none)
 	}
 	// Triquote in attribute position — peek for `'''` before
 	// dispatching to the normal squote path.
@@ -4260,6 +5239,62 @@ fn (mut p Parser) read_triple_double_quoted_str() !string {
 	return p.read_triple_quoted_str_with_quote(`"`)!
 }
 
+// peek_hole_len reports the byte length of an authorable variable-hole
+// token `$name` at the cursor (I1 row 9, L78), or none. A hole is `$` +
+// NameStart NameChar* ENDING at a delimiter (whitespace / `]` / `,` /
+// `)` / `}` / EOF). Any other continuation — a path step (`$x.y`,
+// `$x/y`), a glued sigil, a bare `$` — is NOT a hole and stays on the
+// text lane. The returned length includes the `$`.
+fn (p &Parser) peek_hole_len() ?int {
+	if p.pos + 1 >= p.src.len {
+		return none
+	}
+	if !is_name_start(p.src[p.pos + 1]) {
+		return none
+	}
+	mut i := p.pos + 2
+	// A hole name is a SIMPLE name — the program-binding ident shape.
+	// `.` and `:` are name chars in the data lexer (dotted atoms, QNames)
+	// but a `$x.y` / `$x:y` spelling is a PATH/QName form, not a hole.
+	for i < p.src.len && is_name_char(p.src[i]) && p.src[i] != `.` && p.src[i] != `:` {
+		i++
+	}
+	if i < p.src.len {
+		d := p.src[i]
+		if !(is_ws(d) || d == `]` || d == `,` || d == `)` || d == `}`) {
+			return none
+		}
+	}
+	return i - p.pos
+}
+
+// at_raw_triple reports whether the cursor sits on an `r` GLUED to a triple
+// quote — the RAW triple-quoted string opener (I1 L58, stream 13: legal in
+// DATA mode too; one token grammar with the program lexer). Never true for a
+// bare `r` or `r` before anything but a triple quote.
+fn (p &Parser) at_raw_triple() bool {
+	return p.pos + 3 < p.src.len && p.src[p.pos] == `r`
+		&& (p.src[p.pos + 1] == `'` || p.src[p.pos + 1] == `"`)
+		&& p.src[p.pos + 2] == p.src[p.pos + 1] && p.src[p.pos + 3] == p.src[p.pos + 1]
+}
+
+// read_raw_triple_str consumes the `r` prefix plus the triple-quoted body and
+// returns the VERBATIM value — raw skips the common-indent dedent
+// (scan_triple_quoted_opt, the one shared scanner). Position must satisfy
+// at_raw_triple. Canonical output never re-emits the triquote spelling
+// (L15/L17), so the raw form is an INPUT spelling only.
+fn (mut p Parser) read_raw_triple_str() !string {
+	p.advance() // consume the `r`
+	q := p.peek()
+	value, n := scan_triple_quoted_opt(p.src, p.pos, q, true) or {
+		return error(p.make_error('unterminated triple-quoted string'))
+	}
+	for _ in 0 .. n {
+		p.advance()
+	}
+	return value
+}
+
 // read_triple_quoted_str_with_quote is the shared scanner for both `'''…'''`
 // and `"""…"""`. The `q` parameter is the active delimiter byte (either `'`
 // or `"`). Implements lookahead-on-close: when a triple-delimiter is seen,
@@ -4388,9 +5423,36 @@ fn (p &Parser) peek_is_array_literal() bool {
 		for k < p.src.len && is_ws(p.src[k]) { k++ }
 		return k < p.src.len && p.src[k] == `,`
 	}
+	// I1 row 8 (L80, audit C4): the seven OPERATOR HEADS `+ - * / = < >`
+	// are element names when the single operator char is DELIMITED —
+	// followed by whitespace or `]`. `[+ $x 2]` is the element `+` (it
+	// used to stringify silently through the array lane); a GLUED
+	// continuation stays on its old route (`[-1, 2]` is a negative-number
+	// array item; `[*n]` is an alias). `*` `>` are handled by the
+	// dual-role block above (comma → array; otherwise element-side,
+	// where the dispatch splits alias vs operator head).
+	if first == `+` || first == `-` || first == `/` || first == `=` || first == `<` {
+		if i + 1 >= p.src.len {
+			return true
+		}
+		nxt := p.src[i + 1]
+		if is_ws(nxt) || nxt == `]` {
+			return false // delimited operator head → element
+		}
+		return true
+	}
 	// First char that can't lead an element name → must be array
 	// literal (or a structural sigil already handled by parse_bracket_node).
-	if !is_name_start(first) { return true }
+	// I1 L22: a non-ASCII lead byte is an element head when the decoded
+	// codepoint is in [L10a] (full-Unicode names).
+	if first >= 0x80 {
+		cp, sz := utf8_cp_at(p.src, i)
+		if sz == 0 || !is_name_start_cp(cp) {
+			return true
+		}
+	} else if !is_name_start(first) {
+		return true
+	}
 	// First char IS name_start. Walk through the candidate name
 	// looking for the boundary that decides element vs array.
 	for i < p.src.len {
@@ -4409,6 +5471,16 @@ fn (p &Parser) peek_is_array_literal() bool {
 		// marks an element, so stop the scan here. A single `:` stays a
 		// name char (namespace `svg:rect`) and the scan continues.
 		if b == `:` && i + 1 < p.src.len && p.src[i + 1] == `:` { return false }
+		if b >= 0x80 {
+			// I1 L22: multibyte name characters continue the element-head
+			// candidate; a non-name codepoint routes to the array/text lane.
+			cp, sz := utf8_cp_at(p.src, i)
+			if sz == 0 || !is_name_char_cp(cp) {
+				return true
+			}
+			i += sz
+			continue
+		}
 		if !is_name_char(b) { return true }
 		i++
 	}
@@ -4419,6 +5491,40 @@ fn (p &Parser) peek_is_array_literal() bool {
 // to decide between SequenceLiteral and body text. Does not consume.
 // Returns true if shape is `()` (empty) or contains a depth-0 `,`
 // before the matching `)`.
+// peek_lone_paren_group_fills_slot reports whether the `(` at the cursor
+// opens a balanced paren group which — after trailing whitespace — is
+// immediately followed by a slot terminator (`,` `)` `]` `}`) or EOF:
+// the group IS the whole slot. Quote-shielded like its sibling above.
+// (#810 RULED (a): the lone-group slot form is a sequence literal.)
+fn (p &Parser) peek_lone_paren_group_fills_slot() bool {
+	if p.peek() != `(` { return false }
+	mut i := p.pos + 1
+	mut depth := 1
+	mut quote := u8(0)
+	for i < p.src.len && depth > 0 {
+		b := p.src[i]
+		if quote != 0 {
+			if b == `\\` && i + 1 < p.src.len { i += 2; continue }
+			if b == quote { quote = 0 }
+			i++
+			continue
+		}
+		if b == `'` || b == `"` {
+			quote = b
+			i++
+			continue
+		}
+		if b == `(` || b == `[` || b == `{` { depth++ }
+		if b == `)` || b == `]` || b == `}` { depth-- }
+		i++
+	}
+	if depth != 0 { return false }
+	for i < p.src.len && is_ws(p.src[i]) { i++ }
+	if i >= p.src.len { return true }
+	nb := p.src[i]
+	return nb == `,` || nb == `)` || nb == `]` || nb == `}`
+}
+
 fn (p &Parser) peek_is_sequence_literal_at_paren() bool {
 	if p.peek() != `(` { return false }
 	mut i := p.pos + 1
@@ -4561,7 +5667,16 @@ fn (mut p Parser) parse_map_literal() !Node {
 		if p.at_end() { return error(p.make_error('unterminated map literal')) }
 		if p.peek() == `}` { break }
 		entry := p.parse_map_entry()!
-		marker := '${scalar_type_name(entry.key_type)}:${scalar_value_str(entry.key_value)}'
+		// I1 L23 (W-11): duplicate-key comparison is NFC for string keys —
+		// NFC/NFD confusable spellings of one key are ONE key (the check
+		// was spec'd in three places and implemented nowhere). The STORED
+		// key keeps its authored bytes (keys are values; values never
+		// normalize).
+		mut key_img := scalar_value_str(entry.key_value)
+		if entry.key_type == .string_type {
+			key_img = cx_nfc_name(key_img)
+		}
+		marker := '${scalar_type_name(entry.key_type)}:${key_img}'
 		if marker in seen_keys {
 			return error(p.make_error('W014: duplicate map key (cx-err:CXERMAP-DUPKEY)'))
 		}
@@ -4572,28 +5687,279 @@ fn (mut p Parser) parse_map_literal() !Node {
 		b := p.peek()
 		if b == `,` { p.advance(); continue }
 		if b == `}` { break }
-		return error(p.make_error('expected `,` or `}` in map literal'))
+		// RULED: MSS-2 (#917) — whitespace separates entries exactly as a
+		// comma does ([L85] amended; the 715-site shipped form). The value
+		// reader enforces its own glued-tail boundary, so reaching here
+		// means a ws-separated next entry begins.
 	}
 	p.expect(`}`)!
 	return Node(MapNode{ entries: entries })
 }
 
-// parse_map_entry parses one MapEntry [56f] — `MapKey : BodyItem`.
+// parse_map_entry parses one MapEntry [56f] — `MapKey : MapValue` or the
+// MSS-4 declaration `MapKey : ::Kind` (value ABSENT). The value is one
+// expression-shaped item (RULED: MSS-1 — prose must be quoted), matching
+// the program reading.
 fn (mut p Parser) parse_map_entry() !MapEntry {
 	p.skip_ws_and_line_comments()
 	key_type, key_value := p.read_map_key()!
 	p.skip_ws_and_line_comments()
 	if p.at_end() || p.peek() != `:` {
-		return error(p.make_error('expected `:` after map key'))
+		return error(p.make_error("expected `:` after map key — a map value is ONE item: quote multi-word prose ('two words'), and a typed value is `k: ::int 30` or `k: 30::int` (cx-err:CXER0100)"))
+	}
+	// RULED: MSS-3 item 3 (#917): after a key, `::` is never the entry
+	// separator — the old byte scan consumed one `:` and silently read
+	// `{a ::int}` as the atom entry `{a: :int}`.
+	if p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:` {
+		return error(p.make_error('a type annotation must be glued — write `k::T: v` to type the key, `k: ::T v` or `k: v::T` to type the value, `k: ::T` to declare the field, or `k: :name` for an atom value (cx-err:CXER0100)'))
 	}
 	p.advance() // consume ':'
 	p.skip_ws_and_line_comments()
-	value := p.parse_collection_item()!
+	// RULED: MSS-4 (#917): a prefix TypeAnnotation as the SOLE value
+	// declares the field — typed, value ABSENT. Typed values stay postfix
+	// (`k: v::T`), so `{a: ::int 5}` remains a parse error downstream.
+	if !p.at_end() && p.peek() == `:` && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:` {
+		p.advance()
+		p.advance()
+		tag := p.read_kind_tag()!
+		if !is_valid_kind_tag(tag) {
+			return error(p.make_error('unknown kind `${tag}` in map-entry declaration — the vocabulary is [157] KindName (cx-err:CXER0107 E_UNKNOWN_TYPE_TAG)'))
+		}
+		if !p.at_end() {
+			b := p.peek()
+			if b != `,` && b != `}` && !is_ws(b) {
+				return error(p.make_error('the `::${tag}` annotation is glued to nothing it can type — write `k: ::${tag} VALUE` or the declaration `k: ::${tag}` (cx-err:CXER0100)'))
+			}
+		}
+		// RULED: MSS-7 (#917, owner "1a" on the playground evidence): a
+		// VALUE after the prefix types it — `{age: ::int 30}` — through
+		// the same checked core as the postfix form. A ws-separated token
+		// that turns out to be the NEXT KEY (`{a: ::int b: 2}`) restores
+		// the cursor and this entry stays a declaration.
+		if p.prefixed_value_follows() {
+			v := p.read_prefixed_value(tag)!
+			return MapEntry{
+				key_type:  key_type
+				key_value: key_value
+				value:     v
+			}
+		}
+		return MapEntry{
+			key_type:  key_type
+			key_value: key_value
+			value:     Node(ScalarNode{ data_type: .null_type, value: ScalarValue(NullValue{}) })
+			decl_kind: tag
+		}
+	}
+	value := p.parse_map_value()!
 	return MapEntry{
 		key_type:  key_type
 		key_value: key_value
 		value:     value
 	}
+}
+
+// prefixed_value_follows — MSS-7 (#917) lookahead: does a scalar VALUE
+// token follow the map-entry prefix `::T`? False at the map boundary, at
+// a structure/atom opener (only scalars take the prefix), and when the
+// ws-separated token turns out to be the NEXT ENTRY's key (its `:`
+// betrays it). Cursor always restored.
+fn (mut p Parser) prefixed_value_follows() bool {
+	save := p.pos
+	defer {
+		p.pos = save
+	}
+	p.skip_ws_and_line_comments()
+	if p.at_end() {
+		return false
+	}
+	b := p.peek()
+	if b == `,` || b == `}` {
+		return false
+	}
+	if b == `[` || b == `(` || b == `{` || b == `&` || b == `$` || b == `:` {
+		return false
+	}
+	if b == `'` || b == `"` {
+		if b == `"` {
+			p.read_quoted() or { return false }
+		} else {
+			p.read_quoted_text() or { return false }
+		}
+	} else {
+		tok := p.read_slot_token() or { return false }
+		// `b:` reads as ONE token (the slot reader does not break on `:`)
+		// — a trailing single colon marks the NEXT ENTRY's key.
+		if tok.ends_with(':') && !tok.ends_with('::') {
+			return false
+		}
+	}
+	// A `:` after the token — glued or ws-separated (`{a: ::int b : 2}`,
+	// the spaced-colon key stays legal) — means it was a KEY, not a
+	// value; a bare value that happens to look like a key is quoted.
+	p.skip_ws_and_line_comments()
+	if !p.at_end() && p.peek() == `:`
+		&& !(p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:`) {
+		return false
+	}
+	return true
+}
+
+// read_prefixed_value — MSS-7 (#917): the committed read of `::T VALUE`
+// (owner "1a" on the playground evidence — `{age: ::int 30}` types the
+// value through the same checked core as the postfix form). One scalar
+// token, bare or quoted; a kind-only tag refuses (kinds declare, they do
+// not coerce); the slot then ends.
+fn (mut p Parser) read_prefixed_value(tag string) !Node {
+	p.skip_ws_and_line_comments()
+	if !is_valid_type_tag(tag) {
+		return error(p.make_error('kind `${tag}` declares only — it cannot coerce a value; scalar tags type values (`k: ::int 30`) (cx-err:CXER0290)'))
+	}
+	b := p.peek()
+	if b == `'` || b == `"` {
+		tok := if b == `"` { p.read_quoted()! } else { p.read_quoted_text()! }
+		p.refuse_glued_map_value_tail()!
+		if tag == 'string' {
+			return Node(ScalarNode{ data_type: .string_type, value: ScalarValue(tok) })
+		}
+		return Node(p.coerce_scalar_checked(tag, tok)!)
+	}
+	tok := p.read_slot_token()!
+	sn := p.coerce_scalar_checked(tag, tok)!
+	p.refuse_glued_map_value_tail()!
+	return Node(sn)
+}
+
+// read_kind_tag consumes a type/kind tag name at the cursor — letters,
+// digits and `-` (scalar-node), with an optional glued `[]` suffix.
+fn (mut p Parser) read_kind_tag() !string {
+	mut s := []u8{}
+	for !p.at_end() {
+		b := p.peek()
+		if (b >= `a` && b <= `z`) || (b >= `0` && b <= `9`) || b == `-` {
+			s << b
+			p.advance()
+			continue
+		}
+		break
+	}
+	if s.len == 0 {
+		return error(p.make_error('expected a type name after `::` (cx-err:CXER0107 E_UNKNOWN_TYPE_TAG)'))
+	}
+	if p.pos + 1 < p.src.len && p.src[p.pos] == `[` && p.src[p.pos + 1] == `]` {
+		s << `[`
+		s << `]`
+		p.advance()
+		p.advance()
+	}
+	return s.bytestr()
+}
+
+// parse_map_value parses one map VALUE as a discrete expression-shaped
+// item (RULED: MSS-1 #917) — a nested collection literal, a quoted string,
+// an entity reference, a `$name` hole, or one bare scalar/bareword token.
+// Free prose refuses with quote guidance; glued continuations after a
+// complete value refuse (they were the #917 silent-mangle lane).
+fn (mut p Parser) parse_map_value() !Node {
+	if p.at_end() {
+		return error(p.make_error('expected map value'))
+	}
+	b := p.peek()
+	if b == `{` {
+		v := p.parse_map_literal()!
+		p.refuse_glued_map_value_tail()!
+		return v
+	}
+	if b == `(` {
+		v := p.parse_sequence_literal()!
+		p.refuse_glued_map_value_tail()!
+		return v
+	}
+	if b == `[` {
+		v := p.parse_bracket_node()!
+		p.refuse_glued_map_value_tail()!
+		return v
+	}
+	if b == `&` {
+		v := p.parse_amp_node()!
+		p.refuse_glued_map_value_tail()!
+		return v
+	}
+	if b == `$` {
+		if hole_len := p.peek_hole_len() {
+			hname := p.src[p.pos + 1..p.pos + hole_len].bytestr()
+			for _ in 0 .. hole_len {
+				p.advance()
+			}
+			p.refuse_glued_map_value_tail()!
+			return Node(HoleNode{ name: hname })
+		}
+	}
+	if b == `r` && p.at_raw_triple() {
+		s := p.read_raw_triple_str()!
+		p.refuse_glued_map_value_tail()!
+		return Node(TextNode{ value: s })
+	}
+	if b == `'` || b == `"` {
+		mut n := Node(TextNode{})
+		if p.pos + 3 <= p.src.len && p.src[p.pos] == `'` && p.src[p.pos + 1] == `'`
+			&& p.src[p.pos + 2] == `'` {
+			n = p.read_triple_quoted()!
+		} else if p.pos + 3 <= p.src.len && p.src[p.pos] == `"` && p.src[p.pos + 1] == `"`
+			&& p.src[p.pos + 2] == `"` {
+			n = p.read_triple_double_quoted()!
+		} else if b == `"` {
+			quoted := p.read_quoted()!
+			n = Node(ScalarNode{ data_type: .string_type, value: ScalarValue(quoted) })
+		} else {
+			quoted := p.read_quoted_text()!
+			n = Node(ScalarNode{ data_type: .string_type, value: ScalarValue(quoted) })
+		}
+		// RULED: MSS-3 item 5: a quoted value takes no glued ascription —
+		// the old slot path silently made `'5'::int` a two-item sequence.
+		if !p.at_end() && p.peek() == `:` && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:` {
+			return error(p.make_error('a quoted map value takes no type ascription — write the bare token (`5::int`) or keep the plain string (cx-err:CXER0100)'))
+		}
+		p.refuse_glued_map_value_tail()!
+		return n
+	}
+	tok := p.read_slot_token()!
+	// Postfix value ascription `v::T` (L43) — checked, all arms loud.
+	if val, typ := try_split_postfix_ascription(tok) {
+		sn := p.coerce_scalar_checked(typ, val)!
+		p.refuse_glued_map_value_tail()!
+		return Node(sn)
+	}
+	// RULED: MSS-3 item 4: a bare `::`-carrying token either ascribes or
+	// refuses — it never silently becomes text (`5::bogus`, `std::vector`).
+	if tok.contains('::') {
+		return error(p.make_error('unknown or misplaced type ascription in `${tok}` — quote the value if it is text (cx-err:CXER0107 E_UNKNOWN_TYPE_TAG)'))
+	}
+	if scalar := try_autotype(tok) {
+		p.refuse_glued_map_value_tail()!
+		return Node(scalar)
+	}
+	// A single `:`-carrying bareword that is not an atom/date/datetime is
+	// colon-bearing prose (`warning:`, `http://x`) — quote it (MSS-1).
+	if tok.contains(':') {
+		return error(p.make_error("a bare map value cannot carry `:` — quote it ('${tok}') (cx-err:CXER0100)"))
+	}
+	p.refuse_glued_map_value_tail()!
+	return Node(TextNode{ value: tok })
+}
+
+// refuse_glued_map_value_tail enforces the MSS-1 boundary: after a complete
+// map value the next byte must be a separator (`,`), the closer (`}`), or
+// whitespace — glued continuations were the silent-mangle lane (#917).
+fn (mut p Parser) refuse_glued_map_value_tail() ! {
+	if p.at_end() {
+		return
+	}
+	b := p.peek()
+	if b == `,` || b == `}` || b == `]` || b == `)` || is_ws(b) {
+		return
+	}
+	return error(p.make_error('a map value is one item — separate entries with `,` or whitespace, or quote prose (cx-err:CXER0100)'))
 }
 
 // read_map_key consumes a MapKey [56g] — a Name, QuotedText, or atomic
@@ -4602,14 +5968,55 @@ fn (mut p Parser) parse_map_entry() !MapEntry {
 fn (mut p Parser) read_map_key() !(ScalarType, ScalarValue) {
 	if p.at_end() { return error(p.make_error('expected map key')) }
 	b := p.peek()
+	// RULED: MSS-1/MSS-2 (#917): a structured opener can never be a map
+	// KEY — reaching one here means a ws-separated literal followed a
+	// complete value ({m: 1 (2, 3)}). Refuse naming the two fixes, the
+	// ASP-2 guidance carried into the map-entry read.
+	if b == `(` || b == `{` || b == `[` {
+		return error(p.make_error('a collection literal cannot open a map key — a map value fills its whole collection slot: make it ONE item (`{m: (1, (2, 3))}`) or separate entries with `,` (cx-err:CXER0100)'))
+	}
 	if b == `'` || b == `"` {
-		s := p.read_quoted_text()!
+		// RULED: MSS-3 item 7 (#917): both quote forms are QuotedText [L87]
+		// — the data reader used to refuse `{"k": 1}` while the program
+		// reader accepted it.
+		s := if b == `"` { p.read_quoted()! } else { p.read_quoted_text()! }
+		// RULED: MSS-3 item 5: a glued `::` after a quoted key is the key's
+		// own ascription, same rules as a bare key (identity is (kind,
+		// image)) — the old path silently mangled `{'k'::int: 5}` into
+		// `{k: ':int: 5'}`.
+		if !p.at_end() && p.peek() == `:` && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:` {
+			p.advance()
+			p.advance()
+			tag := p.read_kind_tag()!
+			if !is_valid_type_tag(tag) {
+				return error(p.make_error('unknown type tag `::${tag}` on map key (cx-err:CXER0107 E_UNKNOWN_TYPE_TAG)'))
+			}
+			sn := p.coerce_scalar_checked(tag, s)!
+			if sn.data_type !in [.int_type, .float_type, .string_type, .bool_type, .date_type,
+				.datetime_type, .bytes_type, .decimal_type, .bigint_type] {
+				return error(p.make_error('${scalar_type_name(sn.data_type)} is not a valid map key (cx-err:CXERMAP-BADKEY)'))
+			}
+			return sn.data_type, sn.value
+		}
 		return ScalarType.string_type, ScalarValue(s)
 	}
 	mut s := []u8{}
 	for !p.at_end() {
 		b2 := p.peek()
-		if b2 == `:` || b2 == `,` || b2 == `}` || is_ws(b2) { break }
+		if b2 == `:` {
+			// I1 stream 11 (L43/L47): a glued `::` is the key's postfix
+			// type ascription (`{1.10::decimal: x}`) and stays in the key
+			// token; a single `:` ends the key as before.
+			if p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:` {
+				s << `:`
+				s << `:`
+				p.advance()
+				p.advance()
+				continue
+			}
+			break
+		}
+		if b2 == `,` || b2 == `}` || is_ws(b2) { break }
 		s << b2
 		p.advance()
 	}
@@ -4622,6 +6029,28 @@ fn (mut p Parser) read_map_key() !(ScalarType, ScalarValue) {
 		return error(p.make_error('expected map key'))
 	}
 	tok := s.bytestr()
+	// I1 stream 11 (L47): ascribed keys — decimal and bigint are admitted
+	// (total order + canonical form); atoms, null, and the temporal spans
+	// stay barred (cxdm §5.5 / data-bin D004).
+	if val, typ := try_split_postfix_ascription(tok) {
+		sn := coerce_scalar_strict(typ, val) or {
+			// The commonest slip is meaning a TYPED FIELD ({age::int: 30})
+			// — a key ascription types the KEY, so teach all three forms
+			// rather than reporting the coercion alone (#917 UX, playground
+			// report 2026-08-22).
+			return error(p.make_error('${err.msg()} — a key ascription types the KEY (`{1.10::decimal: x}`); to type this field\'s VALUE write `${val}: ::${typ} 30` (or `${val}: 30::${typ}`), to declare it valueless write `${val}: ::${typ}`'))
+		}
+		if sn.data_type !in [.int_type, .float_type, .string_type, .bool_type, .date_type,
+			.datetime_type, .bytes_type, .decimal_type, .bigint_type] {
+			return error(p.make_error('${scalar_type_name(sn.data_type)} is not a valid map key (cx-err:CXERMAP-BADKEY)'))
+		}
+		return sn.data_type, sn.value
+	}
+	// RULED: MSS-3 item 4 (#917): a `::`-carrying key token either ascribes
+	// or refuses — it never silently becomes a string key.
+	if tok.contains('::') {
+		return error(p.make_error('unknown or misplaced type ascription in map key `${tok}` — quote the key if it is text (cx-err:CXER0107 E_UNKNOWN_TYPE_TAG)'))
+	}
 	if scalar := try_autotype(tok) {
 		if scalar.data_type == .null_type {
 			return error(p.make_error('W014: null is not a valid map key (cx-err:CXERMAP-BADKEY)'))
@@ -4677,6 +6106,11 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 	mut text_buf := []u8{}
 	mut has_child := false
 	mut after_non_text := false
+	// RULED: ASP-2 (#903) — set when a sequence/map literal opens the slot
+	// as its sole content so far: whitespace-separated content after it
+	// refuses (a literal fills its slot; glued continuations stay mixed,
+	// which the CXPath kind-test idiom `$c/node()` depends on).
+	mut saw_ws_literal := false
 	for {
 		if p.at_end() { break }
 		had_ws := is_ws(p.peek())
@@ -4684,6 +6118,10 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 		if p.at_end() { break }
 		b := p.peek()
 		if b == `,` || b == `]` || b == `)` || b == `}` { break }
+		if saw_ws_literal && had_ws {
+			return error(p.make_error('whitespace-separated content after a sequence or map literal in one collection slot — separate items with `,`, or quote prose (cx-err:CXER0100)'))
+		}
+		saw_ws_literal = false
 
 		if b == `[` {
 			has_child = true
@@ -4698,6 +6136,35 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 			continue
 		}
 
+		// I1 row 9 (L78): the variable hole in collection-item / slot-body
+		// position — same rule as the element body (`($x, 2)` carries a
+		// hole item; `('$x', 2)` a string item).
+		if b == `$` {
+			if hole_len := p.peek_hole_len() {
+				if text_buf.len > 0 {
+					items << TextNode{ value: text_buf.bytestr() }
+					text_buf = []u8{}
+				}
+				hname := p.src[p.pos + 1..p.pos + hole_len].bytestr()
+				for _ in 0 .. hole_len {
+					p.advance()
+				}
+				items << HoleNode{ name: hname }
+				continue
+			}
+		}
+		if b == `r` && p.at_raw_triple() {
+			// RAW triple-quoted string (I1 L58) in collection-item /
+			// slot-body position — verbatim body, no dedent.
+			if had_ws && text_buf.len > 0 { text_buf << ` ` }
+			if text_buf.len > 0 {
+				items << TextNode{ value: text_buf.bytestr() }
+				text_buf = []u8{}
+			}
+			s := p.read_raw_triple_str()!
+			items << Node(TextNode{ value: s })
+			continue
+		}
 		if b == `'` || b == `"` {
 			if had_ws && text_buf.len > 0 { text_buf << ` ` }
 			if text_buf.len > 0 {
@@ -4716,17 +6183,50 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 				// Double-quoted in collection-item / slot-body
 				// position (previously fell through to bare-token,
 				// producing the literal `"…"` characters as the value).
+				// #790 (RULED: 1a, the #795 batch): a QUOTED item in a
+				// collection slot is a string SCALAR — the code parser
+				// has always typed it so, while this lane made it Text
+				// whose canonical render dropped the quotes (`("a", 2)`
+				// → `(a, 2)`), colliding with the genuinely-bare Text
+				// spelling at one Tier-1 address across two kinds. Bare
+				// tokens stay Text.
 				quoted := p.read_quoted()!
-				items << TextNode{ value: quoted }
+				items << ScalarNode{ data_type: .string_type, value: ScalarValue(quoted) }
 			} else {
 				quoted := p.read_quoted_text()!
-				items << TextNode{ value: quoted }
+				items << ScalarNode{ data_type: .string_type, value: ScalarValue(quoted) }
+			}
+			// #934 (MSS-3 item 5 parity): a quoted value followed by a glued
+			// `::` REFUSES in array/sequence slots exactly as it does in
+			// map-value position — the old path silently split `['x'::int]`
+			// into a nested two-item sequence (the string plus the ascription
+			// as TEXT) at rc=0.
+			if !p.at_end() && p.peek() == `:` && p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:` {
+				return error(p.make_error('a quoted collection item takes no type ascription — write the bare token (`5::int`) or keep the plain string (cx-err:CXER0100)'))
 			}
 			after_non_text = true
 			continue
 		}
 
-		if b == `(` && p.peek_is_sequence_literal_at_paren() {
+		if b == `(` && (p.peek_is_sequence_literal_at_paren()
+			|| (items.len == 0 && text_buf.len == 0 && p.peek_lone_paren_group_fills_slot())
+) {
+			// #810 RULED (a): in a collection SLOT (map value / array or
+			// sequence item) a lone paren group that fills the whole slot is
+			// a SEQUENCE LITERAL even without a comma — a slot has no prose
+			// lane, so the body-text comma disambiguator does not apply here.
+			// Completes the #587 fidelity invariant in its last position:
+			// the canonical singleton emission `(x)` now re-parses to the
+			// singleton sequence it came from. Zero canonical bytes move.
+			// RULED: ASP-2 (#903) — a WHITESPACE-SEPARATED sequence literal
+			// after other slot content refuses loudly instead of silently
+			// gluing into a nested sequence that mangled the leading value
+			// per type (int 1 → the string '1 '). GLUED runs stay one item —
+			// CXPath kind tests (`$c/node()`, fmt-013) and call shapes live
+			// mid-slot glued and must keep parsing byte-identically.
+			if had_ws && (items.len > 0 || text_buf.len > 0) {
+				return error(p.make_error('a whitespace-separated sequence literal cannot join other content in one collection slot — separate items with `,` (write `[1, (2, 3)]`), or quote prose (cx-err:CXER0100)'))
+			}
 			if had_ws && text_buf.len > 0 { text_buf << ` ` }
 			if text_buf.len > 0 {
 				items << TextNode{ value: text_buf.bytestr() }
@@ -4734,10 +6234,15 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 			}
 			items << p.parse_sequence_literal()!
 			after_non_text = true
+			saw_ws_literal = items.len == 1 && text_buf.len == 0
 			continue
 		}
 
 		if b == `{` && p.peek_is_map_literal_at_brace() {
+			// ASP-2 (#903): same whitespace-adjacency rule for map literals.
+			if had_ws && (items.len > 0 || text_buf.len > 0) {
+				return error(p.make_error('a whitespace-separated map literal cannot join other content in one collection slot — separate items with `,` (write `[1, {a: 1}]`), or quote prose (cx-err:CXER0100)'))
+			}
 			if had_ws && text_buf.len > 0 { text_buf << ` ` }
 			if text_buf.len > 0 {
 				items << TextNode{ value: text_buf.bytestr() }
@@ -4745,6 +6250,7 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 			}
 			items << p.parse_map_literal()!
 			after_non_text = true
+			saw_ws_literal = items.len == 1 && text_buf.len == 0
 			continue
 		}
 
@@ -4771,6 +6277,22 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 		}
 
 		tok := p.read_slot_token()!
+		// RULED: MSS-7 (#917): a slot-INITIAL `::T` commits the slot to one
+		// prefixed scalar value (`[1, ::int 30]`), same rule as map values.
+		// A valueless `::T` in an array/sequence slot stays a refusal
+		// (declarations are map-entry-only, MSS-4).
+		if items.len == 0 && text_buf.len == 0 && !has_child && tok.starts_with('::')
+			&& tok.len > 2 && !tok[2..].contains(':') {
+			ptag := tok[2..]
+			if is_valid_type_tag(ptag) {
+				items << Node(p.read_prefixed_value(ptag)!)
+				return items
+			}
+			if is_valid_kind_tag(ptag) {
+				return error(p.make_error('kind `${ptag}` declares only, and declarations are map-entry-only — an array/sequence slot needs a value (`::int 30`) (cx-err:CXER0290)'))
+			}
+			return error(p.make_error('unknown type tag `${tok}` opening a collection slot (cx-err:CXER0107 E_UNKNOWN_TYPE_TAG)'))
+		}
 		if text_buf.len > 0 {
 			if had_ws { text_buf << ` ` }
 		} else if after_non_text && had_ws {
@@ -4785,11 +6307,36 @@ fn (mut p Parser) parse_collection_slot_body() ![]Node {
 		// Single bare-token slot — autotype if the buffer is exactly
 		// one scalar literal. Multi-token / mixed-content slots keep
 		// the raw text run (the program evaluator parses it as CXPath at
-		// eval time per spec/eval.md §7).
+		// eval time per code.md).
 		if !has_child && items.len == 0 {
-			if scalar := try_autotype(text_val) {
-				items << scalar
-				return items
+			// RULED: MSS-3 item 2 (#917): the ascription split applies to a
+			// single ws-free token ONLY — the old last-`::` split over a
+			// coalesced prose run invented values (':ref compact ::bool' →
+			// bool false at rc=0).
+			if !text_val.contains(' ') {
+				// I1 stream 11 (L43): postfix value ascription `value::T` in
+				// collection positions — `[1::int, 2.5::decimal]`. A valid
+				// type tag makes this an ascription; its payload must conform
+				// (loud CXER0290), it never falls back to text.
+				if val, typ := try_split_postfix_ascription(text_val) {
+					items << p.coerce_scalar_checked(typ, val)!
+					return items
+				}
+				// RULED: MSS-3 item 4: a bare `::`-carrying token either
+				// ascribes or refuses — never silently text ('5::bogus',
+				// 'std::vector').
+				if text_val.contains('::') {
+					return error(p.make_error('unknown or misplaced type ascription in `${text_val}` — quote the value if it is text (cx-err:CXER0107 E_UNKNOWN_TYPE_TAG)'))
+				}
+				if scalar := try_autotype(text_val) {
+					items << scalar
+					return items
+				}
+			} else if text_val.contains('::') {
+				// A prose run carrying a `::` token is the invention lane —
+				// refuse with quote guidance rather than keeping text that a
+				// re-parse would try to ascribe (MSS-3 items 2+4).
+				return error(p.make_error("prose containing `::` in a collection slot must be quoted ('${text_val}') (cx-err:CXER0100)"))
 			}
 		}
 		items << TextNode{ value: text_val }
@@ -4819,4 +6366,34 @@ fn (mut p Parser) read_slot_token() !string {
 		return error(p.make_error('expected token in collection slot'))
 	}
 	return s.bytestr()
+}
+
+
+// reserved_prefix_refusal returns the E210 refusal message for an element
+// name in the reserved `cx:` namespace, or none when the name is fine.
+//
+// THE ONE AUTHORITY for the reservation, read by BOTH readers (#820). It
+// used to live inline in this data-mode parser only, so the PROGRAM
+// reader happily constructed `[cx:x 1]` — and the resulting document
+// could not be read back by the data reader that had just refused to
+// parse it. "Output fails its own re-parse", the #704 class, through a
+// door next to the wall.
+//
+// E210 is reused on both sides deliberately (RULED: 820-1a) rather than
+// minting a program-band code: it is ONE reservation, and two codes would
+// teach a reader that authoring `cx:foo` is two different mistakes
+// depending on which reader saw it first.
+//
+// Scope is the `cx:` prefix on an ELEMENT NAME. Neither reader reserves
+// `xml:`, and neither reserves either prefix on an ATTRIBUTE name — those
+// are not asymmetries to close but reservations that do not exist, and
+// creating one is a ruling, not an implementation detail.
+pub fn reserved_prefix_refusal(raw_name string) ?string {
+	if raw_name.count(':') != 1 {
+		return none
+	}
+	if raw_name.all_before(':') != 'cx' {
+		return none
+	}
+	return 'reserved namespace prefix `cx:` in `${raw_name}` — the `cx:` prefix is reserved for the serializer and may not be authored (cx-err:E210)'
 }

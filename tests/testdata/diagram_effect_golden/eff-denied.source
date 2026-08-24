@@ -1,0 +1,1 @@
+[?with-caps [deny net] [$http:get "https://x"]]

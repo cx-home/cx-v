@@ -1,0 +1,2 @@
+[?def fetch ($u) [$http:get $u]]
+[?if [$env:var "GO"] [then [$fetch "https://x"]] [else [none]]]

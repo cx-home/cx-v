@@ -1,0 +1,1 @@
+[?def classify ($n) [?match $n [case 0 'zero'] [else 'other']]]

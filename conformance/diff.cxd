@@ -1,4 +1,4 @@
-[test-suite name=diff
+[test-suite name=diff ring=0
   [doc [#
 # CX Conformance — cx diff
 # Version: 1.0 — 2026-05-08

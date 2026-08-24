@@ -1,0 +1,2 @@
+[?def greet ($name) [concat 'hello ' $name]]
+[user id=1]

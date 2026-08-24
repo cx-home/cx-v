@@ -1,4 +1,4 @@
-[test-suite name=re
+[test-suite name=re ring=1
   [doc [#
 conformance fixtures for cx-stdlib/re (spec/std-lib/re.md §4/§5/§6/§7).
 
@@ -453,7 +453,7 @@ cx-err:CXER3202
 [$re:groups-all [$re:find [$re:compile "(a+)(b+)"] "aabbb"]]
 #]]
   [out-text [#
-('aabbb', 'aa', 'bbb')
+(aabbb, aa, bbb)
 #]]
  ]
 
@@ -587,7 +587,7 @@ cx-err:CXER3202
 [$re:split [$re:compile ","] "a,b,c"]
 #]]
   [out-text [#
-('a', 'b', 'c')
+(a, b, c)
 #]]
  ]
 
@@ -602,7 +602,7 @@ cx-err:CXER3202
 [$re:split [$re:compile "\\s+"] "a  b   c"]
 #]]
   [out-text [#
-('a', 'b', 'c')
+(a, b, c)
 #]]
  ]
 
@@ -620,7 +620,7 @@ cx-err:CXER3202
 [$re:split-limit [$re:compile ","] "a,b,c,d" 1]
 #]]
   [out-text [#
-('a', 'b,c,d')
+(a, 'b,c,d')
 #]]
  ]
 
@@ -669,7 +669,7 @@ cx-err:CXER3202
 [$re:group-names [$re:compile "(?P<year>[0-9]{4})-(?P<month>[0-9]{2})"]]
 #]]
   [out-text [#
-('year', 'month')
+(year, month)
 #]]
  ]
 
@@ -857,6 +857,227 @@ true
 #]]
   [out-text [#
 3
+#]]
+ ]
+
+ # ── §5 shorthands INSIDE character classes (#924, RULED: PYE-4) ──────────
+ #
+ # Orthogonality: \w and [\w] mean the same thing (and likewise for all six
+ # Perl shorthands). Before #924 the unicode rewrite substituted textually
+ # inside [...], nesting brackets — [\s]/[\S]/[\w]/[\W] silently matched
+ # nothing and the common [^\S\n] idiom was broken. These rows pin the
+ # class-context semantics: each case evaluates a sequence of matches calls
+ # so both polarities of the set are asserted.
+
+ [case id=re-052-class-shorthand-space level=core
+  [tags re class shorthand unicode space]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[\\s]"] " "],
+ [$re:matches [$re:compile "[\\s]"] "\t"],
+ [$re:matches [$re:compile "[\\s]"] "x"])
+#]]
+  [out-text [#
+(true, true, false)
+#]]
+ ]
+
+ [case id=re-053-class-shorthand-negated-space level=core
+  [tags re class shorthand unicode negated space]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[\\S]"] "x"],
+ [$re:matches [$re:compile "[\\S]"] " "],
+ [$re:matches [$re:compile "[\\S]"] "\n"])
+#]]
+  [out-text [#
+(true, false, false)
+#]]
+ ]
+
+ [case id=re-054-class-shorthand-word level=core
+  [tags re class shorthand unicode word]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[\\w]"] "a"],
+ [$re:matches [$re:compile "[\\w]"] "é"],
+ [$re:matches [$re:compile "[\\w]"] "٩"],
+ [$re:matches [$re:compile "[\\w]"] "_"],
+ [$re:matches [$re:compile "[\\w]"] "!"])
+#]]
+  [out-text [#
+(true, true, true, true, false)
+#]]
+ ]
+
+ [case id=re-055-class-shorthand-negated-word level=core
+  [tags re class shorthand unicode negated word]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[\\W]"] "!"],
+ [$re:matches [$re:compile "[\\W]"] "a"],
+ [$re:matches [$re:compile "[\\W]"] "é"],
+ [$re:matches [$re:compile "[\\W]"] "_"])
+#]]
+  [out-text [#
+(true, false, false, false)
+#]]
+ ]
+
+ [case id=re-056-class-shorthand-digit level=core
+  [tags re class shorthand unicode digit]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[\\d]"] "7"],
+ [$re:matches [$re:compile "[\\d]"] "٩"],
+ [$re:matches [$re:compile "[\\d]"] "x"])
+#]]
+  [out-text [#
+(true, true, false)
+#]]
+ ]
+
+ [case id=re-057-class-shorthand-negated-digit level=core
+  [tags re class shorthand unicode negated digit]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[\\D]"] "x"],
+ [$re:matches [$re:compile "[\\D]"] "7"])
+#]]
+  [out-text [#
+(true, false)
+#]]
+ ]
+
+ # The [^\S\n] idiom — "whitespace except newline". Space and tab are in,
+ # newline and non-whitespace are out.
+ [case id=re-058-class-not-nonspace-newline-idiom level=core
+  [tags re class shorthand unicode negated idiom]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[^\\S\\n]"] " "],
+ [$re:matches [$re:compile "[^\\S\\n]"] "\t"],
+ [$re:matches [$re:compile "[^\\S\\n]"] "\n"],
+ [$re:matches [$re:compile "[^\\S\\n]"] "x"])
+#]]
+  [out-text [#
+(true, true, false, false)
+#]]
+ ]
+
+ # Negated class over a negated shorthand: [^\W] is \w, [^\D] is \d.
+ [case id=re-059-class-negated-over-negated-shorthand level=core
+  [tags re class shorthand unicode negated combination]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[^\\W]"] "a"],
+ [$re:matches [$re:compile "[^\\W]"] "!"],
+ [$re:matches [$re:compile "[^\\D]"] "7"],
+ [$re:matches [$re:compile "[^\\D]"] "x"])
+#]]
+  [out-text [#
+(true, false, true, false)
+#]]
+ ]
+
+ # Shorthands composed with ordinary class members: ranges stay ranges, a
+ # dash directly after a shorthand stays LITERAL (RE2/Perl semantics), and
+ # the spec §3 example class [\w.+-] works.
+ [case id=re-060-class-shorthand-mixed-members level=core
+  [tags re class shorthand unicode mixed range dash]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[a-c\\d]"] "b"],
+ [$re:matches [$re:compile "[a-c\\d]"] "5"],
+ [$re:matches [$re:compile "[a-c\\d]"] "d"],
+ [$re:matches [$re:compile "[\\d-x]"] "-"],
+ [$re:matches [$re:compile "[\\d-x]"] "m"],
+ [$re:matches [$re:compile "[\\w.+-]+"] "a.b-c_9"])
+#]]
+  [out-text [#
+(true, true, false, true, false, true)
+#]]
+ ]
+
+ # Shorthands alongside explicit \p{...} and POSIX [:...:] class members.
+ [case id=re-061-class-shorthand-with-unicode-and-posix level=core
+  [tags re class shorthand unicode posix property]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[\\p{Greek}\\d]"] "α"],
+ [$re:matches [$re:compile "[\\p{Greek}\\d]"] "5"],
+ [$re:matches [$re:compile "[[:alpha:]\\d]"] "x"],
+ [$re:matches [$re:compile "[[:alpha:]\\d]"] "5"],
+ [$re:matches [$re:compile "[[:alpha:]\\d]"] "!"])
+#]]
+  [out-text [#
+(true, true, true, true, false)
+#]]
+ ]
+
+ # An escaped backslash before d is NOT the \d shorthand: [\\d] is the
+ # two-member class {backslash, d}.
+ [case id=re-062-class-escaped-backslash-not-shorthand level=core
+  [tags re class shorthand escape backslash]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile "[\\\\d]"] "\\"],
+ [$re:matches [$re:compile "[\\\\d]"] "d"],
+ [$re:matches [$re:compile "[\\\\d]"] "5"])
+#]]
+  [out-text [#
+(true, true, false)
+#]]
+ ]
+
+ # With unicode=false the rewrite does not run; RE2's native ASCII classes
+ # stand inside classes too.
+ [case id=re-063-class-shorthand-unicode-false-ascii level=core
+  [tags re class shorthand flags unicode-false]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/re']
+([$re:matches [$re:compile-with-flags "[\\w]" {"unicode": false}] "a"],
+ [$re:matches [$re:compile-with-flags "[\\w]" {"unicode": false}] "é"],
+ [$re:matches [$re:compile-with-flags "[\\s]" {"unicode": false}] " "])
+#]]
+  [out-text [#
+(true, false, true)
 #]]
  ]
 ]

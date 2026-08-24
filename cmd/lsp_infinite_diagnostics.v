@@ -1,18 +1,18 @@
 // LSP advisory: `[?for]` source is an infinite generator
-// (`range(_, *)` / iter_range_open) without a terminating
-// `:take` / `:takewhile` clause.
+// (`[$range N *]` / iter_range_open) without a terminating
+// `[take]` / `[take-while]` clause.
 //
 // Triggers a hint-severity CXLS006 diagnostic when a [?for] / [?for-array] /
 // [?for-map] comprehension's first generator source is the open-end form
-// `1 to *` (parser substitutes the `:_open_end_` atom for the `*`) AND
-// none of its clauses are `:take` / `:takewhile`. Without a terminating
+// `[$range N *]` (parser substitutes the `_open_end_` atom for the `*`) AND
+// none of its clauses are `[take]` / `[take-while]`. Without a terminating
 // modifier the for-comp will fail at runtime with CXER0100 per D19; we
 // surface that statically so the user sees it in the editor *before*
 // eval rather than at eval time.
 //
 // Diagnostic emits at the position of the open-end source (the `*`
 // substituted by the parser carries the literal's pos). The message
-// suggests the canonical fix — wrap with `:take N` or `:takewhile P`.
+// suggests the canonical fix — add `[take N]` or `[take-while P]`.
 //
 // Suppression: standard editor diagnostic-disable comments / per-file
 // configuration apply. No directive-level opt-out is defined.
@@ -58,11 +58,12 @@ fn walk_for_infinite(node cx.ProgramNode, source string, mut diags []json2.Any) 
 		}
 		cx.ProgramForComp {
 			analyse_for_comp(node, source, mut diags)
-			for clause in node.clauses {
-				if src := clause.source { walk_for_infinite(src, source, mut diags) }
-				if expr := clause.expr { walk_for_infinite(expr, source, mut diags) }
+			// L100: THE ONE traversal. The hand-rolled walk this replaces
+			// stopped at `yield` — an unbounded comprehension nested in a
+			// `[yield-map K V]` value went undiagnosed.
+			for item in cx.for_comp_children(node) {
+				walk_for_infinite(item.node, source, mut diags)
 			}
-			walk_for_infinite(node.yield, source, mut diags)
 		}
 		cx.ProgramPattern {
 			for child in node.body {
@@ -76,8 +77,8 @@ fn walk_for_infinite(node cx.ProgramNode, source string, mut diags []json2.Any) 
 // analyse_for_comp emits CXLS006 when the comprehension's first generator
 // source is an open-end range (`range(start, _open_end_, step?)` —
 // ProgramCall name='range' with arg[1] being the `_open_end_` atom-literal)
-// AND no `:take` / `:takewhile` clause is present. Other terminators
-// (`:limit`, `:drop`) do not bound an unbounded source, so they don't
+// AND no `[take]` / `[take-while]` clause is present. Other terminators
+// (`[limit]`, `[drop]`) do not bound an unbounded source, so they don't
 // suppress the advisory.
 fn analyse_for_comp(f cx.ProgramForComp, source string, mut diags []json2.Any) {
 	// Find first generator clause + its source position.
@@ -104,7 +105,7 @@ fn analyse_for_comp(f cx.ProgramForComp, source string, mut diags []json2.Any) {
 	end := key_pos_end_estimate(open_pos, 1)
 	diags << json2.Any(make_diagnostic('CXLS006', 4, // hint
 		open_pos, end,
-		'[?for] source `1 to *` is an infinite range with no `:take` / `:takewhile` terminator — at runtime this will raise CXER0100. Add `:take N` or `:takewhile P` before `:yield` to bound the comprehension.'))
+		'[?for] source `[\$range N *]` is an infinite range with no `[take]` / `[take-while]` terminator — at runtime this will raise CXER0100. Add `[take N]` or `[take-while P]` before the `[yield …]` clause to bound the comprehension.'))
 }
 
 // is_open_end_range_call returns true when `n` is a `range(start, *, ...)`

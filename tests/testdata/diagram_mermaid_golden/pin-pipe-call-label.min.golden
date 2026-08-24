@@ -1,0 +1,17 @@
+%%cx:Wz9waXBlICRpbiB0aHJvdWdoPVs/Zm4gKCR4KSBbJGNvbXB1dGUgJHggMl1dIHRocm91Z2g9Wz9yZWR1Y2UgJHggdXNpbmc9Wz9mbiAoJGEgJGIpIFsrICRhICRiXV0gaW5pdD0wXV0=%%
+flowchart TD
+    n1(["start"])
+    n2(["result"])
+    n3["$in"]
+    n4[["fn(x) → compute($x, 2)"]]
+    n3 --> n4
+    n5["$x"]
+    n6{{"reduce :init 0"}}
+    n5 --> n6
+    n7[["fn(a,b) → [+ …]"]]
+    n6 -- ":using" --> n7
+    n8(["fold"])
+    n7 --> n8
+    n4 --> n8
+    n1 --> n8
+    n8 --> n2

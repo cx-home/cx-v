@@ -17,7 +17,7 @@
 
   [case id=sv-014-purity-codes level=extended
     [tags schema-validate purity]
-    [schema-cxs [# [?cx schema-of doc] #]]
+    [schema-cxs [# [schema of=doc] #]]
     [source     [# [doc] #]]
     [expect-valid false]
     [expect-codes [:CXER0230, :CXER0233]]

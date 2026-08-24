@@ -68,7 +68,12 @@ fn parse_table_opts(args []string) TableOpts {
 }
 
 fn infer_format(path string) string {
-	if path.ends_with('.cx') || path.ends_with('.cxcol') { return 'cx' }
+	// #705: governance §12.2 renamed `.cxcol` → `.cxbin`; the old spelling
+	// stays a DEPRECATED ALIAS (the review's word) rather than being cut,
+	// so existing files keep opening.
+	if path.ends_with('.cx') || path.ends_with('.cxbin') || path.ends_with('.cxcol') {
+		return 'cx'
+	}
 	if path.ends_with('.parquet') || path.ends_with('.pq') { return 'parquet' }
 	if path.ends_with('.arrow') || path.ends_with('.ipc') { return 'arrow' }
 	return ''

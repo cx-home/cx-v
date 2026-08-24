@@ -52,6 +52,7 @@ pub enum TypeKind {
 	element_name
 	union_
 	sequence_
+	iterator_
 	any_
 	unknown_
 }
@@ -101,22 +102,56 @@ pub mut:
 //
 // The set is closed: any other bareword lowercase identifier at a
 // type-expression slot reports as malformed.
+// The FULL [157]+[157a] closed set (stream 16 W1, L65/#706 — the prior
+// 15-name subset silently lost the structural slot for 'any', 'number',
+// 'iterator', 'document', the node family, and every refinement).
 const kind_names = [
+	// the nine scalar kinds
 	'string',
 	'int',
 	'float',
 	'bool',
 	'null',
 	'atom',
-	'element',
-	'sequence',
-	'map',
-	'function',
-	'path',
 	'bytes',
 	'date',
 	'datetime',
+	// containers / callables / structural kinds
+	'element',
+	'sequence',
+	'map',
+	'iterator',
 	'array',
+	'function',
+	'path',
+	// the node family (the ::T value-kind test covers the full Item taxonomy)
+	'document',
+	'text',
+	'scalar-node',
+	'comment',
+	'pi',
+	'directive',
+	// top type + shorthand
+	'any',
+	'number',
+	// [157a] storage-precision refinements
+	'decimal',
+	'bigint',
+	'i8',
+	'i16',
+	'i32',
+	'i64',
+	'u8',
+	'u16',
+	'u32',
+	'u64',
+	'f16',
+	'f32',
+	'f64',
+	'duration',
+	'period',
+	'instant',
+	'secret',
 ]
 
 // is_reserved_kind_name returns true iff `s` is one of the reserved
@@ -175,6 +210,7 @@ fn type_expr_canonical_bytes_into(t TypeExpr, mut out []u8) {
 		.element_name { u8(0x21) }
 		.union_ { u8(0x22) }
 		.sequence_ { u8(0x23) }
+		.iterator_ { u8(0x26) } // additive (stream 16 W1) — new spellings only
 		.any_ { u8(0x24) }
 		.unknown_ { u8(0x25) }
 	}
@@ -227,6 +263,7 @@ pub fn type_expr_to_json(t TypeExpr) string {
 		.element_name { 'element_name' }
 		.union_ { 'union' }
 		.sequence_ { 'sequence' }
+		.iterator_ { 'iterator' }
 		.any_ { 'any' }
 		.unknown_ { 'unknown' }
 	}
@@ -466,8 +503,19 @@ fn parse_bracket_type(mut c TypeParseCursor, start int) !TypeExpr {
 				source:  src
 			}
 		}
+		'iterator' {
+			// [156a]: iterator-of-T, parallel to sequence (the lazy §8 kind).
+			if members.len != 1 {
+				return error('CXTYPE_PARSE: `[iterator T]` requires exactly 1 member; got ${members.len}')
+			}
+			return TypeExpr{
+				kind:    TypeKind.iterator_
+				members: members
+				source:  src
+			}
+		}
 		else {
-			return error('CXTYPE_PARSE: unknown bracket head `${head}` — expected `or` or `sequence`')
+			return error('CXTYPE_PARSE: unknown bracket head `${head}` — expected `or`, `sequence`, or `iterator`')
 		}
 	}
 	return error('CXTYPE_PARSE: unreachable')

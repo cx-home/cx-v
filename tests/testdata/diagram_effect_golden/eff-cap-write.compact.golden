@@ -1,0 +1,6 @@
+flowchart TD
+  prog(["program"])
+  eff_io_write_file[["io-write-file"]]
+  cap_write{{"write --allow-write"}}
+  prog --> eff_io_write_file
+  eff_io_write_file --> cap_write

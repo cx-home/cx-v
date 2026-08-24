@@ -2,6 +2,7 @@ module main
 
 import os
 import cx
+import fixtures
 import arrow
 
 // CXCol ↔ Apache Arrow C-Data ABI conformance runner.
@@ -49,12 +50,12 @@ fn strip_blank_edges(s string) string {
 	return lines.join('\n')
 }
 
-// parse_suite loads a .cxd conformance suite via cx.load_fixtures, replacing
+// parse_suite loads a .cxd conformance suite via fixtures.load_fixtures, replacing
 // the bespoke `=== test:` / `--- key` scanner. pending + chunk_at come from
 // the [meta] block; level/tags from the case attr / [tags] element.
 fn parse_suite(path string) []Test {
 	mut tests := []Test{}
-	for c in cx.load_fixtures(path) {
+	for c in fixtures.load_fixtures(path) {
 		mut t := Test{
 			name:     c.name
 			level:    c.level
@@ -208,6 +209,40 @@ fn run_test(t Test) []string {
 			}
 		}
 	}
+	// Per-side needles (#795 batch, 2026-08-15): the #807(d) offset
+	// transport carriage made the CX-side render offset-preserving while
+	// Arrow's timestamp[ns, UTC] has no offset channel — the two sides
+	// legitimately render DIFFERENT spellings of one instant, so an
+	// offset case needs side-scoped expectations.
+	if 'expect_values_in' in t.sections {
+		for needle in split_nonempty_lines(t.sections['expect_values_in'] or { '' }) {
+			if !txt_in.contains(needle) {
+				failures << 'expect_values_in: txt_in missing "${needle}"\n  txt_in=${txt_in}'
+			}
+		}
+	}
+	if 'expect_values_out' in t.sections {
+		for needle in split_nonempty_lines(t.sections['expect_values_out'] or { '' }) {
+			if !txt_out.contains(needle) {
+				failures << 'expect_values_out: txt_out missing "${needle}"\n  txt_out=${txt_out}'
+			}
+		}
+	}
+
+	// §9 pair-family lane (d) (stream 17 W7): `[repr-pair-arrow 1]`
+	// asserts FULL render identity — the Arrow round trip's decoded
+	// render equals the case's [out-cx] EXACTLY (the same truth lanes
+	// a/b/c render; the table name rides the root ArrowSchema name).
+	if 'repr_pair_arrow' in t.sections {
+		expected := (t.sections['out_cx'] or { '' }).trim_space()
+		if expected == '' {
+			failures << 'repr_pair_arrow: requires an [out-cx] section'
+			return failures
+		}
+		if txt_out.trim_space() != expected {
+			failures << 'repr_pair_arrow: out_cx mismatch after Arrow round trip\n  expected:\n${expected}\n  got:\n${txt_out}'
+		}
+	}
 
 	return failures
 }
@@ -221,6 +256,17 @@ fn run_suite(path string) bool {
 		if t.pending != '' {
 			skip++
 			println('SKIP ${t.name} (pending: ${t.pending})')
+			continue
+		}
+		// Mixed suites (table_transparency.cxd): only cases carrying an
+		// Arrow-relevant section run here — the pair suite's 0x60/0x63
+		// lanes and decode vectors belong to conformance_run.v.
+		if 'repr_pair_arrow' !in t.sections && 'expect_values' !in t.sections
+			&& 'arrow_children_formats' !in t.sections
+			&& 'arrow_chunk_lengths' !in t.sections
+			&& 'expected_export_error' !in t.sections {
+			skip++
+			println('SKIP ${t.name} (no arrow-lane sections)')
 			continue
 		}
 		failures := run_test(t)

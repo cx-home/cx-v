@@ -1,4 +1,4 @@
-[test-suite name=format
+[test-suite name=format ring=1
   [doc [#
 conformance fixtures for cx-stdlib/format (spec/std-lib/format.md §6).
 
@@ -136,7 +136,7 @@ conformance fixtures for cx-stdlib/format (spec/std-lib/format.md §6).
 [$format:pretty [a [b [c]]]]
 #]]
   [out-text [#
-'[a [b [c] ] ]'
+'[a\n  [b\n    [c]\n  ]\n]'
 #]]
  ]
 
@@ -150,7 +150,7 @@ conformance fixtures for cx-stdlib/format (spec/std-lib/format.md §6).
 [$format:pretty-with-opts [a [b [c]]] {indent: "    "}]
 #]]
   [out-text [#
-'[a [b [c] ] ]'
+'[a\n    [b\n        [c]\n    ]\n]'
 #]]
  ]
 
@@ -178,7 +178,7 @@ conformance fixtures for cx-stdlib/format (spec/std-lib/format.md §6).
 [$format:pretty-with-opts [a [b [c [d]]]] {max-depth: 2}]
 #]]
   [out-text [#
-'[a [b [c … ] ] ]'
+'[a\n  [b\n    [c\n      …\n    ]\n  ]\n]'
 #]]
  ]
 

@@ -1,7 +1,7 @@
-[test-suite name=run
+[test-suite name=run ring=1
   [doc [#
 Conformance fixtures for cx-x/run — the Runnable convention + combinator library
-(spec/02-working/agentic_positioning.md D2/M2). NB cx-x/run is an EXPERIMENTAL
+(spec/03-approved/x/run.md; #6 D2/M2). NB cx-x/run is an EXPERIMENTAL
 x/-TIER module (D3): bundled + gated like the frozen tier, but exempt from the
 byte-compatible-reimpl stability promise. These fixtures live under the harness
 root (conformance/stdlib/) — the loader resolves cx-x/* from the same seeded
@@ -121,4 +121,27 @@ closure keeps its own captured environment when re-captured by the outer pipe.
 42
 #]]
   ]
+
+ [case id=run-008-closures-in-data-registry-dispatch level=core
+  [tags run registry closures-in-data dispatch 45 stream-14 686 stream-18 690]
+  [meta [#
+note: the post-#45 registry pattern (run.md §4.1): CLOSURES STORED IN
+note: DATA elements, retrieved by name predicate, invoked cross-scope —
+note: an escaped closure travels with its defining environment. An
+note: absent tool answers the absence channel (), never a fault.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-x/run' :as run]
+[?def greet-tool scope=public pure [returns string] ($name::string) [$concat "hi " $name]]
+[?def shout-tool scope=public pure [returns string] ($name::string) [$concat "HI " $name]]
+[?def dispatch scope=public pure [returns any] ($registry::any $tool-name::string $args::string)
+  [?for [in $t $registry] [where [= $t@name $tool-name]] [yield [$run:invoke [$first $t/*] $args]]]]
+[?let [= $reg ([tool name=greet greet-tool], [tool name=shout shout-tool])]
+  [reg [a [$dispatch $reg "greet" "dana"]] [b [$dispatch $reg "shout" "dana"]] [miss [$dispatch $reg "nope" "x"]]]]
+#]]
+  [out-text [#
+[reg [a ('hi dana')] [b ('HI dana')] [miss ()]]
+#]]
+ ]
 ]

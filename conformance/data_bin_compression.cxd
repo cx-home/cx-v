@@ -1,4 +1,4 @@
-[test-suite name=data-bin-compression
+[test-suite name=data-bin-compression ring=0
   [doc [#
 # CX Conformance — data_bin page-compression round-trips
 # Version: 0.1 — 2026-05-09 (spec-lock; awaiting V core impl)

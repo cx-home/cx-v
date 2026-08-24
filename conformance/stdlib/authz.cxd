@@ -1,4 +1,4 @@
-[test-suite name=authz
+[test-suite name=authz ring=2
   [doc [#
 conformance fixtures for cx-stdlib/authz (spec/02-working/stdlib_authz.md §10).
 
@@ -241,6 +241,741 @@ cx-err:CXER4711
 #]]
   [out-text [#
 [deny actor=leaf [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'x'] [slice '/s/1'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-063-durability-reopen-permit level=core gate=enforced
+  [tags authz durability journal replay stream-6 678 713]
+  [meta [#
+note: #713 item 4 (RULED) — the persisted-grant-then-reopen path. A
+note: store bound to a journal (opts.journal, sect-3.1) appends the
+note: sect-2.6 attributed issue-event; a NEW store opened on the SAME
+note: journal replays the authz stream and rebuilds the grant — trust
+note: state survives the store handle (and, with a durable journal
+note: backend, the process).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-dur-063" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]]
+  [= $c [$authz:close $az]]
+  [= $az2 [$authz:store {tenant: 'acme', journal: $j}]]
+  [$authz:check $az2 [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]]]
+#]]
+  [out-text [#
+[permit rooted-principal=dana [delegation 'd-1'] [via 'd-1'] [tier :t1] [capability 'refund']]
+#]]
+ ]
+
+ [case id=authz-064-durability-reopen-revoked level=core gate=enforced
+  [tags authz durability journal replay revoke stream-6 678 713]
+  [meta [#
+note: a revocation is an authz-revoked event on the same stream; the
+note: reopened store replays issue THEN revoke — the grant stays
+note: absent-for-check across the reopen (no resurrection).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-dur-064" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]]
+  [= $r [$authz:revoke $az 'd-1']]
+  [= $c [$authz:close $az]]
+  [= $az2 [$authz:store {tenant: 'acme', journal: $j}]]
+  [$authz:check $az2 [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'refund'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-065-store-fault-on-append level=core gate=enforced
+  [tags authz durability journal fault CXER4710 fail-closed stream-6 678 713]
+  [meta [#
+note: journal-first, fail-closed (W3 R7) — a persisting verb whose
+note: sect-2.6 append faults (here: the bound journal was closed) is
+note: the declared store fault CXER4710, live since the durable tier
+note: landed.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-dur-065" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $x [$journal:close $j]]
+  [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4710
+#]]
+ ]
+
+ [case id=authz-066-store-fault-no-mutation level=core gate=enforced
+  [tags authz durability journal fault fail-closed no-mutation stream-6 678 713]
+  [meta [#
+note: the R7 other half — on an append fault the in-process mutation
+note: does NOT apply: live trust state never runs ahead of its log.
+note: The faulted delegate is recovered by [?fallback]; the follow-up
+note: check on the SAME still-open store denies (no grant installed).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-dur-066" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $x [$journal:close $j]]
+  [= $e [?fallback [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]] [recover-with :faulted]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'refund'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-067-durability-cascade-reopen level=core gate=enforced
+  [tags authz durability journal replay cascade stream-6 678 713]
+  [meta [#
+note: W3 R8 — a cascade revoke appends ONE authz-revoked event per
+note: affected id, so replay is a trivial fold and the audit stream is
+note: exact. Parent + attenuating child both stay revoked across the
+note: reopen.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-dur-067" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$authz:delegate $az
+    [delegation d-par [tenant acme] [from [principal dana]] [to [agent mid]]
+      [capabilities [x]] [over '/s'] [assurance :t1] [signature s]]]]
+  [= $ch [$authz:delegate $az
+    [delegation d-chi [tenant acme] [from [agent mid]] [to [agent leaf]]
+      [capabilities [x]] [over '/s'] [attenuates d-par] [assurance :t1] [signature s]]]]
+  [= $r [$authz:revoke $az 'd-par' {cascade: true}]]
+  [= $c [$authz:close $az]]
+  [= $az2 [$authz:store {tenant: 'acme', journal: $j}]]
+  [$authz:check $az2 [authz-request [actor [agent leaf]] [capability x] [slice '/s/1'] [tenant acme]]]]
+#]]
+  [out-text [#
+[deny actor=leaf [code 'cx-err:CXER4700'] [reason :no-grant] [capability 'x'] [slice '/s/1'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-068-meters-fold-count level=core gate=enforced
+  [tags authz budgets meters fold debit stream-6 678 L112]
+  [meta [#
+note: L112 meter-as-fold (W4 R10) — meters folds the authz stream's
+note: debit events into the EXACT element the pure PEP reads; count is
+note: monotone. Only declared conjunct axes are emitted.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-bud-068" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [count 3]] [assurance :t1] [signature s]]]]
+  [= $x1 [$authz:debit $az 'd-1']]
+  [= $x2 [$authz:debit $az 'd-1']]
+  [$authz:meters $az]]
+#]]
+  [out-text [#
+[meters [meter id=d-1 count-used=2]]
+#]]
+ ]
+
+ [case id=authz-069-debit-exhausts-count level=core gate=enforced
+  [tags authz budgets debit commit-point CXER4713 stream-6 678 L112]
+  [meta [#
+note: L112 commit-point enforcement (W4 R11) — debit re-folds UNDER the
+note: stream commit lock before appending; exhausted at commit = the
+note: CXER4713-carrying deny VALUE naming the failing conjunct (D-C1)
+note: and the meter-owning delegation, and NO event is written. count
+note: never replenishes, so no retry-after (the sect-8 rule).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-bud-069" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [count 2]] [assurance :t1] [signature s]]]]
+  [= $x1 [$authz:debit $az 'd-1']]
+  [= $x2 [$authz:debit $az 'd-1']]
+  [$authz:debit $az 'd-1']]
+#]]
+  [out-text [#
+[deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :count] [delegation 'd-1']]
+#]]
+ ]
+
+ [case id=authz-070-fold-then-check-denies level=core gate=enforced
+  [tags authz budgets meters check pure-pep stream-6 678 L112]
+  [meta [#
+note: the with-context posture end-to-end — the caller folds
+note: (meters) then checks; check STAYS PURE over the supplied
+note: snapshot and denies :budget-exhausted from the folded reading.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-bud-070" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [count 2]] [assurance :t1] [signature s]]]]
+  [= $x1 [$authz:debit $az 'd-1']]
+  [= $x2 [$authz:debit $az 'd-1']]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]
+    {meters: [$authz:meters $az]}]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :count] [capability 'refund'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-071-rate-bucket-refill level=core gate=enforced
+  [tags authz budgets meters rate token-bucket stream-6 678 L112]
+  [meta [#
+note: rate = token-bucket replay over the debit event timestamps (the
+note: rate-limit semantics verbatim): capacity 2, two debits at t0
+note: empty the bucket; 30s later at 2-per-1m the fold has refilled
+note: exactly one token. at/now are the controllable clock (the
+note: journal opts.clock posture) so the arithmetic is byte-stable.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-bud-071" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [rate 2 :per '1m']] [assurance :t1] [signature s]]]]
+  [= $x1 [$authz:debit $az 'd-1' {at: '2026-01-01T00:00:00Z'}]]
+  [= $x2 [$authz:debit $az 'd-1' {at: '2026-01-01T00:00:00Z'}]]
+  [$authz:meters $az {now: '2026-01-01T00:00:30Z'}]]
+#]]
+  [out-text [#
+[meters [meter id=d-1 tokens=1]]
+#]]
+ ]
+
+ [case id=authz-072-spend-window-utc-aligned level=core gate=enforced
+  [tags authz budgets meters spend utc-window stream-6 678 L112]
+  [meta [#
+note: spend windows are UTC-Z aligned (L112; epoch-aligned = the
+note: deterministic implementation, never tenant-local midnight): a
+note: 60 spent BEFORE the day boundary is outside the current 1d
+note: window; only the 50 spent after midnight counts at now.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-bud-072" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [spend 100.0 :currency :USD :per '1d']] [assurance :t1] [signature s]]]]
+  [= $x1 [$authz:debit $az 'd-1' {spend: 60.0, currency: 'USD', at: '2026-01-01T23:00:00Z'}]]
+  [= $x2 [$authz:debit $az 'd-1' {spend: 50.0, currency: 'USD', at: '2026-01-02T01:00:00Z'}]]
+  [$authz:meters $az {now: '2026-01-02T02:00:00Z'}]]
+#]]
+  [out-text [#
+[meters [meter id=d-1 spend-used=50.0]]
+#]]
+ ]
+
+ [case id=authz-073-debit-refuses-overspend level=core gate=enforced
+  [tags authz budgets debit spend commit-point CXER4713 stream-6 678 L112]
+  [meta [#
+note: commit-side spend headroom is STRICT — spent + pending must stay
+note: within the window limit (50 + 60 > 100 refuses); refunds never
+note: credit back, so the only path to headroom is the next window.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-bud-073" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [spend 100.0 :currency :USD :per '1d']] [assurance :t1] [signature s]]]]
+  [= $x1 [$authz:debit $az 'd-1' {spend: 50.0, currency: 'USD', at: '2026-01-02T01:00:00Z'}]]
+  [$authz:debit $az 'd-1' {spend: 60.0, currency: 'USD', at: '2026-01-02T02:00:00Z'}]]
+#]]
+  [out-text [#
+[deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :spend] [delegation 'd-1']]
+#]]
+ ]
+
+ [case id=authz-074-debit-negative-rejected level=core gate=enforced
+  [tags authz budgets debit negative refund CXER4711 stream-6 678 L112]
+  [meta [#
+note: refunds do NOT credit back — budgets meter authority exercised,
+note: not net economic effect (L112). A non-positive debit is
+note: unissuable, CXER4711.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-bud-074" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [spend 100.0 :currency :USD :per '1d']] [assurance :t1] [signature s]]]]
+  [$authz:debit $az 'd-1' {spend: -5.0, currency: 'USD'}]]
+#]]
+  [out-err [#
+cx-err:CXER4711
+#]]
+ ]
+
+ [case id=authz-075-shared-meter-debit level=core gate=enforced
+  [tags authz budgets debit shared-meter composition stream-6 678 L112]
+  [meta [#
+note: sub-delegation SHARES the issuer meter (a pool never multiplies
+note: authority): a debit against the CHILD depletes the parent's
+note: count meter; the second child debit refuses naming the PARENT
+note: as the failing meter owner.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?let [= $j [$journal:open "mem://authz-bud-075" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$authz:delegate $az
+    [delegation d-par [tenant acme] [from [principal dana]] [to [agent mid]]
+      [capabilities [refund]] [bounds [count 1]] [assurance :t1] [signature s]]]]
+  [= $ch [$authz:delegate $az
+    [delegation d-chi [tenant acme] [from [agent mid]] [to [agent leaf]]
+      [capabilities [refund]] [attenuates d-par] [assurance :t1] [signature s]]]]
+  [= $x1 [$authz:debit $az 'd-chi']]
+  [$authz:debit $az 'd-chi']]
+#]]
+  [out-text [#
+[deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :count] [delegation 'd-par']]
+#]]
+ ]
+
+ [case id=authz-076-debit-unbound-store level=core gate=enforced
+  [tags authz budgets debit unbound CXER4710 stream-6 678 L112]
+  [meta [#
+note: an unbound (in-process tier) store has NO commit point — a debit
+note: without a journal is the store fault CXER4710 (a meter that
+note: resets on restart is not a budget, the L112 prerequisite).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [count 2]] [assurance :t1] [signature s]]]]
+  [$authz:debit $az 'd-1']]
+#]]
+  [out-err [#
+cx-err:CXER4710
+#]]
+ ]
+
+ [case id=authz-077-pep-spend-conjunct level=core gate=enforced
+  [tags authz budgets check spend conjunct stream-6 678 L112]
+  [meta [#
+note: W4 R11 — the PEP reading gains the spend axis, so a supplied
+note: snapshot can deny naming ANY failing conjunct (D-C1). No
+note: retry-after: only rate replenishes (the sect-8 rule).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [spend 100.0 :currency :USD :per '1d']] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]
+    {meters: [meters [meter id='d-1' spend-used=100.0]]}]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :spend] [capability 'refund'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-078-propose-approve-commit-roundtrip level=core gate=enforced
+  [tags authz propose approve commit stream-6 678 L113]
+  [meta [#
+note: the L113 spine end-to-end: cx:propose constructs the proposal
+note: value; approve mints the Lane-2 claim binding its ADDRESS;
+note: commit verifies fail-closed (address, tier, version binding,
+note: precondition re-check), executes the body, and journals the
+note: transition on the durable tier. The outcome is the command
+note: body result.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?def refund-order impure [effects] [preconditions [> $amount 0]] ($order='' $amount=10) $amount]
+[?let [= $j [$journal:open "mem://authz-pm-078" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$cx:propose refund-order {order: 'o-1', amount: 42} {tenant: 'acme'}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-1'}]]
+  [$authz:commit $az $p $a refund-order {actor: 'agent-1'}]]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=authz-086-propose-predicts-commit-trace level=core gate=enforced rule=EV-EFFECT-SET
+  [tags authz propose commit out-effects trace stream-22 694 stream-6 678]
+  [meta [#
+note: the stream-6 booked pair, landing WITH the out-effects channel
+note: (stream 22 W1): commit executes under (grant INTERSECT declared)
+note: — exactly the set the proposal records — so the commit-run trace
+note: shows the DECLARED effect admitted, in body order.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?lib 'cx-stdlib/time']
+[?def stamp-order impure [effects [clock]] ($order='') [$time:now]]
+[?let [= $j [$journal:open "mem://authz-pm-086" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$cx:propose stamp-order {order: 'o-1'} {tenant: 'acme'}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-1'}]]
+  [= $r [$authz:commit $az $p $a stamp-order {actor: 'agent-1'}]]
+  [ok]]
+#]]
+  [out-text [#
+[ok]
+#]]
+  [out-effects [#
+clock:time-now
+#]]
+ ]
+
+ [case id=authz-087-commit-undeclared-effect-never-admitted level=core gate=enforced rule=EV-EFFECT-SET
+  [tags authz commit out-effects trace discriminator CXER0271 stream-22 694 stream-6 678]
+  [meta [#
+note: the discriminator: the body attempts an UNDECLARED effect (env
+note: under [effects clock]) — refused CXER0271 at the effect point,
+note: and the trace shows NO env admission: an undeclared effect is
+note: never exercised, not merely reported.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?lib 'cx-stdlib/env']
+[?def leak-order impure [effects [clock]] ($order='') [$env:var "HOME"]]
+[?let [= $j [$journal:open "mem://authz-pm-087" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$cx:propose leak-order {order: 'o-1'} {tenant: 'acme'}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-1'}]]
+  [$authz:commit $az $p $a leak-order {actor: 'agent-1'}]]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+  [out-effects [#
+#]]
+ ]
+
+ [case id=authz-079-commit-tampered-proposal level=core gate=enforced
+  [tags authz commit tamper address-binding CXER4714 stream-6 678 L113 L139]
+  [meta [#
+note: approval-by-address catches tampering: the approval binds p1;
+note: presenting p2 (different args, different address) at commit is
+note: the fail-closed CXER4714 — a re-lowered proposal is a DIFFERENT
+note: proposal.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?def refund-order impure [effects] ($order='' $amount=10) $amount]
+[?let [= $j [$journal:open "mem://authz-pm-079" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p1 [$cx:propose refund-order {order: 'o-1', amount: 42} {}]]
+  [= $p2 [$cx:propose refund-order {order: 'o-1', amount: 4200} {}]]
+  [= $a [$authz:approve $az $p1 {by: 'dana', signature: 'sig-1'}]]
+  [$authz:commit $az $p2 $a refund-order {}]]
+#]]
+  [out-err [#
+cx-err:CXER4714
+#]]
+ ]
+
+ [case id=authz-088-approval-binds-tier1-exact-version level=core gate=enforced
+  [tags authz commit approval tier1 version-binding stream-18 690 L139]
+  [meta [#
+note: the L139 pair, positive half: the approval was minted against
+note: v1's proposal; presenting v1 (the EXACT approved def text) at
+note: commit succeeds. ./cmd-v1.cx and ./cmd-v2-widened.cx carry the
+note: SAME name/params/body (⇒ same Tier-2 computes-as — cmd-011's
+note: clause-exclusion invariance) and differ ONLY in [effects].
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?lib './cmd-v1.cx' as=v1]
+[?let [= $j [$journal:open "mem://authz-pm-088" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$cx:propose $v1:refund-order {order: 'o-1', amount: 42} {tenant: 'acme'}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-1'}]]
+  [$authz:commit $az $p $a $v1:refund-order {actor: 'agent-1'}]]
+#]]
+  [out-text [#
+42
+#]]
+ ]
+
+ [case id=authz-089-widened-effects-version-refused level=core gate=enforced
+  [tags authz commit approval tier1 tier2 widened-effects CXER4714 stream-18 690 L139]
+  [meta [#
+note: the L139 pair, negative half — THE binding discriminator: v2 has
+note: the SAME Tier-2 computes-as as v1 ([effects] is outside the hash
+note: by S0) but a WIDENED effect set ([net] added), hence a different
+note: Tier-1 def text. The approval minted against v1's proposal must
+note: never admit v2 — a Tier-2-bound approval would replay here; the
+note: Tier-1 binding refuses (commit runs the EXACT approved version).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?lib './cmd-v1.cx' as=v1]
+[?lib './cmd-v2-widened.cx' as=v2]
+[?let [= $j [$journal:open "mem://authz-pm-089" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$cx:propose $v1:refund-order {order: 'o-1', amount: 42} {tenant: 'acme'}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-1'}]]
+  [$authz:commit $az $p $a $v2:refund-order {actor: 'agent-1'}]]
+#]]
+  [out-err [#
+cx-err:CXER4714
+#]]
+ ]
+
+ [case id=authz-080-commit-propose-only-basis level=core gate=enforced
+  [tags authz commit propose-only attenuation CXER4715 stream-6 678 L113]
+  [meta [#
+note: [propose-only] is the grant-side attenuation flag: the
+note: delegation can ground a PROPOSAL but never a commit — the
+note: screening walks the basis chain (inheritance narrowing-only).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?def refund-order impure [effects] ($order='' $amount=10) $amount]
+[?let [= $j [$journal:open "mem://authz-pm-080" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $d [$authz:delegate $az
+    [delegation d-agent [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [propose-only] [assurance :t1] [signature s]]]]
+  [= $p [$cx:propose refund-order {order: 'o-1', amount: 42} {}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-1'}]]
+  [$authz:commit $az $p $a refund-order {basis: 'd-agent'}]]
+#]]
+  [out-err [#
+cx-err:CXER4715
+#]]
+ ]
+
+ [case id=authz-081-resolve-cap-live-then-revoked level=core gate=enforced
+  [tags authz resolve-cap cap-prefix fail-closed CXER4716 stream-6 678 L114]
+  [meta [#
+note: L114 — cap:sha2-256:<hex> addresses ANY authority artifact; the
+note: LIVE registry view resolves it. A revoked grant is fail-closed
+note: CXER4716 (a trust input that cannot be proven live is refused),
+note: never a silent absence.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $dv [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [assurance :t1] [signature s]]]
+  [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az $dv]]
+  [= $ref [$concat 'cap:' [$cx:hash $dv]]]
+  [= $live [$authz:resolve-cap $az $ref]]
+  [= $r [$authz:revoke $az 'd-1']]
+  [?fallback [$authz:resolve-cap $az $ref] [recover-with :refused-after-revoke]]]
+#]]
+  [out-text [#
+:refused-after-revoke
+#]]
+ ]
+
+ [case id=authz-082-commit-precondition-divergence level=core gate=enforced
+  [tags authz commit preconditions divergence two-times CXER4714 stream-6 678 L113]
+  [meta [#
+note: the two-times enforcement table: the precondition was TRUE at
+note: propose (counter inc -> 1) and is FALSE at commit (inc -> 2) —
+note: divergence is the loud CXER4714 refusal; the body never runs.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?def once-only impure [effects] [preconditions [$eq [?test-counter name='pc-082' op=inc] 1]] ($x=1) $x]
+[?let [= $j [$journal:open "mem://authz-pm-082" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $p [$cx:propose once-only {x: 7} {}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-1'}]]
+  [$authz:commit $az $p $a once-only {}]]
+#]]
+  [out-err [#
+cx-err:CXER4714
+#]]
+ ]
+
+ [case id=authz-083-refund-order-m5-end-to-end level=core gate=enforced
+  [tags authz command propose approve commit debit dedup m5 stream-6 678 L109 L111 L112 L113]
+  [meta [#
+note: THE M5 worked example end-to-end (commands_effects sect-0): an
+note: agent under a propose-only, budget-bounded sub-delegation
+note: proposes a 42 refund; the principal approves the ADDRESS; commit
+note: verifies the chain, executes, debits the spend meter under the
+note: stream commit lock, and journals. The SECOND commit of an
+note: identical proposal dedups (present [deduped ...] value, the
+note: in-process effect boundary); the third, larger refund crosses
+note: the budget and is denied naming the failing conjunct (:spend on
+note: the meter owner). Composes every wave of stream 6.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/journal' as=journal]
+[?def refund-order impure [effects] [preconditions [> $amount 0]] [idempotent [window 7d]] ($order='' $amount=10) [?let [= $c [?test-counter name='m5-exec' op=inc]] $amount]]
+[?let [= $j [$journal:open "mem://authz-m5-083" "acme"]]
+  [= $az [$authz:store {tenant: 'acme', journal: $j}]]
+  [= $dpar [$authz:delegate $az
+    [delegation d-dana-ops [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [spend 100.0 :currency :USD :per '1d']] [assurance :t1] [signature s]]]]
+  [= $dchi [$authz:delegate $az
+    [delegation d-agent [tenant acme] [from [agent ops-1]] [to [agent bot-7]]
+      [capabilities [refund]] [attenuates d-dana-ops] [propose-only] [assurance :t1] [signature s]]]]
+  [= $p [$cx:propose refund-order {order: 'o-1', amount: 42} {tenant: 'acme'}]]
+  [= $a [$authz:approve $az $p {by: 'dana', signature: 'sig-dana'}]]
+  [= $r1 [$authz:commit $az $p $a refund-order {actor: 'bot-7', debit: {id: 'd-dana-ops', spend: 42.0, currency: 'USD', at: '2026-01-02T01:00:00Z'}}]]
+  [= $r2 [$authz:commit $az $p $a refund-order {actor: 'bot-7'}]]
+  [= $p3 [$cx:propose refund-order {order: 'o-2', amount: 70} {tenant: 'acme'}]]
+  [= $a3 [$authz:approve $az $p3 {by: 'dana', signature: 'sig-dana'}]]
+  [= $r3 [$authz:commit $az $p3 $a3 refund-order {actor: 'bot-7', debit: {id: 'd-dana-ops', spend: 70.0, currency: 'USD', at: '2026-01-02T02:00:00Z'}}]]
+  ([first $r1], [replay $r2], [overspend $r3], [execs [?test-counter name='m5-exec' op=read]])]
+#]]
+  [out-text [#
+([first 42], [replay [deduped 42]], [overspend [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :spend] [delegation 'd-dana-ops']]], [execs 1])
+#]]
+ ]
+
+ [case id=authz-084-requires-at-admission level=core gate=enforced
+  [tags authz coordination requires-at pin stream-10 682 CXER4950 CXER4951]
+  [meta [#
+note: the stream-10 cross-stream precondition PIN (the B3 admission
+note: read): satisfied under authz commit (target head at-or-past seq,
+note: entry hash-matching) => the body runs; a stale pin (seq beyond
+note: head) refuses CXER4950 with no debit and no body; DIRECT
+note: invocation of a pinned command refuses CXER4951 fail-closed both
+note: before AND after a successful commit — the admission brackets
+note: exactly one commit and never leaks.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/authz']
+[?lib 'cx-stdlib/cx']
+[?def approve-order impure [effects] [requires-at stream="sku:88" seq=1 hash="sha2-256:5ea2624a305d00e40d18a0b41adbd212d727f0910e8770c7411b886c1c4c7ec0"] ($order='') [approved order=$order]]
+[?def approve-late impure [effects] [requires-at stream="sku:88" seq=9 hash="sha2-256:5ea2624a305d00e40d18a0b41adbd212d727f0910e8770c7411b886c1c4c7ec0"] ($order='') [approved order=$order]]
+[?let
+[= $s [$store:open "mem://pin-1"]]
+[= $j [$journal:attach $s "acme"]]
+[= $e1 [$journal:append $j [reserved sku="88" qty=1] {actor: "svc" authority: "inv" stream: "sku:88"}]]
+[= $direct [?fallback [$approve-order "o-1"] [recover-with [context] [code $err@code]]]]
+[= $az [$authz:store {tenant: "acme" journal: $j}]]
+[= $p [$cx:propose approve-order {order: "o-1"}]]
+[= $ap [$authz:approve $az $p {by: "dana" signature: "sig-1"}]]
+[= $ok [$authz:commit $az $p $ap approve-order {actor: "agent-1"}]]
+[= $p2 [$cx:propose approve-late {order: "o-2"}]]
+[= $ap2 [$authz:approve $az $p2 {by: "dana" signature: "sig-1"}]]
+[= $stale [?fallback [$authz:commit $az $p2 $ap2 approve-late {actor: "agent-1"}] [recover-with [context] [code $err@code]]]]
+[= $direct2 [?fallback [$approve-order "o-3"] [recover-with [context] [code $err@code]]]]
+  [probe [direct $direct] [committed $ok] [stale $stale] [direct-after $direct2]]]
+#]]
+  [out-text [#
+[probe [direct [code 'cx-err:CXER4951']] [committed [approved order=o-1]] [stale [code 'cx-err:CXER4950']] [direct-after [code 'cx-err:CXER4951']]]
+#]]
+ ]
+
+ [case id=authz-085-escrow-allocations level=core gate=enforced
+  [tags authz escrow allocation reservation stream-10 682 L158 M28 CXER4713]
+  [meta [#
+note: escrow allocations (cross_stream_coordination §3): a reservation
+note: draws from the parent's meter AT ALLOCATION TIME under the
+note: parent's lock (over-reservation denied naming the conjunct;
+note: window attribution pinned at reservation); draws name their
+note: allocation and deplete ITS remainder only (one draw, one meter —
+note: over-draw and post-expiry draws denied naming the allocation
+note: conjunct); rate is REFUSED (flow, un-escrowable); expiry reclaims
+note: the UN-DRAWN remainder visibly — not replenishment: after the
+note: reclaim the parent's consumption is exactly what was drawn, so a
+note: reservation that would have exceeded the cap now fits.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/authz']
+[?let
+[= $s [$store:open "mem://esc-1"]]
+[= $j [$journal:attach $s "acme"]]
+[= $az [$authz:store {tenant: "acme" journal: $j}]]
+[= $d [$authz:delegate $az
+  [delegation d-parent [tenant acme] [from [principal dana]] [to [agent team-1]]
+    [capabilities [spend-money]] [bounds [count 10] [spend 100.0 :currency :USD :per '1d']] [assurance :t1] [signature s]]]]
+[= $a1 [$authz:allocate $az "esc-1" {from: "d-parent" count: 4 spend: 40.0 currency: "USD" at: "2026-08-12T10:00:00Z"}]]
+[= $rate-refused [?fallback [$authz:allocate $az "esc-r" {from: "d-parent" rate: {n: 5 per: "PT1M"}}] [recover-with [context] [code $err@code]]]]
+[= $over [$authz:allocate $az "esc-2" {from: "d-parent" spend: 70.0 currency: "USD" at: "2026-08-12T10:01:00Z"}]]
+[= $draw1 [$authz:debit $az "d-parent" {allocation: "esc-1" count: 2 spend: 15.0 currency: "USD" at: "2026-08-12T10:05:00Z"}]]
+[= $draw-over [$authz:debit $az "d-parent" {allocation: "esc-1" count: 3 at: "2026-08-12T10:06:00Z"}]]
+[= $exp [$authz:allocation-expire $az "esc-1" {at: "2026-08-12T11:00:00Z"}]]
+[= $draw-late [$authz:debit $az "d-parent" {allocation: "esc-1" count: 1 at: "2026-08-12T11:05:00Z"}]]
+[= $after [$authz:allocate $az "esc-3" {from: "d-parent" spend: 70.0 currency: "USD" at: "2026-08-12T11:10:00Z"}]]
+  [probe [reserved $a1] [rate $rate-refused] [over-reserve $over] [draw $draw1] [draw-over $draw-over] [expired $exp] [draw-late $draw-late] [reclaimed-then-ok $after]]]
+#]]
+  [out-text [#
+[probe [reserved [allocated alloc=esc-1 from=d-parent count=4 spend=40.0 currency=USD]] [rate [code 'cx-err:CXER4711']] [over-reserve [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :spend] [delegation 'd-parent']]] [draw [debited id=d-parent alloc=esc-1 count=2 spend=15.0 currency=USD]] [draw-over [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-count] [delegation 'esc-1']]] [expired [allocation-expired alloc=esc-1 reclaimed-count=2 reclaimed-spend=25.0]] [draw-late [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-expired] [delegation 'esc-1']]] [reclaimed-then-ok [allocated alloc=esc-3 from=d-parent spend=70.0 currency=USD]]]
 #]]
  ]
 
@@ -747,6 +1482,238 @@ cx-err:CXER4705
 #]]
   [out-text [#
 [verified [tier :t1]]
+#]]
+ ]
+
+ [case id=authz-054-window-escalation level=core gate=enforced
+  [tags authz negative escalation window attenuation CXER4703 i5-stream4]
+  [doc [#
+The WINDOW axis is issue-time SUB-checked (the four-axis pin, §4.2): a
+child delegation naming an [until] LATER than its parent's is an
+escalation - it would outlive the authority it attenuates. Before the
+W4 pin this was enforced at decision time only (the identity model's
+chain rule §5.2 always required the issue-time check).
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $p [$authz:delegate $az
+    [delegation d-p [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [until 5000] [assurance :t1] [signature s]]]]
+  [$authz:delegate $az
+    [delegation d-c [tenant acme] [from [agent ops-1]] [to [agent sub-1]]
+      [capabilities [refund]] [attenuates d-p] [until 9000] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4703
+#]]
+ ]
+
+ [case id=authz-055-window-inherit level=core gate=enforced
+  [tags authz window attenuation inherit i5-stream4]
+  [doc [#
+A child with NO [until] under a windowed parent INHERITS the parent's
+window at issue - it cannot outlive it (§4.2). The materialized child
+carries the inherited [until].
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $p [$authz:delegate $az
+    [delegation d-p [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [until 5000] [assurance :t1] [signature s]]]]
+  [= $c [$authz:delegate $az
+    [delegation d-c [tenant acme] [from [agent ops-1]] [to [agent sub-1]]
+      [capabilities [refund]] [attenuates d-p] [assurance :t1] [signature s]]]]
+  [$text $c/until]]
+#]]
+  [out-text [#
+'5000'
+#]]
+ ]
+
+ [case id=authz-056-bounds-carriage level=core gate=enforced
+  [tags authz bounds budget carriage i5-stream4]
+  [doc [#
+[bounds ...] rides the grant value (§2.2, stream 6 L112): a delegation
+MAY carry [bounds [rate N :per DUR] [count N]] and the materialized
+record carries it verbatim - attenuation, revocation, explain for free.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [rate 2 :per '1m'] [count 3]] [assurance :t1] [signature s]]]]
+  [seq [$text $d/bounds/count] [$text $d/bounds/rate]]]
+#]]
+  [out-text [#
+[seq '3' '2per1m']
+#]]
+ ]
+
+ [case id=authz-057-bounds-rate-escalation level=core gate=enforced
+  [tags authz negative escalation bounds rate CXER4703 i5-stream4]
+  [doc [#
+The BOUNDS axis is the fourth issue-time SUB-check (§4.2): a child
+naming a FASTER rate than its parent (10/1m over 5/1m) is an
+escalation - a bound never widens.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $p [$authz:delegate $az
+    [delegation d-p [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [rate 5 :per '1m']] [assurance :t1] [signature s]]]]
+  [$authz:delegate $az
+    [delegation d-c [tenant acme] [from [agent ops-1]] [to [agent sub-1]]
+      [capabilities [refund]] [attenuates d-p] [bounds [rate 10 :per '1m']] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4703
+#]]
+ ]
+
+ [case id=authz-058-bounds-count-escalation level=core gate=enforced
+  [tags authz negative escalation bounds count CXER4703 i5-stream4]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $p [$authz:delegate $az
+    [delegation d-p [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [count 3]] [assurance :t1] [signature s]]]]
+  [$authz:delegate $az
+    [delegation d-c [tenant acme] [from [agent ops-1]] [to [agent sub-1]]
+      [capabilities [refund]] [attenuates d-p] [bounds [count 5]] [assurance :t1] [signature s]]]]
+#]]
+  [out-err [#
+cx-err:CXER4703
+#]]
+ ]
+
+ [case id=authz-059-bounds-shared-meter level=core gate=enforced
+  [tags authz bounds shared-meter composition i5-stream4]
+  [doc [#
+A sub-delegation with NO [bounds] under a bounded parent SHARES the
+issuer's meter (a pool never multiplies authority, §2.2) - it issues
+cleanly and carries no bounds of its own.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $p [$authz:delegate $az
+    [delegation d-p [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [rate 5 :per '1m']] [assurance :t1] [signature s]]]]
+  [= $c [$authz:delegate $az
+    [delegation d-c [tenant acme] [from [agent ops-1]] [to [agent sub-1]]
+      [capabilities [refund]] [attenuates d-p] [assurance :t1] [signature s]]]]
+  [$count $c/bounds]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=authz-060-budget-exhausted-rate level=core gate=enforced
+  [tags authz bounds budget deny rate CXER4713 i5-stream4]
+  [doc [#
+Meter exhaustion at the PEP is a VALUE (§2.2/§8): the meter reading
+rides the opts (the materialized-snapshot posture - check stays pure);
+an empty token bucket denies :budget-exhausted with CXER4713 as data,
+[conjunct :rate] naming the failing conjunct (D-C1), and [retry-after]
+= the bucket's next-token interval (rate 2/1m, 0 tokens -> 30s). An
+ABSENT meter reading is a FRESH meter (no recorded usage), never a
+denial.
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [rate 2 :per '1m']] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]
+    {meters: [meters [meter id='d-1' tokens=0]]}]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :rate] [retry-after 30] [capability 'refund'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-061-budget-exhausted-count level=core gate=enforced
+  [tags authz bounds budget deny count CXER4713 i5-stream4]
+  [doc [#
+A monotone [count N] bound never replenishes: exhaustion denies with
+NO [retry-after] (there is no instant at which retrying helps) -
+:budget-exhausted names [conjunct :count].
+#]]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [count 3]] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]
+    {meters: [meters [meter id='d-1' count-used=3]]}]]
+#]]
+  [out-text [#
+[deny actor=ops-1 [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :count] [capability 'refund'] [tenant id=acme]]
+#]]
+ ]
+
+ [case id=authz-062-budget-available-permit level=core gate=enforced
+  [tags authz bounds budget permit i5-stream4]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/authz']
+[?let [= $az [$authz:store {tenant: 'acme'}]]
+  [= $d [$authz:delegate $az
+    [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+      [capabilities [refund]] [bounds [rate 2 :per '1m'] [count 3]] [assurance :t1] [signature s]]]]
+  [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund] [tenant acme]]
+    {meters: [meters [meter id='d-1' tokens=1.5 count-used=2]]}]]
+#]]
+  [out-text [#
+[permit rooted-principal=dana [delegation 'd-1'] [via 'd-1'] [tier :t1] [capability 'refund']]
+#]]
+ ]
+
+ [case id=authz-063-bitemporal-coherence-coordinates level=core gate=enforced
+  [tags authz check bitemporal coherence as-of at-seq stream-8 680 L121]
+  [; the L121 coherence rule: the decision VALUE records BOTH temporal
+     coordinates for audit — as-of (the valid-time decision instant)
+     and the context snapshot's TX position (at-seq from a journal
+     snapshot passed as with-context). Permit AND deny both stamp;
+     a check without the opts stamps nothing (byte-identical shipped
+     shape) — a context making no TX claim leaves the coordinate
+     VISIBLY absent, so an incoherent pair is constructible only
+     explicitly. "What would we have decided at position P, for
+     instant T" is thereby specifiable. ]
+  [in-cx [# [empty] #]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-stdlib/authz']
+[?let [= $j [$journal:open "mem://bt-authz2" "acme"]]
+[= $e1 [$journal:append $j [order total=100] {actor: "u" authority: "g"}]]
+[= $snap [$journal:snapshot $j [?fn ($acc $e) [+ $acc 1]] 0 {sign: false}]]
+[= $az [$authz:store {tenant: 'acme'}]]
+[= $d [$authz:delegate $az
+  [delegation d-1 [tenant acme] [from [principal dana]] [to [agent ops-1]]
+    [capabilities [refund-duplicate]] [over '/orders'] [assurance :t1] [signature s]]]]
+[= $p [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund-duplicate] [slice '/orders/9'] [tenant acme]] {as-of: "2026-08-03T00:00:00Z" with-context: $snap}]]
+[= $dny [$authz:check $az [authz-request [actor [agent ops-1]] [capability delete-account] [slice '/orders/9'] [tenant acme]] {as-of: "2026-08-03T00:00:00Z" with-context: $snap}]]
+[= $bare [$authz:check $az [authz-request [actor [agent ops-1]] [capability refund-duplicate] [slice '/orders/9'] [tenant acme]]]]
+  [coherence-rule permit-as-of=$p/@as-of permit-at=$p/@at-seq deny-as-of=$dny/@as-of deny-at=$dny/@at-seq bare-has-coord=[$exists $bare/@at-seq]]]
+#]]
+  [out-text [#
+[coherence-rule permit-as-of='2026-08-03T00:00:00Z' permit-at=1 deny-as-of='2026-08-03T00:00:00Z' deny-at=1 bare-has-coord=false]
 #]]
  ]
 ]

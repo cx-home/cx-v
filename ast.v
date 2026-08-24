@@ -6,6 +6,7 @@ pub type Node = Element
 	| TextNode
 	| ScalarNode
 	| AliasNode
+	| HoleNode
 	| CommentNode
 	| PINode
 	| XMLDeclNode
@@ -39,10 +40,13 @@ pub type Node = Element
 	// them into `binary.v::encode_node` / `decode_node` so a v8 buffer
 	// can carry these variants embedded in a Document.
 	//
-	// PathNode is intentionally LEFT OUT of the sum-type at this graft
-	// — its codec (`path_node_codec.v` 0x13) remains standalone for now
-	// per the Phase 2.x sequencing plan. The path here is to graft it
-	// alongside the structural ProgramExpr work in a later phase.
+	// PathNode joined at I5 stream 17 W6 (the stream-16 residual noted
+	// on #689): the `::path` value-kind test becomes a REAL kind check
+	// (eval.v — previously accept-always), and the codec
+	// (`path_node_codec.v` 0x13) rides the same v8 dispatch as
+	// MatchNode/ModifyNode, fulfilling capability bit 36's existing
+	// three-kinds-jointly promise (abi.md §1.5).
+	| PathNode
 	| MatchNode
 	| ModifyNode
 	// DocumentNode: the first-class transparent carrier for a whole
@@ -63,6 +67,15 @@ pub type Node = Element
 	// W3c expands to closure-style generators backing [?map] / [?filter]
 	// / [?take] / etc. result-form combinators.
 	| IteratorNode
+	// LazyRecord: a certified-but-unmaterialised top-level child of a
+	// streamed input (#804 leg 2, ruled 1a). It exists ONLY on the
+	// streamed-input fast path and only between the span scan and the
+	// first structural read; `-d cx_no_lazy_record` removes it entirely,
+	// and the dual-build differential requires both builds to produce
+	// byte-identical output. READ `lazy_record.v`'s header before adding
+	// any path by which one can reach new code — the forcing discipline
+	// is verified, not guaranteed, and that file says exactly how.
+	| LazyRecord
 
 // ── Document ──────────────────────────────────────────────────────────────────
 
@@ -146,6 +159,19 @@ pub mut:
 	merge     ?string
 	// v3.4: ascribed data-type label (e.g. `:int`, `:date`, `:user`).
 	data_type ?string
+	// key_kind — the CXDM kind of a `__cx_map__` ENTRY element's KEY (#777,
+	// RULED: 777-1a). Meaningful ONLY on an envelope entry, where the
+	// element is synthetic and never emitted as an element; `none`
+	// everywhere else, and on every entry whose kind follows from its image.
+	// It is deliberately NOT `data_type`: that slot is the element's own
+	// ascription and IS read downstream (tool/schema projections, `[?str]`),
+	// so borrowing it for the key silently retyped the entry's VALUE.
+	key_kind ?string
+	// decl_kind — RULED: MSS-4 (#917): on a `__cx_map__` ENTRY element only,
+	// marks the entry as a DECLARATION (`{k: ::T}` — declared kind T, value
+	// ABSENT, never null). Like key_kind it is synthetic-envelope-only and
+	// inert everywhere else.
+	decl_kind ?string
 	// v3.4: syntactic ID — `[user #u-1 ...]`.
 	id        ?string
 	// v3.4 (second bullet): `[ref @id]` body-position
@@ -160,6 +186,24 @@ pub mut:
 	// v3.4: resolved namespace URI from the in-scope
 	// xmlns declaration. none when no binding is in scope.
 	ns_uri ?string
+	// pos — the element's source position, PRESENTATION ONLY (#792).
+	// Populated only by a position-tracking parse (parse_cx_positioned);
+	// `none` on every ordinary parse and on every constructed element.
+	//
+	// Identity-adjacent care: this NEVER reaches canonical bytes or
+	// Tier-1 identity — the same standing the anchor/comment trivia have.
+	// The canonical emitters read meta field-by-field through the
+	// accessors (emitter_cx.v: anchor()/merge()/id()/data_type()), so a
+	// field they do not name is inert by construction, and
+	// identity_positions_do_not_move_the_hash pins that: the same source
+	// parsed with and without tracking hashes identically.
+	//
+	// Tracking is OPT-IN because meta is lazily allocated: setting a
+	// position on every element would force an ElementMeta allocation
+	// per element, and the parser's allocation pressure is already a
+	// measured share of parse self-time. Only the validator's door asks
+	// for it, and only it pays.
+	pos ?Position
 }
 
 // ── Element accessors ────────────────────────────────────────────────────────
@@ -262,6 +306,20 @@ pub fn (mut e Element) set_merge(v ?string) {
 	e.meta.merge = v
 }
 
+// pos returns the element's source position when the document was read
+// by a position-tracking parse (parse_cx_positioned), else none (#792).
+// Presentation only — never an identity input.
+pub fn (e Element) pos() ?Position {
+	if isnil(e.meta) { return none }
+	return e.meta.pos
+}
+
+pub fn (mut e Element) set_pos(v ?Position) {
+	if isnil(e.meta) && v == none { return }
+	e.ensure_meta()
+	e.meta.pos = v
+}
+
 pub fn (mut e Element) set_data_type(v ?string) {
 	if isnil(e.meta) && v == none { return }
 	e.ensure_meta()
@@ -344,7 +402,7 @@ pub fn (e Element) with_table(td &TableData) Element {
 fn element_meta_is_empty(m ElementMeta) bool {
 	if m.anchor != none || m.merge != none || m.data_type != none
 	   || m.id != none || m.body_ref != none || m.lang_resolved != none
-	   || m.ns_uri != none || m.opaque != none {
+	   || m.ns_uri != none || m.opaque != none || m.pos != none {
 		return false
 	}
 	return m.local == ''
@@ -566,8 +624,14 @@ pub fn (a Attribute) data_type() ?string {
 // namespace metadata is present, matching the pre-diet shape: the
 // namespace-resolver only sets `local` for attributes that originally
 // carried a prefix.
+// local mirrors Element.local(): the meta slot is EMPTY when local ==
+// name (the AttributeMeta contract above), so an unset slot resolves to
+// the name itself. Before #804 the resolver wrote the name into every
+// attribute's meta to keep this accessor from answering '', which cost
+// an AttributeMeta allocation per attribute — on gate-15's corpus, six
+// per record — to store a string the attribute already had.
 pub fn (a Attribute) local() string {
-	if isnil(a.meta) { return '' }
+	if isnil(a.meta) || a.meta.local == '' { return a.name }
 	return a.meta.local
 }
 
@@ -758,11 +822,10 @@ fn scalar_value_str(v ScalarValue) string {
 }
 
 fn format_float(v f64) string {
-	s := '${v}'
-	if s.contains('.') || s.contains('e') {
-		return s
-	}
-	return '${s}.0'
+	// I1 L18 (W-14-float): the float surface is Tier-1 identity — the
+	// CX-owned Ryū renderer (ryu_f64.v) owns the bytes; V's `f64.str()`
+	// formatting policy can no longer re-hash stored documents.
+	return cx_format_float(v)
 }
 
 // ── Leaf node types ───────────────────────────────────────────────────────────
@@ -783,10 +846,53 @@ pub mut:
 	name string
 }
 
+// HoleNode — the authorable VARIABLE HOLE `$name` (I1 row 9, E1 L78 +
+// the audit-C4 collision MUST): a structural node kind, like AliasNode
+// (NOT a 12th scalar kind — L60 makes that a major-version event). Bare
+// `$x` in a data body is a hole; the STRING "$x" spells `'$x'` (its
+// quotes are canonical — needs-quote covers $-leading images), so
+// `[total $x]` and `[total '$x']` carry different bytes and different
+// Tier-1 addresses. `[?quote]` results lower bare bindings to this node,
+// which is how quoted trees acquire authorable canonical text (and
+// addresses); `[?eval]` lowers it back to a ProgramBinding. The XML
+// projection is the emitter-internal `cx:var` carrier.
+pub struct HoleNode {
+pub mut:
+	name string
+}
+
 pub struct CommentNode {
 pub mut:
 	value   string
 	is_line bool   // true for `# line` form; false for `[- block ]` form
+	// run_offset — where this comment sat INSIDE the preceding text run,
+	// as a byte offset into that run's value (#829, RULED: 829-1c).
+	// PRESENTATION ONLY, like `pos` (#792): canonical form strips comments
+	// (lexicon [L2]/[L3]), so this never reaches a hash. It exists so the
+	// LOSSLESS lane can re-place a mid-run comment without SPLITTING the
+	// run into two text nodes — #469 closed exactly that split, because
+	// splitting moves the strict-canonical hash. `none` on every comment
+	// that is not mid-run.
+	run_offset ?int
+	// meta_attr_index — where this comment sat inside the ELEMENT-META
+	// zone, as the number of attributes that preceded it (#829 remainder).
+	// The meta zone is a second place a comment can sit that is neither a
+	// text run nor a body-item position, so `run_offset` does not reach it:
+	// `[config [; c ] env=dev]` re-emitted as `[config env=dev [; c ]]`,
+	// because meta-zone comments are retained by PREPENDING them to the
+	// element's items and the emitter writes attributes before items.
+	//
+	// PRESENTATION ONLY on the same terms as run_offset — canonical strips
+	// comments, so no hash sees this, and the node stays exactly where it
+	// is in `items`; only the CX emitter consults the stamp and lifts the
+	// comment back into the meta run.
+	//
+	// Set ONLY when at least one attribute FOLLOWS the comment (index <
+	// attrs.len). A meta-zone comment with nothing after it is already
+	// emitted correctly as a leading body item, and that is the shape the
+	// multiline lane renders as its own line — `[a [;c] [b 1]]` round-trips
+	// today and must keep doing so.
+	meta_attr_index ?int
 }
 
 pub struct PINode {
@@ -806,10 +912,13 @@ pub struct CXDirectiveNode {
 pub mut:
 	attrs []Attribute
 	// Directives may carry an `&anchor` and/or nested elements.
-	// Currently used by `[?cx frag &name [body :TYPE :flags]]` (spec
-	// schema.md §8 standalone fragment form). Other directives populate
-	// these as none / empty. ast_bin format version 4 carries them; v1-3
-	// decoders see the attrs-only shape.
+	// Historically used by the RETIRED standalone-fragment form
+	// `[?cx frag &name [body :TYPE :flags]]` (I5 stream 1: fragments
+	// are anchored top-level type declarations, spec/schema.md §8);
+	// the capacity stays for any future directive that nests a body,
+	// and legacy texts still PARSE into it (schema load rejects them).
+	// Other directives populate these as none / empty. ast_bin format
+	// version 4 carries them; v1-3 decoders see the attrs-only shape.
 	anchor ?string
 	items  []Node
 }
@@ -927,6 +1036,14 @@ pub mut:
 	key_type  ScalarType   // string | int | float | bool | date | datetime | bytes
 	key_value ScalarValue  // canonical-string-formatted scalar value
 	value     Node
+	// RULED: MSS-4 (#917) — non-empty marks a DECLARATION-ONLY entry
+	// `{k: ::T}`: the field is declared with kind T and its value is
+	// ABSENT (not null; check-null-absence-conflation). `value` holds an
+	// inert null placeholder that consumers MUST NOT read when decl_kind
+	// is set — value reads of a declared entry are ABSENT (#584
+	// presence semantics). The kind draws from [157] KindName
+	// (is_valid_kind_tag), optionally `[]`-suffixed.
+	decl_kind string
 }
 
 pub struct MapNode {
@@ -996,6 +1113,19 @@ pub mut:
 	// Marks the iterator as fully pulled — `iterate()` returns `memo`
 	// as-is on subsequent calls instead of re-pulling.
 	exhausted bool
+	// Incremental pull cursors (stream 17 W1, EV-PULL): how far into
+	// the SOURCE this combinator has read (`consumed`), plus the
+	// position inside the current inner collection for nesting kinds
+	// (`consumed_inner` — flatten/chunks). memo remains the yielded
+	// prefix; sources memoize, so a child re-reads source.memo by
+	// index — no buffering beyond the memos.
+	consumed       i64
+	consumed_inner i64
+	// err_terminal marks a combinator whose pull hit an err-valued
+	// transform/predicate result (§9.2 short-circuit surfacing at the
+	// FORCE point under EV-PULL): memo holds exactly the err value;
+	// the program-result boundary unwraps it BARE.
+	err_terminal bool
 	// external-stream marker. W4-C wires this; W3a
 	// constructs all iterators with `single_use = false`.
 	single_use bool
@@ -1009,7 +1139,7 @@ pub mut:
 //   iter_range        [start, end, step?] scalar ints
 // iter_range_open [start, step?] scalar ints; the
 //                     end is implicit (unbounded). Materialising the
-//                     iterator without :take/:takewhile is an error.
+//                     iterator without :take/:take-while is an error.
 //   iter_map          [src_iter, closure_sentinel]
 //   iter_filter       [src_iter, closure_sentinel]
 //   iter_take         [src_iter, count_scalar]
@@ -1042,7 +1172,7 @@ pub enum IteratorSourceKind {
 	iter_range      // range(start, end, step) — W3a
 	iter_range_open // range(start, _open_end_, step?) — W4-A
 	                // Unbounded; source_args is [start, step?] (no end).
-	                // Materialising without `:take` / `:takewhile` raises
+	                // Materialising without `:take` / `:take-while` raises
 	                // CXER0100.
 	iter_map        // [?map src :using f]                       — W3c
 	iter_filter     // [?filter src :where pred]                 — W3c

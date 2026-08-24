@@ -1,0 +1,6 @@
+sequenceDiagram
+  participant w
+  activate w
+  Note over w : retry
+  Note over w : [ok]
+  deactivate w

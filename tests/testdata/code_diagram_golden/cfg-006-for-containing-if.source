@@ -1,0 +1,3 @@
+[?for [in $u /users/user]
+  [yield [?if $u@active [then $u] [else 'skip']]]
+]

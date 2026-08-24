@@ -8,6 +8,7 @@ import crypto.ed25519
 import crypto.aes
 import crypto.cipher
 import crypto.argon2
+import crypto.rand as crand
 import math.big
 
 // stdlib_crypto.v — native primitives backing the `cx-stdlib/crypto`
@@ -50,21 +51,21 @@ const crypto_err_nonce    = 'cx-err:CXER3707' // E_CRYPTO_NONCE_INVALID
 
 // ── value builders ──────────────────────────────────────────────────
 
-fn crypto_bytes_node(buf []u8) cx.Node {
+pub fn crypto_bytes_node(buf []u8) cx.Node {
 	return cx.ScalarNode{
 		value:     cx.ScalarValue(buf.bytestr())
 		data_type: cx.ScalarType.bytes_type
 	}
 }
 
-fn crypto_string_node(s string) cx.Node {
+pub fn crypto_string_node(s string) cx.Node {
 	return cx.ScalarNode{
 		value:     cx.ScalarValue(s)
 		data_type: cx.ScalarType.string_type
 	}
 }
 
-fn crypto_bool_node(b bool) cx.Node {
+pub fn crypto_bool_node(b bool) cx.Node {
 	return cx.ScalarNode{
 		value:     cx.ScalarValue(b)
 		data_type: cx.ScalarType.bool_type
@@ -162,7 +163,7 @@ fn crypto_hmac_params(algo string) ?(int, fn ([]u8) []u8) {
 }
 
 // crypto_hmac computes HMAC(key, msg) for a supported algo.
-fn crypto_hmac(algo string, key []u8, msg []u8) ?[]u8 {
+pub fn crypto_hmac(algo string, key []u8, msg []u8) ?[]u8 {
 	block_size, digest := crypto_hmac_params(algo)?
 	mut k := key.clone()
 	if k.len > block_size {
@@ -191,7 +192,7 @@ fn crypto_hmac(algo string, key []u8, msg []u8) ?[]u8 {
 
 // ── HKDF (RFC 5869) ─────────────────────────────────────────────────
 
-fn crypto_hkdf_extract(algo string, salt []u8, ikm []u8) ?[]u8 {
+pub fn crypto_hkdf_extract(algo string, salt []u8, ikm []u8) ?[]u8 {
 	hash_len, _ := crypto_hmac_len(algo)?
 	mut s := salt.clone()
 	if s.len == 0 {
@@ -200,7 +201,7 @@ fn crypto_hkdf_extract(algo string, salt []u8, ikm []u8) ?[]u8 {
 	return crypto_hmac(algo, s, ikm)
 }
 
-fn crypto_hkdf_expand(algo string, prk []u8, info []u8, length int) ?cx.Node {
+pub fn crypto_hkdf_expand(algo string, prk []u8, info []u8, length int) ?cx.Node {
 	hash_len, _ := crypto_hmac_len(algo)?
 	if length <= 0 || length > 255 * hash_len {
 		return mk_err(crypto_err_length, 'E_CRYPTO_LENGTH_INVALID: length ${length} out of (0, ${255 * hash_len}]')
@@ -242,7 +243,7 @@ fn crypto_hmac_len(algo string) ?(int, int) {
 const crypto_entropy_prims = ['crypto-aead-encrypt', 'crypto-ed25519-keypair',
 	'crypto-x25519-keypair', 'crypto-password-hash']
 
-fn crypto_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
+pub fn crypto_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	if name in crypto_entropy_prims {
 		if d := cap_guard('random', name) {
 			return d
@@ -509,7 +510,7 @@ fn crypto_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 
 // crypto_ct_equal compares two byte buffers in constant time over the
 // shorter length, with an unconditional length check (§2.2).
-fn crypto_ct_equal(a []u8, b []u8) bool {
+pub fn crypto_ct_equal(a []u8, b []u8) bool {
 	if a.len != b.len {
 		return false
 	}
@@ -662,9 +663,24 @@ fn crypto_aead_decrypt(args []cx.Node) cx.Node {
 	return crypto_bytes_node(plaintext)
 }
 
+// random_crypto_bytes reads n fresh OS/CSPRNG bytes. Moved here from the
+// random pack file (I4, #651/#516): crypto's entropy-drawing surfaces must
+// survive in artifacts built with `-d cx_no_pack_random`; both files share
+// this ONE definition (same module).
+fn random_crypto_bytes(n int) ?string {
+	if n < 0 {
+		return none
+	}
+	if n == 0 {
+		return ''
+	}
+	buf := crand.bytes(n) or { return none }
+	return buf.bytestr()
+}
+
 // crypto_random_octets draws n fresh CSPRNG bytes (shared with the
 // random module's source). Returns none on entropy failure.
-fn crypto_random_octets(n int) ?[]u8 {
+pub fn crypto_random_octets(n int) ?[]u8 {
 	s := random_crypto_bytes(n)?
 	return s.bytes()
 }
@@ -1058,7 +1074,7 @@ fn chacha20poly1305_open(key []u8, nonce []u8, ciphertext []u8, tag []u8, aad []
 
 // ── X25519 (RFC 7748) — Montgomery ladder over GF(2^255 - 19) ───────
 
-fn x25519_clamp(mut k []u8) {
+pub fn x25519_clamp(mut k []u8) {
 	k[0] &= 248
 	k[31] &= 127
 	k[31] |= 64
@@ -1397,7 +1413,7 @@ fn fe_invert(z Fe) Fe {
 	return fe_mul(r, z11)
 }
 
-fn x25519_scalar_mult(scalar []u8, u_coord []u8) []u8 {
+pub fn x25519_scalar_mult(scalar []u8, u_coord []u8) []u8 {
 	mut clamped := scalar.clone()
 	x25519_clamp(mut clamped)
 	x1 := fe_from_bytes(u_coord)
@@ -1431,7 +1447,7 @@ fn x25519_scalar_mult(scalar []u8, u_coord []u8) []u8 {
 	return fe_to_bytes(fe_mul(x2, fe_invert(z2)))
 }
 
-fn x25519_scalar_base_mult(scalar []u8) []u8 {
+pub fn x25519_scalar_base_mult(scalar []u8) []u8 {
 	mut base := []u8{len: 32}
 	base[0] = 9
 	return x25519_scalar_mult(scalar, base)
@@ -1495,7 +1511,7 @@ fn crypto_b64url_val(c u8) ?u8 {
 // crypto_b64url_decode decodes a STRICT base64url string (url-safe alphabet
 // only, RFC 4648 §5), tolerating present or absent `=` padding. A standard-
 // alphabet `+`/`/` or any other character → none.
-fn crypto_b64url_decode(s string) ?[]u8 {
+pub fn crypto_b64url_decode(s string) ?[]u8 {
 	mut out := []u8{}
 	mut acc := u32(0)
 	mut nbits := 0
@@ -1880,7 +1896,7 @@ fn crypto_opt_str_list(m map[string]cx.Node, key string) ?[]string {
 	return crypto_node_str_list(n)
 }
 
-fn crypto_node_str_list(n cx.Node) []string {
+pub fn crypto_node_str_list(n cx.Node) []string {
 	mut out := []string{}
 	if n is cx.SequenceNode {
 		for it in n.items {
@@ -1908,7 +1924,7 @@ fn crypto_node_str_list(n cx.Node) []string {
 
 // ── JSON map readers (over the cx-stdlib/json node model) ────────────
 
-fn crypto_jmap_get(m cx.Node, key string) ?cx.Node {
+pub fn crypto_jmap_get(m cx.Node, key string) ?cx.Node {
 	if m is cx.Element && m.name == '__cx_map__' {
 		for e in m.items {
 			if e is cx.Element && e.name == key && e.items.len > 0 {
@@ -1919,7 +1935,7 @@ fn crypto_jmap_get(m cx.Node, key string) ?cx.Node {
 	return none
 }
 
-fn crypto_jstr(n cx.Node) ?string {
+pub fn crypto_jstr(n cx.Node) ?string {
 	if n is cx.ScalarNode {
 		v := n.value
 		if v is string {
@@ -1945,7 +1961,7 @@ fn crypto_jint(n cx.Node) ?i64 {
 
 // crypto_jwks_parse parses a JWKS JSON document into [jwks [jwk …] …].
 // Validates each [jwk]'s alg against its kty/crv (CXER3717 on mismatch).
-fn crypto_jwks_parse(json_text string) cx.Node {
+pub fn crypto_jwks_parse(json_text string) cx.Node {
 	root := json_do_parse(json_text, map[string]cx.Node{})
 	if is_err_value(root) {
 		return mk_err(crypto_err_jwks_invalid, 'E_JWKS_INVALID: JWKS is not valid JSON')
@@ -2053,7 +2069,7 @@ fn crypto_jwk_by_kid(jwks cx.Node, kid string) cx.Node {
 	return cx.Element{} // absence channel
 }
 
-fn crypto_claim(claims cx.Node, name string) cx.Node {
+pub fn crypto_claim(claims cx.Node, name string) cx.Node {
 	if claims !is cx.Element || (claims as cx.Element).name != 'claims' {
 		return mk_err(crypto_err_jwt_arg, 'E_JWT_ARG_INVALID: claim expects a verified [claims …] value')
 	}
@@ -2207,7 +2223,7 @@ fn crypto_jwt_material(key cx.Node) ?CryptoJwtKey {
 }
 
 // crypto_jwt_verify is the §3.10 fail-closed verification state machine.
-fn crypto_jwt_verify(args []cx.Node) cx.Node {
+pub fn crypto_jwt_verify(args []cx.Node) cx.Node {
 	token := crypto_arg_str(args[0]) or {
 		return mk_err(crypto_err_jwt_arg, 'E_JWT_ARG_INVALID: token must be a string')
 	}
@@ -2442,29 +2458,38 @@ fn crypto_build_claims(payload cx.Node) cx.Node {
 // pending for a network-granted harness); a non-2xx / transport fault /
 // non-JWKS body → CXER3716 carrying the http/net [err] child.
 fn crypto_jwks_fetch(args []cx.Node) cx.Node {
-	uri := crypto_arg_str(args[0]) or {
-		return mk_err(crypto_err_jwks_fetch, 'E_JWKS_FETCH_FAILED: jwks-uri must be a string')
-	}
-	resp := http_request_verb([
-		crypto_string_node('get'),
-		crypto_string_node(uri),
-	])
-	if is_err_value(resp) {
-		return mk_err_with_cause(crypto_err_jwks_fetch, resp)
-	}
-	if resp is cx.Element {
-		if st := resp.attr_val('status') {
-			status_code := cx.scalar_value_str_public(st)
-			if !status_code.starts_with('2') {
-				return mk_err_with_cause(crypto_err_jwks_fetch, resp)
+	// The transport is the Ring-1 http-client pack; in an artifact built
+	// without it (I4, `-d cx_no_pack_http_client` — the §4 embed profile)
+	// the fetch refuses by construction, same failure envelope as a
+	// transport fault.
+	$if cx_no_pack_http_client ? {
+		return mk_err(crypto_err_jwks_fetch,
+			'E_JWKS_FETCH_FAILED: the http client pack is not in this profile')
+	} $else {
+		uri := crypto_arg_str(args[0]) or {
+			return mk_err(crypto_err_jwks_fetch, 'E_JWKS_FETCH_FAILED: jwks-uri must be a string')
+		}
+		resp := http_request_verb([
+			crypto_string_node('get'),
+			crypto_string_node(uri),
+		])
+		if is_err_value(resp) {
+			return mk_err_with_cause(crypto_err_jwks_fetch, resp)
+		}
+		if resp is cx.Element {
+			if st := resp.attr_val('status') {
+				status_code := cx.scalar_value_str_public(st)
+				if !status_code.starts_with('2') {
+					return mk_err_with_cause(crypto_err_jwks_fetch, resp)
+				}
 			}
+			body_node := http_body_text_impl([cx.Node(resp)])
+			body := crypto_arg_str(body_node) or { '' }
+			if body == '' {
+				return mk_err(crypto_err_jwks_fetch, 'E_JWKS_FETCH_FAILED: empty JWKS body')
+			}
+			return crypto_jwks_parse(body)
 		}
-		body_node := http_body_text_impl([cx.Node(resp)])
-		body := crypto_arg_str(body_node) or { '' }
-		if body == '' {
-			return mk_err(crypto_err_jwks_fetch, 'E_JWKS_FETCH_FAILED: empty JWKS body')
-		}
-		return crypto_jwks_parse(body)
+		return mk_err(crypto_err_jwks_fetch, 'E_JWKS_FETCH_FAILED: no response')
 	}
-	return mk_err(crypto_err_jwks_fetch, 'E_JWKS_FETCH_FAILED: no response')
 }

@@ -1,0 +1,5 @@
+erDiagram
+  "+" {
+    int x
+    int y
+  }

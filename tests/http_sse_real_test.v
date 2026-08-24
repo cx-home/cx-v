@@ -131,3 +131,76 @@ fn test_http_sse_client_read() {
 	assert out.contains('alpha'), 'cx sse client did not read the first live event; got: ${out}'
 	assert out.contains('bravo'), 'cx sse client did not read the second live event; got: ${out}'
 }
+
+// ── #852 — `[?term:select]` must actually wake on an SSE source ────────────
+//
+// `[sse-source fd=N]`'s `fd=` is the net REGISTRY id (`net_register` returns
+// `next_id++`), not a descriptor. `term:select` handed that number to poll(2),
+// so the first connection in a process was polled as fd 1 — stdout. The SSE
+// arm never fired, and nothing errored: `select` returned on schedule, the
+// stream stayed open, the server published happily, the client never
+// repainted. term.md §3.6 names SSE handles as valid sources, and this is the
+// primitive #28/#29 exist to deliver ("one loop, both signals").
+//
+// HOW THIS TEST DISCRIMINATES, which took a rethink. Asserting `[ready]` alone
+// does NOT: under the bug, polling a redirected stdout can report readable
+// immediately and yield `[ready index=0]` for the wrong reason. The property
+// that separates them is TIME — a correct `select` CANNOT return before the
+// server sends, because there is nothing to wake on. So the server holds the
+// stream open for 600 ms after the prelude, and the test asserts both that
+// the wake happened AND that it took at least 400 ms.
+//
+// The bound is a LOWER one on purpose: load pushes a real run further into
+// the passing side, while the buggy behaviour (waking immediately on the
+// wrong descriptor) is what a lower bound catches. An upper bound here would
+// turn machine load into a false failure.
+fn test_sse_source_wakes_term_select() {
+	port := pick_port() + 70
+	mut listener := net.listen_tcp(.ip, '127.0.0.1:${port}') or {
+		eprintln('SKIP: cannot bind 127.0.0.1:${port}: ${err}')
+		return
+	}
+	listener.set_accept_timeout(8 * time.second)
+	srv := spawn fn (mut l net.TcpListener) {
+		mut c := l.accept() or {
+			l.close() or {}
+			return
+		}
+		mut req := []u8{}
+		mut hb := []u8{len: 1}
+		for {
+			n := c.read(mut hb) or { break }
+			if n <= 0 {
+				break
+			}
+			req << hb[0]
+			if req.len >= 4 && req#[-4..].bytestr() == '\r\n\r\n' {
+				break
+			}
+		}
+		// Prelude only. sse-connect consumes the headers, so after this the
+		// socket has NOTHING pending and a correct select must block.
+		c.write_string('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n') or {}
+		time.sleep(600 * time.millisecond)
+		c.write_string('id: 1\ndata: late\n\n') or {}
+		time.sleep(400 * time.millisecond)
+		c.close() or {}
+		l.close() or {}
+	}(mut listener)
+
+	prog := write_tmp('cx_sse_select_${port}.cx', "[?lib 'cx-stdlib/http' :as http]\n" +
+		"[?lib 'cx-x/term' :as term]\n" +
+		'[?let [= \$src [\$http:sse-connect "http://127.0.0.1:${port}/stream" {reconnect: false}]]\n' +
+		'      [= \$ev [\$term:select {keys: false sources: (\$src) timeout: 5000}]]\n' +
+		'  [\$name \$ev]]\n')
+	t0 := time.now()
+	res := os.execute('${cx_binary()} --allow-net=127.0.0.1:${port} --allow-read ${prog}')
+	elapsed := time.since(t0).milliseconds()
+	srv.wait()
+	out := res.output.trim_space()
+
+	assert out.contains('ready'),
+		'#852: term:select never woke on the SSE source (got [${out}] after ${elapsed} ms)'
+	assert elapsed >= 400,
+		'#852: term:select returned after only ${elapsed} ms — it cannot have been waiting on the stream, which stayed silent for 600 ms (got [${out}])'
+}

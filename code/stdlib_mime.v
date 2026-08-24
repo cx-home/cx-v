@@ -1036,7 +1036,17 @@ fn mime_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 
 		// ── §3.4 multipart boundary ─────────────────────────────────
+		// #828 (RULED: 828-1a): this draws OS ENTROPY — its own failure mode
+		// is "entropy unavailable" — so it charges `random` like every other
+		// entropy draw. security.md §2.1 is a closed EFFECT-POINT table, not
+		// a secrets table: the question is whether the surface reaches an OS
+		// resource that can fail, not whether its output is confidential. (A
+		// boundary is indeed not a secret; that is why it needs to be
+		// collision-resistant against body content, which is still entropy.)
 		'mime-multipart-boundary' {
+			if d := cap_guard('random', name) {
+				return d
+			}
 			h := mime_random_hex(17) or {
 				return mime_err_boundary('entropy unavailable')
 			}

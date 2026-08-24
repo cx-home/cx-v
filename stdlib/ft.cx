@@ -57,7 +57,7 @@
   [sig """-> element"""]
   [summary """Build an Index with explicit options for language, stopwords, stemmer, tokenizer, and fields."""]
   [example [code """[?lib 'cx-stdlib/ft']
-[?let [= $idx [$ft:index-with-opts ([doc [title "Database design"] [body "schemas and indexes"]]) {"fields" ("title")}]]
+[?let [= $idx [$ft:index-with-opts ([doc [title "Database design"] [body "schemas and indexes"]]) {fields: ("title")}]]
   [$ft:search $idx [$ft:parse-query "body:schemas"] 10]]"""] [expect """cx-err:CXER1202"""]]
 ]
 [fn-doc name=search scope=public purity=pure
@@ -87,7 +87,7 @@
 [?lib 'cx-stdlib/store']
 [?let [= $store [$store:open "mem:///ft-conformance"]]
   [= $_ [$store:put-doc $store [doc id="d1" "database design and analytics"]]]
-  [$ft:doc-ids [$ft:search-store $store [$ft:parse-query "database"] 10]]]"""] [expect """('d1')"""]]
+  [$ft:doc-ids [$ft:search-store $store [$ft:parse-query "database"] 10]]]"""] [expect """(d1)"""]]
 ]
 [fn-doc name=snippet scope=public purity=pure
   [sig """-> string"""]
@@ -115,7 +115,7 @@
   [summary """Extract the document IDs from a sequence of search results."""]
   [example [code """[?lib 'cx-stdlib/ft']
 [?let [= $idx [$ft:index ([doc id="d1" "database design and analytics"], [doc id="d2" "kitchen recipes for soup"])]]
-  [$ft:doc-ids [$ft:search $idx [$ft:parse-query "database"] 10]]]"""] [expect """('d1')"""]]
+  [$ft:doc-ids [$ft:search $idx [$ft:parse-query "database"] 10]]]"""] [expect """(d1)"""]]
 ]
 [fn-doc name=score-of scope=public purity=pure
   [sig """-> float"""]

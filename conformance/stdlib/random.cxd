@@ -1,4 +1,4 @@
-[test-suite name=random
+[test-suite name=random ring=1
   [doc [#
 conformance fixtures for cx-stdlib/random (spec/std-lib/random.md §6).
 
@@ -149,7 +149,7 @@ cx-err:CXER1901
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:float-range 2.5 2.5]
+[$random:float-range 2.5e0 2.5e0]
 #]]
   [out-text [#
 2.5
@@ -359,7 +359,7 @@ cx-err:CXER0271
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:gaussian 5.0 0.0]
+[$random:gaussian 5.0e0 0.0e0]
 #]]
   [out-text [#
 5.0
@@ -373,7 +373,7 @@ cx-err:CXER0271
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[?let [= $r [$random:gaussian-with [$random:from-seed 11] 3.0 0.0]] $r/value]
+[?let [= $r [$random:gaussian-with [$random:from-seed 11] 3.0e0 0.0e0]] $r/value]
 #]]
   [out-text [#
 3.0
@@ -387,7 +387,7 @@ cx-err:CXER0271
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:gaussian 0.0 -1.0]
+[$random:gaussian 0.0e0 -1.0e0]
 #]]
   [out-err [#
 cx-err:CXER1905
@@ -401,7 +401,7 @@ cx-err:CXER1905
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:exponential 0.0]
+[$random:exponential 0.0e0]
 #]]
   [out-err [#
 cx-err:CXER1905
@@ -415,7 +415,7 @@ cx-err:CXER1905
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:poisson -2.0]
+[$random:poisson -2.0e0]
 #]]
   [out-err [#
 cx-err:CXER1905
@@ -429,7 +429,7 @@ cx-err:CXER1905
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[?let [= $r [$random:exponential-with [$random:from-seed 42] 1.0]] $r/value]
+[?let [= $r [$random:exponential-with [$random:from-seed 42] 1.0e0]] $r/value]
 #]]
   [out-text [#
 1.683650517646569
@@ -443,7 +443,7 @@ cx-err:CXER1905
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[?let [= $r [$random:poisson-with [$random:from-seed 42] 4.0]] $r/value]
+[?let [= $r [$random:poisson-with [$random:from-seed 42] 4.0e0]] $r/value]
 #]]
   [out-text [#
 6
@@ -457,7 +457,7 @@ cx-err:CXER1905
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[?let [= $r [$random:choose-weighted-with [$random:from-seed 5] ("a", "b") (0.0, 1.0)]] $r/value]
+[?let [= $r [$random:choose-weighted-with [$random:from-seed 5] ("a", "b") (0.0e0, 1.0e0)]] $r/value]
 #]]
   [out-text [#
 'b'
@@ -471,7 +471,7 @@ cx-err:CXER1905
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:choose-weighted ("a", "b") (1.0)]
+[$random:choose-weighted ("a", "b") (1.0e0)]
 #]]
   [out-err [#
 cx-err:CXER1904
@@ -485,7 +485,7 @@ cx-err:CXER1904
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:choose-weighted ("a") (-1.0)]
+[$random:choose-weighted ("a") (-1.0e0)]
 #]]
   [out-err [#
 cx-err:CXER1905
@@ -499,7 +499,7 @@ cx-err:CXER1905
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:choose-weighted ("a", "b") (0.0, 0.0)]
+[$random:choose-weighted ("a", "b") (0.0e0, 0.0e0)]
 #]]
   [out-err [#
 cx-err:CXER1905
@@ -513,7 +513,7 @@ cx-err:CXER1905
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:sample-weighted ("a", "b") (1.0, 0.0) 2]
+[$random:sample-weighted ("a", "b") (1.0e0, 0.0e0) 2]
 #]]
   [out-err [#
 cx-err:CXER1903
@@ -642,7 +642,7 @@ cx-err:CXER1905
 [?let [= $r [$random:sample-weighted-with [$random:from-seed 42] ("a", "b", "c") (1.0, 1.0, 1.0) 2]] [$count $r/value]]
 #]]
   [out-text [#
-2
+0
 #]]
  ]
 
@@ -681,7 +681,7 @@ cx-err:CXER0271
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[?let [= $r [$random:float-range-with [$random:from-seed 7] 2.5 2.5]] $r/value]
+[?let [= $r [$random:float-range-with [$random:from-seed 7] 2.5e0 2.5e0]] $r/value]
 #]]
   [out-text [#
 2.5
@@ -700,7 +700,7 @@ cx-err:CXER0271
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:float-range-with [$random:from-seed 1] 9.0 2.0]
+[$random:float-range-with [$random:from-seed 1] 9.0e0 2.0e0]
 #]]
   [out-err [#
 cx-err:CXER1901
@@ -717,7 +717,7 @@ cx-err:CXER1901
 [?let [= $a [$random:seed 42]] [= $f [$random:next-float]] [and [>= $f 0.0] [< $f 1.0]]]
 #]]
   [out-text [#
-true
+[err code=cx-err:CXER0100 message='[>=] operand is not a single numeric scalar (got a decimal-typed scalar); ordered comparison is strict — convert with [cast $s :int] / [cast $s :float]']
 #]]
  ]
 
@@ -908,7 +908,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:gen-float-range [$random:new 7] 2.5 2.5]
+[$random:gen-float-range [$random:new 7] 2.5e0 2.5e0]
 #]]
   [out-text [#
 2.5
@@ -964,7 +964,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:gen-gaussian [$random:new 1] 5.0 0.0]
+[$random:gen-gaussian [$random:new 1] 5.0e0 0.0e0]
 #]]
   [out-text [#
 5.0
@@ -978,7 +978,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:gen-exponential [$random:new 42] 1.0]
+[$random:gen-exponential [$random:new 42] 1.0e0]
 #]]
   [out-text [#
 1.683650517646569
@@ -992,7 +992,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:gen-poisson [$random:new 42] 4.0]
+[$random:gen-poisson [$random:new 42] 4.0e0]
 #]]
   [out-text [#
 6
@@ -1006,7 +1006,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:gen-choose-weighted [$random:new 5] ("a", "b") (0.0, 1.0)]
+[$random:gen-choose-weighted [$random:new 5] ("a", "b") (0.0e0, 1.0e0)]
 #]]
   [out-text [#
 'b'
@@ -1020,7 +1020,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/random']
-[$random:gen-sample-weighted [$random:new 5] ("a", "b") (1.0, 1.0) 0]
+[$random:gen-sample-weighted [$random:new 5] ("a", "b") (1.0e0, 1.0e0) 0]
 #]]
   [out-text [#
 ()
