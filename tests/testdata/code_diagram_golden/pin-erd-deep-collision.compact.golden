@@ -3,5 +3,5 @@ erDiagram
   a {
   }
   b {
-    string c
+    string c "e.g. x"
   }

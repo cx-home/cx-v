@@ -110,6 +110,7 @@ fn geo_arg_f64(n cx.Node) ?f64 {
 			else {}
 		}
 	}
+	note_operand_fault('geo', 'geo-', 'number', n)
 	return none
 }
 
@@ -120,6 +121,7 @@ fn geo_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('geo', 'geo-', 'string', n)
 	return none
 }
 

@@ -1152,6 +1152,41 @@ scalar-only
 #]]
  ]
 
+ [; #1019 (2026-08-26): the CALL-valued attribute — the one member of this
+    family whose two readings legitimately DISAGREE, pinned here so the
+    disagreement is a contract rather than a rumour.
+
+    `[m x=[+ 1 2]]` is a legal PROGRAM form and an illegal DATA attribute:
+    the program reading evaluates the head and binds the SCALAR it reduces
+    to (`[m x=3]`, code.md §6.4.1 — an attribute VALUE must reduce to a
+    scalar at EVAL time), while the data reading has no evaluator and so
+    refuses the bracket opener outright at PARSE time (lexicon §10 D2,
+    cx-err:E211, exactly as 037-041 above). Both verdicts are RIGHT: DATA is
+    a SUBSET of PROGRAM (code.md §1.3), so a form the program reading admits
+    need not survive the data reading, and the reverse would be the defect.
+    Precedent: ledger/rulings_2026_08_20_diagram_wave3.md — "the SCANNER was
+    fixed", the same shape of resolution.
+
+    Cases 037-040 are the forms that reduce to NOTHING (a paren/brace/bare
+    bracket has no head to evaluate), so both readings refuse them and they
+    are both_reject in the corpus census. THIS row is the other half: it is
+    the census's code_only member of the family, and that asymmetry is the
+    fixture's whole point.
+
+    The CONVERT surface (`cx --ast`, cli.md §2.2) is the data reading, so it
+    refuses too — and appends ONE orientation line naming the lane when the
+    refused source is program-shaped. ]
+
+ [case id=041a-attr-value-call-rejected level=core
+  [tags parser attribute scalar-only d2 issue-1019 data-program-fork]
+  [in-cx [#
+[m x=[+ 1 2]]
+#]]
+  [out-err [#
+cx-err:E211
+#]]
+ ]
+
  [; #455 (2026-07-14): a [; comment ] child MUST NOT terminate the element
     head's attribute run. Comments are lexical trivia (lexicon.ebnf §1
     rules L2/L3: "skipped; never reach the parser") — a document with a

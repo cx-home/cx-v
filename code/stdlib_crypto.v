@@ -80,6 +80,7 @@ fn crypto_arg_bytes(n cx.Node) ?[]u8 {
 			return v.bytes()
 		}
 	}
+	note_operand_fault('crypto', 'crypto-', 'bytes', n)
 	return none
 }
 
@@ -90,6 +91,7 @@ fn crypto_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('crypto', 'crypto-', 'string', n)
 	return none
 }
 
@@ -102,6 +104,7 @@ fn crypto_arg_int(n cx.Node) ?i64 {
 			else {}
 		}
 	}
+	note_operand_fault('crypto', 'crypto-', 'int', n)
 	return none
 }
 

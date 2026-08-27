@@ -92,6 +92,7 @@ fn time_arg_int(n cx.Node) ?i64 {
 	} else if n is cx.TextNode {
 		return decimal_int_str(n.value)
 	}
+	note_operand_fault('time', 'time-', 'int', n)
 	return none
 }
 
@@ -122,6 +123,7 @@ fn time_arg_type(n cx.Node) ?cx.ScalarType {
 	if n is cx.ScalarNode {
 		return n.data_type
 	}
+	note_operand_fault('time', 'time-', 'scalar', n)
 	return none
 }
 

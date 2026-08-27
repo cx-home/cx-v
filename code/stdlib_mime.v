@@ -73,6 +73,7 @@ fn mime_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('mime', 'mime-', 'string', n)
 	return none
 }
 

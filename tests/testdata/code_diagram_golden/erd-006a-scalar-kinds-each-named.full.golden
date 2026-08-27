@@ -6,14 +6,14 @@ erDiagram
   }
   user ||--|| order : has
   user {
-    int id "@ 1"
+    int id "1"
   }
   order {
-    int id "@ 100"
-    decimal total "@ 42.0"
-    float rate "@ 42.0"
-    date when "@ 2026-08-01"
-    bigint big "@ 99999999999999999999"
-    bool live "@ true"
+    int id "100"
+    decimal total "42.0"
+    float rate "42.0"
+    date when "2026-08-01"
+    bigint big "99999999999999999999"
+    bool live "true"
     string note "appears 1× depth 1"
   }

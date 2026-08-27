@@ -34,20 +34,76 @@ conformance fixtures for cx-stdlib/process (spec/std-lib/process.md §6).
    timeout, $check, pipeline stages, signal atoms) — all still gated to
    CXER0271 under the runner's empty capability set.
 
-   PROCESS-SPECIFIC ERROR CODES (CXER4000–CXER4012, §5): these are
+   PROCESS-SPECIFIC ERROR CODES (CXER4000–CXER4013, §5): these are
    documented behaviors that fire only AFTER the capability check passes
    (a granted spawn that then hits empty-argv, missing-cwd, not-found,
    timeout, pipefail+check, closed-handle, non-group-leader, pty-unsupported,
    encoding-invalid, etc.). Under the runner's empty capability set the
    capability check short-circuits FIRST, so a correct implementation
-   raises CXER0271 — NOT the CXER4xxx code — for every one of these
-   programs. Asserting CXER4001/4003/4006/4007/4009/4011/4012 here would
-   therefore FAIL a correct implementation (a wrong fixture is worse than
-   a missing one, AUTHORING.md "Grounding"). They are intentionally NOT
-   asserted as out-err in this suite; their scenarios are documented in
-   the spec's §6 conformance list and belong in a capability-granted
-   harness (conformance/stdlib/process.cxd) once the host-grant fixture surface
-   exists. See the report's `ambiguous` list.
+   raises CXER0271 — NOT the CXER4xxx code — for a program with no
+   `grant`. Asserting CXER4001/4003/4006/4007/4009/4011/4012 on a
+   NO-GRANT case would therefore FAIL a correct implementation (a wrong
+   fixture is worse than a missing one, AUTHORING.md "Grounding").
+
+   A DENY-ONLY SUITE HIDES DEFECTS — the #1028 lesson, recorded here
+   because this header is what licensed the gap. Every case below
+   028 is a no-grant CXER0271 case, and several were written to
+   exercise a specific CALL SHAPE (env augment/clear, cwd, stage
+   `[opts …]`). A deny case cannot do that: the guard raises before the
+   body runs, so the shape it names is never reached. process-019
+   asserted a pipeline stage `[opts cwd="/tmp"]` for months while
+   `proc_pipeline` dropped `[opts …]` on the floor entirely — the
+   fixture was green throughout, because CXER0271 is all it ever
+   tested. That is the vacuous-gate shape: a fixture whose subject is
+   unreachable is coverage of the capability guard, not of the feature
+   in the program text.
+
+   So the rule for this suite is now: a deny case pins the CXER0271
+   contract and NOTHING else, and any option or element whose behavior
+   is worth asserting gets a `grant='subprocess'` TWIN that actually
+   runs it (028-064). The deny cases stay — process-019 included — as
+   the capability-contract half of each pair.
+
+   THE ENCODING CASES (060-064), §4.7. `$encoding` was declared on all
+   three entry points and read by NONE until #1028 wired `pipeline`;
+   060-064 close the other two (#1035). 060 pins `:bytes` on `run` —
+   the `::bytes` type ascription on the captured attributes is the
+   observable difference, since the byte count is identical either way.
+   061 and 063 pin the accepted-set refusal (CXER0100) at `run` and
+   `spawn`: a misspelled encoding must not silently mean the default,
+   because the default is a DECODE. 062 pins CXER4008 on an invalid
+   UTF-8 sequence under the default encoding. 064 is the other half of
+   063 — a VALID `$encoding` on `spawn` is accepted and the child
+   spawns — because a refusal case alone cannot show that the new
+   validation admits what it should.
+
+   THE TWO RESOURCE CASES (058, 059), §4.4. Both assert that `run` has
+   STOPPED OWNING the child by the time it returns, and neither can be
+   written as a deny case for the reason above.
+
+   058 — a child inherits the parent's non-CLOEXEC descriptors, so
+   `ls /dev/fd` INSIDE the child counts the PARENT's open fds. §4.4
+   requires `run` to close the parent ends of the pipes it opened, so
+   that count must be FLAT across captured runs. Pre-#1034 nothing
+   closed a parent-side capture fd anywhere in the module — `wait` is a
+   bare `waitpid` and `fd_slurp` reads to EOF and returns the bytes — so
+   this read `false` and the raw counts climbed 5, 7, 9, 11, two per
+   call, for the life of the interpreter.
+
+   059 — §4.5's FORCED phase, reached only by a child that ignores
+   SIGTERM, plus §2.3's "when `signaled` is true, `exit-code` carries the
+   platform's signal-encoded status (128 + signum)": 128 + SIGKILL(9) =
+   137. The exit code is what makes the reap observable. Pre-#1034 the
+   forced kill went through V's `signal_kill()`, whose last act is
+   `status = .aborted`, and V's `wait()` returns without a syscall for
+   any status outside running/stopped — so the killer disqualified its
+   own victim from ever being waited on. The child stayed a zombie and
+   `exit-code` kept the stale 0 from the last liveness poll: this case
+   read `exit-code=0` for a process killed by a signal. A child that
+   DIES on SIGTERM never showed any of it, because the grace loop polls
+   `is_alive()` and V implements that as a `waitpid(WNOHANG)` that reaps
+   as a side effect — which is why every well-behaved fixture was green.
+   Bounded: a ~100 ms budget plus §4.5's fixed grace.
 
    NOTE: no inter-fixture comment blocks appear between cases (a comment
    between sections risks capture into the preceding section payload);
@@ -173,7 +229,7 @@ cx-err:CXER0271
 #]]
   [in-code [#
 [?lib 'cx-stdlib/process']
-[$process:spawn ("tail", "-f", "/var/log/app.log")]
+[$process:spawn ("tail", "-f", "/var/log/app.log") stderr=:inherit]
 #]]
   [out-err [#
 cx-err:CXER0271
@@ -695,6 +751,728 @@ true
 #]]
   [out-text [#
 null
+#]]
+ ]
+
+ [case id=process-047-pipeline-cwd-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline cwd granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "pwd"]]) cwd="/"]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'/'
+#]]
+ ]
+
+ [case id=process-048-pipeline-stage-opts-cwd-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts cwd override granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "pwd"] [opts cwd="/usr"]]) cwd="/"]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'/usr'
+#]]
+ ]
+
+ [case id=process-049-pipeline-env-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline env augment granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "printenv" "CXPROBE1028"]]) env=[map CXPROBE1028="reached"]]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'reached'
+#]]
+ ]
+
+ [case id=process-050-pipeline-env-clear-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline env-clear hermetic granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "env"]]) env-clear=true env=[map ONLY="x"]]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'ONLY=x'
+#]]
+ ]
+
+ [case id=process-051-pipeline-stage-opts-env-clear-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env-clear override granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "env"] [opts env-clear=true]]) env=[map ONLY="x"]]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'ONLY=x'
+#]]
+ ]
+
+ [case id=process-052-pipeline-stage-opts-search-path-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts search-path granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "/bin/echo" "hi"] [opts search-path=false]])]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'hi'
+#]]
+ ]
+
+ [case id=process-053-pipeline-encoding-bytes-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline encoding bytes granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/bytes']
+[?let [= $p [$process:pipeline ([stage [argv "printf" "hi"]]) encoding=:bytes]] [$bytes:length $p@stdout]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=process-054-pipeline-stage-opts-refused-key level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "echo" "hi"] [opts timeout-ms=50]])]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-055-pipeline-stage-opts-unknown-key level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts unknown-key CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "echo" "hi"] [opts nonsense=1]])]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-056-pipeline-unknown-encoding-refused level=core gate=enforced grant='subprocess'
+  [tags process pipeline encoding refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "echo" "hi"]]) encoding="latin-1"]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-057-pipeline-missing-cwd-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline cwd CXER4001 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "pwd"]]) cwd="/definitely-not-a-real-dir-xyz"]
+#]]
+  [out-err [#
+cx-err:CXER4001
+#]]
+ ]
+
+ [case id=process-058-run-descriptor-release-granted level=core gate=enforced grant='subprocess'
+  [tags process run reap descriptors fd-leak granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $a [$process:run ("sh", "-c", "ls /dev/fd | wc -l")]] [= $b [$process:run ("sh", "-c", "ls /dev/fd | wc -l")]] [$eq [$strings:trim $a@stdout] [$strings:trim $b@stdout]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=process-059-run-forced-kill-reaps-granted level=core gate=enforced grant='subprocess'
+  [tags process run timeout kill-on-timeout signaled reap exit-code granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("sh", "-c", "trap '' TERM; sleep 30") timeout-ms=100 kill-on-timeout=true]
+#]]
+  [out-text [#
+[proc-result exit-code=137 signaled=true timed-out=true stdout='' stderr='']
+#]]
+ ]
+
+ [case id=process-060-run-encoding-bytes-granted level=core gate=enforced grant='subprocess'
+  [tags process run encoding bytes granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("printf", "hi") encoding=:bytes]
+#]]
+  [out-text [#
+[proc-result exit-code=0 signaled=false timed-out=false stdout::bytes=hi stderr::bytes='']
+#]]
+ ]
+
+ [case id=process-061-run-unknown-encoding-refused level=core gate=enforced grant='subprocess'
+  [tags process run encoding refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "hi") encoding="latin-1"]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-062-run-encoding-invalid-utf8 level=core gate=enforced grant='subprocess'
+  [tags process run encoding CXER4008 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("sh", "-c", "printf '\377'")]
+#]]
+  [out-err [#
+cx-err:CXER4008
+#]]
+ ]
+
+ [case id=process-063-spawn-unknown-encoding-refused level=core gate=enforced grant='subprocess'
+  [tags process spawn encoding refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:spawn ("echo", "hi") encoding="latin-1"]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-064-spawn-encoding-accepted-granted level=core gate=enforced grant='subprocess'
+  [tags process spawn encoding bytes granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $h [$process:spawn ("echo", "x") encoding=:bytes]] [= $w [$process:wait $h]] [$process:close $h]]
+#]]
+  [out-text [#
+null
+#]]
+ ]
+
+ [; §3.3's FOURTH stage key — per-stage [env {…}] (#1047, RULED: CO-15).
+    Granted-path twins: `env` was refused by name until CO-15 ruled the
+    child-element spelling, so every case below was RED on the pre-fix
+    binary with the same "no child-element spelling" message. The
+    positive four pin the RULED semantics (POSIX shape, per-KEY overlay,
+    env-clear in both orders); the negative four pin that only the
+    MALFORMED shapes refuse now. ]
+
+ [case id=process-065-pipeline-stage-opts-env-granted level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "sh" "-c" "printenv CXPROBE1047A"] [opts [env {CXPROBE1047A: "one"}]]], [stage [argv "sh" "-c" "cat; printenv CXPROBE1047B"] [opts [env {CXPROBE1047B: "two"}]]])]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'one\ntwo'
+#]]
+ ]
+
+ [case id=process-066-pipeline-stage-opts-env-overlay-per-key level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env override granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "sh" "-c" "printenv CXPROBE1047A; printenv CXPROBE1047B"] [opts [env {CXPROBE1047A: "stage"}]]]) env=[map CXPROBE1047A="pipe" CXPROBE1047B="pipe"]]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'stage\npipe'
+#]]
+ ]
+
+ [case id=process-067-pipeline-stage-opts-env-with-stage-env-clear level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env env-clear hermetic granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "env"] [opts env-clear=true [env {CXPROBE1047ONLY: "x"}]]])]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'CXPROBE1047ONLY=x'
+#]]
+ ]
+
+ [; #1051 — this case reads the child environment with the `echo` BUILTIN,
+    and every hermetic case must. §4.2 is explicit that `env-clear=true`
+    hands the child EXACTLY the declared set, so the child has no `PATH`;
+    a stage body that shells out to `printenv` is then asking the CHILD
+    SHELL to resolve an external command with nothing to resolve it
+    against, and what happens next belongs to whichever `sh` §4.1
+    resolved from the PARENT's PATH — not to cx. Measured both ways on
+    one binary: macOS /bin/sh substitutes a default PATH of
+    `/usr/gnu/bin:/usr/local/bin:/bin:/usr/bin:.` and finds printenv
+    (green), while the nix bash the devbox/make PATH puts first
+    substitutes `/no-such-path` and does not (exit 127, `printenv:
+    command not found` on stderr, stdout EMPTY). Same binary, same
+    fixture, opposite verdicts — which is exactly how this read as a
+    "deterministic under the runner, green standalone" impl bug for two
+    grading passes. A builtin needs no PATH, so the case now grades the
+    RULED CO-15 layering and nothing else. Its siblings 065/066 keep
+    `printenv` legitimately: they run under §4.2's augment default, where
+    the child inherits PATH. ]
+
+ [case id=process-068-pipeline-stage-opts-env-with-pipeline-env-clear level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env env-clear order granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $p [$process:pipeline ([stage [argv "sh" "-c" 'echo $CXPROBE1047A; echo $CXPROBE1047B'] [opts [env {CXPROBE1047B: "stage"}]]]) env-clear=true env=[map CXPROBE1047A="pipe" CXPROBE1047B="pipe"]]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'pipe\nstage'
+#]]
+ ]
+
+ [case id=process-069-pipeline-stage-opts-env-nonmap-body-refused level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "echo" "hi"] [opts [env "notamap"]]])]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-070-pipeline-stage-opts-env-nonscalar-value-refused level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "echo" "hi"] [opts [env {K: {N: "1"}}]]])]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-071-pipeline-stage-opts-env-duplicate-refused level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "echo" "hi"] [opts [env {A: "1"}] [env {B: "2"}]]])]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-072-pipeline-stage-opts-env-attribute-refused level=core gate=enforced grant='subprocess'
+  [tags process pipeline stage opts env refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:pipeline ([stage [argv "echo" "hi"] [opts env="x"]])]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [; §3.1 $capture carries §3.2's FULL disposition vocabulary (#1023,
+    RULED: CO-16). Granted path only: a deny-only fixture raises CXER0271 at
+    the guard, so the disposition it names is never reached. ]
+
+ [case id=process-073-run-capture-file-target-granted level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition file granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "to-a-file") capture={stdout: "/tmp/cx-conf-1023-out.log"}]
+#]]
+  [out-text [#
+[proc-result exit-code=0 signaled=false timed-out=false stderr='']
+#]]
+ ]
+
+ [case id=process-074-run-capture-file-target-holds-the-bytes level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition file granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?let [= $a [$process:run ("echo", "to-a-file") capture={stdout: "/tmp/cx-conf-1023-round.log"}]] [= $b [$process:run ("cat", "/tmp/cx-conf-1023-round.log")]] $b@stdout]
+#]]
+  [out-text [#
+'to-a-file\n'
+#]]
+ ]
+
+ [case id=process-075-run-capture-discard-granted level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition discard granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("sh", "-c", "echo OUT; echo ERR 1>&2") capture=:discard]
+#]]
+  [out-text [#
+[proc-result exit-code=0 signaled=false timed-out=false]
+#]]
+ ]
+
+ [case id=process-076-run-capture-per-key-keeps-the-default level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition per-key granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("sh", "-c", "echo OUT; echo ERR 1>&2") capture={stderr: "/tmp/cx-conf-1023-err.log"}]
+#]]
+  [out-text [#
+[proc-result exit-code=0 signaled=false timed-out=false stdout='OUT\n']
+#]]
+ ]
+
+ [case id=process-077-run-capture-pipe-is-both level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition pipe granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("sh", "-c", "echo OUT; echo ERR 1>&2") capture=:pipe]
+#]]
+  [out-text [#
+[proc-result exit-code=0 signaled=false timed-out=false stdout='OUT\n' stderr='ERR\n']
+#]]
+ ]
+
+ [case id=process-078-run-capture-inherit-captures-nothing level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition inherit granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("true") capture=:inherit]
+#]]
+  [out-text [#
+[proc-result exit-code=0 signaled=false timed-out=false]
+#]]
+ ]
+
+ [case id=process-079-run-capture-encoding-scopes-to-captured level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition encoding CXER4008 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("sh", "-c", "printf '\377'") capture={stdout: "/tmp/cx-conf-1023-raw.bin"}]
+#]]
+  [out-text [#
+[proc-result exit-code=0 signaled=false timed-out=false stderr='']
+#]]
+ ]
+
+ [case id=process-080-run-capture-bare-path-refused level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "hi") capture="/tmp/cx-conf-1023-bare.log"]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-081-run-capture-stdin-key-refused level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("cat") capture={stdin: :discard}]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-082-run-capture-unknown-key-refused level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "hi") capture={stdrr: :discard}]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-083-run-capture-unknown-disposition-refused level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition refusal CXER0100 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "hi") capture={stdout: :swallow}]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=process-084-run-capture-unopenable-target-refused level=core gate=enforced grant='subprocess'
+  [tags process run capture disposition refusal CXER4001 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "hi") capture={stdout: "/tmp/cx-conf-1023-no-such-dir/out.log"}]
+#]]
+  [out-err [#
+cx-err:CXER4001
+#]]
+ ]
+
+ [; §4.1's argv[0] resolution against the CHILD's PATH (#1052). §4.1:
+    "resolved against `PATH` (the child's when `$env` overrides it, else
+    the parent's)". The pronoun is `PATH`, so the child's PATH governs
+    exactly when an `$env` LAYER NAMES the key — which is why the granted
+    hermetic cases above (050 / 051 / 067) still resolve `env` on the
+    PARENT's PATH: `env-clear=true` alone names nothing. That is coherent
+    rather than a contradiction — resolution yields an ABSOLUTE path and
+    the child execs that, so a child with no PATH never needed one to
+    start; §4.1 is describing where the PARENT's resolver looks.
+
+    proc_resolve_exec took no environment at all before this and always
+    called os.find_abs_path_of_executable — i.e. always the PARENT's
+    PATH — so the first half of that clause was unimplemented and no
+    fixture named the cell. Measured on the pre-fix binary: 085 / 089 /
+    090 / 091 were CXER4001 / CXER4005 (the stub is on no parent PATH),
+    and 087 was GREEN with `stdout='hi\n'` — the same bug seen from the
+    other side, since a child PATH naming nothing must find nothing.
+    086 and 088 are the negatives and were green pre-fix; they pin that
+    this changed only the cell it was supposed to.
+
+    Hermetic per the #1051 lesson: the stub dir is named by ABSOLUTE
+    path, the stub is `/bin/echo` behind a symlink, and no child shell is
+    ever asked to resolve anything against a PATH it does not have. ]
+
+ [case id=process-085-run-argv0-resolves-against-child-path level=core gate=enforced grant='subprocess read write'
+  [tags process run env search-path resolution child-path granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/strings']
+[?if [$io:exists "/tmp/cx-conf-1052-bin"] [then [$io:remove-tree "/tmp/cx-conf-1052-bin"]]]
+[$io:make-dirs "/tmp/cx-conf-1052-bin"]
+[$io:symlink "/bin/echo" "/tmp/cx-conf-1052-bin/cxstub1052"]
+[?let [= $r [$process:run ("cxstub1052", "STUB-HIT") env=[map PATH="/tmp/cx-conf-1052-bin"]]] [$strings:trim $r@stdout]]
+#]]
+  [out-text [#
+'STUB-HIT'
+#]]
+ ]
+
+ [case id=process-086-run-no-path-override-keeps-parent-path level=core gate=enforced grant='subprocess'
+  [tags process run env env-clear hermetic resolution parent-path granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/strings']
+[?let [= $r [$process:run ("echo", "parent-ok") env-clear=true env=[map CXPROBE1052="x"]]] [$strings:trim $r@stdout]]
+#]]
+  [out-text [#
+'parent-ok'
+#]]
+ ]
+
+ [case id=process-087-run-child-path-names-nothing-not-found level=core gate=enforced grant='subprocess'
+  [tags process run env search-path resolution refusal CXER4001 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[$process:run ("echo", "hi") env=[map PATH="/tmp/cx-conf-1052-nowhere"]]
+#]]
+  [out-err [#
+cx-err:CXER4001
+#]]
+ ]
+
+ [case id=process-088-run-search-path-false-beats-child-path level=core gate=enforced grant='subprocess read write'
+  [tags process run env search-path precedence refusal CXER4001 granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/io']
+[?if [$io:exists "/tmp/cx-conf-1052-bin"] [then [$io:remove-tree "/tmp/cx-conf-1052-bin"]]]
+[$io:make-dirs "/tmp/cx-conf-1052-bin"]
+[$io:symlink "/bin/echo" "/tmp/cx-conf-1052-bin/cxstub1052"]
+[$process:run ("cxstub1052") search-path=false env=[map PATH="/tmp/cx-conf-1052-bin"]]
+#]]
+  [out-err [#
+cx-err:CXER4001
+#]]
+ ]
+
+ [case id=process-089-pipeline-stage-env-path-resolves-that-stage level=core gate=enforced grant='subprocess read write'
+  [tags process pipeline stage opts env search-path resolution child-path granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/strings']
+[?if [$io:exists "/tmp/cx-conf-1052-bin"] [then [$io:remove-tree "/tmp/cx-conf-1052-bin"]]]
+[$io:make-dirs "/tmp/cx-conf-1052-bin"]
+[$io:symlink "/bin/echo" "/tmp/cx-conf-1052-bin/cxstub1052"]
+[?let [= $p [$process:pipeline ([stage [argv "cxstub1052" "STAGE-HIT"] [opts [env {PATH: "/tmp/cx-conf-1052-bin"}]]])]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'STAGE-HIT'
+#]]
+ ]
+
+ [case id=process-090-pipeline-env-path-reaches-a-stage-that-names-none level=core gate=enforced grant='subprocess read write'
+  [tags process pipeline env search-path resolution child-path granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/strings']
+[?if [$io:exists "/tmp/cx-conf-1052-bin"] [then [$io:remove-tree "/tmp/cx-conf-1052-bin"]]]
+[$io:make-dirs "/tmp/cx-conf-1052-bin"]
+[$io:symlink "/bin/echo" "/tmp/cx-conf-1052-bin/cxstub1052"]
+[?let [= $p [$process:pipeline ([stage [argv "cxstub1052" "PIPE-HIT"]]) env=[map PATH="/tmp/cx-conf-1052-bin"]]] [$strings:trim $p@stdout]]
+#]]
+  [out-text [#
+'PIPE-HIT'
+#]]
+ ]
+
+ [case id=process-091-spawn-argv0-resolves-against-child-path level=core gate=enforced grant='subprocess read write'
+  [tags process spawn env search-path resolution child-path granted effort-b]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/process']
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/strings']
+[?if [$io:exists "/tmp/cx-conf-1052-bin"] [then [$io:remove-tree "/tmp/cx-conf-1052-bin"]]]
+[$io:make-dirs "/tmp/cx-conf-1052-bin"]
+[$io:symlink "/bin/echo" "/tmp/cx-conf-1052-bin/cxstub1052"]
+[?let [= $h [$process:spawn ("cxstub1052", "SPAWN-HIT") env=[map PATH="/tmp/cx-conf-1052-bin"]]] [= $o [$io:read-all [$process:stdout $h]]] [= $w [$process:wait $h]] [= $c [$process:close $h]] [$strings:trim $o]]
+#]]
+  [out-text [#
+'SPAWN-HIT'
 #]]
  ]
 

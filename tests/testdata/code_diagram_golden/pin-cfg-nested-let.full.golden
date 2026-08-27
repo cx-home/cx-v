@@ -15,8 +15,8 @@ flowchart TD
   output([OUTPUT]):::output
   start([entry])
   done([exit])
-  lt["[= $a 1]"]
-  lt["[= $b 2]"]
+  lt1["[= $a 1]"]
+  lt2["[= $b 2]"]
   i{"if [> $a $b]"}
   t["[x]"]
   i -- "true" --> t
@@ -24,12 +24,12 @@ flowchart TD
   e["[y]"]
   i -- "false" --> e
   e --> done
-  lt --> i
-  lt --> lt
-  start --> lt
+  lt2 --> i
+  lt1 --> lt2
+  start --> lt1
   input --> start
   done --> output
   b_a((("$a"))):::binding
-  b_a -. "resolves" .-> lt
+  b_a -. "resolves" .-> lt1
   b_b((("$b"))):::binding
-  b_b -. "resolves" .-> lt
+  b_b -. "resolves" .-> lt1

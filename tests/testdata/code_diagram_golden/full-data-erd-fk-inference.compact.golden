@@ -4,8 +4,8 @@ erDiagram
   doc {
   }
   user {
-    int id "@"
+    int id "e.g. 1"
   }
   order {
-    int user-id "@"
+    int user-id "e.g. 1"
   }

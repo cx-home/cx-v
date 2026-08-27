@@ -73,6 +73,21 @@ fn cx_module_stdlib_builtin_env(name string, args []cx.Node, mut env MatchEnv) ?
 		'from-format' { return cx_mod_from_format(args) }
 		'select' { return cx_mod_select(args, mut env) }
 		'propose' { return cx_mod_propose(args, mut env) }
+		// §2.2 eval + analysis / §2.3 transform (#940, VC-6). The two
+		// string-eval arms are env-aware; their wrappers convert a raise from
+		// inside the sandbox into an err VALUE, because a `!` propagated out
+		// of THIS function becomes `none` and the chain then reports
+		// `no callable "cx:eval"` — see cx_mod_eval in dynamic_construction.v.
+		'eval' { return cx_mod_eval(args, mut env) }
+		'render' { return cx_mod_render(args, mut env) }
+		'validate' { return cx_mod_validate(args) }
+		'anchors' { return cx_mod_anchors(args) }
+		'ids' { return cx_mod_ids(args) }
+		'references' { return cx_mod_references(args) }
+		'resolve-includes' { return cx_mod_resolve_includes(args) }
+		'strip-comments' { return cx_mod_strip_comments(args) }
+		'strip-attrs' { return cx_mod_strip_attrs(args) }
+		'pretty-print' { return cx_mod_pretty_print(args) }
 		else { return none }
 	}
 }

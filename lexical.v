@@ -163,6 +163,70 @@ pub fn raw_span_end(src []u8, i int) ?int {
 	return none
 }
 
+// source_carries_program_directive reports whether `src` carries a registered
+// program directive head (`[?let]`, `[?def]`, `[?for]`, … — the closed
+// `directive_names` registry) ANYWHERE in its byte stream.
+//
+// It answers the same question as `code.data_reading_has_program_directive`
+// — "is this resource program-SHAPED?" — but LEXICALLY, so it still answers
+// when the data reading itself aborted. That predicate parses a Document and
+// walks it; a source the data parser REFUSES (the D2 node-valued-attribute
+// reject, cx-err:E211) has no tree to walk, and the CONVERT surface needs the
+// answer precisely there (cli.md §2.2 diagnostics, #1019).
+//
+// String- and comment-aware by construction, so a directive merely NAMED in
+// prose is not a directive here: the three opaque spans this shelf recognizes
+// (`#` line comment, `[; … ]` block comment, `[#…#]` raw text) are skipped
+// with their own recognizers, and a `'…'` / `"…"` quoted span is shielded the
+// way `value_run_end` shields one. Unterminated spans end the scan — a
+// truncated document carries no further directive head we can honestly claim.
+//
+// The answer is a HINT, never a verdict: it decorates a diagnostic, it does
+// not decide a reading. `[?cx …]` config directives and foreign PIs are not in
+// `directive_names` and answer false, matching the tree-walking predicate.
+pub fn source_carries_program_directive(src []u8) bool {
+	mut i := 0
+	for i < src.len {
+		b := src[i]
+		if hash_line_comment_at(src, i) {
+			i = line_comment_end(src, i)
+			continue
+		}
+		if block_comment_open_at(src, i) {
+			i = block_comment_end(src, i) or { return false }
+			continue
+		}
+		if raw_span_open_at(src, i) {
+			i = raw_span_end(src, i) or { return false }
+			continue
+		}
+		if b == `'` || b == `"` {
+			mut j := i + 1
+			for j < src.len && src[j] != b {
+				j++
+			}
+			if j >= src.len {
+				return false
+			}
+			i = j + 1
+			continue
+		}
+		if b == `[` && i + 2 < src.len && src[i + 1] == `?` && is_name_start(src[i + 2]) {
+			mut j := i + 2
+			for j < src.len && is_name_char(src[j]) {
+				j++
+			}
+			if is_directive_name(src[i + 2..j].bytestr()) {
+				return true
+			}
+			i = j
+			continue
+		}
+		i++
+	}
+	return false
+}
+
 // is_name_start reports whether `b` may begin an identifier / element name.
 // ASCII only (`lexicon.ebnf` [L10], decision 1a-as-graduated: lone `:` is its
 // own token, never a name-start). Identical in both parsers.
@@ -202,6 +266,66 @@ pub fn is_name_char(b u8) bool {
 @[inline]
 pub fn is_ident_part(b u8) bool {
 	return is_name_start(b) || is_digit(b) || b == `-`
+}
+
+// ── Operator element heads (#976) ────────────────────────────────────────────
+//
+// THE OPERATOR-HEAD ALPHABET IS THE EVALUATOR'S, NOT THE PARSER'S. `code/eval.v`
+// holds the ruled set (`operator_element_heads`, 18 heads); twelve of them are
+// GLYPHS and so need a lexical rule the Name production cannot supply:
+//
+//     one-char   + * - / % = < > ~
+//     two-char   != <= >=
+//
+// The other six (`and or not union intersect except`) are ordinary Names and
+// reach parse_element through `read_name` with no help from here.
+//
+// #976 (content-addressing SOUNDNESS): the data parser used to carry its own,
+// SHORTER copy of this alphabet — seven one-char heads, no two-char forms — in
+// two sites that had drifted apart. The heads it did not know failed in two
+// different ways, and the quiet one was the dangerous one: `>=`, `!=` and `~`
+// raised "expected name" (rc=1, loud), while `<=` and `%` fell through into the
+// ARRAY lane and SILENTLY STRINGIFIED. So `[<= 5 3]` canonicalized to
+// `['<= 5 3']` — byte-identical to the document that really is that quoted
+// string, and therefore the SAME Tier-1 hash — two documents the evaluator
+// gives different values sharing one content address. This function is now the
+// single home of the rule; every site calls it and none re-spells it.
+//
+// DELIMITATION is the whole rule: the operator token is an element name only
+// when the next byte is whitespace, `]`, or end-of-input. A GLUED continuation
+// keeps its historical route and MUST — `[-1, 2]` is a negative-number array
+// item, `[*n]` is an alias reference, `[!ENTITY …]` is a declaration, and
+// `['<= 5 3']` is a quoted string in an array.
+//
+// LONGEST MATCH FIRST, so `<=` wins over `<`. Without that ordering `[<= …]`
+// reads as an UNDELIMITED `<` and falls back to the array lane — which is
+// precisely the collision above, so the ordering is load-bearing, not taste.
+//
+// Returns the head's LENGTH IN BYTES (1 or 2), or 0 when the bytes at `i` do
+// not open a delimited operator head.
+@[inline]
+pub fn operator_head_len(src []u8, i int) int {
+	if i < 0 || i >= src.len {
+		return 0
+	}
+	b := src[i]
+	// Two-char heads lead (longest match): `!=` `<=` `>=`.
+	if (b == `!` || b == `<` || b == `>`) && i + 1 < src.len && src[i + 1] == `=` {
+		return if op_head_delimited(src, i + 2) { 2 } else { 0 }
+	}
+	if b == `+` || b == `*` || b == `-` || b == `/` || b == `%` || b == `=`
+		|| b == `<` || b == `>` || b == `~` {
+		return if op_head_delimited(src, i + 1) { 1 } else { 0 }
+	}
+	return 0
+}
+
+// op_head_delimited — an operator head ends at whitespace, `]`, or EOF. This is
+// the delimiter test `operator_head_len` applies after a head's bytes match;
+// see that function for why a glued continuation must NOT be a head.
+@[inline]
+fn op_head_delimited(src []u8, k int) bool {
+	return k >= src.len || is_ws(src[k]) || src[k] == `]`
 }
 
 // ── Full-Unicode names (I1 L22 / wart W-9) ───────────────────────────────────
@@ -383,6 +507,55 @@ fn decode_unicode_escape(src []u8, bs int, n int) EscapeDecode {
 }
 
 // ── Triple-quoted string scanning (lexicon.ebnf §5 [L31] / grammar [10b]) ────────
+//
+// triple_quote_prefix_len is the OPENER half of the rule `scan_triple_quoted_opt`
+// closes: it reports how many bytes sit BEFORE the opening triple delimiter of a
+// triple-quoted literal starting at `src[i]` — 0 for the plain `'''…'''` /
+// `"""…"""` form, 1 for the RAW `r'''…'''` / `r"""…"""` form (I1 L58) — or -1
+// when `src[i]` does not open one at all. The delimiter byte is then
+// `src[i + prefix]`.
+//
+// It exists because a CURSOR-FREE walker had no way to ask the question at all:
+// every spelling of the opener test was a `Parser`/`Lexer` method reading its
+// own `pos`, so `code_tree.v` did not ask, and its single-quote scanner read
+// `'''body'''` as an EMPTY string followed by a fresh opener. That is #999 — the
+// empty string became the attribute's value, the real body reappeared as sibling
+// `text` nodes, and a body carrying an odd `'` (`'''it's'''`) desynced the
+// bracket matcher into reporting the whole element `unbalanced`.
+//
+// EVERY opener test in the tree is now this one (#1021). `Parser.at_raw_triple`
+// and `Parser.read_quoted_for_doc` ask it, as do both arms of
+// `program_lexer.next_token` — the plain arm reading `== 0` and the `r`-prefixed
+// arm `== 1`, since a raw opener is exactly a 1-byte prefix. Callers that need
+// the delimiter read it at `src[i + prefix]` rather than re-testing the bytes;
+// that is what keeps a second, drifting spelling from growing back (#976).
+//
+// Returns -1 rather than an option so a byte-level caller can branch on it
+// without unwrapping a tuple in a hot scan loop.
+@[inline]
+pub fn triple_quote_prefix_len(src []u8, i int) int {
+	if i < 0 || i >= src.len {
+		return -1
+	}
+	mut j := i
+	mut prefix := 0
+	if src[j] == `r` {
+		prefix = 1
+		j++
+	}
+	if j + 2 >= src.len {
+		return -1
+	}
+	q := src[j]
+	if q != `'` && q != `"` {
+		return -1
+	}
+	if src[j + 1] != q || src[j + 2] != q {
+		return -1
+	}
+	return prefix
+}
+
 // scan_triple_quoted scans a `'''…'''` or `"""…"""` literal. `open` is the index
 // in `src` of the FIRST of the three opening delimiter quotes; `q` is the
 // delimiter byte. Returns the DEDENTED value (strip_common_indent applied, the
@@ -427,6 +600,945 @@ pub fn scan_triple_quoted_opt(src []u8, open int, q u8, raw bool) ?(string, int)
 		pos++
 	}
 	return none // unterminated
+}
+
+// ── Sequence-literal delimitation (grammar [56a], ASP-1) ─────────────────────
+//
+// sequence_literal_at_paren decides whether the `(` at `src[i]` opens a
+// SEQUENCE LITERAL or merely a parenthesised text run. The rule is ASP-1's:
+// `()` is the empty sequence, and otherwise a sequence needs a depth-0 `,`
+// before its matching `)` — so `(x)` and `(see note)` stay prose. Quote regions
+// are shielded so a `,` inside a string does not promote a text run, and the
+// depth counter is deliberately MIXED-DELIMITER (`[`/`(`/`{` all raise it) so a
+// nested node or map cannot leak its own comma to depth 0.
+//
+// Single home of the rule, per the `operator_head_len` precedent (#976, #992):
+// `Parser.peek_is_sequence_literal_at_paren` now delegates here, and `code_tree.v`
+// — which had no delimitation test of its own and therefore emitted `(`, `,` and
+// `)` as scalar CHILDREN (#1000) — asks the same question the parser asks
+// instead of carrying a second, drifting copy.
+//
+// Pure lookahead: no cursor, nothing consumed.
+pub fn sequence_literal_at_paren(src []u8, i int) bool {
+	if i < 0 || i >= src.len || src[i] != `(` {
+		return false
+	}
+	mut j := i + 1
+	for j < src.len && is_ws(src[j]) {
+		j++
+	}
+	if j < src.len && src[j] == `)` {
+		return true // `()` — the empty sequence
+	}
+	mut depth := 0
+	mut quote := u8(0)
+	for j < src.len {
+		b := src[j]
+		if quote != 0 {
+			if b == `\\` && j + 1 < src.len {
+				j += 2
+				continue
+			}
+			if b == quote {
+				quote = 0
+			}
+			j++
+			continue
+		}
+		if b == `'` || b == `"` {
+			quote = b
+			j++
+			continue
+		}
+		if depth == 0 {
+			if b == `,` {
+				return true
+			}
+			if b == `)` {
+				return false
+			}
+		}
+		if b == `[` || b == `(` || b == `{` {
+			depth++
+			j++
+			continue
+		}
+		if b == `]` || b == `}` || b == `)` {
+			if depth > 0 {
+				depth--
+			}
+			j++
+			continue
+		}
+		j++
+	}
+	return false
+}
+
+// ── Map-literal delimitation (grammar [56c], ASP-2) ──────────────────────────
+//
+// map_literal_at_brace decides whether the `{` at `src[i]` opens a MAP LITERAL
+// or merely a brace-delimited text run. The rule is the same shape as its
+// sequence sibling above: `{}` is the empty map, and otherwise a map needs a
+// depth-0 `:` before its matching `}` — so `{text}` stays prose. Quote regions
+// are shielded so a `:` inside a string does not promote a text run, and the
+// depth counter is MIXED-DELIMITER (`[`/`(`/`{` all raise it) so a nested node
+// or array cannot leak its own colon to depth 0.
+//
+// Single home of the rule. It had THREE spellings before #1020 and the walker
+// could reach none of them: `Parser.peek_is_map_literal_at_brace` (cursor-bound)
+// and `span_is_map_shaped` (positional, added for the typed-list detector's
+// lookahead — a second copy of the identical body, the drift this shelf exists
+// to prevent) both delegate here now, and `code_tree.v` — which had no
+// delimitation test of its own and therefore emitted `{`, the key, `:`, the
+// value and `}` as five separate scalar CHILDREN (#1020) — asks this one.
+//
+// Pure lookahead: no cursor, nothing consumed.
+pub fn map_literal_at_brace(src []u8, i int) bool {
+	if i < 0 || i >= src.len || src[i] != `{` {
+		return false
+	}
+	mut j := i + 1
+	for j < src.len && is_ws(src[j]) {
+		j++
+	}
+	if j < src.len && src[j] == `}` {
+		return true // `{}` — the empty map
+	}
+	mut depth := 0
+	mut quote := u8(0)
+	for j < src.len {
+		b := src[j]
+		if quote != 0 {
+			if b == `\\` && j + 1 < src.len {
+				j += 2
+				continue
+			}
+			if b == quote {
+				quote = 0
+			}
+			j++
+			continue
+		}
+		if b == `'` || b == `"` {
+			quote = b
+			j++
+			continue
+		}
+		if depth == 0 {
+			if b == `:` {
+				return true
+			}
+			if b == `}` {
+				return false
+			}
+		}
+		if b == `[` || b == `(` || b == `{` {
+			depth++
+			j++
+			continue
+		}
+		if b == `]` || b == `}` || b == `)` {
+			if depth > 0 {
+				depth--
+			}
+			j++
+			continue
+		}
+		j++
+	}
+	return false
+}
+
+// ── Array-literal delimitation (grammar [56b], [D1]) ─────────────────────────
+//
+// array_literal_at_bracket decides whether the `[` at `src[i]` opens an ARRAY
+// LITERAL or an element / reserved-sigil form. It is the WHOLE answer the
+// `parse_bracket_node` dispatch reaches for that `[`, in the dispatch's own
+// order, so a cursor-free caller gets the parser's reading and not a subset:
+//
+//   1. RESERVED SIGILS keep absolute priority over the array reading — `?`
+//      (EvalDirective / Interpolation / PI / CXDirective), `;` (comment), `|`
+//      (block content), `#` (raw text), and `!` when it is NOT the delimited
+//      operator head `!=` (declaration). Otherwise a comma inside an opaque
+//      span — `[; comment, with, commas]` — reads as an array whose first item
+//      is `;`.
+//   2. The reserved glued `[table[` opener is ElementMeta (#484, grammar
+//      [29]/[50]): it can belong to no element head at this dispatch and is
+//      refused there, so it never reaches the array test.
+//   3. Otherwise the [D1] FIRST-ITEM-FOLLOWED-BY-COMMA rule, which
+//      `Parser.peek_is_array_literal` used to own outright and now delegates
+//      here for:
+//        a. Skip leading whitespace and quick-detect empty `[]` → array.
+//        b. Inspect the first byte: if it is not a valid element-name start
+//           (not letter / not `_`), it is an array literal. Covers `[1, 2, 3]`,
+//           `['a', 'b']`, `[*, default]` (§D8 sentinel), `[(seq, lit)]`, and
+//           any other shape that cannot be an element name.
+//        c. Otherwise scan forward for the boundary character:
+//             - `,` before any whitespace / `=` / `]` → array literal (the
+//               first item is the bare-name-shaped token) — EXCEPT that a Name
+//               head immediately followed by `,` is the ambiguous bare-bareword
+//               array and routes to the element dispatch to be refused (see
+//               below).
+//             - `=` → element with attribute.
+//             - `]` → element with empty body, e.g. `[name]`.
+//             - whitespace → element. The first whitespace inside the bracket
+//               marks the boundary between the element name and the body;
+//               commas appearing AFTER the name are body content, not
+//               separators.
+//             - a non-name char that is also non-ws / non-`,` / non-`=` /
+//               non-`]` (e.g. `*` in `[FOAR*, math]` try-catch globs, or a `:`
+//               not at name-token position) → array literal: the would-be
+//               element name is not a clean Name shape, so the bracket cannot
+//               be an element head.
+//
+// Quote / bracket interiors never appear in the first-item-prefix scan: the
+// rule decides on the first non-name boundary character it sees, well before
+// any nested content. Strictly local — O(first-token-length) lookahead, no
+// full-body scan.
+//
+// NOT part of this predicate, deliberately: the @CHOICE-1 / G-ARRAY-1
+// WHITESPACE typed list (`typed_list_body_at`, §9 [L25a/b]) is a SEPARATE
+// production that also yields an ArrayNode and is tested BEFORE this one at the
+// parser's dispatch — where the two disagree the typed list wins. It stays a
+// separate predicate because it is a separate rule (a whole-body token
+// classifier, not this O(first-token) prefix scan), and folding them would hide
+// which one answered. A cursor-free caller must therefore ask BOTH, in the
+// dispatch's order; `code_tree.v` does (#1025). Asking only this one gets the
+// parser's LOSING answer wherever the typed list fires alone — measured on
+// `[true false]` (name-shaped first token, no comma), which read as the element
+// `true` until #1025.
+//
+// It exists because a CURSOR-FREE walker had no way to ask: the rule was a
+// `&Parser` method reading its own `pos`, so `code_tree.v` did not ask, and
+// `[1, 2, 3]` fell into the element lane — an element NAMED `1` whose children
+// were the commas and the remaining items (#1020). Shapes whose first byte
+// cannot start a Name lost everything instead: `['x', 'y']`, `[[1,2],[3,4]]`
+// and the §D8 sentinel `[*, default]` all came back as the childless
+// anonymous `_`.
+//
+// Pure lookahead: no cursor, nothing consumed.
+pub fn array_literal_at_bracket(src []u8, i int) bool {
+	if i < 0 || i >= src.len || src[i] != `[` {
+		return false
+	}
+	if bracket_head_is_reserved(src, i + 1) {
+		return false
+	}
+	mut k := i + 1
+	for k < src.len && is_ws(src[k]) {
+		k++
+	}
+	if k >= src.len {
+		return false
+	}
+	if src[k] == `]` {
+		return true // empty [] → empty array
+	}
+	first := src[k]
+	// Element-side sigils with dual roles: `*` (alias / operator head / §D8
+	// sentinel), `>` and `~` (ruled operator heads), and `\`` / `^`, which are
+	// not element heads in ANY reading. The §D8 array sentinel form
+	// `[*, default]` and any literal-array shape using these glyphs as item-0
+	// values must still parse as array, so the disambiguator peeks the next
+	// non-ws char: a comma marks the array form, anything else (including
+	// end-of-input) stays with the element-side dispatch in
+	// parse_bracket_node's match.
+	//
+	// #983 — this comment used to call `\`` `>` `~` `^` "Markdown shorthand
+	// elements". THERE IS NO SUCH THING. The grammar note that governs THIS
+	// production is explicit: "CX has NO Markdown syntax — `>`, `~`, `^`, the
+	// backtick, and `#` are ordinary content / operators, never head sigils"
+	// (grammar.ebnf, the [D1] first-item-followed-by-comma preamble). The only
+	// other "markdown shorthand" mention in the grammar is for DATA-surface
+	// `~` as BareValue CONTENT — content, not a head. What the element-side
+	// dispatch actually does with each glyph, measured:
+	//
+	//   `*`       delimited → the `*` operator head (`[* $x 2]`); glued → an
+	//             alias reference (`[*n]`). Both parse.
+	//   `>` `~`   delimited → the ruled OPERATOR head (`[> $x 2]`, `[~ a b]`)
+	//             — both are in code/eval.v `operator_element_heads`, which
+	//             #976 made the data parser's alphabet too. Glued (`[>x]`,
+	//             `[~x]`) → rc=1 "expected name" (parse_element's name
+	//             reader — that refusal carries no CXER code).
+	//             Operators, exactly as the grammar note says; nothing
+	//             markdown about them.
+	//   `\`` `^`  NEVER parse as an element head, delimited or glued:
+	//             `[\` code]` and `[^ footnote]` both exit rc=1 "expected
+	//             name". They are absent from the ruled 18-head set and from
+	//             every grammar production. Admitting either would be a
+	//             SURFACE change requiring a ruling; nothing here implements
+	//             one, and this comment must not imply otherwise.
+	//
+	// Claiming all five for the element lane is nevertheless load-bearing: it
+	// is what makes their glued forms FAIL LOUD instead of stringifying
+	// silently through the array lane the way glued `%` / `<=` still do
+	// (oph-403/404) — the failure mode #976 was filed against.
+	if first == `*` || first == `\`` || first == `>` || first == `~` || first == `^` {
+		mut m := k + 1
+		for m < src.len && is_ws(src[m]) {
+			m++
+		}
+		return m < src.len && src[m] == `,`
+	}
+	// I1 row 8 (L80, audit C4) + #976: a DELIMITED OPERATOR HEAD is an element
+	// name, never an array item. The alphabet lives in `operator_head_len`, one
+	// shelf up — this rule used to re-spell a five-char subset of it, and the
+	// two-char heads it therefore could not see are exactly the ones that
+	// leaked: `[<= 5 3]` scanned as an undelimited `<`, fell through into the
+	// array lane, and canonicalized to `['<= 5 3']` — the same bytes, and so the
+	// same hash, as the document that IS that quoted string.
+	//
+	// The dual-role block above still runs FIRST and still owns `*` `\`` `>`
+	// `~` `^`: a following comma means the §D8 array form (`[*, default]`), and
+	// that reading must win over the operator reading. Everything it does not
+	// claim reaches here, where a GLUED continuation falls through to the
+	// name-shape checks below and lands in the array lane exactly as before
+	// (`[-1, 2]` negative number, `[+1, 2]`, `[<=x]`).
+	if operator_head_len(src, k) > 0 {
+		return false
+	}
+	// First char that can't lead an element name → must be array literal (or a
+	// structural sigil already claimed above). I1 L22: a non-ASCII lead byte is
+	// an element head when the decoded codepoint is in [L10a] (full-Unicode
+	// names).
+	if first >= 0x80 {
+		cp, sz := utf8_cp_at(src, k)
+		if sz == 0 || !is_name_start_cp(cp) {
+			return true
+		}
+	} else if !is_name_start(first) {
+		return true
+	}
+	// First char IS name_start. Walk through the candidate name looking for the
+	// boundary that decides element vs array.
+	for k < src.len {
+		b := src[k]
+		// 3a (lexicon §collections [L83]): a Name head IMMEDIATELY followed by a
+		// `,` is a BARE BAREWORD ARRAY — `[web, prod]` — which is ambiguous with
+		// an element head and is a PARSE ERROR. It routes to the element
+		// dispatch so `parse_element` raises CXER0100.
+		if b == `,` { return false }
+		if b == `=` { return false }
+		if b == `]` { return false }
+		if is_ws(b) { return false }
+		// A glued `::` is the type-label separator on an element head
+		// (`[port::u16 8080]`). It marks an element, so stop the scan here. A
+		// single `:` stays a name char (namespace `svg:rect`).
+		if b == `:` && k + 1 < src.len && src[k + 1] == `:` { return false }
+		if b >= 0x80 {
+			// I1 L22: multibyte name characters continue the element-head
+			// candidate; a non-name codepoint routes to the array/text lane.
+			cp, sz := utf8_cp_at(src, k)
+			if sz == 0 || !is_name_char_cp(cp) {
+				return true
+			}
+			k += sz
+			continue
+		}
+		if !is_name_char(b) { return true }
+		k++
+	}
+	return false
+}
+
+// bracket_head_is_reserved reports whether the byte at `src[i]` — the byte just
+// past a `[` — belongs to a form that owns the `parse_bracket_node` dispatch
+// outright, ahead of any collection-literal reading: `?` `;` `|` `#`, a `!`
+// that is not the delimited operator head `!=` (#976), or the reserved glued
+// `[table[` ElementMeta opener (#484).
+//
+// Both array-adjacent dispatch tests in `parse_bracket_node` — the typed-list
+// route and `peek_is_array_literal` — were guarded by the identical
+// `b != `?` && !is_opaque_sigil` conjunction spelled inline; this is that
+// conjunction, once, where `array_literal_at_bracket` can also reach it
+// (#1020).
+pub fn bracket_head_is_reserved(src []u8, i int) bool {
+	if i < 0 || i >= src.len {
+		return false
+	}
+	b := src[i]
+	if b == `?` || b == `;` || b == `|` || b == `#` {
+		return true
+	}
+	if b == `!` && operator_head_len(src, i) == 0 {
+		return true
+	}
+	// `[table[` — the TABLE_OPEN glued form. `[table[]` (empty) is not it.
+	// Bounds and the `!= ]` test are the dispatch's own, byte for byte.
+	if b == `t` && i + 7 <= src.len
+		&& src[i + 1] == `a` && src[i + 2] == `b`
+		&& src[i + 3] == `l` && src[i + 4] == `e`
+		&& src[i + 5] == `[` && src[i + 6] != `]` {
+		return true
+	}
+	return false
+}
+
+// ── §9 [L25a/b] whitespace typed list — @CHOICE-1 / G-ARRAY-1 ────────────────
+//
+// typed_list_body_at reports whether the body beginning at `src[body_start]`
+// (the byte just past the opening `[`) is a §9 [L25a/b] TYPED LIST: a no-comma body of 2+
+// top-level tokens in which EVERY bare scalar token auto-types to a non-string
+// scalar (number / atom / bool / date) or is a quoted string, and child
+// elements `[…]` may interleave (mixed content). One BAREWORD (a bare token
+// that does NOT auto-type — `the`, `Version`, `it's`) makes the whole body
+// PROSE instead (G-BODY-1, conformance 009/014). A top-level comma (→ the
+// [L25c] comma path) or an `&` entity introducer also disqualifies it.
+//
+// `headless` selects the caller's POSITION, and it changes exactly one rule:
+// the ASP-2 (#903) carve-out by which a name-shaped FIRST token followed by a
+// `(…)`/`{…}` structure keeps the ELEMENT reading (`[true (2, 3)]` is the
+// element `true`). An element BODY has no element reading to protect, and the
+// ux-016 engine-output shape (`[list false (verb, …) …]`) starts with the
+// name-shaped bool `false`, so ASP-3 (#909) admits it there.
+//
+// `body_start` is load-bearing beyond where the scan begins — hence the name,
+// which also keeps it from being confused with the other shelf entries' `i`
+// (they take the index OF their delimiter; this one takes the byte AFTER the
+// `[`). The glued-structure test (`(1, 2)[0]`, `(1, 2)(3, 4)` keep their
+// historical one-item mixed reading) asks whether the byte BEFORE the structure
+// is whitespace, which is only a question when the structure is not the body's
+// first token.
+//
+// WHY IT IS HERE (#1025). This is the SECOND array-yielding production — the
+// headless dispatch tests it BEFORE the [D1] first-item rule
+// (`array_literal_at_bracket`), and where the two disagree the typed list wins.
+// It was a `&Parser` method reading its own `pos`, so the cursor-free
+// `code_tree.v` walker could not ask it and did not: where ONLY the typed list
+// fires the walker fell into the element lane and read the first token as the
+// element NAME — `[true false]` is an ArrayNode to the parser and was the
+// element `true` with one child to the tree (pinned as measured behavior at
+// #1020, flipped here). Same class as #999 / #1000 / #1020, and the same fix:
+// the rule gets a cursor-free home on this shelf, every caller delegates, and
+// the walker asks the question the parser asks instead of carrying a copy that
+// can drift.
+//
+// It SUPERSEDES the old whitespace auto-array (try_auto_array, a single
+// `T[]`-typed element): a typed list is N discrete typed items with no element
+// array type, per the formal witnesses (G-BODY-2/3, M-SCALAR-ITEM).
+//
+// Quote regions, child brackets and line comments are skipped so their
+// interiors don't count. Pure lookahead: no cursor, nothing consumed.
+pub fn typed_list_body_at(src []u8, body_start int, headless bool) bool {
+	mut i := body_start
+	mut at_tok_start := true
+	mut tokens := 0
+	// RULED: ASP-2 (#903) / ASP-3 (#909) — a `(…)`/`{…}` literal is a
+	// discrete token, in the headless array position (ASP-2) and in element
+	// bodies (ASP-3), so `[1 (2, 3)]` is two items and `[k 1 (2, 3)]` is the
+	// element `k` with two children — exactly like `[1 [?=@x]]` already was.
+	// Before, the bail-out below sent the run to the comma/prose path, which
+	// glued it into ONE item and mangled the leading value per type (int 1 →
+	// the string '1 ', trailing space and all; bools, atoms, quoted strings
+	// and holes corrupted the same way) — silently, stably under
+	// canonicalization, and REACHABLE FROM ENGINE OUTPUT (ux-016 renders
+	// `[list false (verb, …) …]`, which failed its own re-parse, the #704
+	// class). The first-token guard below is HEADLESS-ONLY: it preserves the
+	// element reading of `[true (2, 3)]` (name-shaped head + structure →
+	// element, per the ASP-1 scope note); an element body has no element
+	// reading to protect.
+	mut first_tok_namelike := false
+	for i < src.len {
+		c := src[i]
+		if c == `]` { break } // body terminator (top level)
+		if c == ` ` || c == `\t` || c == `\r` || c == `\n` {
+			at_tok_start = true
+			i++
+			continue
+		}
+		if c == `#` && at_tok_start {
+			i++
+			for i < src.len && src[i] != `\n` { i++ }
+			continue
+		}
+		if c == `,` { return false } // top-level comma → [L25c] comma path
+		// Entity refs route to parse_body (it already images `&` correctly).
+		if c == `&` { return false }
+		if c == `(` || c == `{` {
+			if headless && first_tok_namelike {
+				return false
+			}
+			// The map-shape test is `map_literal_at_brace`'s, one shelf entry
+			// up. `span_is_map_shaped` used to sit in `parser.v` with a
+			// byte-identical body — a second copy of the rule, retired at
+			// #1020 when the `code_tree.v` walker needed a cursor-free home
+			// for it. This function is the same move for the same reason.
+			if c == `{` && !map_literal_at_brace(src, i) {
+				return false
+			}
+			// A structure span counts as a token only when WHITESPACE-
+			// delimited on both sides — a glued span (`(1, 2)[0]`,
+			// `(1, 2)(3, 4)`) keeps its historical one-item mixed reading
+			// via the comma path, matching the slot rule's "glued runs are
+			// one item" (the CXPath kind-test idiom depends on it).
+			if i > body_start && !is_ws(src[i - 1]) {
+				return false
+			}
+			j := skip_bracket_region(src, i)
+			if j >= src.len {
+				return false // unbalanced — let the comma path refuse loudly
+			}
+			if !is_ws(src[j]) && src[j] != `]` {
+				return false
+			}
+			i = j
+			tokens++
+			at_tok_start = true
+			continue
+		}
+		// A child element `[…]` (or `[#…#]` / `[|…|]`) is admitted as a list item
+		// (mixed content, G-BODY-2). Skip its balanced span and count it.
+		if c == `[` {
+			i = skip_bracket_region(src, i)
+			tokens++
+			at_tok_start = true
+			continue
+		}
+		// A `'`/`"` is a quoted-string token ONLY at a token start. A MID-token
+		// quote is a literal apostrophe in bare prose (`it's`, `Bob's`) — read by
+		// the bare-token branch, where try_autotype fails → the body is prose.
+		if (c == `'` || c == `"`) && at_tok_start {
+			tokens++
+			i = skip_quoted_region(src, i)
+			at_tok_start = true
+			continue
+		}
+		if at_tok_start {
+			tokens++
+			start := i
+			for i < src.len {
+				cc := src[i]
+				if cc == ` ` || cc == `\t` || cc == `\r` || cc == `\n` || cc == `]` || cc == `,` {
+					break
+				}
+				i++
+			}
+			// The classifier tests the token as a SPAN of `src` — this is
+			// pure lookahead whose result is thrown away, and materialising
+			// every token as a string here was the heaviest allocation in the
+			// §11.6 gate-15 profile: a body of N tokens paid N `bytestr()`
+			// calls before the real parse re-read the same N tokens (#804).
+			span := src[start..i]
+			if try_autotype_bytes(span) == none {
+				// I1 row 9 (L78): a variable-hole token `$name` is
+				// SELF-DELIMITING — it joins the [L25b] discrete class
+				// exactly like a quoted string, so `[+ $x 2]` is a hole
+				// plus a typed int, not prose.
+				if !is_hole_token_bytes(span) {
+					return false // a bareword → prose, not a typed-list item
+				}
+			}
+			if tokens == 1 && span.len > 0 && is_name_start(span[0]) {
+				// ASP-2: a name-shaped first token (`true`, `false`,
+				// `null`) keeps the element reading when a structure
+				// follows — HEADLESS position only (see the guard above);
+				// in an element body the same token is just a bool/null
+				// child (ASP-3).
+				first_tok_namelike = true
+			}
+			at_tok_start = true
+			continue
+		}
+		at_tok_start = false
+		i++
+	}
+	return tokens >= 2
+}
+
+// ── The element-body PROSE RUN (#1029) ───────────────────────────────────────
+//
+// `typed_list_body_at` above is the SECOND of the element-body dispatch's three
+// lanes. The dispatch is:
+//
+//   1. `body_is_flat_comma_array` → §9 [L25c] comma array   — DISCRETE items
+//   2. `body_is_typed_list(false)` → §9 [L25a/b] typed list — DISCRETE items
+//   3. otherwise                   → `parse_body`           — the PROSE lane
+//
+// In the prose lane a maximal run of bare value-run tokens is ONE Text item:
+// `[the quick brown]` is the element `the` with a single Text "quick brown"
+// (G-BODY-1, conformance 009/014 — one bareword that does not auto-type makes
+// the whole body prose). The `code_tree.v` walker read the body one ITEM at a
+// time and projected two scalar children, so it reported arity 2 where the
+// document has 1 — an arity lie in the tree pane and in the source↔tree bridge
+// that reads its `loc`s (#1029).
+//
+// Every question the prose lane asks was a `&Parser` method reading its own
+// `pos`, so the cursor-free walker could not ask any of them: which lane the
+// body takes (`body_is_flat_comma_array`), where a bare token ENDS
+// (`lex_value_run`), what STARTS at a token boundary (`tok_peek_kind`), and
+// whether a `$name` is a hole or text (`peek_hole_len`). All four get a
+// cursor-free home here and every caller delegates — the same discipline
+// `operator_head_len` (#976/#992), `triple_quote_prefix_len` (#999),
+// `sequence_literal_at_paren` (#1000), `array_literal_at_bracket` /
+// `map_literal_at_brace` (#1020) and `typed_list_body_at` (#1025) established.
+
+// flat_comma_array_body_at reports whether the element body beginning at
+// `body_start` is a §9 [L25c] comma-separated scalar body: it has a top-level
+// comma and contains NO child-element / collection / entity introducer
+// (`[` `(` `{` `&`) outside of quotes (those route through parse_body's
+// mixed-content path instead, per §9 "no child elements"). Quote regions
+// (single / double / triple) and line comments are skipped so their inner
+// commas and brackets do not count. Pure lookahead — nothing is consumed.
+//
+// This is the FIRST lane of the element-body dispatch and therefore the first
+// question the walker has to ask: a body with a top-level comma is discrete
+// items, not prose, and coalescing it would report `[doc a, b]` as one text
+// node where the parser builds an Array. `Parser.body_is_flat_comma_array` is
+// now a one-line delegation.
+pub fn flat_comma_array_body_at(src []u8, body_start int) bool {
+	mut i := body_start
+	mut saw_comma := false
+	mut at_tok_start := true
+	for i < src.len {
+		c := src[i]
+		if c == `]` { break } // body terminator (top level)
+		if c == ` ` || c == `\t` || c == `\r` || c == `\n` {
+			at_tok_start = true
+			i++
+			continue
+		}
+		// `#` at a token boundary opens a line comment (grammar [30b]); a
+		// mid-token `#` is an ordinary byte. Skip the comment to EOL.
+		if c == `#` && at_tok_start {
+			i++
+			for i < src.len && src[i] != `\n` { i++ }
+			continue
+		}
+		// Any structural introducer disqualifies the flat-array fast path —
+		// child elements, collection literals, and entities are mixed content.
+		if c == `[` || c == `(` || c == `{` || c == `&` { return false }
+		// A quote opens a string ONLY at a token start; a mid-token `'` is a
+		// bare-prose apostrophe (`it's`) and must not swallow the following
+		// comma — else this scan misses the array signal.
+		if (c == `'` || c == `"`) && at_tok_start {
+			i = skip_quoted_region(src, i)
+			at_tok_start = false
+			continue
+		}
+		if c == `,` { saw_comma = true }
+		at_tok_start = false
+		i++
+	}
+	return saw_comma
+}
+
+// token_kind_at classifies the STRUCTURAL kind of the token at `src[i]` from the
+// leading byte(s) only — no cursor, nothing consumed. It assumes whitespace and
+// line comments have already been skipped by the caller (the parse loops do
+// this, preserving comments as nodes); a `#` reaching here is therefore treated
+// as ordinary lexeme content.
+//
+// Anything that is not a bracket / quote / single-char sigil is reported as
+// `.value_run`, the catch-all "lexeme run" — the parser then calls `tok_name`
+// (head position) or `tok_value` (body position) to consume it. Quote openers are
+// split into `.triple_span` (`'''` / `"""`) vs `.quote_run` (single `'` / `"`) so
+// the dispatch matches the parser's existing two-way quote branch.
+//
+// This is the classifier `parse_body` DISPATCHES on, so it is also the classifier
+// that decides whether a body item continues a prose run or breaks it — see
+// `prose_run_break_at`. `Parser.tok_peek_kind` is now a one-line delegation
+// (#1029); before that it read its own `p.pos`, so `code_tree.v` had no way to
+// ask the run-boundary question and instead walked the body one item at a time.
+pub fn token_kind_at(src []u8, i int) CxTokenKind {
+	if i >= src.len {
+		return .eof
+	}
+	b := src[i]
+	match b {
+		`]` { return .rbrack }
+		`,` { return .comma }
+		`=` { return .eq }
+		`&` { return .amp }
+		`*` { return .star }
+		`#` { return .hash }
+		`(` { return .lparen }
+		`)` { return .rparen }
+		`{` { return .lbrace }
+		`}` { return .rbrace }
+		`[` {
+			n := if i + 1 < src.len { src[i + 1] } else { u8(0) }
+			match n {
+				`?` { return .ldirective }
+				`#` { return .raw_span }
+				`|` { return .block_span }
+				else { return .lbrack }
+			}
+		}
+		`'`, `"` {
+			if i + 2 < src.len && src[i + 1] == b && src[i + 2] == b {
+				return .triple_span
+			}
+			return .quote_run
+		}
+		`r` {
+			// I1 L58 (stream 13): `r` GLUED to a triple quote opens a RAW
+			// triple-quoted string in data mode too (one token grammar,
+			// same rule as the program lexer). A bare `r` — or `r` before
+			// anything but a triple quote — stays an ordinary lexeme run.
+			if i + 3 < src.len && (src[i + 1] == `'` || src[i + 1] == `"`)
+				&& src[i + 2] == src[i + 1] && src[i + 3] == src[i + 1] {
+				return .triple_span
+			}
+			return .value_run
+		}
+		`:` {
+			if i + 1 < src.len && src[i + 1] == `:` {
+				return .double_colon
+			}
+			return .colon
+		}
+		else {
+			return .value_run
+		}
+	}
+}
+
+// value_run_end reports the index just past the whitespace-or-`]`-terminated body
+// token that starts at `src[start]`, or `start` itself on an empty run. This is
+// the BODY-TOKEN boundary rule — the one that decides how much of the source one
+// prose token covers. Semantics (verbatim from `lex_value_run`, which now
+// delegates):
+//   - mid-token `'`/`"` are literal bytes (bare prose like "it's broken");
+//     a `'…'` at a body-item boundary is caught upstream in parse_body before
+//     this point — reaching here means the quote sits inside a token. The
+//     bracket-depth path still tracks quote nesting so predicate args like
+//     `//x[name='foo']` keep their `'…'` regions atomic.
+//   - a balanced `[...]` opened mid-token absorbs embedded ws and `]` until
+//     depth returns to zero (e.g. `:enum=[v1 v2 v3]`).
+//   - `[?` introduces a program form and ALWAYS breaks the run.
+// The run may span `\n` (inside brackets/quotes).
+//
+// The walker needs it for the same reason the parser does, and it is load-bearing
+// for exactly the mid-token cases: `[doc :enum=[v1 v2] rest here]` is ONE Text to
+// the parser, and a walker scanning byte kinds instead of value runs read it as
+// five items — an atom, an `=`, a typed-list array image, and two barewords.
+pub fn value_run_end(src []u8, start int) int {
+	mut i := start
+	mut in_quote := u8(0)
+	mut bracket_depth := 0
+	for i < src.len {
+		b := src[i]
+		if in_quote != 0 {
+			i++
+			if b == in_quote { in_quote = 0 }
+			continue
+		}
+		if bracket_depth > 0 {
+			if b == `[` {
+				bracket_depth++
+			} else if b == `]` {
+				bracket_depth--
+				i++
+				if bracket_depth == 0 { break }
+				continue
+			} else if b == `'` || b == `"` {
+				in_quote = b
+			}
+			i++
+			continue
+		}
+		if is_ws(b) || b == `]` { break }
+		if b == `[` && i + 1 < src.len && src[i + 1] == `?` {
+			break
+		}
+		if b == `[` {
+			bracket_depth = 1
+		}
+		i++
+	}
+	return i
+}
+
+// hole_token_len reports the byte length of an authorable variable-hole token
+// `$name` at `src[i]` (I1 row 9, L78), or none. A hole is `$` + NameStart
+// NameChar* ENDING at a delimiter (whitespace / `]` / `,` / `)` / `}` / EOF).
+// Any other continuation — a path step (`$x.y`, `$x/y`), a glued sigil, a bare
+// `$` — is NOT a hole and stays on the text lane. The returned length includes
+// the `$`.
+//
+// It is the run-boundary question for `$`: a hole is a discrete structural node
+// and BREAKS a prose run, while `$x.y` is ordinary text INSIDE one.
+// `Parser.peek_hole_len` is now a one-line delegation (#1029).
+pub fn hole_token_len(src []u8, i int) ?int {
+	if i + 1 >= src.len {
+		return none
+	}
+	if !is_name_start(src[i + 1]) {
+		return none
+	}
+	mut j := i + 2
+	// A hole name is a SIMPLE name — the program-binding ident shape.
+	// `.` and `:` are name chars in the data lexer (dotted atoms, QNames)
+	// but a `$x.y` / `$x:y` spelling is a PATH/QName form, not a hole.
+	for j < src.len && is_name_char(src[j]) && src[j] != `.` && src[j] != `:` {
+		j++
+	}
+	if j < src.len {
+		d := src[j]
+		if !(is_ws(d) || d == `]` || d == `,` || d == `)` || d == `}`) {
+			return none
+		}
+	}
+	return j - i
+}
+
+// prose_run_break_at reports whether the body item starting at the token start
+// `i` BREAKS a prose run — i.e. whether `parse_body` FLUSHES its text buffer
+// there instead of appending the token's bytes to it. It is a reading of
+// parse_body's own branch table, expressed over the shared classifiers so the
+// two cannot drift on which bytes are an item and which are prose:
+//
+//   BREAK   `]` / EOF                    the body terminator
+//   BREAK   `[`, `[?`, `[#`, `[|`        a child node — and the ONE case that
+//                                        also contributes the join space
+//   BREAK   `'`/`"`, `'''`/`"""`, `r'''` a quoted or triple-quoted string
+//   BREAK   `&`                          an entity reference
+//   BREAK   `(…)` that IS a sequence literal   (`sequence_literal_at_paren`)
+//   BREAK   `{…}` that IS a map literal        (`map_literal_at_brace`)
+//   BREAK   `$name` that IS a hole             (`hole_token_len`)
+//   CONTINUE everything else — including `,` `=` `:` `::` `*` `#` `)` `}`, a
+//            comma-less `(x)`, a `{text}` run, and `$x.y`, every one of which
+//            falls to parse_body's bare-token branch and joins the run.
+//
+// `[; … ]` is NOT a break and NOT an item: a block comment inside a bare text
+// run is lexical trivia (lexicon.ebnf §1 [L2]/[L3]) and #469 forbids splitting
+// the run on it in those words — the run continues across it with erasure
+// semantics (`a [; c ] b` ≡ `a b`). The caller skips the span and keeps
+// accumulating.
+pub fn prose_run_break_at(src []u8, i int) bool {
+	k := token_kind_at(src, i)
+	if k == .eof || k == .rbrack {
+		return true
+	}
+	if k.is_bracket_open() {
+		if k == .lbrack && i + 1 < src.len && src[i + 1] == `;` {
+			return false // `[; … ]` — trivia, see above
+		}
+		return true
+	}
+	if k == .quote_run || k == .triple_span || k == .amp {
+		return true
+	}
+	if k == .lparen {
+		return sequence_literal_at_paren(src, i)
+	}
+	if k == .lbrace {
+		return map_literal_at_brace(src, i)
+	}
+	if src[i] == `$` {
+		if _ := hole_token_len(src, i) { return true }
+		return false
+	}
+	return false
+}
+
+// ── The at-token-start quote rule for BALANCED-SPAN scans (#1039) ─────────────
+//
+// span_token_start_at reports whether `src[i]` stands at a TOKEN START for a
+// scan that began at the delimiter `span_start` — the single question a
+// balanced-span scanner has to ask before it may read a `'`/`"` as a string
+// OPENER.
+//
+// It has to ask, because a `'` is two different bytes in CX. At a token start
+// it opens a quoted region; MID-token it is a literal apostrophe in bare prose
+// (`it's`, `Bob's`, `don't`), which the data parser reads as ordinary Text and
+// which a span scan must therefore step over as an ordinary byte. A scanner
+// that takes the mid-token one as an opener runs its "string" past the span's
+// own closing delimiter, miscounts depth, and reports the span UNBALANCED —
+// the #1039 symptom: `[doc it's here]` recovering as
+// `{"kind":"element","name":"unbalanced"}` in the tree pane while the parser
+// reads the element `doc` with one Text item `it's here`.
+//
+// A token starts at the span's own opening delimiter, and after any bracket
+// opener, any whitespace byte, a `,` or an `=` — nothing else. The predicate is
+// byte-LOCAL (it reads only `src[i - 1]`), and that is exactly equivalent to
+// the running `at_tok_start` flag `skip_bracket_region` carried before this
+// shelf entry existed: that flag was set true on precisely those bytes and
+// false on every other, INCLUDING the byte after a skipped quoted region (a
+// closing quote, which is not in the set) and after a closing delimiter (also
+// not in the set). A scanner never inspects a position inside a region it
+// skipped whole, so no interior byte can be misread as the predecessor.
+//
+// Single home of the rule, per the shelf discipline above: `skip_bracket_region`
+// (parser.v) is the spelling that HAD it, and `find_matching_bracket` /
+// `find_matching_paren` / `find_matching_brace` (code_tree.v) are the three that
+// did not — three copies of a balanced-span scan that must agree with the
+// parser's byte for byte, or the walker reports an arity the document does not
+// have. They all ask this one now.
+//
+// NOT the rule the body-DISPATCH scanners use: `flat_comma_array_body_at` and
+// `typed_list_body_at` restart a token on whitespace ONLY (a `,` or `=` does not
+// start one there, because those scanners are counting top-level separators, not
+// walking a delimiter stack). Those are deliberately different questions and keep
+// their own inline flag.
+pub fn span_token_start_at(src []u8, i int, span_start int) bool {
+	if i <= span_start {
+		return true
+	}
+	if i > src.len {
+		return false
+	}
+	p := src[i - 1]
+	return p == `[` || p == `(` || p == `{` || p == ` ` || p == `\t` || p == `\r`
+		|| p == `\n` || p == `,` || p == `=`
+}
+
+// ── The TOP-LEVEL text run (doc-top / mixed-text mode, #1040) ────────────────
+//
+// top_text_run_end scans the top-level text run starting at `start` and returns
+// `(end, terminator)`: the index one past the run's last byte, and the byte that
+// stopped it — `[` (node start), `&` (entity-ref start), `]` (a depth-0 stray
+// close, grammar GR-STRAY-CLOSE), `-` (a `---` document separator at line
+// start), or 0 for EOF.
+//
+// THIS IS A DIFFERENT RULE FROM THE ELEMENT-BODY PROSE LANE, in a different
+// position. `parse_body`'s run coalesces a maximal sequence of bare VALUE-RUN
+// tokens and breaks at every structural item (`prose_run_break_at`, #1029);
+// this run is VERBATIM — it swallows quotes, `(`, `{`, `$`, `/`, `#`, `,`, `=`
+// and every internal whitespace byte exactly as authored, and stops only at the
+// four terminators above. `the quick brown` at top level is ONE Text whose value
+// is those fifteen bytes; `a  b` keeps BOTH spaces where the body lane collapses
+// them; `hello world # note` keeps the `#` as content, because a comment is only
+// a comment at the comment-eligible position BEFORE a run starts.
+//
+// Single home of the rule: `Parser.read_top_text_run` is now the position
+// bookkeeping (the `advance()` loop that keeps line/col, and the
+// editor-convention strip of one trailing newline when the run reached EOF or a
+// `---`) wrapped around this scan, which it delegates to provably — the retired
+// loop and this one are identical after `p.src` → `src` and `p.pos` → `start`.
+// `code_tree.v` could not ask the question at all, so the walker walked the top
+// level one ITEM at a time and reported `the quick brown` as THREE scalar
+// children where the document has one Text — the #1029 arity lie, in the
+// position #1029 named and left (#1040).
+pub fn top_text_run_end(src []u8, start int) (int, u8) {
+	mut end := start
+	mut line_start := start == 0 || (start > 0 && src[start - 1] == `\n`)
+	mut terminator := u8(0)
+	for end < src.len {
+		b := src[end]
+		if b == `[` || b == `&` {
+			terminator = b
+			break
+		}
+		if b == `]` {
+			// A depth-0 `]` can never be text: BareValue [L70] excludes it,
+			// so it is a structural stray close (grammar GR-STRAY-CLOSE).
+			// Stop the run; the caller decides. (#289 — absorbing it here let
+			// `cx fmt`'s data fallback silently accept, and mangle, program
+			// files the program reader rejects.)
+			terminator = b
+			break
+		}
+		if line_start && end + 3 <= src.len
+			&& src[end] == `-` && src[end + 1] == `-` && src[end + 2] == `-` {
+			terminator = `-`
+			break
+		}
+		line_start = b == `\n`
+		end++
+	}
+	return end, terminator
 }
 
 // ── Date / datetime recognition (lexicon.ebnf §4 [L23] / [L24]) ──────────────────

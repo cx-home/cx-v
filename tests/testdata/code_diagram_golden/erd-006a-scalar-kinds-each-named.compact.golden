@@ -1,13 +1,13 @@
 erDiagram
   user ||--|| order : has
   user {
-    int id "@"
+    int id "e.g. 1"
   }
   order {
-    int id "@"
-    decimal total "@"
-    float rate "@"
-    date when "@"
-    bigint big "@"
-    bool live "@"
+    int id "e.g. 100"
+    decimal total "e.g. 42.0"
+    float rate "e.g. 42.0"
+    date when "e.g. 2026-08-01"
+    bigint big "e.g. 99999999999999999999"
+    bool live "e.g. true"
   }

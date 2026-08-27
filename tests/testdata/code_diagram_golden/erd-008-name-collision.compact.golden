@@ -6,12 +6,12 @@ erDiagram
   org {
   }
   team {
-    string name "@"
+    string name "e.g. alpha"
   }
   user {
-    int id "@"
-    string name "@"
+    int id "e.g. 1"
+    string name "e.g. alice"
   }
   project {
-    string name "@"
+    string name "e.g. beta"
   }

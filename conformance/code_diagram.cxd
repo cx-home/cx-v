@@ -107,8 +107,8 @@ kind: data
   [expected [#
 erDiagram
   user {
-    int id "@"
-    string name "@"
+    int id "e.g. 1"
+    string name "e.g. alice"
   }
 #]]
  ]
@@ -128,8 +128,8 @@ kind: data
   [expected [#
 erDiagram
   user {
-    string email
-    string phone
+    string email "e.g. a@x.test"
+    string phone "e.g. 555-0100"
   }
 #]]
  ]
@@ -148,9 +148,9 @@ kind: data
   [expected [#
 erDiagram
   user {
-    int id "@"
-    string name "@"
-    string email
+    int id "e.g. 1"
+    string name "e.g. alice"
+    string email "e.g. a@x.test"
   }
 #]]
  ]
@@ -171,11 +171,11 @@ kind: data
 erDiagram
   user ||--o{ order : has
   user {
-    int id "@"
+    int id "e.g. 1"
   }
   order {
-    int id "@"
-    decimal total "@"
+    int id "e.g. 100"
+    decimal total "e.g. 42.0"
   }
 #]]
   [meta-note [#
@@ -210,15 +210,15 @@ kind moving out from under the map is a red fixture, not a plausible
 erDiagram
   user ||--|| order : has
   user {
-    int id "@"
+    int id "e.g. 1"
   }
   order {
-    int id "@"
-    decimal total "@"
-    float rate "@"
-    date when "@"
-    bigint big "@"
-    bool live "@"
+    int id "e.g. 100"
+    decimal total "e.g. 42.0"
+    float rate "e.g. 42.0"
+    date when "e.g. 2026-08-01"
+    bigint big "e.g. 99999999999999999999"
+    bool live "e.g. true"
   }
 #]]
  ]
@@ -238,10 +238,10 @@ kind: data
 erDiagram
   user ||--|| profile : has
   user {
-    int id "@"
+    int id "e.g. 1"
   }
   profile {
-    string email "@"
+    string email "e.g. a@x.test"
   }
 #]]
  ]
@@ -271,14 +271,14 @@ erDiagram
   org {
   }
   team {
-    string name "@"
+    string name "e.g. alpha"
   }
   project {
-    string name "@"
+    string name "e.g. beta"
   }
   user {
-    int id "@"
-    string name "@"
+    int id "e.g. 1"
+    string name "e.g. alice"
   }
 #]]
  ]
@@ -310,7 +310,7 @@ erDiagram
   para {
   }
   span {
-    int id "@"
+    int id "e.g. 1"
   }
 #]]
  ]
@@ -722,8 +722,8 @@ view: graph
   [expected [#
 erDiagram
   user {
-    int id "@"
-    string name "@"
+    int id "e.g. 1"
+    string name "e.g. alice"
   }
 #]]
  ]
@@ -778,7 +778,7 @@ view: graph
   [expected [#
 erDiagram
   user {
-    int id "@"
+    int id "e.g. 1"
   }
 
 ---
@@ -963,7 +963,7 @@ erDiagram
   users {
   }
   user {
-    int id "@ 1"
+    int id "1"
     string note "appears 1× depth 1"
   }
 #]]
@@ -1040,7 +1040,7 @@ erDiagram
   users {
   }
   user {
-    int id "@ 1, 2, 3"
+    int id "1, 2, 3"
     string note "appears 3× depth 1"
   }
 #]]
@@ -1068,11 +1068,11 @@ erDiagram
   doc {
   }
   user {
-    int id "@ 1"
+    int id "1"
     string note "appears 1× depth 1"
   }
   order {
-    int user-id "@ 1"
+    int user-id "1"
     string note "appears 1× depth 1"
   }
 #]]
@@ -1120,7 +1120,7 @@ erDiagram
   doc {
   }
   user {
-    int id "@ 1, 2, 3, 4"
+    int id "1, 2, 3, 4"
     string note "appears 4× depth 1"
   }
 #]]
@@ -1199,7 +1199,7 @@ flowchart TD
   output([OUTPUT])
   start([entry])
   done([exit])
-  lt["[= $x 1]"]
+  lt1["[= $x 1]"]
   i{"if true"}
   t["$x"]
   i -- "true" --> t
@@ -1207,12 +1207,12 @@ flowchart TD
   e["0"]
   i -- "false" --> e
   e --> done
-  lt --> i
-  start --> lt
+  lt1 --> i
+  start --> lt1
   input --> start
   done --> output
   b_x((("$x")))
-  b_x -. "resolves" .-> lt
+  b_x -. "resolves" .-> lt1
 #]]
  ]
 

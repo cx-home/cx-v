@@ -420,4 +420,44 @@ note: or mangled paren pair is a data-loss bug, not a cosmetic one.
 [?for [in $c //c] [yield ($c/node(), $c//text(), //a/text()[1], //c/attribute::attribute())]]
 #]]
  ]
+
+ [case id=fmt-022-fail-closed-lane-returns-unterminated-text level=core
+  [tags fmt idempotence fixed-point fail-closed program issue-980]
+  [title A fail-closed program keeps its bytes AND its line count across passes]
+  [meta [#
+note: issue-980, reduced mechanically from
+note: corpus/rosetta/21-fetch-csv-validate.cx (57 → 58 → 59 lines, one
+note: newline per `cx fmt` pass, unbounded). Every reduction of that file
+note: lands here: `[?def …]` renders through the program emitter as a
+note: `:raw-source` carrier, which is not a re-parse fixed point, so
+note: faithful_program_fmt fails closed — correctly — and returns the
+note: SOURCE. It returned the source BYTES, trailing newline and all,
+note: while every other lane returns unterminated text and the caller
+note: (`cx fmt`'s println, the LSP edit) supplies the terminator. So each
+note: pass handed back one more newline than it was given.
+note:
+note: The data formatter is what pushes this shape down the fail-closed
+note: lane at all: it re-emits the body `1` as the quoted run `' 1'`,
+note: which is a string_lit where the program reading holds a call — a
+note: meaning change, so the data lane is refused, and with no comment in
+note: the source there is no comment inventory to protect either. Hence a
+note: bare two-token [?def] reproduces it with no comment and no blank
+note: line in sight, which is why the filing's comment / blank-line /
+note: multi-form reduction attempts all came back idempotent.
+note:
+note: fmt is a NO-OP on this input — that is the fail-closed contract, and
+note: it is what the byte-pinned section below records. The growth is
+note: caught by the runner's mechanical cli-cycle check, which compares
+note: fmt(fmt(x) + newline) to fmt(x) byte-exactly; the older §7 check
+note: normalizes blank edges on both sides and cannot see it. That sweep
+note: found the same growth on fmt-008 and fmt-011, which had been green
+note: since they were authored.
+#]]
+  [in-cx [#
+[?def [f] 1]
+#]]
+  [out-fmt [#
+[?def [f] 1]
+#]]
+ ]
 ]

@@ -61,58 +61,19 @@ fn (mut p Parser) tok_restore(s TokSnapshot) {
 // (head position) or `tok_value` (body position) to consume it. Quote openers are
 // split into `.triple_span` (`'''` / `"""`) vs `.quote_run` (single `'` / `"`) so
 // the dispatch matches the parser's existing two-way quote branch.
+// The classification itself is `token_kind_at`'s (cx/lexical.v) — the single
+// home, which carries the whole narrative; this is the cursor-bound spelling of
+// the same question and delegates provably: the only use of the cursor was
+// `p.pos` as the token start, which is exactly the index passed here.
+//
+// It moved onto the shelf at #1029. `parse_body` dispatches on this classifier,
+// so it is also what decides whether a body item CONTINUES a prose run or
+// BREAKS it (`prose_run_break_at`) — and while it read its own `p.pos` the
+// cursor-free `code_tree.v` walker could not ask, so it walked element bodies
+// one item at a time and reported `[the quick brown]` as two scalar children
+// where the parser builds one Text.
 fn (p &Parser) tok_peek_kind() CxTokenKind {
-	if p.pos >= p.src.len {
-		return .eof
-	}
-	b := p.src[p.pos]
-	match b {
-		`]` { return .rbrack }
-		`,` { return .comma }
-		`=` { return .eq }
-		`&` { return .amp }
-		`*` { return .star }
-		`#` { return .hash }
-		`(` { return .lparen }
-		`)` { return .rparen }
-		`{` { return .lbrace }
-		`}` { return .rbrace }
-		`[` {
-			n := if p.pos + 1 < p.src.len { p.src[p.pos + 1] } else { u8(0) }
-			match n {
-				`?` { return .ldirective }
-				`#` { return .raw_span }
-				`|` { return .block_span }
-				else { return .lbrack }
-			}
-		}
-		`'`, `"` {
-			if p.pos + 2 < p.src.len && p.src[p.pos + 1] == b && p.src[p.pos + 2] == b {
-				return .triple_span
-			}
-			return .quote_run
-		}
-		`r` {
-			// I1 L58 (stream 13): `r` GLUED to a triple quote opens a RAW
-			// triple-quoted string in data mode too (one token grammar,
-			// same rule as the program lexer). A bare `r` — or `r` before
-			// anything but a triple quote — stays an ordinary lexeme run.
-			if p.pos + 3 < p.src.len && (p.src[p.pos + 1] == `'` || p.src[p.pos + 1] == `"`)
-				&& p.src[p.pos + 2] == p.src[p.pos + 1] && p.src[p.pos + 3] == p.src[p.pos + 1] {
-				return .triple_span
-			}
-			return .value_run
-		}
-		`:` {
-			if p.pos + 1 < p.src.len && p.src[p.pos + 1] == `:` {
-				return .double_colon
-			}
-			return .colon
-		}
-		else {
-			return .value_run
-		}
-	}
+	return token_kind_at(p.src, p.pos)
 }
 
 // tok_adjacent_to_prev reports whether the token at the current position is

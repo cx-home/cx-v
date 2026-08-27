@@ -1,0 +1,14 @@
+sequenceDiagram
+  participant jobs
+  participant results
+  participant dispatcher
+  participant worker
+  activate dispatcher
+  dispatcher ->>+ jobs : $j
+  Note over dispatcher : [?close]
+  deactivate dispatcher
+  activate worker
+  worker ->>+ results : [processed]
+  deactivate worker
+  participant main
+  Note over main : [?wait-for]

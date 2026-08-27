@@ -5,6 +5,6 @@ erDiagram
     int max_depth "1"
   }
   user {
-    string email
-    string phone
+    string email "'a@x.test'"
+    string phone "'555-0100'"
   }

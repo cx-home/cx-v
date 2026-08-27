@@ -86,7 +86,7 @@
   [sig """-> number"""]
   [summary """Parse a number from a string written in a locale's conventions."""]
   [example [code """[?lib 'cx-stdlib/locale']
-[$locale:parse-number-locale "1,234,567.89" "en-US"]"""] [expect """1234567.89"""]]
+[$locale:parse-number-locale "1,234,567.89" "en-US"]"""] [expect """1.23456789e6"""]]
 ]
 [fn-doc name=format-date scope=public purity=pure
   [sig """-> string"""]

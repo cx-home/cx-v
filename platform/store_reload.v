@@ -23,7 +23,17 @@ import cx
 
 // Hot sections apply without restart; restart sections refuse the reload WHOLE
 // (all-or-nothing — hot changes riding in the same candidate are not applied).
-const svc_hot_sections = ['tls', 'timeouts', 'limits', 'observability']
+//
+// #986: `[xsp]` is HOT, but only through its `[grants]` child — the grant table
+// re-folds into every live session (revocation latency is the security
+// property; see svc_xsp_split + sx_refold_grants_locked). The REST of the
+// section (addr, identity, policy, limits, peers, revocations) is
+// restart-required and refuses by name, because a listener cannot rebind its
+// address or change its responder DID under live sessions. Classifying the
+// WHOLE section either way would re-create the very defect #986 names — a
+// silent success over grants that did not move (hot-whole would also silently
+// swallow an addr edit), or a refusal that makes revocation restart-only.
+const svc_hot_sections = ['tls', 'timeouts', 'limits', 'observability', 'xsp']
 const svc_restart_sections = ['bind', 'grpc', 'stores', 'workers']
 
 const e_svc_cfg_restart = 'cx-err:CXER1712' // E_SVC_CONFIG_RESTART_REQUIRED (§3.13)
@@ -52,6 +62,10 @@ mut:
 	tls_key  string
 	tls_ca   string
 	gen      int // successful applies since start (0 = startup config)
+	// #986: the live `[xsp [grants …]]` table. The xsp listener and the gRPC
+	// edge read it THROUGH the box (never the startup-frozen copy), so an
+	// applied reload's new grants are what the next authority decision sees.
+	xsp_grants []XspGrant
 }
 
 // new_svc_config_box seeds the box from the startup config. `src` is the
@@ -68,10 +82,39 @@ pub fn new_svc_config_box(cfg ServiceConfig, src string, tls_cert string, tls_ke
 			read_timeout_ms: cfg.read_timeout_ms
 			idle_timeout_ms: cfg.idle_timeout_ms
 		}
-		sections: svc_config_sections(src)
-		tls_cert: tls_cert
-		tls_key:  tls_key
-		tls_ca:   tls_ca
+		sections:   svc_config_sections(src)
+		tls_cert:   tls_cert
+		tls_key:    tls_key
+		tls_ca:     tls_ca
+		xsp_grants: cfg.xsp.grants.clone()
+	}
+}
+
+// xsp_grants returns the live `[xsp [grants …]]` table (#986). One consistent
+// view per call — callers compile it into an authority basis, they never hold
+// the box's slice.
+pub fn (mut b SvcConfigBox) xsp_grants() []XspGrant {
+	b.mu.lock()
+	defer {
+		b.mu.unlock()
+	}
+	return b.xsp_grants.clone()
+}
+
+// svc_ctx_xsp_cfg projects the LIVE grant table over a context's startup-frozen
+// `[xsp …]` config (#986). Every authority decision — the profile listener's
+// per-session basis and the gRPC edge's per-call basis, including the
+// open-vs-enforcing posture test (`grants.len > 0`) — resolves through here, so
+// a reload that moved the grants is live at the next decision. No box (tests /
+// embedded) = the startup config unchanged.
+pub fn svc_ctx_xsp_cfg(ctx ServeContext) XspConfig {
+	if ctx.cfgbox == unsafe { nil } {
+		return ctx.xsp_cfg
+	}
+	mut box := ctx.cfgbox
+	return XspConfig{
+		...ctx.xsp_cfg
+		grants: box.xsp_grants()
 	}
 }
 
@@ -112,6 +155,49 @@ fn svc_config_sections(src string) map[string]string {
 		}
 	}
 	return out
+}
+
+// svc_xsp_split splits an `[xsp …]` section's canonical emit into its two
+// reload classes (#986): `grants` is the canonical emit of the `[grants]`
+// child(ren) — the HOT half, re-folded into live sessions — and `rest` is the
+// section with those children removed — the RESTART-REQUIRED half (addr,
+// identity, policy, limits, peers, revocations: a bound listener cannot move
+// its address or responder identity under live sessions).
+//
+// Splitting on the CANONICAL EMIT keeps the §2.2 attr-exact posture: anything
+// an operator wrote that is not a `[grants]` child lands in `rest` and is
+// therefore refused by name, never silently ignored. An unparseable emit (it
+// came from a document parse_service_config already accepted, so this is
+// belt-and-braces) folds WHOLLY into `rest` — fail-closed: the reload refuses
+// rather than treating an unreadable section as a hot grant change.
+fn svc_xsp_split(emit string) (string, string) {
+	if emit == '' {
+		return '', ''
+	}
+	doc := cx.parse(emit) or { return '', emit }
+	if doc.elements.len == 0 {
+		return '', emit
+	}
+	root := doc.elements[0]
+	if root !is cx.Element {
+		return '', emit
+	}
+	el := root as cx.Element
+	mut grants := ''
+	mut rest_items := []cx.Node{}
+	for item in el.items {
+		if item is cx.Element && item.name == 'grants' {
+			grants += cx.cx_emit_node_str(item, true)
+			continue
+		}
+		rest_items << item
+	}
+	rest := cx.Element{
+		name:  el.name
+		attrs: el.attrs
+		items: rest_items
+	}
+	return grants, cx.cx_emit_node_str(cx.Node(rest), true)
 }
 
 // ReloadOutcome is one reload attempt's result — shared verbatim by the SIGHUP
@@ -211,12 +297,26 @@ fn svc_reload_config_inner(mut box SvcConfigBox, deps ReloadDeps) ReloadOutcome 
 			restart_changed << s
 		}
 	}
+	// #986: `[xsp]` is hot ONLY through `[grants]`. Everything else in the
+	// section is restart-required and refuses HERE, in the pre-apply phase, so
+	// the all-or-nothing rule holds — a candidate that moves the listener addr
+	// AND the grants applies neither.
+	old_xsp_grants, old_xsp_rest := svc_xsp_split(old_sections['xsp'] or { '' })
+	new_xsp_grants, new_xsp_rest := svc_xsp_split(new_sections['xsp'] or { '' })
+	if old_xsp_rest != new_xsp_rest {
+		restart_changed << 'xsp'
+	}
 	if restart_changed.len > 0 {
+		restart_changed.sort()
 		offenders := restart_changed.join(', ')
+		mut note := ''
+		if 'xsp' in restart_changed {
+			note = ' ([xsp] is hot ONLY through its [grants] child — addr/identity/policy/limits/peers/revocations need a restart)'
+		}
 		return ReloadOutcome{
 			gen:      gen0
 			err_code: e_svc_cfg_restart
-			err_msg:  'E_SVC_CONFIG_RESTART_REQUIRED: restart-required section(s) changed: ${offenders} — reload refused whole, nothing applied'
+			err_msg:  'E_SVC_CONFIG_RESTART_REQUIRED: restart-required section(s) changed: ${offenders}${note} — reload refused whole, nothing applied'
 		}
 	}
 	// Hot diff. TLS is special: the section text may be unchanged while the
@@ -227,6 +327,13 @@ fn svc_reload_config_inner(mut box SvcConfigBox, deps ReloadDeps) ReloadOutcome 
 	for s in svc_hot_sections {
 		if s == 'tls' {
 			continue // content-compared below
+		}
+		if s == 'xsp' {
+			// #986: grants-only — the rest of the section already refused above.
+			if old_xsp_grants != new_xsp_grants {
+				changed << s
+			}
+			continue
 		}
 		if old_sections[s] or { '' } != new_sections[s] or { '' } {
 			changed << s
@@ -317,6 +424,13 @@ fn svc_reload_config_inner(mut box SvcConfigBox, deps ReloadDeps) ReloadOutcome 
 			idle_timeout_ms: cand.idle_timeout_ms
 		}
 		g_svc_drain_grace_ms = cand.drain_ms // next shutdown's grace (§2.6)
+	}
+	if 'xsp' in changed {
+		// #986: publish the new grant table. The listener's per-session re-fold
+		// and the gRPC edge's per-call basis both read it through the box, and
+		// both notice via the generation bumped below in this same critical
+		// section — table and generation move together or not at all.
+		box.xsp_grants = cand.xsp.grants.clone()
 	}
 	box.tls_cert = new_cert
 	box.tls_key = new_key

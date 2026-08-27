@@ -12,8 +12,56 @@
 # the array lane (`[+ $x 2]` → `['+ $x 2']`) and two (`*` `>`) errored
 # ("expected name"). GLUED continuations keep their old routes:
 # `[-1, 2]` is a negative-number array item, `[*n]` is an alias
-# reference, `[+1, 2]` normalizes through the array lane. Multi-char
-# glyphs (`<=`, `**`, …) are NOT operator heads.
+# reference, `[+1, 2]` normalizes through the array lane.
+#
+# Version: 3.0 — 2026-08-25 (#976). THE ALPHABET IS NOT SEVEN AND NEVER
+# WAS. v2.0 of this header closed with "Multi-char glyphs (`<=`, `**`,
+# …) are NOT operator heads" — HALF RIGHT, and the wrong half was a
+# content-addressing defect. The ruled head set is the EVALUATOR's
+# (code/eval.v `operator_element_heads`, 18 heads); twelve are glyphs:
+#
+#     one-char   + * - / % = < > ~
+#     two-char   != <= >=
+#
+# The data parser admitted only the seven above, so `%` and `<=` fell
+# into the array lane and STRINGIFIED SILENTLY while `!=`, `>=` and `~`
+# raised "expected name". `[<= 5 3]` therefore canonicalized to the
+# very bytes of `['<= 5 3']` and shared its Tier-1 hash — two documents
+# the evaluator reads differently at ONE content address (oph-301..303).
+# `**` and `==` are genuinely NOT heads: they are absent from the ruled
+# set, and oph-407 pins `[== 5 3]` staying in the array lane.
+#
+# The oph-001..010 pins below are UNMOVED by #976 — every head they
+# name was already admitted. The repair shows up in oph-101..118 (the
+# closed alphabet), oph-201..218 (canonical re-parse), oph-301..303
+# (the collision) and oph-401..407 (the dispatch guard rails).
+#
+# Version: 3.1 — 2026-08-26 (#983). One route #976 MOVED without
+# pinning: an operator head that runs to EOF. `op_head_delimited`
+# counts end-of-input as a delimiter, so `[+` is a DELIMITED head and
+# `peek_is_array_literal` sends it to the ELEMENT dispatch, where
+# `parse_element` runs out of input looking for `]`. The pre-#976
+# disambiguator carried an explicit `if i + 1 >= p.src.len { return
+# true }` for `+ - / = <` and sent the same bytes to the ARRAY lane,
+# which said "unterminated array literal". Both spellings exit rc=1, so
+# nothing in the corpus noticed the swap. oph-408 pins the CURRENT
+# message so the lane is a decision and not a side effect: an operator
+# head stays an ELEMENT head all the way to EOF, and the diagnostic
+# names the element closer it is missing.
+#
+# oph-409 pins the OTHER #983 finding: `[<=x]` canonicalizes to the BARE
+# `[<=x]`, and that is sound rather than an emitter/parser asymmetry.
+# `cx_collection_bare_safe` would refuse the string `<=x`, but that
+# predicate owns map-value / sequence-item position, NOT array-item
+# position — arrays answer a different question (does the image re-parse
+# to the same value?) with a different predicate. It does: a GLUED
+# operator glyph is not a head, so the bare image re-enters the array
+# lane unchanged, and `[<=x]` shares its Tier-1 address with the quoted
+# twin `['<=x']`. The emitter is deliberately NOT changed to quote —
+# Tier-1 identity IS the canonical bytes, so quoting would MOVE the
+# address of every array carrying such an item, and no ruling or
+# migration names that move. oph-409 is the guard that keeps a future
+# "tidy-up" of the emitter from making that move silently.
 #]]
 
  [; ── The seven heads — delimited operator char = element name ── ]
@@ -151,4 +199,768 @@ sha2-256:035024fc29be0b68f53364eca31100403d820f250c450139fb6992018404e6be
 [+]
 #]]
  ]
+
+ [; ── #976: the head alphabet is the EVALUATORs, and it is CLOSED at 18 ──
+    Every head in the code/eval.v operator_element_heads set canonicalizes
+    here. Five could not before: `%` and `<=` STRINGIFIED through the array
+    lane (rc=0, SILENT) while `!=`, `>=` and `~` raised "expected name"
+    (rc=1, loud). The silent pair is the defect that mattered — oph-301/302
+    pin why. The data parser had its OWN seven-glyph copy of this alphabet;
+    the evaluator set is the ruled truth and lexical.v operator_head_len is
+    now its single home. ]
+
+ [case id=oph-101-plus-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[+ 5 3]
+#]]
+  [out-cx [#
+[+ 5 3]
+#]]
+  [out-canonical [#
+[+ 5 3]
+#]]
+  [out-hash [#
+sha2-256:c01e016d8fb100f0f2a19a1bada2f3ddce695f0ba86ff2374ff896885aa2fd47
+#]]
+ ]
+
+ [case id=oph-102-star-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[* 5 3]
+#]]
+  [out-cx [#
+[* 5 3]
+#]]
+  [out-canonical [#
+[* 5 3]
+#]]
+  [out-hash [#
+sha2-256:6230806797633d5af46a2bed04826718de355e1e20f1895a2e0b0c7e389d25da
+#]]
+ ]
+
+ [case id=oph-103-minus-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[- 5 3]
+#]]
+  [out-cx [#
+[- 5 3]
+#]]
+  [out-canonical [#
+[- 5 3]
+#]]
+  [out-hash [#
+sha2-256:112cc4b7dc7ff16bc4c03d35bcf11a673f910854a5f81f95ad5ab4eedfc4d2a2
+#]]
+ ]
+
+ [case id=oph-104-slash-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[/ 6 3]
+#]]
+  [out-cx [#
+[/ 6 3]
+#]]
+  [out-canonical [#
+[/ 6 3]
+#]]
+  [out-hash [#
+sha2-256:655eae699b251bc952d252fd06dd3205609fa9b9551b4aba1ae5ef025d3c05d4
+#]]
+ ]
+
+ [case id=oph-105-percent-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[% 7 3]
+#]]
+  [out-cx [#
+[% 7 3]
+#]]
+  [out-canonical [#
+[% 7 3]
+#]]
+  [out-hash [#
+sha2-256:34dcb4766093307a4b0b7eee8811fc3774bad3d3b879b0799ad524abc1e87f24
+#]]
+ ]
+
+ [case id=oph-106-equals-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[= 5 3]
+#]]
+  [out-cx [#
+[= 5 3]
+#]]
+  [out-canonical [#
+[= 5 3]
+#]]
+  [out-hash [#
+sha2-256:a71d4469ddcc50903aaab470a87652d5682de06263af6d8a21f6973a78c38fdd
+#]]
+ ]
+
+ [case id=oph-107-not-equals-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[!= 5 3]
+#]]
+  [out-cx [#
+[!= 5 3]
+#]]
+  [out-canonical [#
+[!= 5 3]
+#]]
+  [out-hash [#
+sha2-256:aed0afd1afd7602729fe38062bd266f122897288df0d7c2c961475f61adcd61c
+#]]
+ ]
+
+ [case id=oph-108-less-than-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[< 5 3]
+#]]
+  [out-cx [#
+[< 5 3]
+#]]
+  [out-canonical [#
+[< 5 3]
+#]]
+  [out-hash [#
+sha2-256:205f2e8e9750de62d50a99d2996835ba7719545b3b287b991afabcb944c16303
+#]]
+ ]
+
+ [case id=oph-109-less-or-equal-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[<= 5 3]
+#]]
+  [out-cx [#
+[<= 5 3]
+#]]
+  [out-canonical [#
+[<= 5 3]
+#]]
+  [out-hash [#
+sha2-256:4295cd0d9866535de562c8bb46148922218bb1b86ffeb10ddb3e6e377fc81e47
+#]]
+ ]
+
+ [case id=oph-110-greater-than-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[> 5 3]
+#]]
+  [out-cx [#
+[> 5 3]
+#]]
+  [out-canonical [#
+[> 5 3]
+#]]
+  [out-hash [#
+sha2-256:a9fcac1ac5e6a55232207217f99400ef28fba5c67fe4fc37714b9335f339ae8e
+#]]
+ ]
+
+ [case id=oph-111-greater-or-equal-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[>= 5 3]
+#]]
+  [out-cx [#
+[>= 5 3]
+#]]
+  [out-canonical [#
+[>= 5 3]
+#]]
+  [out-hash [#
+sha2-256:9542efe072e27e4c47befc1898d5d99b3d21b127a7003399dfc007506c711937
+#]]
+ ]
+
+ [case id=oph-112-similar-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[~ 5 3]
+#]]
+  [out-cx [#
+[~ 5 3]
+#]]
+  [out-canonical [#
+[~ 5 3]
+#]]
+  [out-hash [#
+sha2-256:c699a1d3a2adee06bf8021df65a4a4ba1b17ebbc868967cc0bd5760c6870737a
+#]]
+ ]
+
+ [case id=oph-113-and-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[and true false]
+#]]
+  [out-cx [#
+[and true false]
+#]]
+  [out-canonical [#
+[and true false]
+#]]
+  [out-hash [#
+sha2-256:58be4b3bbff2cb58dc683c930a632b8c00fd5447a270c55e434f48fb6a3d2d02
+#]]
+ ]
+
+ [case id=oph-114-or-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[or true false]
+#]]
+  [out-cx [#
+[or true false]
+#]]
+  [out-canonical [#
+[or true false]
+#]]
+  [out-hash [#
+sha2-256:3939d767b88f0a5300ee0cf5d62698c629b06b978af393f08f03165c164487bf
+#]]
+ ]
+
+ [case id=oph-115-not-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[not true]
+#]]
+  [out-cx [#
+[not true]
+#]]
+  [out-canonical [#
+[not true]
+#]]
+  [out-hash [#
+sha2-256:951d2cbba4f31d95e9464396a0dabeb10373ae09bf11586038aa694c7c1e8c01
+#]]
+ ]
+
+ [case id=oph-116-union-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[union (1, 2) (2, 3)]
+#]]
+  [out-cx [#
+[union (1, 2) (2, 3)]
+#]]
+  [out-canonical [#
+[union (1, 2) (2, 3)]
+#]]
+  [out-hash [#
+sha2-256:9ef63633411387597242e88bf8ffa4aafebeaeeec2419610bddfbbf8ef4f5f47
+#]]
+ ]
+
+ [case id=oph-117-intersect-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[intersect (1, 2) (2, 3)]
+#]]
+  [out-cx [#
+[intersect (1, 2) (2, 3)]
+#]]
+  [out-canonical [#
+[intersect (1, 2) (2, 3)]
+#]]
+  [out-hash [#
+sha2-256:ebee9fe4230f3721eebcec42935b16997eac5a47c970e864f56ea675571e55bf
+#]]
+ ]
+
+ [case id=oph-118-except-alphabet level=core
+  [tags operator-heads i1 issue-976 alphabet element]
+  [in-cx [#
+[except (1, 2) (2, 3)]
+#]]
+  [out-cx [#
+[except (1, 2) (2, 3)]
+#]]
+  [out-canonical [#
+[except (1, 2) (2, 3)]
+#]]
+  [out-hash [#
+sha2-256:8b62edb31191c76a96526508795ca3592434c5030da04ec67ae8a6b516c7340a
+#]]
+ ]
+
+ [; ── #976: the canonical image RE-PARSES to the SAME address ──
+    in-a is a presentation variant, a leading comment plus line breaks and
+    widened runs; in-b is the canonical image Family A pins. Hash-EQUAL is
+    the round-trip closing: the head survives strict canonicalization and
+    re-parses as the SAME element — not as text that merely looks like one,
+    which is exactly what the stringifying heads used to produce. ]
+
+ [case id=oph-201-plus-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[+
+    5
+    3]
+#]]
+  [in-b [#
+[+ 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-202-star-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[*
+    5
+    3]
+#]]
+  [in-b [#
+[* 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-203-minus-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[-
+    5
+    3]
+#]]
+  [in-b [#
+[- 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-204-slash-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[/
+    6
+    3]
+#]]
+  [in-b [#
+[/ 6 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-205-percent-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[%
+    7
+    3]
+#]]
+  [in-b [#
+[% 7 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-206-equals-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[=
+    5
+    3]
+#]]
+  [in-b [#
+[= 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-207-not-equals-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[!=
+    5
+    3]
+#]]
+  [in-b [#
+[!= 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-208-less-than-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[<
+    5
+    3]
+#]]
+  [in-b [#
+[< 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-209-less-or-equal-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[<=
+    5
+    3]
+#]]
+  [in-b [#
+[<= 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-210-greater-than-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[>
+    5
+    3]
+#]]
+  [in-b [#
+[> 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-211-greater-or-equal-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[>=
+    5
+    3]
+#]]
+  [in-b [#
+[>= 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-212-similar-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[~
+    5
+    3]
+#]]
+  [in-b [#
+[~ 5 3]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-213-and-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[and
+    true
+    false]
+#]]
+  [in-b [#
+[and true false]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-214-or-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[or
+    true
+    false]
+#]]
+  [in-b [#
+[or true false]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-215-not-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[not
+    true]
+#]]
+  [in-b [#
+[not true]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-216-union-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[union
+    (1, 2)
+    (2, 3)]
+#]]
+  [in-b [#
+[union (1, 2) (2, 3)]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-217-intersect-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[intersect
+    (1, 2)
+    (2, 3)]
+#]]
+  [in-b [#
+[intersect (1, 2) (2, 3)]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [case id=oph-218-except-canonical-reparse level=core
+  [tags operator-heads issue-976 roundtrip hash-pair]
+  [in-a [#
+[; presentation ]
+[except
+    (1, 2)
+    (2, 3)]
+#]]
+  [in-b [#
+[except (1, 2) (2, 3)]
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
+ [; ── #976: the OPERATOR form and its QUOTED-STRING twin are DISTINCT ──
+    THE REGRESSION THIS FAMILY EXISTS TO CATCH. The document [<= 5 3] used
+    to canonicalize into the one-item array of the string, byte-identical to
+    the document that IS that array — and therefore to the same Tier-1 hash.
+    Two documents the evaluator reads differently, false versus a text item,
+    shared ONE content address. That is a content-addressing SOUNDNESS break,
+    not a formatting wart. hash-eq FALSE is the property; if any of these
+    ever flips to true the addressing scheme is broken again. ]
+
+ [case id=oph-301-less-or-equal-operator-vs-string-distinct level=core
+  [tags operator-heads issue-976 collision negative hash-pair]
+  [in-a [#
+[<= 5 3]
+#]]
+  [in-b [#
+['<= 5 3']
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=oph-302-percent-operator-vs-string-distinct level=core
+  [tags operator-heads issue-976 collision negative hash-pair]
+  [in-a [#
+[% 7 3]
+#]]
+  [in-b [#
+['% 7 3']
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [case id=oph-303-not-equals-operator-vs-string-distinct level=core
+  [tags operator-heads issue-976 collision negative hash-pair]
+  [in-a [#
+[!= 5 3]
+#]]
+  [in-b [#
+['!= 5 3']
+#]]
+  [out-hash-eq [#
+false
+#]]
+ ]
+
+ [; ── #976: guard rails — the sigils the widened alphabet brushes past ──
+    `!` still opens a DECLARATION unless it is the delimited `!=` head, and
+    a GLUED continuation still routes to the array lane. These are the
+    dispatch neighbours the two-char admissions had to thread between; the
+    `*` alias and negative-number guards are oph-008 and oph-009 above. ]
+
+ [case id=oph-401-entity-declaration-unmoved level=core
+  [tags operator-heads issue-976 guard declaration]
+  [in-cx [#
+[!ENTITY greeting 'Hello World']
+#]]
+  [out-canonical [#
+[!ENTITY greeting 'Hello World']
+#]]
+  [out-hash [#
+sha2-256:a68894cf3f0f6c661a992f104c767a80fd027988f6bc2752411296be3ab9d7c8
+#]]
+ ]
+
+ [case id=oph-402-pe-declaration-unmoved level=core
+  [tags operator-heads issue-976 guard declaration percent]
+  [in-cx [#
+[!ENTITY % common 'id CDATA #REQUIRED']
+#]]
+  [out-canonical [#
+[!ENTITY % common 'id CDATA #REQUIRED']
+#]]
+  [out-hash [#
+sha2-256:fe99ff1432d91b7011a7aaaa44264db45c39a86d72022e8b52dbd7c052a5173a
+#]]
+ ]
+
+ [case id=oph-403-glued-le-not-a-head level=core
+  [tags operator-heads issue-976 guard glued array]
+  [in-cx [#
+[<=x]
+#]]
+  [out-canonical [#
+[<=x]
+#]]
+  [out-hash [#
+sha2-256:fde968e0f5f04839653716b5d656e4261755239cd77588d8424ac029c1b80719
+#]]
+ ]
+
+ [case id=oph-404-glued-percent-not-a-head level=core
+  [tags operator-heads issue-976 guard glued array]
+  [in-cx [#
+[%x]
+#]]
+  [out-canonical [#
+[%x]
+#]]
+  [out-hash [#
+sha2-256:3bc5b7a0a9558c7fe626864a6ac5d03eab4a605a878371e84421fdc4be9dae78
+#]]
+ ]
+
+ [case id=oph-405-empty-le-element level=core
+  [tags operator-heads issue-976 guard element empty]
+  [in-cx [#
+[<=]
+#]]
+  [out-canonical [#
+[<=]
+#]]
+  [out-hash [#
+sha2-256:8117ff0e36adc164c63d9b8a33b965b33a2b6fdc8f0e36009532ff2412f932ba
+#]]
+ ]
+
+ [case id=oph-406-empty-neq-element level=core
+  [tags operator-heads issue-976 guard element empty]
+  [in-cx [#
+[!=]
+#]]
+  [out-canonical [#
+[!=]
+#]]
+  [out-hash [#
+sha2-256:20e03a441d73b11aa86689361b544f94ce3e9cc9b246338cccebe265f108e21f
+#]]
+ ]
+
+ [case id=oph-407-double-equals-out-of-set level=core
+  [tags operator-heads issue-976 guard out-of-set array]
+  [in-cx [#
+[== 5 3]
+#]]
+  [out-canonical [#
+['== 5 3']
+#]]
+  [out-hash [#
+sha2-256:3697eeaa2ebd013039b9437db9b0f1e0a90051f438cb3d39446df55527104a01
+#]]
+ ]
+
+ [; ── #983: the UNTERMINATED head at EOF — which lane raises ── ]
+
+ [case id=oph-408-unterminated-plus-head-at-eof level=core
+  [tags operator-heads issue-976 issue-983 guard eof negative CXER0100]
+  [title Operator head at EOF is refused by the ELEMENT lane, not the array lane]
+  [in-cx [#
+[+
+#]]
+  [out-err [#
+expected ']' got EOF (cx-err:CXER0100)
+#]]
+ ]
+
+ [case id=oph-409-glued-le-bare-image-is-its-own-value level=core
+  [tags operator-heads issue-976 issue-983 guard glued array roundtrip hash-pair]
+  [title The bare canonical image of a glued operator head IS the quoted string it renders]
+  [in-a [#
+[<=x]
+#]]
+  [in-b [#
+['<=x']
+#]]
+  [out-hash-eq [#
+true
+#]]
+ ]
+
 ]

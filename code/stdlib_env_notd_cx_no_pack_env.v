@@ -113,6 +113,7 @@ fn env_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('env', 'env-', 'string', n)
 	return none
 }
 
@@ -123,6 +124,7 @@ fn env_arg_int(n cx.Node) ?i64 {
 			return v
 		}
 	}
+	note_operand_fault('env', 'env-', 'int', n)
 	return none
 }
 
@@ -136,6 +138,7 @@ fn env_arg_float(n cx.Node) ?f64 {
 			return f64(v)
 		}
 	}
+	note_operand_fault('env', 'env-', 'float', n)
 	return none
 }
 
@@ -146,6 +149,7 @@ fn env_arg_bool(n cx.Node) ?bool {
 			return v
 		}
 	}
+	note_operand_fault('env', 'env-', 'bool', n)
 	return none
 }
 

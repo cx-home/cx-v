@@ -26,7 +26,26 @@ import cx
 // dropped because `native` was read as a guard). Per-module files like
 // `stdlib_path.v` / `stdlib_bytes.v` are safe (path/bytes are not
 // platform words); avoid `_native` / `_test` / OS / arch suffixes.
+//
+// stdlib_builtin is the chain HEAD: it brackets the module chain with the
+// R-A8 (#955) operand-kind fault slot. The slot is cleared here so a
+// recorded fault can only ever describe THIS dispatch, and an end-of-chain
+// miss with a fault standing is converted into the CXER0100 err naming the
+// function as written (see stdlib_operand_fault.v). A miss with no fault
+// standing still returns `none` — "this dispatcher does not own this name"
+// — so the `user-undefined` / `no callable "…"` lane is untouched.
 fn stdlib_builtin(name string, args []cx.Node) ?cx.Node {
+	clear_operand_fault()
+	if r := stdlib_builtin_chain(name, args) {
+		return r
+	}
+	if e := operand_fault_err(name, args) {
+		return e
+	}
+	return none
+}
+
+fn stdlib_builtin_chain(name string, args []cx.Node) ?cx.Node {
 	// ── module primitive chains (one `if r := <mod>_stdlib_builtin…` per
 	//    module is inserted here as each module lands) ─────────────────
 	if r := math_stdlib_builtin(name, args) { return r }

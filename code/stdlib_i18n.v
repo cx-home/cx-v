@@ -73,6 +73,7 @@ fn i18n_arg_str(n cx.Node) ?string {
 	if n is cx.TextNode {
 		return n.value
 	}
+	note_operand_fault('i18n', 'i18n-', 'string', n)
 	return none
 }
 

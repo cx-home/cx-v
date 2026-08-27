@@ -124,6 +124,7 @@ closure keeps its own captured environment when re-captured by the outer pipe.
 
  [case id=run-008-closures-in-data-registry-dispatch level=core
   [tags run registry closures-in-data dispatch 45 stream-14 686 stream-18 690]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [meta [#
 note: the post-#45 registry pattern (run.md §4.1): CLOSURES STORED IN
 note: DATA elements, retrieved by name predicate, invoked cross-scope —
@@ -138,10 +139,10 @@ note: absent tool answers the absence channel (), never a fault.
 [?def dispatch scope=public pure [returns any] ($registry::any $tool-name::string $args::string)
   [?for [in $t $registry] [where [= $t@name $tool-name]] [yield [$run:invoke [$first $t/*] $args]]]]
 [?let [= $reg ([tool name=greet greet-tool], [tool name=shout shout-tool])]
-  [reg [a [$dispatch $reg "greet" "dana"]] [b [$dispatch $reg "shout" "dana"]] [miss [$dispatch $reg "nope" "x"]]]]
+  [reg [a [?splice [$dispatch $reg "greet" "dana"]]] [b [?splice [$dispatch $reg "shout" "dana"]]] [miss [?splice [$dispatch $reg "nope" "x"]]]]]
 #]]
   [out-text [#
-[reg [a ('hi dana')] [b ('HI dana')] [miss ()]]
+[reg [a 'hi dana'] [b 'HI dana'] [miss]]
 #]]
  ]
 ]

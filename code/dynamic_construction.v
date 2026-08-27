@@ -43,6 +43,68 @@ fn is_empty_seq_node(n cx.Node) bool {
 	return false
 }
 
+// is_content_sequence_value reports whether an evaluated body item is a
+// SEQUENCE value for the R-A1 construction rule: a node-set / sequence
+// wrapper, a raw SequenceNode, or a lazy IteratorNode. Arrays and maps
+// are single values — legal children — and are deliberately excluded.
+// content_seq_refusal is the R-A1 refusal an element form raises when an
+// operand-produced sequence would become plain element content (after
+// operator/builtin dispatch has declined to consume it as an argument).
+fn content_seq_refusal(el_name string, n_members int, first_member string) EvalError {
+	head := if first_member == '' { '' } else { '; first member [${first_member} …]' }
+	return EvalError{
+		code:    'cx-err:CXER0100'
+		message: 'a sequence value (${n_members} members) cannot be element content — adopt its members with [?splice EXPR] (in [${el_name} …]${head}; code.md §6.4.1, #847-1a)'
+	}
+}
+
+// content_seq_first_member names the first member of an offending sequence
+// value for the refusal diagnostic (empty when it has no element head).
+fn content_seq_first_member(n cx.Node) string {
+	mut first := ?cx.Node(none)
+	if n is cx.Element {
+		if n.items.len > 0 {
+			first = n.items[0]
+		}
+	} else if n is cx.SequenceNode {
+		if n.items.len > 0 {
+			first = n.items[0]
+		}
+	}
+	if f := first {
+		if f is cx.Element {
+			return f.name
+		}
+	}
+	return ''
+}
+
+fn is_content_sequence_value(n cx.Node) bool {
+	if n is cx.Element {
+		return n.name == '' || n.name == seq_marker_name
+	}
+	if n is cx.SequenceNode {
+		return true
+	}
+	if n is cx.IteratorNode {
+		return true
+	}
+	return false
+}
+
+fn content_sequence_len(n cx.Node) int {
+	if n is cx.Element {
+		return n.items.len
+	}
+	if n is cx.SequenceNode {
+		return n.items.len
+	}
+	if n is cx.IteratorNode {
+		return iterate(n).len
+	}
+	return 0
+}
+
 fn seq_items(n cx.Node) ([]cx.Node, bool) {
 	if n is cx.Element {
 		if n.name == seq_marker_name || n.name == arr_marker_name || n.name == '' {
@@ -109,7 +171,12 @@ fn coerce_entry_key(v cx.Node) (string, cx.Node, bool) {
 	return '', empty_seq_node(), false
 }
 
-fn eval_dc_body_items(prog_items []cx.ProgramNode, mut items []cx.Node, mut cx_attrs []cx.Attribute, mut env MatchEnv) !cx.Node {
+// seq_offenders collects the member counts of operand-produced sequence
+// values found in body position. The CALLER decides their fate: an element
+// form that dispatches as an operator/builtin consumes them as ARGUMENTS
+// (legal — `[sum $doc/line/@price]`); a form that falls through to plain
+// element construction refuses per R-A1 (#847-1a).
+fn eval_dc_body_items(prog_items []cx.ProgramNode, mut items []cx.Node, mut cx_attrs []cx.Attribute, mut env MatchEnv, el_name string, mut seq_offenders []int, mut seq_offender_heads []string) !cx.Node {
 	for it in prog_items {
 		if it is cx.ProgramDirective {
 			match it.name {
@@ -164,10 +231,75 @@ fn eval_dc_body_items(prog_items []cx.ProgramNode, mut items []cx.Node, mut cx_a
 					items << uv
 					continue
 				}
+				'for' {
+					// R-A1 (2026-08-25): [?for] in a multi-sibling slot is a
+					// MULTI-SIBLING CONTRIBUTOR — one sibling per [yield],
+					// the directive's defined contribution (not a value
+					// being auto-spliced). An empty comprehension
+					// contributes nothing.
+					fv := eval_node(it, mut env)!
+					if is_err_node(fv) {
+						return fv
+					}
+					for g in iterate(fv) {
+						items << g
+					}
+					continue
+				}
 				else {}
 			}
 		}
+		if it is cx.ProgramForComp {
+			// R-A1 (2026-08-25): a for-comprehension in a multi-sibling slot
+			// is a MULTI-SIBLING CONTRIBUTOR — one sibling per [yield], the
+			// directive's defined contribution (not a value auto-spliced).
+			// An empty comprehension contributes nothing.
+			fv := eval_node(it, mut env)!
+			if is_err_node(fv) {
+				return fv
+			}
+			for g in iterate(fv) {
+				items << g
+			}
+			continue
+		}
 		val := eval_node(it, mut env)!
+		// R-A1 (#847-1a, ruled 2026-08-18, implemented 2026-08-25): a
+		// NON-EMPTY SEQUENCE VALUE never becomes element content — a
+		// binding read, call result, or directive result ([?if]/[?let]/…)
+		// yielding one refuses loudly, naming [?splice] as the idiom.
+		// Arrays and maps are single VALUES and stay legal children; the
+		// EMPTY sequence is absence and contributes nothing (null-totality
+		// — an absent optional read must not plant a visible `()` child).
+		//
+		// THE DISCRIMINATOR IS POSITION, NOT VALUE (the #853 literal-err
+		// principle): a SOURCE-LITERAL paren sequence written in the body
+		// (`[pair (1, 2)]`) is the author explicitly writing the envelope
+		// the DATA reading gives those bytes — it constructs the sequence
+		// child (cross-parser parity; the settled #587/#847 opaque cells
+		// apply to it). Only a sequence produced by an evaluated OPERAND
+		// refuses.
+		// [break] / [continue] are the [?loop] protocol's POSITIONAL value
+		// carriers (§8.15), not documents: every expression contributes
+		// exactly ONE value — absence rides as the empty sequence and a
+		// sequence value rides whole — or the loop's rebind arity breaks.
+		// The R-A1 content rules below do not apply to them.
+		is_loop_carrier := el_name == 'continue' || el_name == 'break'
+		is_literal_seq := it is cx.ProgramLiteral
+			&& (it as cx.ProgramLiteral).kind == .sequence_lit
+		if !is_loop_carrier && !is_literal_seq && is_content_sequence_value(val) {
+			n_members := content_sequence_len(val)
+			if n_members == 0 {
+				continue
+			}
+			// Adopt provisionally and record the offense — the caller
+			// refuses ONLY when the form does not dispatch as an
+			// operator/builtin consuming this as an argument.
+			seq_offenders << n_members
+			seq_offender_heads << content_seq_first_member(val)
+			items << val
+			continue
+		}
 		// #853 (owner ruling 2026-08-18, "2a") — element construction is
 		// OPERAND-CONSUMING for propagation, per code.md §6.4.1 /
 		// §9.2: a positional child that EVALUATES to an [err …] propagates
@@ -953,6 +1085,21 @@ fn run_tree_eval(tree_val cx.Node, ctx map[string]cx.Node, max_depth int, mut en
 			return mk_err('cx-err:CXER0238', 'tree-eval: [?${prog.name}] is not evaluable as code in this position')
 		}
 	}
+	return run_sandboxed_eval(prog, ctx, mut env)!
+}
+
+// run_sandboxed_eval is the §3.1–§3.2 sandbox itself, shared by tree-eval
+// (`[?eval]` / `cx:eval-tree`) and string-eval (`cx:eval` / `cx:render`): a
+// FRESH env carrying only the `$context` keys (no ambient capture of the
+// caller's [?def] / [?fn] / [?for] / [?let] / [?with] bindings), the caller's
+// [?lib] alias set installed as the non-widening allow-list (CXER4113), and
+// the shared recursion counter bumped for the duration. Split out of
+// run_tree_eval when cx:eval landed (#940 / VC-6) so BOTH eval forms answer
+// to one sandbox implementation rather than two that can drift — §3.4 makes
+// "reuses the cx:eval sandbox wholesale" normative, and the counter is ONE
+// budget across the two by construction (§3.3).
+fn run_sandboxed_eval(prog cx.ProgramNode, ctx map[string]cx.Node, mut env MatchEnv) !cx.Node {
+	has_state := env.state != unsafe { nil }
 	mut sub := new_env()
 	sub.state = env.state
 	for k, v in ctx {
@@ -993,6 +1140,133 @@ fn run_tree_eval(tree_val cx.Node, ctx map[string]cx.Node, max_depth int, mut en
 		env.state.tree_eval_lib_allow = prev_allow
 	}
 	return result
+}
+
+// ── cx:eval / cx:render — string-eval (modules/cx.md §2.2 + §3) ─────────────
+//
+// cx_mod_eval / cx_mod_render are the DISPATCH-BOUNDARY wrappers, and they
+// exist for a measured reason. The `cx:` dispatch hook returns `?cx.Node`; a
+// `!` error propagated out of it becomes `none`, the chain falls through to the
+// next dispatcher, and the user is told `no callable "cx:eval"` — which is the
+// silent-absence defect #940 is about, reproduced by the very function meant
+// to fix it. Measured on the first build of this change: a fragment whose
+// `[?lib]` widens raised CXER4113 inside the sandbox and the CALLER saw
+// `no callable "cx:eval"`, making CXER4113 unobservable.
+//
+// So a raise crossing this boundary is converted to an err VALUE with
+// closure_err_to_value — the same converter, for the same reason, that the
+// closure-dispatch boundary uses so "a [?def] body that raises surfaces as
+// [err code=… message=…] at the call site instead of being swallowed". An err
+// value is also the better railway citizen: it auto-propagates through
+// argument positions (code.md §9.2) and `[?fallback]` recovers it.
+//
+// NOTE (measured, pre-existing, NOT changed here): `cx:eval-tree` still
+// dispatches with a bare `!` at eval.v and therefore still has the swallow —
+// it is why #940's own method note records eval-tree answering
+// `no callable "cx:eval-tree"` at zero args. Left alone deliberately: VC-6
+// authorizes the ten, and changing a shipped function's error surface is its
+// own issue.
+//
+// `cx:eval($source::string $context::map $opts::map=$nil) → any`, impure.
+// The tree-eval twin with a PARSE STEP in front: the source string parses as a
+// CX PROGRAM (cx.parse_program — the same reader `cx <file>` uses, so a
+// fragment is exactly the language, not a subset), then the §3.1–§3.2 sandbox
+// runs it. Every sandbox property is inherited from run_sandboxed_eval rather
+// than re-implemented (§3.4 "reuses the cx:eval sandbox wholesale" read in the
+// direction the spec actually orders it — cx:eval is the definition, eval-tree
+// the parse-free dual):
+//
+//   §3.1 context-only bindings — the fresh env carries ONLY $context's keys.
+//   §3.2 [?lib] narrowing-only  — CXER4113 on a widening [?lib].
+//   §3.3 depth cap 8            — $opts `max-depth`, CXER4114, ONE counter
+//                                 shared with cx:eval-tree AND with the
+//                                 cx:render path (which routes through here).
+//   capability                  — `eval`, CXER0271 when denied.
+//
+// The one thing tree-eval CANNOT raise (§3.4: "structurally unreachable") is
+// live here: a malformed source string is CXER4100.
+fn cx_mod_eval(args []cx.Node, mut env MatchEnv) cx.Node {
+	return eval_string_fn(args, mut env) or { closure_err_to_value(err) }
+}
+
+fn cx_mod_render(args []cx.Node, mut env MatchEnv) cx.Node {
+	return render_string_fn(args, mut env) or { closure_err_to_value(err) }
+}
+
+fn eval_string_fn(args []cx.Node, mut env MatchEnv) !cx.Node {
+	// Arity is the §2.2 signature exactly: $source and $context are BOTH
+	// required (only $opts carries `=$nil`). cx:eval-tree's $context DOES
+	// default — the spec draws that distinction deliberately, so accepting a
+	// one-argument cx:eval here would invent surface the spec withheld.
+	if args.len < 2 || args.len > 3 {
+		return mk_err('cx-err:CXER0100', 'cx:eval requires (\$source::string \$context::map \$opts::map=\$nil) — \$context is not optional')
+	}
+	if is_err_node(args[0]) {
+		return args[0]
+	}
+	src := cx_mod_source_text(args[0]) or {
+		return mk_err('cx-err:CXER0100', 'cx:eval: \$source must be a string of CX source text')
+	}
+	// map_value_to_bindings yields {} for a nil / non-map value, so an
+	// explicit empty context is spelled {} and behaves as one.
+	ctx := map_value_to_bindings(args[1])
+	mut max_depth := tree_eval_default_depth
+	if args.len > 2 {
+		md, has_md := map_get_int(args[2], 'max-depth')
+		if has_md {
+			max_depth = md
+		}
+	}
+	return run_string_eval(src, ctx, max_depth, mut env)!
+}
+
+// run_string_eval is the shared string-eval engine: capability gate, shared
+// depth counter, parse, sandbox. Used by cx:eval and (through
+// render_string_fn) by cx:render, so the §3.3 sentence "the counter increments
+// on each cx:eval invocation including indirect invocation through cx:render"
+// holds by construction rather than by a second bump.
+fn run_string_eval(src string, ctx map[string]cx.Node, max_depth int, mut env MatchEnv) !cx.Node {
+	if !cap_allowed('eval') {
+		return mk_err('cx-err:CXER0271', 'eval capability denied — cx:eval requires the `eval` capability (run with --allow-eval)')
+	}
+	has_state := env.state != unsafe { nil }
+	if has_state && env.state.eval_depth >= max_depth {
+		return mk_err('cx-err:CXER4114', 'cx:eval recursion depth exceeded (max-depth=${max_depth})')
+	}
+	program := cx.parse_program(src) or {
+		return mk_err('cx-err:CXER4100', 'cx:eval: malformed CX source: ${err.msg()}')
+	}
+	return run_sandboxed_eval(program.body, ctx, mut env)!
+}
+
+// render_string_fn is `cx:render($template::string $context::map) → string`,
+// impure — §2.2: "sugar for cx:serialize(cx:eval($t $ctx))". Implemented AS
+// that composition (one eval engine, one serializer) so the two can never
+// disagree; the "permission to stream output directly" §2.2 grants is a
+// latitude about WHERE the bytes may go, not a different result value, and
+// this engine has no streaming sink at a function-call return position.
+//
+// $opts is not part of cx:render's §2.2 signature, so the depth cap is the
+// default 8 — and because the eval it performs goes through run_string_eval,
+// it consumes the SAME budget as a direct cx:eval (§3.3's "including indirect
+// invocation through cx:render").
+fn render_string_fn(args []cx.Node, mut env MatchEnv) !cx.Node {
+	// §2.2 gives cx:render exactly two parameters, neither defaulted.
+	if args.len != 2 {
+		return mk_err('cx-err:CXER0100', 'cx:render requires (\$template::string \$context::map)')
+	}
+	if is_err_node(args[0]) {
+		return args[0]
+	}
+	tmpl := cx_mod_source_text(args[0]) or {
+		return mk_err('cx-err:CXER0100', 'cx:render: \$template must be a string of CX source text')
+	}
+	ctx := map_value_to_bindings(args[1])
+	evaluated := run_string_eval(tmpl, ctx, tree_eval_default_depth, mut env)!
+	if is_err_node(evaluated) {
+		return evaluated
+	}
+	return cx_mod_serialize([evaluated])
 }
 
 // map_value_to_bindings flattens a `__cx_map__` value to a name → node map.

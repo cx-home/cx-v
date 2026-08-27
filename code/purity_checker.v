@@ -2,6 +2,15 @@ module code
 
 import cx
 
+// cx_module_impure_fns is the `cx:` module's impure member set, taken from
+// modules/cx.md §2.2's Purity column. Kept OUT of builtin_purity_table()
+// deliberately: that table is the value `cx:builtins` returns, hence an input
+// to `cx:env` and to every computation address, so only a name the §6.5.x SPEC
+// table carries may enter it. A `pure` [?def] body reaching any of these
+// raises CXER0233 (modules/cx.md §3 for cx:eval; core/code.md §6.4.4 for the
+// tree form).
+const cx_module_impure_fns = ['cx:eval', 'cx:eval-tree', 'cx:render', 'cx:resolve-includes']
+
 // purity_checker.v — static purity checker.
 //
 // Phase 2.22 (partial). Sound-but-incomplete inference: walks
@@ -631,11 +640,16 @@ fn (checker &PurityChecker) classify_callee(callee string, mut seen map[string]b
 	// Module-qualified call `prefix:local` (e.g. [$env:var …], [$cx:eval-tree …]).
 	// The impure table keys stdlib prims by their hyphenated bare name, so
 	// normalize `:`→`-` and probe the local segment (mirrors
-	// call_name_is_impure_builtin). cx:eval-tree is the tree-eval function form
-	// — impure per §6.4.4 (the eval effect is gated by the `eval` capability at
-	// runtime), the call-form dual of the [?eval] directive.
+	// call_name_is_impure_builtin). The `cx:` module's four impure members
+	// (cx_module_impure_fns) are named here rather than in
+	// builtin_purity_table(): that table IS the value `cx:builtins` returns and
+	// therefore an input to `cx:env` and to every computation address, so a
+	// name may only enter it when the §6.5.x SPEC table names it. These four
+	// get their purity from modules/cx.md §2.2's own Purity column instead.
+	// This is the shipped treatment of cx:eval-tree, widened to the list when
+	// the other three landed (#940 / VC-6).
 	if callee.contains(':') {
-		if callee == 'cx:eval-tree' || callee.all_after_last(':') == 'eval-tree'
+		if callee in cx_module_impure_fns || callee.all_after_last(':') == 'eval-tree'
 		   || call_name_is_impure_builtin(callee) {
 			return purity_error(origin, 'call to impure builtin `${callee}`')
 		}

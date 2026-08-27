@@ -46,6 +46,7 @@ fn map_native_entries(n cx.Node) ?[]MapNativeEntry {
 			}
 			return out
 		}
+		note_operand_fault('map', 'map-', 'map', n)
 		return none
 	}
 	if n is cx.MapNode {
@@ -57,6 +58,7 @@ fn map_native_entries(n cx.Node) ?[]MapNativeEntry {
 		}
 		return out
 	}
+	note_operand_fault('map', 'map-', 'map', n)
 	return none
 }
 

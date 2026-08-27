@@ -261,7 +261,7 @@ null
 [$prof:histogram-stats "prof-015-never-observed"]
 #]]
   [out-text [#
-[histogram-stats name=prof-015-never-observed count=0 p50=0.0 p95=0.0 p99=0.0 min=0.0 max=0.0 mean=0.0]
+[histogram-stats name=prof-015-never-observed count=0 p50=0.0e0 p95=0.0e0 p99=0.0e0 min=0.0e0 max=0.0e0 mean=0.0e0]
 #]]
  ]
 

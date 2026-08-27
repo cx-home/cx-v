@@ -166,20 +166,20 @@
   [?let [= $n [$name $el]] [= $ctx2 [$ux:descend $el $ctx]]
     [?match $n
       [case "ux:region"   [$lower-region $el $ctx2 $opts]]
-      [case "ux:card"     [t:card    [$kids $el $ctx2 $opts]]]
-      [case "ux:heading"  [t:heading [?attr "level" [$ux:level-of $el]] [$leaf $el $ctx2 $opts]]]
-      [case "ux:text"     [t:para    [$leaf $el $ctx2 $opts]]]
-      [case "ux:field"    [t:field   [?attr "label" [$ux:str-or $el@label ""]] [$leaf $el $ctx2 $opts]]]
-      [case "ux:badge"    [t:badge   [?attr "tone" [$ux:str-or $el@tone "neutral"]] [$leaf $el $ctx2 $opts]]]
-      [case "ux:list"     [t:list    [$kids $el $ctx2 $opts]]]
-      [case "ux:item"     [t:item    [$leaf $el $ctx2 $opts]]]
-      [case "ux:table"    [t:table   [$kids $el $ctx2 $opts]]]
-      [case "ux:columns"  [t:head    [$kids $el $ctx2 $opts]]]
-      [case "ux:column"   [t:col     [$leaf $el $ctx2 $opts]]]
-      [case "ux:rows"     [t:body    [$kids $el $ctx2 $opts]]]
+      [case "ux:card"     [t:card    [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:heading"  [t:heading [?attr "level" [$ux:level-of $el]] [?splice [$leaf $el $ctx2 $opts]]]]
+      [case "ux:text"     [t:para    [?splice [$leaf $el $ctx2 $opts]]]]
+      [case "ux:field"    [t:field   [?attr "label" [$ux:str-or $el@label ""]] [?splice [$leaf $el $ctx2 $opts]]]]
+      [case "ux:badge"    [t:badge   [?attr "tone" [$ux:str-or $el@tone "neutral"]] [?splice [$leaf $el $ctx2 $opts]]]]
+      [case "ux:list"     [t:list    [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:item"     [t:item    [?splice [$leaf $el $ctx2 $opts]]]]
+      [case "ux:table"    [t:table   [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:columns"  [t:head    [?splice [$kids $el $ctx2 $opts]]]]
+      [case "ux:column"   [t:col     [?splice [$leaf $el $ctx2 $opts]]]]
+      [case "ux:rows"     [t:body    [?splice [$kids $el $ctx2 $opts]]]]
       [case "ux:row"      [$lower-row $el $ctx2 $opts]]
-      [case "ux:cell"     [t:cell    [$leaf $el $ctx2 $opts]]]
-      [case "ux:nav"      [t:nav     [$kids $el $ctx2 $opts]]]
+      [case "ux:cell"     [t:cell    [?splice [$leaf $el $ctx2 $opts]]]]
+      [case "ux:nav"      [t:nav     [?splice [$kids $el $ctx2 $opts]]]]
       [case "ux:nav-item" [t:navitem [?attr "href" [$ux:str-or $el@href ""]]
                                      [?attr "focus" [$concat "nav:" [$ux:str-or $el@href ""]]]
                                      [$ux:label-of $el]]]
@@ -220,9 +220,9 @@
       [case "ux:hidden"   [t:hidden  [?attr "name" [$ux:str-or $el@name ""]]
                                      [?attr "value" [$ux:str-or $el@value ""]]]]
       [case "ux:submit"   [t:submit  [?attr "focus" [$concat "sub:" [?else $ctx2.form "ux"]]] [$ux:label-of $el]]]
-      [case "ux:error"    [t:error   [$kids $el $ctx2 $opts]]]
+      [case "ux:error"    [t:error   [?splice [$kids $el $ctx2 $opts]]]]
       [case "ux:notice"   [t:notice  [?attr "tone" [$ux:str-or $el@tone "info"]]
-                                     [$kids $el $ctx2 $opts]]]
+                                     [?splice [$kids $el $ctx2 $opts]]]]
       [case "ux:select"   [$lower-select $el $ctx2 $opts]]
       [case "ux:option"   [t:option [?attr "value" [$ux:str-or $el@value ""]] [$ux:label-of $el]]]
       [case "ux:group"    [t:group  [?attr "name" [$ux:str-or $el@name ""]]
@@ -295,7 +295,7 @@
                                      [$ux:str-or $el@label [$ux:str-or $el@value ""]]]]
       [case "ux:aside"      [$lower-aside $el $ctx2 $opts]]
       [case "ux:status"     [t:status [?attr "tone" [$ux:str-or $el@tone "info"]]
-                                      [$leaf $el $ctx2 $opts]]]
+                                      [?splice [$leaf $el $ctx2 $opts]]]]
       [; P0-101: a named group of peer blocks. The children lower under the
          panel's OWN context step (`ux:child-ctx` steps a panel by name, as a
          group) so the focus ids and addresses below it agree with the web
@@ -593,7 +593,7 @@
                   [$ux:joined [$ux:collisions-with $pairs]
                               [$ux:dangling-affects-with $el $ctx $pairs]]]]]]
     [?if [$exists $bad]
-      [then [err code=ux-refused $bad]]
+      [then [err code=ux-refused [?splice $bad]]]
       [else
         [?let
           [= $low  [$lower $el $ctx $opts]]
@@ -1134,7 +1134,7 @@
                  {done: (), cur: ""}]]
     [t:lines
       [?for [in $x [?else $folded.done ()]] [yield [l v=[$string $x@v]]]]
-      [?if [= [?else $folded.cur ""] ""] [then ()] [else ([l v=[?else $folded.cur ""]])]]]]]
+      [?splice [?if [= [?else $folded.cur ""] ""] [then ()] [else ([l v=[?else $folded.cur ""]])]]]]]]
 
 [?def push-line pure [returns any] ($done::any $line::string)
   [?let [= $c [t:lines [?for [in $x $done] [yield [l v=[$string $x@v]]]] [l v=$line]]]
@@ -1220,8 +1220,8 @@
     [= $n     [$count $heads]]
     [= $ws    [?for [in $i [$range 1 $n]] [yield [$col-width $heads $rows $i]]]]
     [t:lines
-      [?if [= $n 0] [then ()] [else ([l v=[$head-line $heads $ws $opts]])]]
-      [?if [= $n 0] [then ()] [else ([l v=[$rule-line $ws $opts]])]]
+      [?splice [?if [= $n 0] [then ()] [else ([l v=[$head-line $heads $ws $opts]])]]]
+      [?splice [?if [= $n 0] [then ()] [else ([l v=[$rule-line $ws $opts]])]]]
       [?for [in $r $rows] [yield [$paint-trow $r $ws $n $opts $w]]]]]]
 
 # col-width — the widest of the header and every scalar cell in that column,
@@ -1349,12 +1349,13 @@
                [else $err]]]
     [t:lines
       [l v=[$mark [$concat [$style $lbl [$theme-of $opts] "muted" [$color-of $opts]] " " $box] $t $opts]]
-      [?if [= $help ""]
-        [then ()]
-        [else ([l v=[$concat [$strings:repeat " " [+ $lw 3]]
-                             [$style $help [$theme-of $opts]
-                                     [?if [= $err ""] [then "muted"] [else "tone-danger"]]
-                                     [$color-of $opts]]]])]]]]]
+      [?splice
+        [?if [= $help ""]
+          [then ()]
+          [else ([l v=[$concat [$strings:repeat " " [+ $lw 3]]
+                               [$style $help [$theme-of $opts]
+                                       [?if [= $err ""] [then "muted"] [else "tone-danger"]]
+                                       [$color-of $opts]]]])]]]]]]
 
 # editor-text — what the editor shows. A `toggle` shows its state rather than
 # its literal, because "true" is a value and `[x]` is a control.

@@ -502,6 +502,20 @@ const arr_marker_name = '__cx_arr__'
 // rebuilds a `cx.MapNode` at the top-level emit boundary.
 pub const map_marker_name = '__cx_map__'
 
+// Document marker (R-A2, 2026-08-25). A DocumentNode navigates as a
+// CONTAINER NODE whose child items are its top-level nodes — element-
+// uniform on every engine path (the retired fast-path single-root unwrap
+// answered differently per lane, #964). The view exists transiently
+// during navigation; the marker name never matches a real element name.
+const doc_marker_name = '__cx_document__'
+
+fn doc_node_view(n cx.DocumentNode) cx.Element {
+	return cx.Element{
+		name:  doc_marker_name
+		items: n.elements
+	}
+}
+
 // secret_marker_name wraps a `[?secret EXPR]` value (cxdm.md §12). The
 // underlying value is the wrapper's single child; computation that needs
 // the real value unwraps it, while output boundaries redact it to the
@@ -904,9 +918,16 @@ fn eval_computed_name_element(l cx.ProgramLiteral, expr cx.ProgramNode, mut env 
 	if !is_dc_ok_sentinel(sc_a) {
 		return sc_a
 	}
-	sc := eval_dc_body_items(l.items, mut items, mut cx_attrs, mut env)!
+	mut seq_offenders := []int{}
+	mut seq_offender_heads := []string{}
+	sc := eval_dc_body_items(l.items, mut items, mut cx_attrs, mut env, effective_name, mut seq_offenders, mut seq_offender_heads)!
 	if !is_dc_ok_sentinel(sc) {
 		return sc
+	}
+	// R-A1: computed-name elements never dispatch — the user is
+	// constructing, so an operand-produced sequence refuses outright.
+	if seq_offenders.len > 0 {
+		return content_seq_refusal(effective_name, seq_offenders[0], seq_offender_heads[0])
 	}
 	return cx.Element{
 		name:  effective_name
@@ -1130,7 +1151,9 @@ fn eval_element_construct(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 	if !is_dc_ok_sentinel(sc_a) {
 		return sc_a
 	}
-	sc := eval_dc_body_items(l.items, mut items, mut cx_attrs, mut env)!
+	mut seq_offenders := []int{}
+	mut seq_offender_heads := []string{}
+	sc := eval_dc_body_items(l.items, mut items, mut cx_attrs, mut env, l.name, mut seq_offenders, mut seq_offender_heads)!
 	if !is_dc_ok_sentinel(sc) {
 		return sc
 	}
@@ -1140,6 +1163,14 @@ fn eval_element_construct(l cx.ProgramLiteral, mut env MatchEnv) !cx.Node {
 		if result := eval_operator_element(l.name, items) {
 			return result
 		}
+	}
+	// R-A1 (#847-1a): dispatch declined, so the form IS plain element
+	// construction — an operand-produced sequence in the body refuses
+	// loudly rather than becoming content. Deferred until here because a
+	// dispatching head consumes the sequence as an ARGUMENT
+	// (`[sum $doc/line/@price]`), which is legal everywhere.
+	if seq_offenders.len > 0 {
+		return content_seq_refusal(l.name, seq_offenders[0], seq_offender_heads[0])
 	}
 	for slot in l.slots {
 		val := eval_node(slot.value, mut env)!
@@ -1680,7 +1711,15 @@ pub fn read_result_field(el cx.Element, name string) ?cx.Node {
 	}
 	for it in el.items {
 		if it is cx.Element && it.name == name && it.items.len > 0 {
-			return it.items[0]
+			if it.items.len == 1 {
+				return it.items[0]
+			}
+			// R-A1/#584 alignment (2026-08-25): a field holding N items reads
+			// as its WHOLE content. Pre-R-A1 a sequence payload arrived as one
+			// envelope child, so items[0] was the payload; spliced content is
+			// N direct items and items[0] silently truncated it (svc-019 read
+			// 1 of 1000 streaming-body items).
+			return cx.Node(cx.Element{ name: seq_marker_name, items: it.items })
 		}
 	}
 	// legacy slot fallback
@@ -1840,6 +1879,20 @@ fn eval_operator_element(op string, args_in []cx.Node) ?cx.Node {
 				acc /= val
 				all_int = all_int && isi
 			}
+			if all_int && args.len == 2 {
+				// Binary int/int decides divisibility EXACTLY in i64 — the
+				// f64 fold rounds operands past 2^53 into the wrong int and
+				// saturates MIN ÷ -1 (#1044 audit). An exact quotient that
+				// fits i64 answers int; MIN ÷ -1 (= 2^63, exactly
+				// representable in f64) and every inexact quotient answer
+				// float per `/`'s true-division contract.
+				ai := atomize_int(args[0]) or { return arith_operand_err('/') }
+				bi := atomize_int(args[1]) or { return arith_operand_err('/') }
+				if !(ai == eval_i64_min && bi == -1) && ai % bi == 0 {
+					return int_scalar_node(ai / bi)
+				}
+				return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(f64(ai) / f64(bi)), data_type: cx.ScalarType.float_type })
+			}
 			return num_result(acc, all_int)
 		}
 		'=', '!=' {
@@ -1866,7 +1919,33 @@ fn eval_operator_element(op string, args_in []cx.Node) ?cx.Node {
 			// resolve to the absence channel — "unknown", never 0 (rule 6).
 			if args.len != 2 && args.len != 3 { return op_arity_err(op, 'two or three') }
 			pred := if args.len == 3 { args[2] } else { cx.Node(cx.Element{ name: '' }) }
-			return similar_compare(args[0], args[1], pred)
+			// R-A3 companion (settled 2026-05-31 atomization, extended to the
+			// graded comparison 2026-08-25): `~` is the cognate of `=`, so a
+			// ONE-member node-set operand unwraps to its member, and an
+			// element holding a single scalar/text item atomizes to that
+			// value against a scalar comparand — `//vendor[~ $_/name 'acme']`
+			// keeps grading strings, not element-vs-string kind mismatches.
+			mut ga := args[0]
+			mut gb := args[1]
+			if ga is cx.Element && (ga.name == '' || ga.name == seq_marker_name)
+				&& ga.items.len == 1 {
+				ga = ga.items[0]
+			}
+			if gb is cx.Element && (gb.name == '' || gb.name == seq_marker_name)
+				&& gb.items.len == 1 {
+				gb = gb.items[0]
+			}
+			if av := atomize_single_item_element(ga) {
+				if gb is cx.ScalarNode || gb is cx.TextNode {
+					ga = av
+				}
+			}
+			if bv := atomize_single_item_element(gb) {
+				if ga is cx.ScalarNode || ga is cx.TextNode {
+					gb = bv
+				}
+			}
+			return similar_compare(ga, gb, pred)
 		}
 		'<', '<=', '>', '>=' {
 			if args.len != 2 { return op_arity_err(op, 'exactly two') }
@@ -2076,9 +2155,15 @@ fn div_zero_err() cx.Node {
 }
 
 // num_result builds the scalar result of an arithmetic fold: int when
-// every operand was int AND the value is whole, else float.
+// every operand was int AND the value is whole AND it fits i64, else float.
+// The range guard matters: `i64(acc)` saturates outside i64, and the
+// saturated value round-trips through f64 back to acc — so without it a
+// whole-valued fold past i64.max materialized as a silently-wrong int
+// (#1044 audit's `[/ MIN -1]`). Out of range stays float, which is exact
+// f64 arithmetic's honest answer.
 fn num_result(acc f64, all_int bool) cx.Node {
-	if all_int && acc == f64(i64(acc)) {
+	if all_int && acc == f64(i64(acc)) && acc < 9223372036854775808.0
+		&& acc >= -9223372036854775808.0 {
 		return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(i64(acc)), data_type: cx.ScalarType.int_type })
 	}
 	return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(acc), data_type: cx.ScalarType.float_type })
@@ -2165,6 +2250,30 @@ fn int_scalar_node(v i64) cx.Node {
 	})
 }
 
+// checked_div_i64 — the truncating i64 quotient, refusing the ONE cell whose
+// quotient leaves i64 (MIN ÷ -1 = 2^63; also the cell that traps in hardware).
+fn checked_div_i64(a i64, b i64) ?i64 {
+	if a == eval_i64_min && b == -1 {
+		return none
+	}
+	return a / b
+}
+
+// exact_int_or_bigint narrows an exact integral image to the family's
+// integral representation: int while the value fits i64, bigint past it.
+// strconv.parse_int SATURATES on out-of-range input instead of erroring
+// (every magnitude in (i64.max, 2^64) parsed as a clamped i64.max — the
+// silent band the #1044 audit measured on $idiv/$floor/$ceiling/$round),
+// so fitting is decided by round-trip, never by a bare parse.
+fn exact_int_or_bigint(img string) cx.Node {
+	if v := strconv.parse_int(img, 10, 64) {
+		if v.str() == img {
+			return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(v), data_type: cx.ScalarType.int_type })
+		}
+	}
+	return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(img), data_type: cx.ScalarType.bigint_type })
+}
+
 fn op_word(op string) string {
 	return match op {
 		'+' { 'add' }
@@ -2243,12 +2352,22 @@ fn args_have_decimal_bigint(args []cx.Node) bool {
 // bridge. Result kind: decimal when any operand is decimal or the result
 // carries a fraction; bigint otherwise.
 fn exact_fold_op(op string, args []cx.Node) cx.Node {
+	return exact_fold_op_named(op, op, args)
+}
+
+// exact_fold_op_named is the one implementation; `head` is only what the
+// diagnostics call it. `[$div]` is a SECOND SPELLING of the exact `/` lane
+// (#1044 / CO-17, the #598 discipline `%`/`[$mod]` and the CO-14 aggregates
+// already follow) — the arithmetic must be the same code path, so that
+// `[$div a b]` and `[/ a b]` can never disagree on a kind, a scale, or a
+// refusal, while each still names ITSELF when it refuses.
+fn exact_fold_op_named(op string, head string, args []cx.Node) cx.Node {
 	mut imgs := []string{cap: args.len}
 	mut any_decimal := false
 	for a in args {
 		sn := atomize_exact_num(a) or {
 			return mk_err('cx-err:CXER0100',
-				'${op}: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)')
+				'${head}: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)')
 		}
 		if sn.data_type == cx.ScalarType.decimal_type {
 			any_decimal = true
@@ -2278,10 +2397,10 @@ fn exact_fold_op(op string, args []cx.Node) cx.Node {
 		}
 		'/' {
 			if imgs.len == 1 {
-				acc = cx.cx_exact_div('1', acc) or { return exact_div_err(err) }
+				acc = cx.cx_exact_div('1', acc) or { return exact_div_err(head, err) }
 			} else {
 				for i := 1; i < imgs.len; i++ {
-					acc = cx.cx_exact_div(acc, imgs[i]) or { return exact_div_err(err) }
+					acc = cx.cx_exact_div(acc, imgs[i]) or { return exact_div_err(head, err) }
 				}
 			}
 		}
@@ -2289,6 +2408,32 @@ fn exact_fold_op(op string, args []cx.Node) cx.Node {
 			return mk_err('cx-err:CXER0100', 'exact arithmetic: unsupported op ${op}')
 		}
 	}
+	if any_decimal || acc.contains('.') {
+		return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(acc), data_type: cx.ScalarType.decimal_type })
+	}
+	return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(acc), data_type: cx.ScalarType.bigint_type })
+}
+
+// exact_mod_op is `%` / `[$mod]`'s exact-family lane (#1016, L44) — the
+// binary sibling of exact_fold_op. Operand admissibility and the result-kind
+// convention are exact_fold_op's, unchanged: int/bigint/decimal only, a float
+// in the mix is unbridged (`[cast]` is the only bridge), decimal when any
+// operand is decimal or the result carries a fraction, bigint otherwise.
+// Divide-by-zero is CXER0101, matching the int and float lanes.
+fn exact_mod_op(args []cx.Node) cx.Node {
+	mut imgs := []string{cap: args.len}
+	mut any_decimal := false
+	for a in args {
+		sn := atomize_exact_num(a) or {
+			return mk_err('cx-err:CXER0100',
+				'%: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)')
+		}
+		if sn.data_type == cx.ScalarType.decimal_type {
+			any_decimal = true
+		}
+		imgs << cx.cx_exact_num_image(sn) or { '0' }
+	}
+	acc := cx.cx_exact_mod(imgs[0], imgs[1]) or { return div_zero_err() }
 	if any_decimal || acc.contains('.') {
 		return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(acc), data_type: cx.ScalarType.decimal_type })
 	}
@@ -2312,18 +2457,54 @@ fn exact_integral_result(a0 cx.ScalarNode, op string) ?cx.Node {
 		'ceiling' { cx.cx_exact_ceiling(img) }
 		else      { cx.cx_exact_round_half_away(img) }
 	}
-	if v := strconv.parse_int(res, 10, 64) {
-		return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(v), data_type: cx.ScalarType.int_type })
-	}
-	return cx.Node(cx.ScalarNode{ value: cx.ScalarValue(res), data_type: cx.ScalarType.bigint_type })
+	return exact_int_or_bigint(res)
 }
 
-fn exact_div_err(err IError) cx.Node {
+// exact_div_err is the ONE refusal every spelling of exact division raises —
+// `/`, `[$div]`, and the exact `[$avg]` mean all arrive here (#1044, CO-17).
+//
+// A non-terminating exact quotient (5.00 ÷ 3) has no exact decimal image, and
+// L44 §5 refuses to pick a scale and a mode for the caller: it must be told.
+// So the refusal REFUSES BY NAME — it names the one ruled precision+mode
+// context on the surface, `[$math:div-decimal]`, rather than leaving the
+// caller to guess that a context exists at all or, worse, hiding a default
+// behind the operator. Under CO-17 this is the CORE lane's answer everywhere,
+// including the `[$avg]` cell CO-14 had reserved.
+fn exact_div_err(head string, err IError) cx.Node {
 	msg := err.msg()
 	if msg.contains('division by zero') {
 		return mk_err('cx-err:CXER0101', 'division by zero')
 	}
-	return mk_err('cx-err:CXER3002', msg)
+	return mk_err('cx-err:CXER3002',
+		'${head}: non-terminating exact division — supply an explicit rounding context (precision + mode) with [\$math:div-decimal a b {precision: N mode: :half-up}] (L44)')
+}
+
+// exact_idiv_op is `[$idiv]`'s exact-family lane (#1044, CO-17) — the binary
+// sibling of exact_fold_op/exact_mod_op, sharing their operand admissibility
+// (int/bigint/decimal only; a float in the mix is unbridged, `[cast]` being
+// the only bridge) and their CXER0101 divide-by-zero.
+//
+// It never reaches exact_div_err: `idiv` asks for the INTEGRAL quotient, which
+// always terminates, so the CXER3002 rounding-context question `/` and `$div`
+// must ask simply does not arise (cx_exact_idiv carries the argument).
+//
+// Result kind — §6.5 says `idiv` yields an integer regardless of operand
+// kinds, and the exact family's integral representation is `int` when the
+// value fits i64 and `bigint` when it does not. That is not a new convention:
+// it is exactly the one exact_integral_result already gives floor/ceiling/
+// round over the same kinds, and L44's no-silent-saturation rule forbids the
+// alternative of clamping an over-i64 quotient into an i64.
+fn exact_idiv_op(args []cx.Node) cx.Node {
+	mut imgs := []string{cap: args.len}
+	for a in args {
+		sn := atomize_exact_num(a) or {
+			return mk_err('cx-err:CXER0100',
+				'\$idiv: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)')
+		}
+		imgs << cx.cx_exact_num_image(sn) or { '0' }
+	}
+	q := cx.cx_exact_idiv(imgs[0], imgs[1]) or { return div_zero_err() }
+	return exact_int_or_bigint(q)
 }
 
 // atomize_exact_num unwraps to a single EXACT-FAMILY scalar (int / bigint /
@@ -2350,6 +2531,140 @@ fn atomize_exact_num(n cx.Node) ?cx.ScalarNode {
 		return none
 	}
 	return none
+}
+
+// ── sequence-aggregate operand classification (§6.5 numeric built-ins) ──
+//
+// The sequence aggregates `$sum` / `$max` / `$min` fold over three numeric
+// lanes, and which lane an operand lands in is decided by its KIND, not by
+// the shape of its V payload. That distinction is the whole point of this
+// helper: an exact-family scalar (`decimal` / `bigint`) carries its base-10
+// image as a V `string`, so a value-only `match` on the ScalarValue cannot
+// tell `19.99::decimal` from the string `'19.99'` and drops the decimal into
+// the XPath `fn:number` string-leniency arm, which f64-parses it. That is
+// exactly how a `[returns decimal]` money total came back a float (#1017),
+// and how a `bigint` beyond 2^53 came back a SATURATED i64. `data_type` is
+// checked FIRST here so neither can recur.
+struct AggNum {
+	lane int    // 0 = int, 1 = float, 2 = exact family (decimal / bigint)
+	i    i64    // lane 0
+	f    f64    // every lane — the f64 view, used only once a float is in play
+	img  string // lanes 0 and 2 — the base-10 fixed-point image
+	dec  bool   // lane 2 and decimal-kinded (vs bigint)
+}
+
+// agg_classify atomizes one aggregate item and classifies it, or returns
+// none for a non-numeric (which every aggregate skips silently per
+// spec/code.md §6.5). Attribute-shaped Elements (single ScalarNode body, as
+// materialised by the `@name` / `attribute::name` path step) atomize to
+// their scalar value per XPath 3.1 §14.4.4.
+fn agg_classify(raw cx.Node) ?AggNum {
+	mut it := raw
+	if raw is cx.Element {
+		if raw.items.len == 1 {
+			only := raw.items[0]
+			if only is cx.ScalarNode {
+				it = cx.Node(only)
+			}
+		}
+	}
+	if it is cx.ScalarNode {
+		// KIND first — see the note above.
+		if it.data_type == cx.ScalarType.decimal_type
+			|| it.data_type == cx.ScalarType.bigint_type {
+			img := cx.cx_exact_num_image(it) or { return none }
+			return AggNum{
+				lane: 2
+				f:    img.f64()
+				img:  img
+				dec:  it.data_type == cx.ScalarType.decimal_type
+			}
+		}
+		v := it.value
+		match v {
+			i64 {
+				return AggNum{ lane: 0, i: v, f: f64(v), img: v.str() }
+			}
+			f64 {
+				return AggNum{ lane: 1, f: v }
+			}
+			string {
+				// A genuine `string` scalar, not an exact-family image:
+				// XPath fn:sum / fn:max apply fn:number() to atomized
+				// non-numeric values. i64 first (so an integer-only
+				// aggregate stays integral), then f64; an unparseable
+				// value is skipped.
+				t := v.trim_space()
+				if t.len > 0 && parses_as_i64(t) {
+					n := t.i64()
+					return AggNum{ lane: 0, i: n, f: f64(n), img: n.str() }
+				}
+				if t.len > 0 && parses_as_f64(t) {
+					return AggNum{ lane: 1, f: t.f64() }
+				}
+				return none
+			}
+			else {
+				return none
+			}
+		}
+	}
+	return none
+}
+
+// agg_cmp orders two classified operands: -1 / 0 / +1. int / bigint /
+// decimal are ONE exact family (L40/L42), so any pair drawn from it
+// compares by digit arithmetic over the images — bigint ordering stays
+// exact beyond 2^53 and decimal never loses scale digits. Only a float in
+// the pair falls back to the f64 views.
+fn agg_cmp(a AggNum, b AggNum) int {
+	if a.lane == 0 && b.lane == 0 {
+		if a.i < b.i {
+			return -1
+		}
+		if a.i > b.i {
+			return 1
+		}
+		return 0
+	}
+	if a.lane != 1 && b.lane != 1 {
+		return cx.cx_exact_num_cmp(a.img, b.img)
+	}
+	if a.f < b.f {
+		return -1
+	}
+	if a.f > b.f {
+		return 1
+	}
+	return 0
+}
+
+// agg_exact_node wraps an exact-family aggregate result, mirroring
+// exact_fold_op's result-kind convention: decimal when any decimal
+// participated or the image carries a fraction, bigint otherwise.
+fn agg_exact_node(img string, any_decimal bool) cx.Node {
+	if any_decimal || img.contains('.') {
+		return cx.Node(cx.ScalarNode{
+			value:     cx.ScalarValue(img)
+			data_type: cx.ScalarType.decimal_type
+		})
+	}
+	return cx.Node(cx.ScalarNode{
+		value:     cx.ScalarValue(img)
+		data_type: cx.ScalarType.bigint_type
+	})
+}
+
+// agg_unbridged_err is the aggregate family's half of L44's decimal↔float
+// refusal (RULED: CO-14). The aggregates were the one numeric surface still
+// bridging silently: `[+ 39.98 1.5e0]` refused while `[$sum (39.98, 1.5e0)]`
+// returned an f64 — the §6.5 promotion row predates decimal's promotion to a
+// full semantic kind, and the silent bridge is exactly what produced #1017.
+// Same code and same message shape exact_fold_op / exact_mod_op raise, so the
+// whole numeric surface refuses alike; only the head name differs.
+fn agg_unbridged_err(name string) cx.Node {
+	return mk_err('cx-err:CXER0100',
+		'${name}: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)')
 }
 
 fn scalar_to_f64_either(n cx.Node) ?f64 {
@@ -2726,6 +3041,24 @@ fn eval_binding_opt(b cx.ProgramBinding, mut env MatchEnv, unwrap_terminal bool)
 		env.cow_bindings()
 		env.bindings[b.name] = val
 	}
+	// R-A3 (2026-08-25): a path rooted at the predicate context item `$_`
+	// is a NODE-SET form — the terminal field unwrap never fires and a
+	// single ELEMENT match keeps node-set shape, so `[$count $_/tag]`
+	// counts matches (1 for one match, whatever the match's own arity).
+	// Typed reads (a terminal `@attr` scalar) pass through unwrapped —
+	// they are value reads, not match sets. Scoped by pred_nodeset to the
+	// predicate sites: `$_` bound by a pipe stage keeps value-position
+	// field-read semantics.
+	if b.name == '_' && env.pred_nodeset > 0 {
+		res := apply_value_path(val, b.path, mut env, false)!
+		if res is cx.Element {
+			if res.name != '' && res.name != seq_marker_name && res.name != arr_marker_name
+				&& res.name != map_marker_name {
+				return cx.Element{ name: seq_marker_name, items: [cx.Node(res)] }
+			}
+		}
+		return res
+	}
 	return apply_value_path(val, b.path, mut env, unwrap_terminal)
 }
 
@@ -2914,6 +3247,16 @@ fn eval_slice_access(s cx.ProgramSliceAccess, mut env MatchEnv) !cx.Node {
 	} else {
 		eval_binding(s.binding, mut env)!
 	}
+	// R-A6(iv)/R-A3: a predicate bracket ($_-referencing) applies to ANY
+	// receiver — including maps, whose items are their entries — so it is
+	// discriminated BEFORE the positional-axis map rejection below.
+	if s.axes.len == 1 && s.axes[0].kind == .single {
+		if pexpr0 := s.axes[0].start {
+			if program_node_references_pred_ctx(pexpr0) {
+				return apply_binding_predicate(receiver, pexpr0, mut env)!
+			}
+		}
+	}
 	// slicing is defined only for positional sequences.
 	// A Map (whether a materialised `cx.MapNode` or the in-pipeline
 	// `__cx_map__` envelope) has no positional axis, so reject it rather
@@ -2962,6 +3305,139 @@ fn eval_slice_access(s cx.ProgramSliceAccess, mut env MatchEnv) !cx.Node {
 	}
 	axis := effective_axes[0]
 	return apply_one_axis(items, axis, mut env)!
+}
+
+// apply_binding_predicate implements R-A6(iv): a `$x[pred]` bracket whose
+// expression reads `$_` / `$_position` binds `$_` per item of a COLLECTION
+// receiver (sequence/array members, map entries, document top-level items)
+// or to the receiver itself for any other focus, and keeps the survivors
+// as a node-set. `$xs[0]`, `$xs[$w]`, `$xs[[- $_last 1]]` keep index
+// semantics — the discrimination is static.
+fn apply_binding_predicate(receiver cx.Node, pexpr cx.ProgramNode, mut env MatchEnv) !cx.Node {
+	mut foci := []FocusedNode{}
+	mut rec := receiver
+	if rec is cx.MapNode {
+		rec = cx.Node(map_node_view(rec))
+	}
+	if rec is cx.DocumentNode {
+		rec = cx.Node(doc_node_view(rec))
+	}
+	if rec is cx.Element
+		&& (rec.name == '' || rec.name == seq_marker_name || rec.name == arr_marker_name
+		|| rec.name == map_marker_name || rec.name == doc_marker_name) {
+		for m in rec.items {
+			foci << FocusedNode{ node: m, ancestors: []cx.Node{} }
+		}
+	} else if rec is cx.SequenceNode {
+		for m in rec.items {
+			foci << FocusedNode{ node: m, ancestors: []cx.Node{} }
+		}
+	} else if rec is cx.ArrayNode {
+		for m in rec.items {
+			foci << FocusedNode{ node: m, ancestors: []cx.Node{} }
+		}
+	} else if rec is cx.IteratorNode {
+		for m in iterate(rec) {
+			foci << FocusedNode{ node: m, ancestors: []cx.Node{} }
+		}
+	} else {
+		foci << FocusedNode{ node: rec, ancestors: []cx.Node{} }
+	}
+	pred := cx.ProgramPathPredicate{ kind: .expr, body: pexpr }
+	kept := apply_step_predicates(foci, [pred], mut env)!
+	mut out := []cx.Node{cap: kept.len}
+	for k in kept {
+		out << k.node
+	}
+	return cx.Element{ name: seq_marker_name, items: out }
+}
+
+// program_node_references_pred_ctx reports whether an expression READS the
+// predicate context bindings `$_` / `$_position` (NOT `$_last`, which is
+// slice vocabulary). It does not recurse into nested path-step predicates
+// or rooted path expressions — those bind their OWN `$_`. Conservative
+// `false` keeps index semantics (the pre-R-A6(iv) behavior).
+fn program_node_references_pred_ctx(n cx.ProgramNode) bool {
+	match n {
+		cx.Program {
+			return program_node_references_pred_ctx(n.body)
+		}
+		cx.ProgramBinding {
+			return n.name in ['_', '_position']
+		}
+		cx.ProgramCall {
+			for a in n.args {
+				if program_node_references_pred_ctx(a) {
+					return true
+				}
+			}
+			return false
+		}
+		cx.ProgramDirective {
+			for s in n.slots {
+				if program_node_references_pred_ctx(s.value) {
+					return true
+				}
+			}
+			return false
+		}
+		cx.ProgramForComp {
+			for c in n.clauses {
+				if src := c.source {
+					if program_node_references_pred_ctx(src) {
+						return true
+					}
+				}
+				if e := c.expr {
+					if program_node_references_pred_ctx(e) {
+						return true
+					}
+				}
+			}
+			if program_node_references_pred_ctx(n.yield) {
+				return true
+			}
+			if yv := n.yield_value {
+				if program_node_references_pred_ctx(yv) {
+					return true
+				}
+			}
+			return false
+		}
+		cx.ProgramLiteral {
+			for it in n.items {
+				if program_node_references_pred_ctx(it) {
+					return true
+				}
+			}
+			for a in n.attrs {
+				if program_node_references_pred_ctx(a.value) {
+					return true
+				}
+			}
+			if ne := n.name_expr {
+				if program_node_references_pred_ctx(ne) {
+					return true
+				}
+			}
+			return false
+		}
+		cx.ProgramPathExpr {
+			return false
+		}
+		cx.ProgramPattern {
+			return false
+		}
+		cx.ProgramSliceAccess {
+			return program_node_references_pred_ctx(n.binding)
+		}
+		cx.ProgramSliceLiteral {
+			return false
+		}
+		cx.ProgramWildcard {
+			return false
+		}
+	}
 }
 
 // apply_one_axis dispatches a single axis (`.single`, `.range`, or
@@ -3640,24 +4116,24 @@ fn walk_binding_path_seq(root cx.Node, steps_in []cx.ProgramPathStep, mut env Ma
 	// the wrapper itself. Expand the wrapper into its member nodes so the
 	// subsequent step descends into the matched element(s).
 	if root is cx.Element {
-		if root.name == '' || root.name == seq_marker_name {
+		// R-A6(ii): arrays of elements distribute exactly as sequences —
+		// the arr marker joins the node-set root expansion.
+		if root.name == '' || root.name == seq_marker_name || root.name == arr_marker_name {
 			focus = []FocusedNode{}
 			for it in root.items {
 				focus << FocusedNode{ node: it, ancestors: []cx.Node{} }
 			}
 		}
 	}
-	// A transparent DocumentNode root (e.g. the result of `[$cx:parse]`, D7)
-	// is the whole-document carrier; its top-level elements are the context
-	// node-set, exactly as `--data` binds the parsed root element and as
-	// `[?modify $doc //x]` already unwraps it. Without this, `$doc//section` /
-	// `$doc/section` over an in-program parse find nothing — the in-program
-	// read→CXPath pipeline (codec.md §1 / Cap A) would be unusable.
+	// R-A2 (2026-08-25): a DocumentNode root is a container NODE, not a
+	// distributing node-set — steps address its top-level items through the
+	// document view (element-uniform), so `$d/a` finds a top-level `[a …]`
+	// rather than searching INSIDE each root (which answered 0, #964). The
+	// former expansion distributed the roots as context members.
+	mut doc_root := false
 	if root is cx.DocumentNode {
-		focus = []FocusedNode{}
-		for it in root.elements {
-			focus << FocusedNode{ node: it, ancestors: []cx.Node{} }
-		}
+		focus = [FocusedNode{ node: cx.Node(doc_node_view(root)), ancestors: []cx.Node{} }]
+		doc_root = true
 	}
 	last_idx := steps.len - 1
 	// terminal labeled-field unwrap applies only to a "pure
@@ -3666,7 +4142,12 @@ fn walk_binding_path_seq(root cx.Node, steps_in []cx.ProgramPathStep, mut env Ma
 	// node-set query such as `$doc/user[@active=true]/name`, which must
 	// return elements). Predicate / descendant / wildcard / parent steps
 	// disqualify the whole path.
-	pure_child_chain := unwrap_terminal && steps.all(it.kind == .child && it.predicates.len == 0)
+	// R-A2: a document query is a NODE-SET query — `/name` on a document
+	// yields matching top-level elements (match semantics, single match
+	// kept as a one-member set), never the §6.2 field collapse: a document
+	// is not a record and its roots are not fields.
+	pure_child_chain := unwrap_terminal && !doc_root
+		&& steps.all(it.kind == .child && it.predicates.len == 0)
 	mut terminal_attr_step := ?cx.ProgramPathStep(none)
 	for i, step in steps {
 		// Defer the terminal attribute step: when the final step is
@@ -3738,7 +4219,10 @@ fn walk_binding_path_seq(root cx.Node, steps_in []cx.ProgramPathStep, mut env Ma
 	// / `[$empty]` see one item rather than the matched element's own
 	// arity (container count). Plain child/attr/member chains keep the
 	// single-node field-read semantics per the §6.2 table.
-	mut node_set_query := false
+	// A document root makes the whole path a node-set query (R-A2): a
+	// single top-level match stays a one-member set so `[$count $d/a]`
+	// answers matches, not the match's own arity.
+	mut node_set_query := doc_root
 	for step in steps {
 		if step.predicates.len > 0 {
 			node_set_query = true
@@ -4319,17 +4803,34 @@ fn apply_step_predicates(focus []FocusedNode, preds []cx.ProgramPathPredicate, m
 							value:     cx.ScalarValue(i64(total))
 							data_type: cx.ScalarType.int_type
 						})
+						// R-A3: while the predicate body evaluates, $_-rooted
+						// paths are node-set forms (no terminal field unwrap).
+						env.pred_nodeset++
 						result := eval_node(body, mut env) or {
 							// Restore bindings on error before propagating
+							env.pred_nodeset--
 							if had_underscore { env.bindings['_'] = saved_underscore } else { env.bindings.delete('_') }
 							if had_pos { env.bindings['_position'] = saved_pos } else { env.bindings.delete('_position') }
 							if had_last { env.bindings['_last'] = saved_last } else { env.bindings.delete('_last') }
 							return err
 						}
+						env.pred_nodeset--
 						// Restore bindings
 						if had_underscore { env.bindings['_'] = saved_underscore } else { env.bindings.delete('_') }
 						if had_pos { env.bindings['_position'] = saved_pos } else { env.bindings.delete('_position') }
 						if had_last { env.bindings['_last'] = saved_last } else { env.bindings.delete('_last') }
+						// R-A4 (#965): an err ARISING in a predicate body
+						// refuses the whole query loudly. A filter must never
+						// fail open (the err was EBV-truthy → select-all) or
+						// silently closed. Err VALUES navigated as data never
+						// reach here as the predicate RESULT unless the body
+						// itself produced the err.
+						if is_err_value(result) {
+							return EvalError{
+								code:    'cx-err:CXER0001'
+								message: 'predicate raised ${err_value_summary(result)}'
+							}
+						}
 						ebv := node_ebv(result) or { return iterator_ebv_eval_error() }
 						if ebv {
 							next << f
@@ -4474,14 +4975,40 @@ fn walk_path_step(val cx.Node, step cx.ProgramPathStep) !cx.Node {
 	if val is cx.MapNode {
 		return walk_path_step(cx.Node(map_node_view(val)), step)!
 	}
-	// O4 (spec/code.md §6.2): a `/child`, `/@attr`, or `.member` read step
-	// applied to a Sequence / Array DISTRIBUTES over the items, mapping the
-	// step across each and collecting the results into a Sequence. Items
+	// R-A2 (2026-08-25): a DocumentNode is a container NODE — steps address
+	// its top-level items through the document view, identically on every
+	// engine path. A typed `@attr` read refuses (documents carry no
+	// attributes; PS-1 non-element refusal).
+	if val is cx.DocumentNode {
+		if step.kind == .attr {
+			return EvalError{
+				code:    'cx-err:CXER0001'
+				message: 'attribute path step on a document value'
+			}
+		}
+		return walk_path_step(cx.Node(doc_node_view(val)), step)!
+	}
+	// Raw collection nodes (parsed content reached as a value) navigate
+	// through their marker views — one topology on both lanes (#847/#587).
+	if val is cx.SequenceNode {
+		return walk_path_step(cx.Node(cx.Element{ name: seq_marker_name, items: val.items }),
+			step)!
+	}
+	if val is cx.ArrayNode {
+		return walk_path_step(cx.Node(cx.Element{ name: arr_marker_name, items: val.items }),
+			step)!
+	}
+	// O4 (spec/code.md §6.2): a `/child`, `/@attr`, `.member`, or `/*` read
+	// step applied to a Sequence / Array DISTRIBUTES over the items, mapping
+	// the step across each and collecting the results into a Sequence. Items
 	// that are non-elements, or where the step does not resolve, are
 	// SKIPPED (not an error); empty in → empty out. This is the
 	// optional-read projection the SAP pins (missing/non-element skipped).
+	// R-A6(i): `/*` distributes like every other step — the union of the
+	// members' children, never the member list itself.
 	if val is cx.Element && (val.name == seq_marker_name || val.name == arr_marker_name) {
-		if step.kind == .attr || step.kind == .child || step.kind == .member {
+		if step.kind == .attr || step.kind == .child || step.kind == .member
+			|| step.kind == .wildcard_children {
 			mut projected := []cx.Node{}
 			for item in val.items {
 				r := walk_path_step(item, step) or { continue }
@@ -4490,6 +5017,16 @@ fn walk_path_step(val cx.Node, step cx.ProgramPathStep) !cx.Node {
 				// null stand-in"), same as the error-skip above.
 				if is_absence_node(r) {
 					continue
+				}
+				if step.kind == .wildcard_children {
+					// Each member's `/*` result is a children wrapper —
+					// splice, so the union is flat (children, not wrappers).
+					if r is cx.Element && (r.name == '' || r.name == seq_marker_name) {
+						for c in r.items {
+							projected << c
+						}
+						continue
+					}
 				}
 				projected << r
 			}
@@ -4554,6 +5091,15 @@ fn walk_path_step(val cx.Node, step cx.ProgramPathStep) !cx.Node {
 		}
 		.attr {
 			if val is cx.Element {
+				// R-A6(v): a typed `@attr` read on a MAP refuses like every
+				// non-element (PS-1) — `.key` is the map read; the former
+				// silent absence hid exactly the @/.key confusion.
+				if val.name == map_marker_name {
+					return EvalError{
+						code:    'cx-err:CXER0001'
+						message: 'attribute path step on a map value (map keys read with .key)'
+					}
+				}
 				// 1. Real attributes
 				for a in val.attrs {
 					if a.name == step.name {
@@ -4676,10 +5222,11 @@ fn walk_path_step(val cx.Node, step cx.ProgramPathStep) !cx.Node {
 				}
 				return cx.Element{ name: '', items: kids }
 			}
-			return EvalError{
-				code:    'cx-err:CXER0001'
-				message: '/* path step on non-element value'
-			}
+			// R-A6(iii): `/*` is a child step — on a scalar (or any other
+			// childless value) it yields ABSENCE, exactly as `/name` already
+			// did (PS-1 kind-driven totality). The typed read (`@attr`)
+			// stays the loud one.
+			return cx.Element{ name: seq_marker_name }
 		}
 		.descendant, .descendant_wildcard, .parent {
 			// Slow-path step kinds (G1/G2). The
@@ -5157,8 +5704,19 @@ fn dispatch_call_fallback(name string, args []cx.Node, mut env MatchEnv) ?cx.Nod
 	// cx:eval-tree — tree-eval module function (spec/modules/cx.md §3.4), the
 	// function-form dual of [?eval]. Env-aware (capability gate + shared depth
 	// counter + context isolation). Tried before the env-free chain.
+	// RULED: VC-15 (#955) — the error is converted at the boundary, NOT
+	// propagated. This function returns `?cx.Node`, where V collapses a
+	// propagated `!` into `none`; `none` here means only "this dispatcher does
+	// not own this name", so the caller walks on and reports `no callable
+	// "cx:eval-tree"`. A real raised error — an arity refusal, a capability
+	// denial, CXER4114 depth — therefore presented as a MISSING FUNCTION. That
+	// is how #940's audit came to record cx:eval-tree as answering "no
+	// callable" at zero args: it was never missing, its arity error was being
+	// swallowed. Every option-returning *_stdlib_builtin_env hook and every
+	// `!`-propagation site in this file was enumerated (VC-6): this was the
+	// only one with the defect, so the conversion closes the class here.
 	if name == 'cx:eval-tree' {
-		return eval_tree_fn(args, mut env)!
+		return eval_tree_fn(args, mut env) or { closure_err_to_value(err) }
 	}
 	// cx: self-host core surface (spec/modules/cx.md §2.1, #437) — always
 	// available, no [?lib] required. Env-aware so cx:select runs its runtime
@@ -6460,75 +7018,45 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 			// skipped silently per spec/code.md §6.3 numeric-builtin
 			// semantics. Empty sequence yields 0 (consistent with
 			// count(empty) → 0).
+			//
+			// The spec reads "maximum numeric scalar in `seq`" — it names
+			// no promotion, so absent a float the WINNER IS RETURNED IN
+			// ITS OWN KIND. An int/float mix still yields the winner's
+			// float view (the long-standing behavior, preserved); an
+			// EXACT/float mix is refused instead (CO-14 — the aggregates
+			// adopt the heads' L44 discipline). See agg_classify for why
+			// the exact family has to be recognised by kind (#1017).
 			if args.len == 0 { return none }
-			mut best_i := i64(0)
-			mut best_f := f64(0)
-			mut use_float := false
+			mut best := AggNum{}
 			mut seen := false
+			mut saw_float := false
+			mut saw_exact := false
 			// Two surfaces (§6.3): a single sequence argument
 			// (`[$min (5,3,8)]`) iterates that sequence; multiple scalar
 			// arguments (`[$min 5 3 8]`) fold over the argument list.
 			items := if args.len == 1 { iterate(args[0]) } else { args }
 			for raw in items {
-				// Atomize attribute-shaped Elements (single ScalarNode body)
-				// to their scalar value — same convention as `sum`.
-				mut it := raw
-				if raw is cx.Element {
-					if raw.items.len == 1 {
-						only := raw.items[0]
-						if only is cx.ScalarNode {
-							it = cx.Node(only)
-						}
-					}
+				n := agg_classify(raw) or { continue }
+				if n.lane == 1 {
+					saw_float = true
+				} else if n.lane == 2 {
+					saw_exact = true
 				}
-				if it is cx.ScalarNode {
-					v := it.value
-					mut as_i := i64(0)
-					mut as_f := f64(0)
-					mut got_int := false
-					mut got_float := false
-					match v {
-						i64 { as_i = v; got_int = true }
-						f64 { as_f = v; got_float = true }
-						string {
-							t := v.trim_space()
-							if t.len > 0 && parses_as_i64(t) {
-								as_i = t.i64(); got_int = true
-							} else if t.len > 0 && parses_as_f64(t) {
-								as_f = t.f64(); got_float = true
-							}
-						}
-						else {}
-					}
-					if got_int {
-						if !seen {
-							best_i = as_i
-							seen = true
-						} else if use_float {
-							f := f64(as_i)
-							if (name == 'max' && f > best_f) || (name == 'min' && f < best_f) {
-								best_f = f
-							}
-						} else {
-							if (name == 'max' && as_i > best_i) || (name == 'min' && as_i < best_i) {
-								best_i = as_i
-							}
-						}
-					} else if got_float {
-						if !seen {
-							best_f = as_f
-							use_float = true
-							seen = true
-						} else {
-							if !use_float {
-								best_f = f64(best_i)
-								use_float = true
-							}
-							if (name == 'max' && as_f > best_f) || (name == 'min' && as_f < best_f) {
-								best_f = as_f
-							}
-						}
-					}
+				// CO-14: the exact family and float do not mix. Refused at
+				// the item that COMPLETES the mix, so the verdict is the
+				// same whichever order the operands arrive in — and a lazy
+				// source stops being pulled the moment it is decided.
+				if saw_exact && saw_float {
+					return agg_unbridged_err('\$${name}')
+				}
+				if !seen {
+					best = n
+					seen = true
+					continue
+				}
+				c := agg_cmp(n, best)
+				if (name == 'max' && c > 0) || (name == 'min' && c < 0) {
+					best = n
 				}
 			}
 			if !seen {
@@ -6537,14 +7065,17 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 					data_type: cx.ScalarType.int_type
 				})
 			}
-			if use_float {
+			if saw_float {
 				return cx.Node(cx.ScalarNode{
-					value:     cx.ScalarValue(best_f)
+					value:     cx.ScalarValue(best.f)
 					data_type: cx.ScalarType.float_type
 				})
 			}
+			if best.lane == 2 {
+				return agg_exact_node(best.img, best.dec)
+			}
 			return cx.Node(cx.ScalarNode{
-				value:     cx.ScalarValue(best_i)
+				value:     cx.ScalarValue(best.i)
 				data_type: cx.ScalarType.int_type
 			})
 		}
@@ -6552,75 +7083,86 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 			// sum(seq) — total numeric scalars in a sequence. Non-
 			// numeric items are skipped (matching max/min). Empty
 			// sequence yields 0. Integer-only inputs return an
-			// integer; any float promotes the result to float.
+			// integer; an int/float mix promotes the result to float.
 			//
 			// Attribute-shaped Elements (single ScalarNode body, as
 			// materialised by the `@name` / `attribute::name` path
 			// step) atomize to their scalar value per XPath 3.1
 			// §14.4.4. Numeric strings parse as numbers (XPath fn:sum
 			// applies fn:number to non-numeric atomized values).
+			// Three accumulator lanes, per the kinds actually present:
+			// checked i64 (the default), exact base-10 digit arithmetic
+			// (engaged by a decimal or bigint operand — the same
+			// numeric_exact fold `+` uses, so `[$sum (a, b)]` agrees with
+			// `[+ a b]`), and f64. A float collapses the INT lane into
+			// f64 (§6.5's promotion, unchanged); it does NOT collapse the
+			// exact lane — that mix is CO-14's refusal, so `[$sum (a, b)]`
+			// agrees with `[+ a b]` on the error too, not just the total.
 			if args.len == 0 { return none }
+			mut lane := 0 // 0 = int, 1 = float, 2 = exact
 			mut total_i := i64(0)
 			mut total_f := f64(0)
-			mut use_float := false
+			mut total_x := '0'
+			mut any_dec := false
+			mut saw_float := false
+			mut saw_exact := false
 			// Single sequence argument iterates that sequence; multiple
 			// scalar arguments fold over the argument list (see max/min).
 			items := if args.len == 1 { iterate(args[0]) } else { args }
 			for raw in items {
-				// Atomize: attribute-shaped Elements (single scalar
-				// body) flatten to their scalar; everything else passes
-				// through as-is.
-				mut it := raw
-				if raw is cx.Element {
-					if raw.items.len == 1 {
-						only := raw.items[0]
-						if only is cx.ScalarNode {
-							it = cx.Node(only)
-						}
-					}
+				n := agg_classify(raw) or { continue }
+				if n.lane == 1 {
+					saw_float = true
+				} else if n.lane == 2 {
+					saw_exact = true
 				}
-				if it is cx.ScalarNode {
-					v := it.value
-					match v {
-						i64 {
-							if use_float { total_f += f64(v) } else { total_i = checked_add_i64(total_i, v) or { return math_overflow_err('sum') } }
-						}
-						f64 {
-							if !use_float {
-								total_f = f64(total_i)
-								use_float = true
-							}
-							total_f += v
-						}
-						string {
-							// XPath fn:sum applies fn:number() to
-							// non-numeric atomized values. Try i64 first
-							// (preserves integer-only sum result type),
-							// then f64; on parse failure the value is
-							// skipped (matches max/min's non-numeric
-							// skip).
-							trimmed := v.trim_space()
-							if trimmed.len > 0 && parses_as_i64(trimmed) {
-								v_int := trimmed.i64()
-								if use_float { total_f += f64(v_int) } else { total_i = checked_add_i64(total_i, v_int) or { return math_overflow_err('sum') } }
-							} else if trimmed.len > 0 && parses_as_f64(trimmed) {
-								v_f := trimmed.f64()
-								if !use_float {
-									total_f = f64(total_i)
-									use_float = true
-								}
-								total_f += v_f
-							}
-						}
-						else {}
+				// CO-14 — see max/min. The exact lane is end-to-end: no
+				// float may collapse it, in either arrival order.
+				if saw_exact && saw_float {
+					return agg_unbridged_err('\$sum')
+				}
+				if n.lane == 1 {
+					// float — the ruled promotion, from any lane.
+					if lane != 1 {
+						total_f = if lane == 2 { total_x.f64() } else { f64(total_i) }
+						lane = 1
 					}
+					total_f += n.f
+					continue
+				}
+				if lane == 1 {
+					total_f += n.f
+					continue
+				}
+				if n.lane == 2 {
+					if lane == 0 {
+						total_x = total_i.str()
+						lane = 2
+					}
+					if n.dec {
+						any_dec = true
+					}
+					total_x = cx.cx_exact_add(total_x, n.img)
+					continue
+				}
+				// int, in whichever exact lane is running. The int-only
+				// lane stays CHECKED — an i64 overflow raises CXER3000
+				// exactly as `[+ i i]` does, rather than silently
+				// widening to bigint.
+				if lane == 2 {
+					total_x = cx.cx_exact_add(total_x, n.img)
+				} else {
+					total_i = checked_add_i64(total_i, n.i) or { return math_overflow_err('sum') }
 				}
 			}
-			if use_float {
+			if lane == 1 {
 				return cx.Node(cx.ScalarNode{
 					value:     cx.ScalarValue(total_f)
 					data_type: cx.ScalarType.float_type
 				})
+			}
+			if lane == 2 {
+				return agg_exact_node(total_x, any_dec)
 			}
 			return cx.Node(cx.ScalarNode{
 				value:     cx.ScalarValue(total_i)
@@ -6907,38 +7449,51 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 		}
 		// ── §6.5 P3 — numeric ───────────────────────────────────────
 		'avg' {
-			if args.len != 1 { return none }
-			arg := args[0]
-			mut total := f64(0)
+			// avg(seq) — arithmetic mean of the numeric scalars, non-
+			// numerics skipped and empty yielding float 0.0 (§6.5).
+			//
+			// This shares `sum`'s classifier now (CO-14). It used to run a
+			// private i64/f64/string match, which meant it could not SEE the
+			// exact kinds at all: a decimal's base-10 image is a V `string`,
+			// so `[$avg (19.99, 19.99)]` fell into the fn:number string arm
+			// and came back f64 — a `[returns decimal]` mean silently
+			// becoming a float, #1017's defect surviving in the one
+			// aggregate #1017 did not reach. A bigint beyond 2^53 saturated
+			// there too.
+			//
+			// Two surfaces, matching sum/min/max and the §6.5 sentence that
+			// names all four: one sequence argument, or positional scalars.
+			if args.len == 0 { return none }
+			mut total_f := f64(0)
+			mut total_x := '0'
+			mut any_dec := false
 			mut count := 0
-			items := iterate(arg)
+			mut saw_float := false
+			mut saw_exact := false
+			items := if args.len == 1 { iterate(args[0]) } else { args }
 			for raw in items {
-				// Atomize attribute-shaped Elements (matches `sum` / `min` / `max`).
-				mut it := raw
-				if raw is cx.Element {
-					if raw.items.len == 1 {
-						only := raw.items[0]
-						if only is cx.ScalarNode {
-							it = cx.Node(only)
-						}
-					}
+				n := agg_classify(raw) or { continue }
+				if n.lane == 1 {
+					saw_float = true
+				} else if n.lane == 2 {
+					saw_exact = true
 				}
-				if it is cx.ScalarNode {
-					v := it.value
-					match v {
-						i64 { total += f64(v); count++ }
-						f64 { total += v; count++ }
-						string {
-							t := v.trim_space()
-							if t.len > 0 && parses_as_i64(t) {
-								total += f64(t.i64()); count++
-							} else if t.len > 0 && parses_as_f64(t) {
-								total += t.f64(); count++
-							}
-						}
-						else {}
-					}
+				// CO-14 — the same refusal, and the same completes-the-mix
+				// timing, that sum/min/max apply.
+				if saw_exact && saw_float {
+					return agg_unbridged_err('\$avg')
 				}
+				total_f += n.f
+				if n.lane != 1 {
+					// int / bigint / decimal all carry an exact image, so
+					// the exact numerator is free to accumulate alongside
+					// the f64 one; only `saw_exact` decides which is used.
+					if n.dec {
+						any_dec = true
+					}
+					total_x = cx.cx_exact_add(total_x, n.img)
+				}
+				count++
 			}
 			if count == 0 {
 				return cx.Node(cx.ScalarNode{
@@ -6946,8 +7501,28 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 					data_type: cx.ScalarType.float_type
 				})
 			}
+			if saw_exact {
+				// The exact mean is the exact sum divided by the count —
+				// the SAME cx_exact_div `/` folds with (L44 §5), so
+				// `[$avg (a, b)]` and `[/ [+ a b] 2]` agree by construction.
+				// CO-14 RESERVED this cell — a non-terminating quotient —
+				// and kept its float promotion, because a 1-argument
+				// aggregate has nowhere to carry a precision + mode and the
+				// rounding rule was not CO-14's to invent. CO-17 RULES it,
+				// together with $div/$idiv which posed the identical
+				// question (#1044): the core lane REFUSES BY NAME rather
+				// than defaulting. `avg` cannot carry a rounding context,
+				// so it says so and names the one that can. The float
+				// promotion is GONE from this cell — it was the last place
+				// an exact fold silently produced a binary float, which is
+				// #1017's defect in its final hiding spot.
+				q := cx.cx_exact_div(total_x, count.str()) or {
+					return exact_div_err('\$avg', err)
+				}
+				return agg_exact_node(q, any_dec)
+			}
 			return cx.Node(cx.ScalarNode{
-				value:     cx.ScalarValue(total / f64(count))
+				value:     cx.ScalarValue(total_f / f64(count))
 				data_type: cx.ScalarType.float_type
 			})
 		}
@@ -6969,6 +7544,12 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				v := a0.value
 				match v {
 					i64 {
+						// The int-only lane stays CHECKED: |MIN| has no i64
+						// image and `-v` silently answers MIN itself — the
+						// same CXER3000 `[- 0 MIN]`/`[* MIN -1]` raise.
+						if v == eval_i64_min {
+							return math_overflow_err('abs')
+						}
 						out := if v < 0 { -v } else { v }
 						return cx.Node(cx.ScalarNode{
 							value:     cx.ScalarValue(out)
@@ -7083,11 +7664,21 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER0100',
 					'mod takes 2 arguments, got ${args.len}')
 			}
+			// #1016 / L44: an exact-family operand routes to the exact lane,
+			// exactly as `+ - * /` do (exact_fold_op). Before the exact lane
+			// existed, #38 made decimal/bigint REJECT here so they could not
+			// be silently i64/f64-wrapped — but refusal was the workaround,
+			// not the rule: L44 rules `decimal ⊕ int` EXACT and only
+			// `decimal ⊕ float` an error. This restores that line for `%`
+			// (and `[$mod]`, its other spelling), which the `+ − × ÷`
+			// rollout had skipped.
+			if args_have_decimal_bigint(args) {
+				return exact_mod_op(args)
+			}
 			// Strict numeric atomization — same contract as [+]/[-]/[*]
 			// (atomize_numeric): only i64/f64-TYPED scalars qualify. A
-			// bigint or decimal (string-stored, NOT f64-representable) and a
-			// string-typed scalar all reject here rather than silently
-			// lossy-converting (#38: idiv/mod were i64-wrapping a bigint).
+			// string-typed scalar rejects here rather than silently
+			// lossy-converting.
 			a_f, a_is_int := atomize_numeric(args[0]) or {
 				return mk_err('cx-err:CXER0100',
 					'mod: argument 1 is not numeric')
@@ -7127,8 +7718,22 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER0100',
 					'div takes 2 arguments, got ${args.len}')
 			}
-			// Strict numeric atomization (see mod, above): bigint/decimal/
-			// string operands reject instead of lossy-converting (#38).
+			// #1044 / CO-17: an exact-family operand routes to the heads'
+			// exact lane — the SAME cx_exact_div `/` folds with, so
+			// `[$div a b]` and `[/ a b]` agree by construction on kind,
+			// scale and refusal (#598: one implementation, all spellings).
+			// This retires the #38 workaround below, which rejected
+			// decimal/bigint as "not numeric" only because there was no
+			// exact lane to send them to yet — the same debt `%`/`[$mod]`
+			// paid off in #1016 and the aggregates in #1046. A terminating
+			// quotient comes back exact; a NON-terminating one refuses by
+			// name, naming `[$math:div-decimal]` as the precision+mode
+			// context (exact_div_err).
+			if args_have_decimal_bigint(args) {
+				return exact_fold_op_named('/', '\$div', args)
+			}
+			// Strict numeric atomization (see mod, above): a string operand
+			// rejects instead of lossy-converting (#38).
 			a_f, a_int := atomize_numeric(args[0]) or {
 				return mk_err('cx-err:CXER0100',
 					'div: argument 1 is not numeric')
@@ -7141,11 +7746,15 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER0101', 'division by zero')
 			}
 			if a_int && b_int {
-				// V's i64 cast truncates toward zero.
-				return cx.Node(cx.ScalarNode{
-					value:     cx.ScalarValue(i64(a_f / b_f))
-					data_type: cx.ScalarType.int_type
-				})
+				// The int/int quotient computes in i64, never through f64:
+				// the float route rounded operands past 2^53 into the wrong
+				// int and saturated MIN ÷ -1 to i64.max (#1044 audit). The
+				// int-only lane stays CHECKED — the one over-i64 cell
+				// refuses CXER3000 like `[+ i i]`, never widens silently.
+				ai := atomize_int(args[0]) or { return mk_err('cx-err:CXER0100', 'div: argument 1 is not numeric') }
+				bi := atomize_int(args[1]) or { return mk_err('cx-err:CXER0100', 'div: argument 2 is not numeric') }
+				q := checked_div_i64(ai, bi) or { return math_overflow_err('div') }
+				return int_scalar_node(q)
 			}
 			return cx.Node(cx.ScalarNode{
 				value:     cx.ScalarValue(a_f / b_f)
@@ -7160,22 +7769,47 @@ fn invoke_builtin(name string, args []cx.Node) ?cx.Node {
 				return mk_err('cx-err:CXER0100',
 					'idiv takes 2 arguments, got ${args.len}')
 			}
-			// Strict numeric atomization (see mod, above): bigint/decimal/
-			// string operands reject instead of lossy-converting (#38).
-			a_f, _ := atomize_numeric(args[0]) or {
+			// #1044 / CO-17: the exact-family lane, as for `div` above —
+			// §6.5's "integer division regardless of operand kinds" is
+			// answered over decimal/bigint by the exact truncated quotient,
+			// which is the complement of the `%` remainder #1016 already
+			// ships (`a = b × idiv + mod`, both truncating toward zero).
+			// CXER3002 cannot arise here: an integral quotient always
+			// terminates, so `idiv` never needs the rounding context `div`
+			// must ask for.
+			if args_have_decimal_bigint(args) {
+				return exact_idiv_op(args)
+			}
+			// Strict numeric atomization (see mod, above): a string operand
+			// rejects instead of lossy-converting (#38).
+			a_f, a_int := atomize_numeric(args[0]) or {
 				return mk_err('cx-err:CXER0100',
 					'idiv: argument 1 is not numeric')
 			}
-			b_f, _ := atomize_numeric(args[1]) or {
+			b_f, b_int := atomize_numeric(args[1]) or {
 				return mk_err('cx-err:CXER0100',
 					'idiv: argument 2 is not numeric')
 			}
 			if b_f == 0.0 {
 				return mk_err('cx-err:CXER0101', 'division by zero')
 			}
+			if a_int && b_int {
+				// int/int computes in i64, never through f64 (see `div`):
+				// checked, CXER3000 on the one over-i64 cell (MIN ÷ -1).
+				ai := atomize_int(args[0]) or { return mk_err('cx-err:CXER0100', 'idiv: argument 1 is not numeric') }
+				bi := atomize_int(args[1]) or { return mk_err('cx-err:CXER0100', 'idiv: argument 2 is not numeric') }
+				q := checked_div_i64(ai, bi) or { return math_overflow_err('idiv') }
+				return int_scalar_node(q)
+			}
+			// Float lane: a quotient outside i64 refuses instead of the
+			// silent saturation V's i64 cast performs (XPath FOAR0002).
+			qf := a_f / b_f
+			if qf >= 9223372036854775808.0 || qf < -9223372036854775808.0 {
+				return math_overflow_err('idiv')
+			}
 			// V's i64 cast already truncates toward zero.
 			return cx.Node(cx.ScalarNode{
-				value:     cx.ScalarValue(i64(a_f / b_f))
+				value:     cx.ScalarValue(i64(qf))
 				data_type: cx.ScalarType.int_type
 			})
 		}
@@ -7926,6 +8560,12 @@ fn count_items(n cx.Node) int {
 	if n is cx.IteratorNode {
 		return iterate(n).len
 	}
+	// R-A5 items-view: a document counts its top-level items (leading
+	// prolog comments are document metadata, not items; interior
+	// non-element items count — `/*` skips them, count does not).
+	if n is cx.DocumentNode {
+		return n.elements.len
+	}
 	if n is cx.Element {
 		// Table sequence view (D22, #404): count rows, not (absent)
 		// CXDM children.
@@ -7958,6 +8598,26 @@ fn coerce_text_to_scalar(n cx.Node) cx.Node {
 		})
 	}
 	return n
+}
+
+// atomize_single_item_element yields the typed content value of a NAMED
+// element holding exactly one scalar/text item (`[name 'ada']` → 'ada'),
+// for comparison-position atomization. Markers, multi-item and complex-
+// content elements return none — they compare structurally.
+fn atomize_single_item_element(n cx.Node) ?cx.Node {
+	if n is cx.Element {
+		if n.name != '' && n.name != seq_marker_name && n.name != arr_marker_name
+			&& n.name != map_marker_name && n.items.len == 1 {
+			it := n.items[0]
+			if it is cx.ScalarNode {
+				return cx.Node(it)
+			}
+			if it is cx.TextNode {
+				return coerce_text_to_scalar(cx.Node(it))
+			}
+		}
+	}
+	return none
 }
 
 pub fn nodes_equal(a_in cx.Node, b_in cx.Node) bool {
@@ -8020,6 +8680,41 @@ pub fn nodes_equal(a_in cx.Node, b_in cx.Node) bool {
 			}
 		}
 		return false
+	}
+	// R-A3 companion (the settled 2026-05-31 comparison-atomization rule,
+	// coverage completed 2026-08-25): in comparison position
+	// (1) a node-set / sequence compared against a non-sequence comparand is
+	//     EXISTENTIAL — any member satisfying the comparison satisfies it
+	//     (XPath general comparison; an empty set satisfies nothing);
+	// (2) an element whose content is a single scalar/text item atomizes to
+	//     that item's typed value against a scalar comparand — this is what
+	//     keeps `user[= $_/name 'ada']` true now that predicate-rooted paths
+	//     are node-set forms. Element-vs-element comparison stays structural.
+	a_is_set := a is cx.Element
+		&& ((a as cx.Element).name == '' || (a as cx.Element).name == seq_marker_name)
+	b_is_set := b is cx.Element
+		&& ((b as cx.Element).name == '' || (b as cx.Element).name == seq_marker_name)
+	if a_is_set != b_is_set {
+		set_el := if a_is_set { a as cx.Element } else { b as cx.Element }
+		other := if a_is_set { b } else { a }
+		for m in set_el.items {
+			if nodes_equal(m, other) {
+				return true
+			}
+		}
+		return false
+	}
+	if !a_is_set && !b_is_set {
+		if av := atomize_single_item_element(a) {
+			if b_c is cx.ScalarNode || b is cx.TextNode {
+				return nodes_equal(av, b)
+			}
+		}
+		if bv := atomize_single_item_element(b) {
+			if a_c is cx.ScalarNode || a is cx.TextNode {
+				return nodes_equal(a, bv)
+			}
+		}
 	}
 	if a is cx.Element && b is cx.Element {
 		// #927: MAP envelopes take cxdm §5.3 map equality, not element
@@ -9009,15 +9704,31 @@ fn filter_path_predicates_idx(seq []int, preds []cx.ProgramPathPredicate, bind s
 							value:     cx.ScalarValue(i64(total))
 							data_type: cx.ScalarType.int_type
 						})
+						// R-A3: $_-rooted paths are node-set forms while the
+						// predicate body evaluates (no terminal field unwrap).
+						env.pred_nodeset++
 						result := eval_node(body, mut env) or {
+							env.pred_nodeset--
 							if had_underscore { env.bindings['_'] = saved_underscore } else { env.bindings.delete('_') }
 							if had_pos { env.bindings['_position'] = saved_pos } else { env.bindings.delete('_position') }
 							if had_last { env.bindings['_last'] = saved_last } else { env.bindings.delete('_last') }
 							return err
 						}
+						env.pred_nodeset--
 						if had_underscore { env.bindings['_'] = saved_underscore } else { env.bindings.delete('_') }
 						if had_pos { env.bindings['_position'] = saved_pos } else { env.bindings.delete('_position') }
 						if had_last { env.bindings['_last'] = saved_last } else { env.bindings.delete('_last') }
+						// R-A4 (#965): an err arising in a predicate body
+						// refuses the whole query loudly — never fail-open
+						// (err was EBV-truthy → select-all), never silently
+						// closed. This is also what makes `cx select` refuse
+						// an unresolved callable instead of matching all.
+						if is_err_value(result) {
+							return EvalError{
+								code:    'cx-err:CXER0001'
+								message: 'predicate raised ${err_value_summary(result)}'
+							}
+						}
 						ebv := node_ebv(result) or { return iterator_ebv_eval_error() }
 						if ebv {
 							next << idx
@@ -10342,6 +11053,34 @@ pub fn is_err_value(n cx.Node) bool {
 	return false
 }
 
+// err_value_summary renders "CODE: MESSAGE" from an [err …] value's
+// attributes for embedding in a carrying diagnostic (R-A4 predicate
+// refusals). Empty parts are omitted.
+fn err_value_summary(n cx.Node) string {
+	if n is cx.Element {
+		mut ecode := ''
+		mut emsg := ''
+		for a in n.attrs {
+			v := a.value
+			if v is string {
+				if a.name == 'code' {
+					ecode = v
+				} else if a.name == 'message' {
+					emsg = v
+				}
+			}
+		}
+		if ecode != '' && emsg != '' {
+			return '${ecode}: ${emsg}'
+		}
+		if ecode != '' {
+			return ecode
+		}
+		return emsg
+	}
+	return ''
+}
+
 // is_ok_value reports whether a value is the status-only success
 // sentinel `[ok]` (§9.1.1). Value-bearing successes return the raw
 // value, not an envelope, so they are not is_ok_value.
@@ -10882,17 +11621,22 @@ fn eval_lib(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 		return module_resolve_eval_error(err.msg())
 	}
 	prefix := module_call_prefix(libnode)
-	// §6.4.4 module non-widening (#808): inside a tree-eval the `[?lib]` set
-	// may NARROW but not widen. A prefix the caller already holds is a
-	// re-declaration and passes; anything else is refused. Checked AFTER
-	// resolve so a malformed / unresolvable lib still reports its own
+	// §6.4.4 / modules/cx.md §3.2 module non-widening (#808): inside an eval
+	// the `[?lib]` set may NARROW but not widen. A prefix the caller already
+	// holds is a re-declaration and passes; anything else is refused. Checked
+	// AFTER resolve so a malformed / unresolvable lib still reports its own
 	// error, and BEFORE the alias registration below — which writes into
 	// the SHARED module_table, i.e. the widening this rule exists to stop.
+	//
+	// The allow-list is installed by run_sandboxed_eval, so this one check
+	// covers all four eval forms — [?eval], cx:eval-tree, cx:eval, cx:render
+	// (#940 / VC-6 put the last two on the same sandbox). The message
+	// therefore says "an eval", not "tree-eval".
 	if allowed := env.state.tree_eval_lib_allow {
 		if prefix !in allowed {
 			return EvalError{
 				code:    'cx-err:CXER4113'
-				message: 'cx-err:CXER4113: tree-eval may not widen the module set — `[?lib]` introducing `${prefix}` is not in the caller\'s [?lib] set (code.md §6.4.4: inherits the caller\'s set; may narrow, not widen)'
+				message: 'an eval may not widen the module set — `[?lib]` introducing `${prefix}` is not in the caller\'s [?lib] set (code.md §6.4.4 / modules/cx.md §3.2: inherits the caller\'s set; may narrow, not widen)'
 			}
 		}
 	}
@@ -14729,6 +15473,10 @@ pub fn iterate(n cx.Node) []cx.Node {
 		}
 		return [n]
 	}
+	// R-A5 items-view: a document iterates its top-level items.
+	if n is cx.DocumentNode {
+		return n.elements
+	}
 	// SequenceNode / ArrayNode are already eager — iterate over their items.
 	if n is cx.SequenceNode {
 		return n.items
@@ -16173,27 +16921,22 @@ fn eval_bulkhead(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 			message: '[?bulkhead] requires :body' }
 	}
 	key := state_key(d)
-	mut bh := env.state.bh_get(key)
-	// Record max + queue cap so the cooperative scheduler's settle phase
-	// (scheduler.v `settle`) can detect "slot freed → wake first
-	// queued waiter" without reaching back into the originating
-	// directive's AST.
-	bh.max_concurrent = int(max_n)
-	bh.queue_cap = int(queue_n)
-	env.state.bh_set(key, bh)
 
-	if i64(bh.in_flight) < max_n {
-		bh.in_flight++
-		env.state.bh_set(key, bh)
+	// #1050: the permit moves inside SINGLE write-lock critical sections
+	// (state_locks.v `bh_try_acquire` / `bh_try_enqueue` / `bh_release`).
+	// The former shape — bh_get → test `in_flight` → mutate → bh_set —
+	// was a non-atomic read-modify-write in both directions: concurrent
+	// arrivals lost each other's increments (admitting over capacity) and
+	// concurrent completions lost decrements, which pinned `in_flight`
+	// high forever and shed CXER0152 while the bulkhead sat idle.
+	// `bh_try_acquire` also records :max-concurrent / :queue on every
+	// arrival without clobbering a concurrent worker's counter update.
+	if env.state.bh_try_acquire(key, max_n, queue_n) {
 		result := eval_node(body, mut env) or {
-			mut after_err := env.state.bh_get(key)
-			after_err.in_flight--
-			env.state.bh_set(key, after_err)
+			env.state.bh_release(key)
 			return err
 		}
-		mut after_ok := env.state.bh_get(key)
-		after_ok.in_flight--
-		env.state.bh_set(key, after_ok)
+		env.state.bh_release(key)
 		return result
 	}
 
@@ -16203,30 +16946,27 @@ fn eval_bulkhead(d cx.ProgramDirective, mut env MatchEnv) !cx.Node {
 	// frees. Outside a task context, saturated means immediate
 	// CXER0152 — Phase A semantics preserved.
 	tid := env.state.current_task_get()
-	if i64(bh.queued) < queue_n && tid != 0
-	   && env.state.scheduler_task_has(tid) {
-		bh.queued++
-		bh.wait_queue << tid
-		env.state.bh_set(key, bh)
+	if tid != 0 && env.state.scheduler_task_has(tid) {
+		// Resolve the task record BEFORE enqueueing: a missing record is
+		// an internal error, and enqueueing first would strand a phantom
+		// wait-queue entry that no task will ever consume.
 		t := env.state.scheduler_task_get(tid) or {
 			return EvalError{ code: 'cx-err:CXER0001',
 				message: '[?bulkhead] internal: current_task_id has no record' }
 		}
-		mut tr := unsafe { t }
-		tr.queued_bulkhead = key
-		task_yield(tr, TaskYieldKind.bulkhead_queue)
-		// On resume, scheduler has already done in_flight++ /
-		// queued-- on our behalf. Run body, then release the slot.
-		result := eval_node(body, mut env) or {
-			mut after_err := env.state.bh_get(key)
-			after_err.in_flight--
-			env.state.bh_set(key, after_err)
-			return err
+		if env.state.bh_try_enqueue(key, queue_n, tid) {
+			mut tr := unsafe { t }
+			tr.queued_bulkhead = key
+			task_yield(tr, TaskYieldKind.bulkhead_queue)
+			// On resume, scheduler has already done in_flight++ /
+			// queued-- on our behalf. Run body, then release the slot.
+			result := eval_node(body, mut env) or {
+				env.state.bh_release(key)
+				return err
+			}
+			env.state.bh_release(key)
+			return result
 		}
-		mut after_ok := env.state.bh_get(key)
-		after_ok.in_flight--
-		env.state.bh_set(key, after_ok)
-		return result
 	}
 
 	return mk_err_with_slots('cx-err:CXER0152', [
@@ -16963,6 +17703,41 @@ fn ch_fan_send(mut ch ChannelRecord, value cx.Node) {
 		ch.log.delete(0)
 		ch.base++
 	}
+	$if sup951_probe ? {
+		d := sup951_describe(value)
+		if d != '' {
+			eprintln('sup951 ENQ ch=${ch.name} ${d} log=${ch.log.len} base=${ch.base}')
+		}
+	}
+}
+
+// sup951_describe — #951 probe helper (-d sup951_probe): names a sup-note-
+// bearing transit value and its item count, '' for everything else. The
+// discriminator for the vanished-tail flake: a ':panicked' pair must cross
+// as `seq items=2`; `seq items=1` at ENQ = producer-side collapse, 2-at-ENQ
+// with 1-at-DEQ = transit truncation, `bare-note` = the pair was never a
+// sequence at all.
+fn sup951_describe(value cx.Node) string {
+	if value is cx.Element {
+		if value.name == seq_marker_name {
+			mut has_note := false
+			for it in value.items {
+				if it is cx.Element {
+					if it.name == 'sup-note' {
+						has_note = true
+					}
+				}
+			}
+			if has_note {
+				return 'seq items=${value.items.len}'
+			}
+			return ''
+		}
+		if value.name == 'sup-note' {
+			return 'bare-note'
+		}
+	}
+	return ''
 }
 
 // ch_subscribe registers a consumer cursor. from_pos < 0 = the head (live).
@@ -17004,6 +17779,12 @@ fn ch_sub_next(mut ch ChannelRecord, id int) (cx.Node, i64, string) {
 			if ch.log.len > 0 {
 				v := ch.log[ch.log.len - 1]
 				ch.sub_pos[id] = ch.base + i64(ch.log.len)
+				$if sup951_probe ? {
+					d := sup951_describe(v)
+					if d != '' {
+						eprintln('sup951 DEQ-LATEST ch=${ch.name} ${d} base=${ch.base}')
+					}
+				}
 				return v, ch.base, 'ok'
 			}
 			ch.sub_pos[id] = ch.base
@@ -17014,6 +17795,12 @@ fn ch_sub_next(mut ch ChannelRecord, id int) (cx.Node, i64, string) {
 	if cur < ch.base + i64(ch.log.len) {
 		v := ch.log[int(cur - ch.base)]
 		ch.sub_pos[id] = cur + 1
+		$if sup951_probe ? {
+			d := sup951_describe(v)
+			if d != '' {
+				eprintln('sup951 DEQ ch=${ch.name} ${d} pos=${cur} base=${ch.base}')
+			}
+		}
 		return v, ch.base, 'ok'
 	}
 	if ch.closed {

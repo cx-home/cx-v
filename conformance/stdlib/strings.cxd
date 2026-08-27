@@ -1187,7 +1187,7 @@ cx-err:CXER2902
 [$strings:to-number "3.07"]
 #]]
   [out-text [#
-3.07
+3.07e0
 #]]
  ]
 
@@ -1215,7 +1215,7 @@ cx-err:CXER2902
 [$strings:to-number "1e3"]
 #]]
   [out-text [#
-1000.0
+1.0e3
 #]]
  ]
 
@@ -1229,7 +1229,7 @@ cx-err:CXER2902
 [$strings:to-number "  4.2  "]
 #]]
   [out-text [#
-4.2
+4.2e0
 #]]
  ]
 
@@ -1327,7 +1327,7 @@ cx-err:CXER2902
 [$strings:to-float "5"]
 #]]
   [out-text [#
-5.0
+5.0e0
 #]]
  ]
 

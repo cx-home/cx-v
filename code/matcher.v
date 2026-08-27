@@ -76,6 +76,13 @@ pub mut:
 	// (definitions are top/module-level only, §12.2). Top-level program
 	// eval leaves it false.
 	in_function_body bool
+	// pred_nodeset counts the active CXPath-predicate evaluation depth
+	// (R-A3, 2026-08-25). While > 0, a binding read ROOTED AT `$_` is a
+	// node-set form: the §6.2 terminal-field unwrap does not fire, so
+	// `[$count $_/tag]` inside a predicate counts MATCHES. Scoped to the
+	// predicate sites only — `$_` bound by a pipe stage keeps the
+	// value-position field-read collapse.
+	pred_nodeset int
 	// frame_pool is a per-thread free-list of closure call-frame binding maps (#36).
 	// Allocating a fresh map[string]cx.Node per closure invocation dominated post-B18
 	// alloc pressure (~32M maps on the #14 reduce). Pooling is sound because every path
@@ -535,8 +542,16 @@ pub mut:
 // any queued waiter on this name?" without consulting the originating
 // directive AST. `wait_queue` is a FIFO of task ids parked in the
 // queued-but-not-yet-acquired state; the scheduler pops the head when
-// granting a slot. All fields are touched only while a task holds the
-// scheduler's run-token, so no mutex is needed.
+// granting a slot.
+//
+// #1050 retired this struct's original premise ("touched only while a
+// task holds the scheduler's run-token, so no mutex is needed") — with
+// in-process parallelism real, `:par` workers move the counter from
+// several threads at once. Every mutation of `in_flight` / `queued` /
+// `wait_queue` MUST go through the atomic permit helpers in
+// state_locks.v (`bh_try_acquire`, `bh_try_enqueue`, `bh_release`,
+// `bh_grant_next`), never a bh_get → mutate → bh_set round trip: that
+// split loses concurrent increments AND decrements.
 pub struct BulkheadStateRecord {
 pub mut:
 	max_concurrent int

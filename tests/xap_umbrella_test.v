@@ -293,11 +293,12 @@ fn xa_boot(lane int, auth_block string) (int, string, &os.Process) {
 	host_prog := xa_write(tmp, 'host.cx', xa_host_prog(port, xap_path))
 	os.setenv('CX_REGISTRY', 'file://${reg}', true)
 	os.setenv('CX_XAP_HOST_SEED', xa_host_seed_hex, true)
-	mut proc := os.new_process(cxbin)
-	proc.set_args(['--allow-read', '--allow-write', '--allow-net=127.0.0.1:${port}',
-		'--allow-env', host_prog])
-	proc.set_redirect_stdio()
-	proc.run()
+	// #1006: the boot log is a FILE, never an undrained pipe — see
+	// xh_host_process. This lane waits 10 s before it looks at anything the
+	// host said, so a pipe would have to hold every boot byte until then.
+	hlog := os.join_path(tmp, 'host.log')
+	mut proc := xh_host_process(cxbin, ['--allow-read', '--allow-write',
+		'--allow-net=127.0.0.1:${port}', '--allow-env', host_prog], hlog)
 	// wait for the listener: the [public]-less auth host still serves /attach,
 	// so probe readiness with a bare GET and accept any HTTP answer.
 	mut up := false
@@ -310,7 +311,7 @@ fn xa_boot(lane int, auth_block string) (int, string, &os.Process) {
 		}
 	}
 	if !up {
-		out := proc.stdout_slurp() + proc.stderr_slurp()
+		out := xh_host_log(hlog)
 		proc.signal_kill()
 		panic('auth host never came up: ${out}')
 	}
@@ -717,11 +718,10 @@ fn test_xap_host_boots_a_toy_xap_from_packages() {
 	// boot the host as a real subprocess (CX_REGISTRY bound; loopback only).
 	host_prog := xh_write(tmp, 'host.cx', xh_host_prog(port, xap_path))
 	os.setenv('CX_REGISTRY', 'file://${reg}', true)
-	mut proc := os.new_process(cxbin)
-	proc.set_args(['--allow-read', '--allow-write', '--allow-net=127.0.0.1:${port}',
-		'--allow-env', host_prog])
-	proc.set_redirect_stdio()
-	proc.run()
+	// #1006: log FILE, not an undrained pipe — see xh_host_process.
+	hlog := os.join_path(tmp, 'host.log')
+	mut proc := xh_host_process(cxbin, ['--allow-read', '--allow-write',
+		'--allow-net=127.0.0.1:${port}', '--allow-env', host_prog], hlog)
 	defer {
 		proc.signal_kill()
 		os.unsetenv('CX_REGISTRY')
@@ -737,7 +737,7 @@ fn test_xap_host_boots_a_toy_xap_from_packages() {
 		}
 	}
 	if !up {
-		out := proc.stdout_slurp() + proc.stderr_slurp()
+		out := xh_host_log(hlog)
 		panic('host never came up: ${out}')
 	}
 
@@ -848,6 +848,1174 @@ fn test_xap_host_boots_a_toy_xap_from_packages() {
 	assert ec.contains('/echo/abc'), 'prefix adapter route: ${ec}'
 }
 
+// ── #977 — [$xap:host] forwards `derivers:` into run assembly ─────────────
+//
+// The host built its run opts from tenant + grammar ALONE. Run assembly
+// (composition spec §4.2) refuses any grammar whose `derived=true` nouns are
+// not all bound to a producer — CXER4875 — so a deployment carrying one
+// derived noun could not boot at all: `derived=true` was unusable in EVERY
+// hosted deployment, while the distribution spec §6.3 step 2 attaches "via
+// [$xap:run {grammar: …}] … exactly per the composition spec's runtime
+// integration", and §4.2 IS that integration. The forward carries the same
+// `{derivers: (…)}` value [$xap:run] takes, unchanged.
+//
+// Same registry harness as the auth-off host test above (publish + host are
+// real cx subprocesses over a signed registry), plus the derivers dimension:
+//   (a) a hosted grammar with a derived noun BOOTS and its bound deriver
+//       folds derived values against the hosted runtime;
+//   (b) parity — hosted vs direct [$xap:run] over the SAME grammar and the
+//       SAME bindings produce a byte-identical derivation probe.
+
+// porch as a COMPOSITE over door, carrying the derived noun `visit`
+// ([from 'door/door'] is its read-authority envelope, §4.2 rule 3). This is
+// the shape the host could never boot before the forward.
+const xd_porch_spec = "[feature name=porch version=1.0.0 kind=composite
+ [uses features=door]
+ [nouns [noun name=visit derived=true [field name=count type=int] [from 'door/door']]]
+ [verbs
+  [verb name=welcome effect=act scope=shared consequence=irreversible
+   [intent [do :welcome]]
+   [constituents 'door/unlock door/read-door']
+   [reads visit]]]
+ [governance [grant verb=welcome to=resident]]
+ [requirements
+  [requirement kind=functional as=resident traces=welcome [want 'to welcome a guest'] [so 'arrival is one gesture']]]]"
+
+// the run-assembly binding, written ONCE so the hosted and direct lanes are
+// provably the same input (the parity pin is only worth its name if the two
+// lanes cannot drift apart in the fixture).
+const xd_derivers_opt = '{name: "counter" produces: "porch/visit" reads: ("door/door")}'
+
+// the derivation probe, likewise shared: derive one record as the bound
+// producer, then read the noun's fold route back. `$rt` is whichever runtime
+// the lane put in scope — the hosted one, or the direct one.
+fn xd_derive_probe(out_path string) string {
+	return '      [= \$d [\$xap:derive \$rt {deriver: "counter" noun: "porch/visit"\n' +
+		'                                record: [visit [count 1] [for-door "front"]]}]]\n' +
+		'      [= \$p [probe [committed \$d]\n' +
+		'                    [visits [\$count [\$xap:state \$rt "/visit"]]]\n' +
+		'                    [who [?for [in \$a [\$xap:state \$rt "/visit"]] [yield [\$concat "" \$a/actor]]]]\n' +
+		'                    [counts [?for [in \$a [\$xap:state \$rt "/visit"]] [yield [\$concat "" \$a/count]]]]]]\n' +
+		'      [= \$w [\$io:write-file "${out_path}" [\$cx:serialize \$p]]]\n'
+}
+
+// Disjoint from the auth-off host test's port inside the same 26800 band —
+// both run in one test binary, and a just-killed listener can linger.
+fn xd_pick_port() int {
+	return 26800 + ((xh_pick_port() - 26800 + 43) % 100)
+}
+
+// the hosted lane: a non-blocking host (the deployment keeps its own worker
+// after boot — §6.3 extend), the deriver commit, then park serving.
+fn xd_host_prog(port int, xap_path string, out_path string) string {
+	return "[?lib 'cx-xap' :as xap]\n[?lib 'cx-stdlib/store' :as store]\n" +
+		"[?lib 'cx-stdlib/io' :as io]\n[?lib 'cx-stdlib/cx' :as cx]\n" +
+		'[?let [= \$xdoc [\$cx:parse [\$io:read-file "${xap_path}"]]]\n' +
+		'      [= \$x [\$first [?for [in \$e \$xdoc//xap] [yield \$e]]]]\n' +
+		'      [= \$ws [\$store:open "mem://"]]\n' +
+		'      [= \$rt [\$xap:host \$x {url: "http://127.0.0.1:${port}" store: \$ws block: false\n' +
+		'                              derivers: (${xd_derivers_opt})}]]\n' + xd_derive_probe(out_path) +
+		'  [?sleep 120s]]\n'
+}
+
+// the direct lane: the SAME two feature specs composed in-process, the SAME
+// bindings handed straight to [$xap:run].
+fn xd_direct_prog(out_path string) string {
+	return "[?lib 'cx-xap' :as xap]\n[?lib 'cx-stdlib/io' :as io]\n" +
+		"[?lib 'cx-stdlib/cx' :as cx]\n" + '[?let [= \$door ${xh_door_spec}]\n' +
+		'      [= \$porch ${xd_porch_spec}]\n' +
+		'      [= \$g [\$xap:compose \$door \$porch]]\n' +
+		'      [= \$rt [\$xap:run {tenant: "toy" grammar: \$g\n' +
+		'                         derivers: (${xd_derivers_opt})}]]\n' + xd_derive_probe(out_path) +
+		'  [out "direct-done"]]\n'
+}
+
+fn test_xap_host_forwards_derivers_for_a_derived_noun() {
+	cxbin := xh_cx_binary()
+	port := xd_pick_port()
+	tmp := os.join_path(os.temp_dir(), 'cx-xap-host-derivers-test-${os.getpid()}')
+	os.rmdir_all(tmp) or {}
+	os.mkdir_all(tmp) or { panic('mkdir ${tmp}: ${err}') }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	reg := os.join_path(tmp, 'registry')
+	os.mkdir_all(reg) or { panic('mkdir ${reg}: ${err}') }
+	xh_write(tmp, 'door.feature.cxd', xh_door_spec)
+	xh_write(tmp, 'door.cx', xh_door_code)
+	xh_write(tmp, 'porch.feature.cxd', xd_porch_spec)
+
+	// publish both features (the same signed-registry harness).
+	pub_prog := xh_write(tmp, 'publish.cx', xh_publish_prog(reg))
+	pres := os.execute('${cxbin} --allow-read --allow-write --allow-random ${pub_prog}')
+	if pres.exit_code != 0 {
+		panic('publish failed (${pres.exit_code}): ${pres.output}')
+	}
+	parts := pres.output.trim_space().trim("'").split(' ')
+	if parts.len != 4 {
+		panic('unexpected publish output: ${pres.output}')
+	}
+	door_m, door_t, porch_m, porch_t := parts[0], parts[1], parts[2], parts[3]
+
+	xap_doc := '[xap name=toy
+  [roles [role name=resident rank=1] [role name=guest rank=0]]
+  [features
+    [feature name=door version=1.0.0 manifest=${door_m} hash=${door_t}]
+    [feature name=porch version=1.0.0 manifest=${porch_m} hash=${porch_t}]]]'
+	xap_path := xh_write(tmp, 'toy.xap.cxd', xap_doc)
+
+	hosted_out := os.join_path(tmp, 'hosted.probe')
+	host_prog := xh_write(tmp, 'host.cx', xd_host_prog(port, xap_path, hosted_out))
+	os.setenv('CX_REGISTRY', 'file://${reg}', true)
+	// #1006: log FILE, not an undrained pipe — see xh_host_process.
+	hlog := os.join_path(tmp, 'host.log')
+	mut proc := xh_host_process(cxbin, ['--allow-read', '--allow-write',
+		'--allow-net=127.0.0.1:${port}', '--allow-env', host_prog], hlog)
+	defer {
+		proc.signal_kill()
+		os.unsetenv('CX_REGISTRY')
+	}
+
+	// (a) BOOT GREEN. Before the forward, run assembly refused this grammar
+	// with CXER4875 and the listener never bound at all.
+	mut up := false
+	for _ in 0 .. 100 {
+		time.sleep(100 * time.millisecond)
+		if xh_get(port, '/grammar').contains('bare-terms') {
+			up = true
+			break
+		}
+	}
+	if !up {
+		out := xh_host_log(hlog)
+		panic('a host whose grammar carries a derived noun never came up (#977): ${out}')
+	}
+	gram := xh_get(port, '/grammar')
+	assert gram.contains('porch/welcome'), 'composed grammar missing the composite verb: ${gram}'
+
+	// … and the bound deriver PRODUCES against the hosted runtime: the
+	// binding reached rt.derivers, so [$xap:derive] is admitted and folds.
+	mut hosted := ''
+	for _ in 0 .. 100 {
+		hosted = os.read_file(hosted_out) or { '' }
+		if hosted != '' {
+			break
+		}
+		time.sleep(100 * time.millisecond)
+	}
+	assert hosted != '', 'the hosted deployment wrote no derivation probe'
+	assert !hosted.contains('CXER4875'), 'hosted derive refused — the binding never reached run assembly: ${hosted}'
+	assert hosted.contains('visits 1'), 'the hosted deriver folded no derived value: ${hosted}'
+	assert hosted.contains('deriver:counter'), 'the hosted fold must carry the deriver actor: ${hosted}'
+
+	// (b) PARITY: same grammar, same bindings, direct [$xap:run] — the
+	// derivation is byte-identical. Hosting is a transport, not a semantics.
+	direct_out := os.join_path(tmp, 'direct.probe')
+	direct_prog := xh_write(tmp, 'direct.cx', xd_direct_prog(direct_out))
+	dres := os.execute('${cxbin} --allow-read --allow-write ${direct_prog}')
+	if dres.exit_code != 0 {
+		panic('direct run failed (${dres.exit_code}): ${dres.output}')
+	}
+	direct := os.read_file(direct_out) or {
+		panic('direct lane wrote no probe: ${dres.output}')
+	}
+	assert direct == hosted, 'hosted and direct derivation diverged:\n--- hosted ---\n${hosted}\n--- direct ---\n${direct}'
+}
+
+// ── #982 (RULED: CO-9) — the deployment DOCUMENT is the hosted binding surface ─
+//
+// [$xap:host] honored url/store/tenant/routes/resolve-actor/block, and — after
+// #977 — derivers. FOUR more run options xap_run validates stayed unreachable
+// from a hosted deployment. `journal:` was the serious one: a hosted XAP was
+// therefore ALWAYS in-process demo mode, so the §3.1.1 durability contract
+// could not be had through the host at all.
+//
+// CO-9 rules the hosted binding surface to be the deployment document's
+// [runtime …] block (distribution spec §6.3.1) — the durable plane is DATA,
+// beside the [deriver] principals the composition spec already puts in the same
+// wiring layer, so a XAP with durable bindings stays zero server code. The host
+// COMPILES the document into the same run opts xap_run already validates (one
+// validator, never two), and the document's [deriver] rows SUPERSEDE the opts
+// key (§4.2 rule 1: run assembly reads ONE block to know every actor).
+//
+// Same host_real fidelity as the #977 lane above (signed registry; publish and
+// host are real cx subprocesses), with ONE live deployment declaring ALL FOUR
+// bindings at once — so "boots, serves, and commits durably" is itself the
+// end-to-end proof that each compiled into a value run assembly accepted.
+
+// door's contract module gains a PURE reducer, so [log-reduce fn='door:compact']
+// names a real public def of a PINNED feature package: §6.3.1 — the deployment
+// DECLARES the compaction, the code ships inside a verified tree.
+const xb_door_compact = "
+[?def compact scope=public pure (\$summary \$rec)
+  [?element 'log-summary' [?attr 'folded' 'yes']]]
+"
+
+// ── the hosted-boot instrument: a LOG FILE, never an undrained pipe (#993) ───
+//
+// EVERY lane in this file that boots a host as a subprocess goes through here
+// (#1006 migrated the last four — xa_boot, xh/xd's registry hosts, and the
+// auth-serve lane — which still held stderr in a pipe nobody drained until
+// past the wait loop).
+//
+// `proc.set_redirect_stdio()` hands the child a pipe, and these lanes do not
+// drain it until they are already past their wait loop. On this platform that
+// pipe holds 512 BYTES — measured — so a host that announces more than that at
+// boot BLOCKS in write() forever and the lane reads the block as "the
+// deployment never came up". The boot announcements this surface deliberately
+// owes (#994's abandon/denial diagnostics, #993's source-tier notice) live
+// exactly inside that budget, which had ~160 bytes left: the harness was
+// imposing a hard ceiling on how much a boot may legitimately say, and any lane
+// asserting ON those diagnostics was one sentence away from deadlocking. That
+// ceiling was never a property of the lane under test — it was the harness
+// silently rationing the surface's own diagnostics.
+//
+// A file cannot fill, so the child never blocks and the captured diagnostic is
+// COMPLETE instead of truncated at the first 512 bytes. `exec` is load-bearing:
+// it replaces the shell with `cx`, so the returned pid IS the host and
+// signal_kill reaches it rather than orphaning it behind a wrapper.
+fn xh_host_process(cxbin string, args []string, log string) &os.Process {
+	mut proc := os.new_process('/bin/sh')
+	proc.set_args(['-c', 'exec ${cxbin} ${args.join(' ')} > ${log} 2>&1'])
+	proc.run()
+	return proc
+}
+
+// the captured boot log — everything the host said, in order.
+fn xh_host_log(log string) string {
+	return os.read_file(log) or { '' }
+}
+
+// the document under test: the pinned rows, the roles ladder, and the deriver
+// as a PRINCIPAL (composition spec §4.2 rule 1) whose reads= is its §4.2 rule 3
+// [from …] envelope — declared as data, not handed in as a call option.
+fn xb_doc(pins []string, runtime_block string) string {
+	return '[xap name=toy
+  [principals
+    [role name=resident rank=1] [role name=guest rank=0]
+    [deriver name=counter produces=\'porch/visit\' reads=\'door/door\'
+     doc=\'The ONE producer of porch/visit — bound by the DOCUMENT.\']]
+  [features
+    [feature name=door version=1.0.0 manifest=${pins[0]} hash=${pins[1]}]
+    [feature name=porch version=1.0.0 manifest=${pins[2]} hash=${pins[3]}]]
+  ${runtime_block}]'
+}
+
+// the live deployment: NO binding in opts — every one of the four is read off
+// the document. `derivers:` IS in opts, deliberately, bound to a DIFFERENT
+// producer name: the document must supersede it, and the two derive probes
+// below are what proves which binding run assembly took.
+fn xb_host_prog(port int, xap_path string, out_path string) string {
+	return "[?lib 'cx-xap' :as xap]\n[?lib 'cx-stdlib/store' :as store]\n" +
+		"[?lib 'cx-stdlib/io' :as io]\n[?lib 'cx-stdlib/cx' :as cx]\n" +
+		'[?let [= \$xdoc [\$cx:parse [\$io:read-file "${xap_path}"]]]\n' +
+		'      [= \$x [\$first [?for [in \$e \$xdoc//xap] [yield \$e]]]]\n' +
+		'      [= \$ws [\$store:open "mem://"]]\n' +
+		'      [= \$rt [\$xap:host \$x {url: "http://127.0.0.1:${port}" store: \$ws block: false\n' +
+		'                              derivers: ({name: "opts-counter" produces: "porch/visit"})}]]\n' +
+		'      [= \$d [\$xap:derive \$rt {deriver: "counter" noun: "porch/visit"\n' +
+		'                                record: [visit [count 1] [for-door "front"]]}]]\n' +
+		'      [= \$o [\$xap:derive \$rt {deriver: "opts-counter" noun: "porch/visit"\n' +
+		'                                record: [visit [count 9] [for-door "back"]]}]]\n' +
+		// the refusal rides as its code + message TEXT: an err VALUE inside a
+		// serialized tree is the §8.6 data-serialization boundary, so the probe
+		// would silently never be written.
+		'      [= \$p [probe [doc-deriver [committed \$d]]\n' +
+		'                    [opts-deriver [code [\$concat "" \$o/@code]]\n' +
+		'                                  [message [\$concat "" \$o/@message]]]\n' +
+		'                    [visits [\$count [\$xap:state \$rt "/visit"]]]]]\n' +
+		'      [= \$w [\$io:write-file "${out_path}" [\$cx:serialize \$p]]]\n' +
+		'  [?sleep 120s]]\n'
+}
+
+// a boot that is EXPECTED to refuse: [$xap:host] returns its err VALUE before
+// the listener ever binds, so the refusal is readable on stdout with no socket.
+fn xb_refuse_prog(xap_path string, port int, opts_extra string) string {
+	return "[?lib 'cx-xap' :as xap]\n[?lib 'cx-stdlib/store' :as store]\n" +
+		"[?lib 'cx-stdlib/io' :as io]\n[?lib 'cx-stdlib/cx' :as cx]\n" +
+		'[?let [= \$xdoc [\$cx:parse [\$io:read-file "${xap_path}"]]]\n' +
+		'      [= \$x [\$first [?for [in \$e \$xdoc//xap] [yield \$e]]]]\n' +
+		'      [= \$ws [\$store:open "mem://"]]\n' +
+		'  [out [\$xap:host \$x {url: "http://127.0.0.1:${port}" store: \$ws block: false${opts_extra}}]]]\n'
+}
+
+// publish one [unlock …] event onto the deployment's bound SOURCE stream — an
+// ordinary fabric publisher, outside any xap (§3.1.2: the runtime owns the
+// subscription, the producer knows nothing about it).
+fn xb_publish_prog(evid string, id string) string {
+	return "[?lib 'cx-fabric' :as fabric]\n[?lib 'cx-stdlib/journal' :as journal]\n" +
+		'[?let [= \$j [\$journal:open "${evid}" "toy"]]\n' +
+		'      [= \$f [\$fabric:open \$j]]\n' +
+		'      [= \$a [\$fabric:publish \$f "evidence" [unlock [id "${id}"]] {actor: "src" authority: "sim"}]]\n' +
+		'  [out \$a]]\n'
+}
+
+// the EXTERNAL observer: the deployment's committed acts are ordinary journal
+// entries on the bound stream, readable with no xap runtime in the picture.
+// This is the journal binding's own surface — and the red-proof's instrument:
+// with the compile step gone the runtime is in-process, this stream is empty,
+// and every assertion below fails.
+//
+// The open is READ-ONLY, and must be (#1005): this observer runs in a THIRD
+// process while the host process holds the acts root open writable, so it is
+// one of the N read-only readers the local-root discipline admits alongside the
+// one writer (journal.md §3.3) — never a second writer. `observe` is exactly
+// that shape: it takes no group and commits no offsets, so it has nothing to
+// write. Before the cross-process guard landed, the writable open here
+// SUCCEEDED silently and made this lane a two-writer arrangement on one root —
+// the #982 hazard, running unnoticed inside the lane that measured it.
+fn xb_observe_prog(acts string) string {
+	return "[?lib 'cx-fabric' :as fabric]\n[?lib 'cx-stdlib/journal' :as journal]\n" +
+		"[?lib 'cx-stdlib/format' :as format]\n" +
+		'[?let [= \$j [\$journal:open "${acts}" "toy" [map read-only="true"]]]\n' +
+		'      [= \$f [\$fabric:open \$j]]\n' +
+		'      [= \$s [\$fabric:observe \$f "acts" "event"]]\n' +
+		'      [= \$es [?receive from=\$s max=32]]\n' +
+		'  [out [?str \'{[\$count \$es]}|{[\$format:canonical \$es]}\']]]\n'
+}
+
+// Disjoint from the auth-off and #977 host ports inside the same 26800 band.
+fn xb_pick_port() int {
+	return 26800 + ((xh_pick_port() - 26800 + 71) % 100)
+}
+
+fn test_xap_host_document_runtime_bindings() {
+	cxbin := xh_cx_binary()
+	port := xb_pick_port()
+	tmp := os.join_path(os.temp_dir(), 'cx-xap-host-docbind-test-${os.getpid()}')
+	os.rmdir_all(tmp) or {}
+	os.mkdir_all(tmp) or { panic('mkdir ${tmp}: ${err}') }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	reg := os.join_path(tmp, 'registry')
+	os.mkdir_all(reg) or { panic('mkdir ${reg}: ${err}') }
+	xh_write(tmp, 'door.feature.cxd', xh_door_spec)
+	xh_write(tmp, 'door.cx', xh_door_code + xb_door_compact)
+	xh_write(tmp, 'porch.feature.cxd', xd_porch_spec)
+
+	pub_prog := xh_write(tmp, 'publish.cx', xh_publish_prog(reg))
+	pres := os.execute('${cxbin} --allow-read --allow-write --allow-random ${pub_prog}')
+	if pres.exit_code != 0 {
+		panic('publish failed (${pres.exit_code}): ${pres.output}')
+	}
+	pins := pres.output.trim_space().trim("'").split(' ')
+	if pins.len != 4 {
+		panic('unexpected publish output: ${pres.output}')
+	}
+	os.setenv('CX_REGISTRY', 'file://${reg}', true)
+	defer {
+		os.unsetenv('CX_REGISTRY')
+	}
+
+	acts := 'file://${tmp}/acts-journal'
+	evid := 'file://${tmp}/evidence-journal'
+	// bring the source stream into existence before boot, carrying an event the
+	// binding's pattern does NOT match (§3.1.2: pattern defaults to the verb's
+	// head name) — the pump has a real stream to subscribe to, and the fold
+	// stays untouched, so nothing below depends on ingest timing.
+	warm := xh_write(tmp, 'warm.cx', xb_publish_prog(evid, 'warm').replace('[unlock [id',
+		'[warmup [id'))
+	wres := os.execute('${cxbin} --allow-read --allow-write ${warm}')
+	if wres.exit_code != 0 {
+		panic('source-stream warmup failed (${wres.exit_code}): ${wres.output}')
+	}
+
+	// ONE deployment, ALL FOUR bindings — journal + sources + resolver +
+	// log-reduce — plus the document's deriver principal.
+	runtime_block := "[runtime
+    [journal url='${acts}' stream=acts]
+    [sources [source fabric='${evid}' stream=evidence verb=unlock group=g1
+              actor='role:resident']]
+    [resolver [affinity component='door/door-panel' when='context[deadline]'
+               class=:door.urgent rank=1]]
+    [log-reduce window=64 fn='door:compact']]"
+	xap_path := xh_write(tmp, 'toy.xap.cxd', xb_doc(pins, runtime_block))
+	probe_out := os.join_path(tmp, 'bindings.probe')
+	host_prog := xh_write(tmp, 'host.cx', xb_host_prog(port, xap_path, probe_out))
+	hlog := os.join_path(tmp, 'host.log')
+	mut proc := xh_host_process(cxbin, ['--allow-read', '--allow-write',
+		'--allow-net=127.0.0.1:${port}', '--allow-env', host_prog], hlog)
+	defer {
+		proc.signal_kill()
+	}
+
+	// (a) BOOTS. Every binding compiled into a value run assembly accepted —
+	// a refusal at any one of them (unknown child, unresolved reducer, a
+	// malformed affinity rule, an unbindable journal) returns before the
+	// listener binds and this never comes up.
+	mut up := false
+	for _ in 0 .. 150 {
+		time.sleep(100 * time.millisecond)
+		if xh_get(port, '/grammar').contains('bare-terms') {
+			up = true
+			break
+		}
+	}
+	if !up {
+		out := xh_host_log(hlog)
+		panic('a deployment declaring [runtime …] bindings never came up (#982): ${out}')
+	}
+
+	// (b) PRECEDENCE. The document binds porch/visit to `counter`; opts bind it
+	// to `opts-counter`. The document supersedes, so deriving as `counter`
+	// commits and deriving as `opts-counter` is refused BY NAME — one noun, one
+	// producer, and the producer is the document's (composition spec §4.2
+	// rule 1; RULED: CO-9).
+	mut probe := ''
+	for _ in 0 .. 100 {
+		probe = os.read_file(probe_out) or { '' }
+		if probe != '' {
+			break
+		}
+		time.sleep(100 * time.millisecond)
+	}
+	if probe == '' {
+		out := xh_host_log(hlog)
+		panic('the hosted deployment wrote no binding probe: ${out}')
+	}
+	assert !probe.contains('CXER4875'), 'the DOCUMENT deriver never reached run assembly: ${probe}'
+	assert probe.contains('visits 1'), 'the document-bound deriver folded no derived value: ${probe}'
+	assert probe.contains('opts-counter'), 'precedence probe did not name the superseded opts deriver: ${probe}'
+	assert probe.contains('bound to deriver') || probe.contains('one noun, one producer'), 'the opts deriver must be REFUSED while the document binds the noun: ${probe}'
+
+	// (c) an admitted act on the live surface — its commit has to be durable.
+	a1 := xh_post_intent(port, '[intent verb="unlock" author="dana" role="resident"]')
+	assert a1.contains('ok=true'), 'resident unlock refused on a journal-bound host: ${a1}'
+
+	// (d) JOURNAL. The deployment's committed acts are on the BOUND STREAM,
+	// read here through the journal's own surface with no xap runtime in the
+	// picture: the deriver's append AND the web intent's. Without the
+	// document's journal binding compiling into run assembly this stream does
+	// not exist at all — the runtime stays in-process, and this is the
+	// red-proof instrument (verified: with the [journal] arm of
+	// xap_host_runtime_bindings removed, the observer reads no such stream).
+	obs_prog := xh_write(tmp, 'observe.cx', xb_observe_prog(acts))
+	mut obs := ''
+	for _ in 0 .. 40 {
+		time.sleep(250 * time.millisecond)
+		r := os.execute('${cxbin} --allow-read --allow-write ${obs_prog}')
+		obs = r.output
+		if obs.contains('deriver:counter') && obs.contains('door/unlock') {
+			break
+		}
+	}
+	if !obs.contains('[event') || !obs.contains('deriver:counter') || !obs.contains('door/unlock') {
+		proc.signal_kill()
+		time.sleep(300 * time.millisecond)
+		diag := xh_host_log(hlog)
+		panic('the bound journal did not carry the deployment\'s committed acts (#982):\n--- observed ---\n${obs}\n--- deployment ---\n${diag}')
+	}
+	assert obs.contains('[event'), 'the bound journal carries no committed envelope — the [runtime [journal …]] binding never reached run assembly: ${obs}'
+	assert obs.contains('deriver:counter'), 'the document-bound deriver\'s commit did not land on the bound journal: ${obs}'
+	assert obs.contains('door/unlock'), 'the admitted act did not land on the bound journal: ${obs}'
+	assert obs.contains('role:resident'), 'the committed envelope must carry the PEP actor: ${obs}'
+
+	// (e) SOURCES is pinned at the boundary that is DETERMINISTIC here. The
+	// binding compiled into a value xap_start_source_pumps accepted, and that
+	// function OPENS the subscription at run assembly (a bad binding refuses at
+	// boot, never at first delivery, §3.1.2) — so a host that came up with this
+	// block has a live pump on the evidence stream. Its malformed twin reaching
+	// the SAME validator is pinned in the refusal table below.
+	//
+	// A live cross-process ingest is NOT asserted here, and deliberately: over
+	// the EMBEDDED tier a subscription does not observe appends another process
+	// makes after it subscribes (measured), so the only ingestible entries are
+	// the ones already on the stream at boot. That is a property of the runtime
+	// the host binds into, not of this binding surface; asserting past it would
+	// only buy a flaky lane. See the #982 report.
+	//
+	// #993 RULED that property rather than leaving it measured-but-unexplained:
+	// it is the substrate's write discipline, not a reader that failed to
+	// follow. A source binding must carry `group=`, so it COMMITS OFFSETS into
+	// the same local root, which makes it a writer; a producer in another
+	// process is then a second writer, and two writers on one root corrupt it
+	// (#628 — measured here as E_STORE_INTEGRITY_MISMATCH on the next open,
+	// 5 of 5). There is therefore no cross-process embedded delivery to build.
+	// The tier split is now normative (distribution spec §6.3.1) and the boot
+	// announces it — pinned by test_xap_host_announces_embedded_source_tier.
+	//
+	// The OTHER thing #982 reported here — that those pre-seeded entries raced
+	// the host's dial wiring — is FIXED (#994): pumps now consume only after
+	// the host has wired authority, and a pre-seeded stream ingests
+	// deterministically. That contract has its own lane below
+	// (test_xap_host_arms_source_pumps_only_after_authority); this one stays on
+	// the binding surface.
+}
+
+// Every REFUSAL the document binding surface owes. Each runs [$xap:host] to its
+// refusal and back — no listener binds, so these are plain subprocesses over
+// the same signed registry. A binding the host cannot honor end to end must
+// never boot a XAP that silently lacks it (#982 is exactly that failure class).
+fn test_xap_host_document_binding_refusals() {
+	cxbin := xh_cx_binary()
+	port := xb_pick_port() + 1
+	tmp := os.join_path(os.temp_dir(), 'cx-xap-host-docbind-refuse-${os.getpid()}')
+	os.rmdir_all(tmp) or {}
+	os.mkdir_all(tmp) or { panic('mkdir ${tmp}: ${err}') }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	reg := os.join_path(tmp, 'registry')
+	os.mkdir_all(reg) or { panic('mkdir ${reg}: ${err}') }
+	xh_write(tmp, 'door.feature.cxd', xh_door_spec)
+	xh_write(tmp, 'door.cx', xh_door_code + xb_door_compact)
+	xh_write(tmp, 'porch.feature.cxd', xd_porch_spec)
+	pub_prog := xh_write(tmp, 'publish.cx', xh_publish_prog(reg))
+	pres := os.execute('${cxbin} --allow-read --allow-write --allow-random ${pub_prog}')
+	if pres.exit_code != 0 {
+		panic('publish failed (${pres.exit_code}): ${pres.output}')
+	}
+	pins := pres.output.trim_space().trim("'").split(' ')
+	if pins.len != 4 {
+		panic('unexpected publish output: ${pres.output}')
+	}
+	os.setenv('CX_REGISTRY', 'file://${reg}', true)
+	defer {
+		os.unsetenv('CX_REGISTRY')
+	}
+	evid := 'file://${tmp}/evidence-journal'
+
+	// what the boot must say, and WHOSE validator says it. The rows marked
+	// "xap_run" are the ones that prove the compiled value reached the SAME
+	// validator the direct [$xap:run] lane uses — one validator, never two.
+	cases := [
+		// (block, opts_extra, expected substring, whose validator)
+		["[runtime [journal stream=acts]]", '', 'E_XAP_HOST_BINDING_INVALID',
+			'host: a journal binding without url=' ],
+		["[runtime [sources]]", '', 'E_XAP_HOST_BINDING_INVALID',
+			'host: a binding block that binds nothing'],
+		["[runtime [resolver kind=closure]]", '', 'E_XAP_HOST_BINDING_INVALID',
+			'host: a closure resolver is code, not data'],
+		["[runtime [log-reduce window=8 fn='nope:missing']]", '',
+			'E_XAP_HOST_BINDING_UNRESOLVED', 'host: fn= names no loaded contract def'],
+		["[runtime [cache size=1]]", '', 'E_XAP_HOST_BINDING_UNKNOWN',
+			'host: an unknown [runtime] child is never dropped'],
+		["[runtime [journal url='file:///tmp/a'] [journal url='file:///tmp/b']]", '',
+			'declares [journal …] twice', 'host: a second row cannot be honored'],
+		['', ' journal: {url: "file:///tmp/nope" stream: "acts"}',
+			'E_XAP_HOST_BINDING_MISPLACED', 'host: the four have no opts spelling'],
+		["[runtime [log-reduce window=0 fn='door:compact']]", '',
+			'log-reduce needs window', 'xap_run: window >= 1 (xap.md §3.1)'],
+		["[runtime [resolver [affinity component=door when='context[x]']]]", '',
+			'run resolver', 'xap_run: xap_parse_affinity over the rule set'],
+		["[runtime [sources [source fabric='${evid}' stream=evidence verb=unlock]]]", '',
+			'needs group', 'xap_run: the §3.1.2 source-binding validator'],
+	]
+	for i, c in cases {
+		xap_path := xh_write(tmp, 'case${i}.xap.cxd', xb_doc(pins, c[0]))
+		prog := xh_write(tmp, 'case${i}.cx', xb_refuse_prog(xap_path, port, c[1]))
+		r := os.execute('${cxbin} --allow-read --allow-write --allow-env ${prog}')
+		out := r.output
+		assert out.contains(c[2]), 'boot refusal [${c[3]}] missing "${c[2]}" for ${c[0]}${c[1]}:\n${out}'
+	}
+}
+
+// ── #993 — the source binding's TIER is announced at boot ────────────────────
+//
+// A `[source fabric=…]` row naming a journal url is an EMBEDDED-tier
+// subscription: it ingests everything the bound stream already carries and
+// never observes an entry another process appends after it subscribes. That is
+// the substrate's write discipline, not a gap in the binding surface — on a
+// local root the supported cross-process shape is ONE writer plus read-only
+// readers (journal.md §3.3 / jrn_head_fresh), and a §3.1.2 source binding is
+// REQUIRED to carry `group=` because the runtime owns committed offsets, so the
+// binding writes into that same root and is itself a writer. A producer in
+// another process is then a second writer, which is what #628 records as
+// unsound: measured on this tree, the root refuses E_STORE_INTEGRITY_MISMATCH
+// on its next open, 5 runs of 5. So there is no reader-side fix to make; there
+// is a tier split to state.
+//
+// Neither tier is refused — an embedded source binding is the ordinary shape
+// for a single-process deployment or a fixture. But a deployment that declared
+// one while expecting live cross-process ingest is mis-wired in a way nothing
+// else surfaces, so the hosted boot ANNOUNCES the tier. This lane is the
+// discriminator pair: the notice fires for a journal url and stays silent for
+// `xsp://`, which is the cross-process path (the daemon is the single sequencer
+// AND the single writer of the root it mounts, fabric.md §10).
+//
+// Both boots use a PORTLESS url so each refuses after the `[runtime …]` block
+// has compiled: no listener ever binds, and the lane stays hermetic and
+// bounded.
+fn x3_notice_prog(xap_path string) string {
+	return "[?lib 'cx-xap' :as xap]\n[?lib 'cx-stdlib/store' :as store]\n" +
+		"[?lib 'cx-stdlib/io' :as io]\n[?lib 'cx-stdlib/cx' :as cx]\n" +
+		'[?let [= \$xdoc [\$cx:parse [\$io:read-file "${xap_path}"]]]\n' +
+		'      [= \$x [\$first [?for [in \$e \$xdoc//xap] [yield \$e]]]]\n' +
+		'      [= \$ws [\$store:open "mem://"]]\n' +
+		'  [out [\$xap:host \$x {url: "http://127.0.0.1" store: \$ws block: false}]]]\n'
+}
+
+fn test_xap_host_announces_embedded_source_tier() {
+	cxbin := xh_cx_binary()
+	tmp := os.join_path(os.temp_dir(), 'cx-xap-src-tier-${os.getpid()}')
+	os.rmdir_all(tmp) or {}
+	os.mkdir_all(tmp) or { panic('mkdir ${tmp}: ${err}') }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	reg := os.join_path(tmp, 'registry')
+	os.mkdir_all(reg) or { panic('mkdir ${reg}: ${err}') }
+	xh_write(tmp, 'door.feature.cxd', xh_door_spec)
+	xh_write(tmp, 'door.cx', xh_door_code + xb_door_compact)
+	xh_write(tmp, 'porch.feature.cxd', xd_porch_spec)
+	pub_prog := xh_write(tmp, 'publish.cx', xh_publish_prog(reg))
+	pres := os.execute('${cxbin} --allow-read --allow-write --allow-random ${pub_prog}')
+	if pres.exit_code != 0 {
+		panic('publish failed (${pres.exit_code}): ${pres.output}')
+	}
+	pins := pres.output.trim_space().trim("'").split(' ')
+	if pins.len != 4 {
+		panic('unexpected publish output: ${pres.output}')
+	}
+	os.setenv('CX_REGISTRY', 'file://${reg}', true)
+	defer {
+		os.unsetenv('CX_REGISTRY')
+	}
+
+	// EMBEDDED — a journal url. Well-formed, honored, and announced.
+	evid := 'file://${tmp}/evidence-journal'
+	emb_doc := xh_write(tmp, 'emb.xap.cxd', xb_doc(pins,
+		"[runtime [sources [source fabric='${evid}' stream=evidence verb=unlock group=g993]]]"))
+	emb := os.execute('${cxbin} --allow-read --allow-write --allow-env ${xh_write(tmp,
+		'emb.cx', x3_notice_prog(emb_doc))}')
+	assert emb.output.contains('EMBEDDED-tier'), 'a journal-url source binding must announce its tier at boot (#993):\n${emb.output}'
+	assert emb.output.contains('evidence'), 'the tier notice must name the bound stream (#993):\n${emb.output}'
+	assert emb.output.contains('NEVER observe'), 'the tier notice must state what the binding cannot do — otherwise it is decoration (#993):\n${emb.output}'
+	assert emb.output.contains('xsp://'), 'the tier notice must name the cross-process path a deployment should bind instead (#993):\n${emb.output}'
+
+	// SERVED — an xsp:// daemon. The cross-process path: SILENT. (This boot
+	// refuses at the dial, with no net capability granted — that refusal is
+	// another section's, and the only thing asserted here is the silence.)
+	srv_doc := xh_write(tmp, 'srv.xap.cxd', xb_doc(pins,
+		"[runtime [sources [source fabric='xsp://127.0.0.1:9' stream=evidence verb=unlock group=g993 tenant=toy]]]"))
+	srv := os.execute('${cxbin} --allow-read --allow-write --allow-env ${xh_write(tmp,
+		'srv.cx', x3_notice_prog(srv_doc))}')
+	assert !srv.output.contains('EMBEDDED-tier'), 'an xsp:// source binding IS the live cross-process path — announcing a tier limit on it would be false (#993):\n${srv.output}'
+	// … and the silence above is NOT vacuous: this boot really did compile the
+	// `[sources]` block and carry it into run assembly, where the dial (no net
+	// capability granted) is what refuses. Without this the assertion would
+	// also pass on a boot that never reached the binding at all.
+	assert srv.output.contains('source binding'), 'the xsp:// boot never reached its source binding, so the tier-notice silence above proves nothing (#993):\n${srv.output}'
+}
+
+// ── #994 — hosted boot ORDERING: authority is wired before a pump consumes ───
+//
+// The host wires the deployment's authority — the roles ladder × each spec's
+// governance grants (step 3), then the §4.12 [host-auth] map — only AFTER run
+// assembly returns. A `[runtime [sources …]]` pump that spawned inside run
+// assembly therefore raced that wiring, and §3.1.2's deny path is
+// skip-and-ack with no redelivery: a stream pre-seeded before boot could lose
+// its first entries outright, silently and on thread-start timing. #982 hit
+// this and reported it rather than pinning a flaky ingest.
+//
+// The fix is the ORDER, not a retry. The subscriptions still open at run
+// assembly (a bad binding still refuses at boot — that contract is untouched);
+// no pump CONSUMES until the host has wired authority and the transport is up.
+// This lane pins both halves against the same pre-seeded stream:
+//
+//   (a) INGEST IS DETERMINISTIC — every pre-seeded entry meets exactly the PEP
+//       every later entry meets, so all three commit. Against the pre-fix
+//       ordering this lane read `0|()` — all three gone, permanently — on 1 run
+//       in 5 (measured; that is the reported timing dependence, and why the
+//       assertion is on the count and not on "at least one");
+//   (b) THE IN-WINDOW POLICY — a boot that refuses after run assembly consumes
+//       nothing, says so out loud, and leaves every entry REDELIVERABLE: the
+//       group's committed offset never moved, so the next boot of the same
+//       group ingests them. Never skip-and-ack, never a silent no-op. This half
+//       is deterministic against the pre-fix ordering (5 of 5).
+//
+// (b) runs FIRST, on the same journal and the same group as (a) — so (a) is
+// literally ingesting the entries the refused boot left behind.
+
+// Disjoint from the auth-off / #977 / #982 host ports inside the same band.
+fn x9_pick_port() int {
+	return 26800 + ((xh_pick_port() - 26800 + 37) % 100)
+}
+
+// the deployment under test: ONE runtime binding, the §3.1.2 source. Its
+// `actor='role:resident'` is the whole point — door's [governance] grants
+// unlock to resident, and that grant only becomes a dial in the host's step 3.
+// An entry consumed before step 3 is denied by a PEP that has no dials yet.
+fn x9_doc(pins []string, evid string, acts string) string {
+	return "[xap name=toy
+  [roles [role name=resident rank=1] [role name=guest rank=0]]
+  [features
+    [feature name=door version=1.0.0 manifest=${pins[0]} hash=${pins[1]}]
+    [feature name=porch version=1.0.0 manifest=${pins[2]} hash=${pins[3]}]]
+  [runtime
+    [journal url='${acts}' stream=acts]
+    [sources [source fabric='${evid}' stream=evidence verb=unlock group=g994
+              actor='role:resident']]]]"
+}
+
+// zero server code: the document, the host call, nothing else.
+fn x9_host_prog(url string, xap_path string, tail string) string {
+	return "[?lib 'cx-xap' :as xap]\n[?lib 'cx-stdlib/store' :as store]\n" +
+		"[?lib 'cx-stdlib/io' :as io]\n[?lib 'cx-stdlib/cx' :as cx]\n" +
+		'[?let [= \$xdoc [\$cx:parse [\$io:read-file "${xap_path}"]]]\n' +
+		'      [= \$x [\$first [?for [in \$e \$xdoc//xap] [yield \$e]]]]\n' +
+		'      [= \$ws [\$store:open "mem://"]]\n' +
+		'      [= \$rt [\$xap:host \$x {url: "${url}" store: \$ws block: false}]]\n' +
+		tail
+}
+
+fn test_xap_host_arms_source_pumps_only_after_authority() {
+	cxbin := xh_cx_binary()
+	port := x9_pick_port()
+	tmp := os.join_path(os.temp_dir(), 'cx-xap-boot-order-${os.getpid()}')
+	os.rmdir_all(tmp) or {}
+	os.mkdir_all(tmp) or { panic('mkdir ${tmp}: ${err}') }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	reg := os.join_path(tmp, 'registry')
+	os.mkdir_all(reg) or { panic('mkdir ${reg}: ${err}') }
+	xh_write(tmp, 'door.feature.cxd', xh_door_spec)
+	xh_write(tmp, 'door.cx', xh_door_code)
+	xh_write(tmp, 'porch.feature.cxd', xh_porch_spec)
+
+	pub_prog := xh_write(tmp, 'publish.cx', xh_publish_prog(reg))
+	pres := os.execute('${cxbin} --allow-read --allow-write --allow-random ${pub_prog}')
+	if pres.exit_code != 0 {
+		panic('publish failed (${pres.exit_code}): ${pres.output}')
+	}
+	pins := pres.output.trim_space().trim("'").split(' ')
+	if pins.len != 4 {
+		panic('unexpected publish output: ${pres.output}')
+	}
+	os.setenv('CX_REGISTRY', 'file://${reg}', true)
+	defer {
+		os.unsetenv('CX_REGISTRY')
+	}
+
+	// PRE-SEED. Three [unlock …] events land on the bound source stream BEFORE
+	// any host exists — an ordinary fabric publisher outside every xap (§3.1.2:
+	// the runtime owns the subscription, the producer knows nothing about it).
+	// These are the entries the defect lost.
+	evid := 'file://${tmp}/evidence-journal'
+	acts := 'file://${tmp}/acts-journal'
+	for i in 1 .. 4 {
+		seed := xh_write(tmp, 'seed${i}.cx', xb_publish_prog(evid, 'preseed-${i}'))
+		sres := os.execute('${cxbin} --allow-read --allow-write ${seed}')
+		if sres.exit_code != 0 {
+			panic('pre-seed ${i} failed (${sres.exit_code}): ${sres.output}')
+		}
+	}
+	xap_path := xh_write(tmp, 'toy.xap.cxd', x9_doc(pins, evid, acts))
+
+	// (b) THE IN-WINDOW POLICY. This boot gets through run assembly — the
+	// source binding is valid, its subscription OPENS — and then refuses: the
+	// url carries no port. That is the window the defect lived in, and the
+	// ruled behavior for it is "never consumed, and said out loud": no receive,
+	// therefore no ack, therefore the group's committed offset is exactly where
+	// this boot found it and every entry stays redeliverable — which (a) then
+	// proves by ingesting them.
+	refuse_prog := xh_write(tmp, 'refused.cx', x9_host_prog('http://127.0.0.1', xap_path,
+		'  [out \$rt]]\n'))
+	rr := os.execute('${cxbin} --allow-read --allow-write --allow-env ${refuse_prog}')
+	assert rr.output.contains('needs an explicit port'), 'the portless boot did not refuse where this lane needs it to: ${rr.output}'
+	assert rr.output.contains('never consumed'), 'a boot that refused after run assembly must announce the source binding it will not serve (#994): ${rr.output}'
+	assert rr.output.contains('redeliverable'), 'the abandon diagnostic must state that nothing was acked and the entries stay redeliverable (#994): ${rr.output}'
+	assert !rr.output.contains('DENIED, skipped and acked'), 'an entry was consumed and dropped by a boot that never wired its dials (#994): ${rr.output}'
+
+	// (a) DETERMINISTIC INGEST. Same journal, same group, a boot that completes.
+	hlog := os.join_path(tmp, 'host.log')
+	mut proc := xh_host_process(cxbin, ['--allow-read', '--allow-write',
+		'--allow-net=127.0.0.1:${port}', '--allow-env',
+		xh_write(tmp, 'host.cx', x9_host_prog('http://127.0.0.1:${port}', xap_path,
+		'  [?sleep 120s]]\n'))], hlog)
+	defer {
+		proc.signal_kill()
+	}
+	mut up := false
+	for _ in 0 .. 150 {
+		time.sleep(100 * time.millisecond)
+		if xh_get(port, '/grammar').contains('door/unlock') {
+			up = true
+			break
+		}
+	}
+	if !up {
+		out := xh_host_log(hlog)
+		panic('the source-bound deployment never came up (#994): ${out}')
+	}
+	// The instrument is the BOUND JOURNAL, read through its own surface with no
+	// xap runtime in the picture (the #982 lane's instrument): an ingested
+	// entry commits through the ONE emit path, so it appends a qualified
+	// [event …] to the acts stream as `door/unlock` by `role:resident`. A
+	// PEP-denied entry appends NOTHING — it is skipped and acked. Three
+	// pre-seeded events, therefore exactly three committed envelopes, and this
+	// deployment commits nothing else.
+	obs_prog := xh_write(tmp, 'observe.cx', xb_observe_prog(acts))
+	mut obs := ''
+	for _ in 0 .. 60 {
+		time.sleep(250 * time.millisecond)
+		r := os.execute('${cxbin} --allow-read --allow-write ${obs_prog}')
+		obs = r.output
+		if obs.contains('[out "3|') {
+			break
+		}
+	}
+	if !obs.contains('[out "3|') {
+		proc.signal_kill()
+		time.sleep(300 * time.millisecond)
+		diag := xh_host_log(hlog)
+		panic('the pre-seeded entries did not all ingest — the pumps consumed before the deployment\'s dials were wired (#994).\n--- bound journal ---\n${obs}\n--- deployment ---\n${diag}')
+	}
+	assert obs.contains('door/unlock'), 'the ingested entries did not commit as the mapped qualified verb: ${obs}'
+	assert obs.contains('role:resident'), 'the committed envelope must carry the source binding\'s actor — the grant that admits it is a dial the host wires in step 3: ${obs}'
+	// … and NOT ONE of them was skipped on the way in. The post-arm denial path
+	// is still skip-and-ack (deny-by-default must never wedge a group on a
+	// permanent refusal) but it is loud now, so its absence here is readable.
+	proc.signal_kill()
+	time.sleep(300 * time.millisecond)
+	diag := xh_host_log(hlog)
+	assert !diag.contains('DENIED, skipped and acked'), 'an entry was PEP-denied on a fully wired host — the arming step ran too early (#994): ${diag}'
+}
+
+// ── #997 — a LIVE dial is atomic against everything reading the basis ────────
+//
+// #994 closed the BOOT window (a pump consuming before the deployment's dials
+// were wired). This is the STEADY-STATE pair it left unaudited: a running
+// deployment worker issues a dial while a §3.1.2 source pump — on its own
+// thread since arming — is deciding, and while every reactor thread is deciding
+// for the requests it serves.
+//
+// `[$xap:dial]` grew `rt.authz.delegations` and `rt.dials` with a plain `<<`
+// and no lock anywhere. V's `array.push` reallocates the buffer, copies the
+// element in, and THEN bumps `len` — three unordered stores over shared memory.
+// Measured on the pre-fix code, 2 workers × 3000 dials each: 12 runs in 12 came
+// back corrupt — 11 SIGSEGV inside the evaluator, 1 surviving but 42 grants of
+// 6000 silently absent. (It is append-count sensitive, not exotic: at 300-400
+// each the same probe reports clean batches, which is exactly why the pin is
+// sized where the outcome is deterministic rather than where it is cheapest.)
+// A lost dial is authority the principal issued and the PEP does not hold, so
+// the emit it was meant to admit is later DENIED — and on the pump that denial
+// is skip-and-ack (§3.1.2): the entry is gone, permanently, with no redelivery.
+//
+// The mechanism is the authority-basis rwmutex (stdlib_authz.v): a dial takes
+// the WRITE lock and publishes both arrays as one act; every PEP decision takes
+// the READ lock, so decisions still run in parallel with each other and only a
+// dial excludes them. See the AuthzStore doc comment for the per-tier table.
+
+// x97_component — the one bound component both halves ingest through. Its
+// `emits` is what [scope :evid] resolves a dial's capability set from, and its
+// bind is the slice the grant is scoped over.
+const x97_component = '[?lib \'cx-xap\' :as xap]
+[\$xap:component evid
+  {bind: "/evidence"
+   emits: ([do :evidence [e :element]])
+   view: [?fn (\$rs) [panel [list [?for [in \$r \$rs] [yield [item \$r/evidence/id]]]]]]
+   working-panel: :none}]
+'
+
+// (a) THE WRITE PAIR — two deployment workers dial the same runtime at once.
+// The instrument is [$xap:why-allowed]'s chain, read AFTER both workers joined:
+// every dial issued carries the same derived id, so the chain length IS the
+// number of appends that survived. The read is single-threaded by then, so a
+// short chain can only mean an append was lost on the way in.
+fn test_xap_live_dial_is_atomic_against_a_concurrent_dial() {
+	tmp := os.join_path(os.temp_dir(), 'cx-xap-997-write-${os.getpid()}')
+	os.rmdir_all(tmp) or {}
+	os.mkdir_all(tmp) or { panic(err) }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	// 3000 each is where the pre-fix outcome stops being a coin flip: 12 of 12
+	// measured runs came back either SIGSEGV or short. One round costs ~0.15s.
+	per := 3000
+	prog := sb_write(tmp, 'dialrace.cx', x97_component +
+		'[?let [= \$rt [\$xap:run {tenant: "probe"}]]\n' +
+		'      [= \$w1 [?worker name=d1 [\$count [?for [in \$i [\$range 1 ${per}]]\n' +
+		'          [yield [?let [= \$d [\$xap:dial \$rt [from id="principal:p"]\n' +
+		'                   [to id="agent:src"] [scope :evid] [setting :auto]]] 1]]]]]]\n' +
+		'      [= \$w2 [?worker name=d2 [\$count [?for [in \$i [\$range 1 ${per}]]\n' +
+		'          [yield [?let [= \$d [\$xap:dial \$rt [from id="principal:p"]\n' +
+		'                   [to id="agent:src"] [scope :evid] [setting :auto]]] 1]]]]]]\n' +
+		'      [= \$n1 [?wait-for worker=\$w1]]\n' +
+		'      [= \$n2 [?wait-for worker=\$w2]]\n' +
+		'      [= \$a [\$xap:why-allowed \$rt [do :evidence] {actor: "agent:src"}]]\n' +
+		'  [out [?str \'ISSUED={[+ \$n1 \$n2]} INCHAIN={[\$count \$a/chain/*]}\']]]\n')
+	// Four rounds — the interleaving is the variable, so one clean round is not
+	// evidence. Four × ~0.15s keeps the whole half well inside the 25s bound the
+	// concurrency probes are held to.
+	for round in 1 .. 5 {
+		r := os.execute('${testenv.cx_bin()} --allow-read ${prog}')
+		assert r.exit_code == 0, 'round ${round}: two concurrent [\$xap:dial] calls killed the process (rc=${r.exit_code}) — the authority basis grew in place under a reader (#997):\n${r.output}'
+		out := r.output.trim_space()
+		want := 'ISSUED=${2 * per} INCHAIN=${2 * per}'
+		assert out.contains(want), 'round ${round}: concurrent dials LOST grants — expected `${want}`, got: ${out}\n(a dial the principal issued that the PEP does not hold is an emit that will be denied, and on a source pump a denial is skip-and-ack — #997)'
+	}
+}
+
+// (b) THE DEPLOYMENT PAIR — a running source pump decides on its own thread
+// while the main thread dials. The pump's actor is `agent:src`, so every entry
+// it ingests walks the very basis those dials are appending to; the grant that
+// admits it is seated BEFORE the first publish, so after that point a denial
+// can only be a torn read.
+//
+// WHAT THIS HALF IS AND IS NOT. It is the deployment-shaped invariant pin, and
+// it is honestly NOT red-proven by removing the mechanism: with ONE writing
+// thread the bad OUTCOME window is a store-buffer drain wide, and it did not
+// fire in measurement — 5 of 5 clean at 800 entries × 8 dials each, 4 of 4 at
+// 600 × 40 (24000 appends), and 5 of 5 with a reader spinning
+// [$xap:why-allowed] at 8000 decisions against 4000 dials. (a) is the pair the
+// mechanism is red-proven against. The READ bracket still earns its place for
+// two reasons the rate does not touch: V's push publishes `len` and the element
+// with no ordering between them, so an unbracketed walk is undefined behavior
+// whatever the observed rate; and without it a reader can see `rt.dials` moved
+// while `rt.authz.delegations` has not, which is `why-allowed` rendering a
+// chain that did not decide the answer it is attached to.
+//
+// Both halves are asserted:
+//   * nothing was skipped — `DENIED, skipped and acked` is the pump's own
+//     stderr line for an entry it dropped (#994 made it loud precisely so a
+//     drop is legible), and
+//   * the fold reached every published entry.
+fn test_xap_source_pump_decides_while_live_dials_land() {
+	tmp := os.join_path(os.temp_dir(), 'cx-xap-997-pump-${os.getpid()}')
+	os.rmdir_all(tmp) or {}
+	os.mkdir_all(tmp) or { panic(err) }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	n := 800
+	evid := 'file://${tmp}/evidence-journal'
+	src := '{fabric: "${evid}", stream: "evidence", group: "g997", verb: :evidence, actor: "agent:src"}'
+	// Publishing and dialing from the SAME process is deliberate: #993 ruled
+	// cross-process appends into a CONSUMED file:// fabric out of the
+	// substrate's write discipline, so a second publisher process would be
+	// testing that instead of this.
+	prog := sb_write(tmp, 'pumprace.cx', x97_component +
+		"[?lib 'cx-fabric' :as fabric]\n[?lib 'cx-stdlib/journal' :as journal]\n" +
+		'[?let [= \$rt [\$xap:run {tenant: "probe" sources: [${src}]}]]\n' +
+		'      [= \$d0 [\$xap:dial \$rt [from id="principal:p"] [to id="agent:src"]\n' +
+		'                              [scope :evid] [setting :auto]]]\n' +
+		'      [= \$settle [?sleep 250ms]]\n' +
+		'      [= \$j [\$journal:open "${evid}" "probe"]]\n' +
+		'      [= \$f [\$fabric:open \$j]]\n' +
+		'      [= \$loop [\$count [?for [in \$i [\$range 1 ${n}]]\n' +
+		'          [yield [?let\n' +
+		'            [= \$p [\$fabric:publish \$f "evidence"\n' +
+		'                     [evidence [id [?str \'e{\$i}\']] [kind "k"]]\n' +
+		'                     {actor: "src" authority: "sim"}]]\n' +
+		'            [= \$dd [\$xap:dial \$rt [from id="principal:p"]\n' +
+		'                     [to id="agent:noise"] [scope :evid] [setting :auto]]]\n' +
+		'            1]]]]]\n' +
+		'      [= \$drain [?sleep 8000ms]]\n' +
+		'  [out [?str \'FOLDED={[\$count [\$xap:state \$rt "/evidence"]]}\']]]\n')
+	r := os.execute('${testenv.cx_bin()} --allow-read --allow-write ${prog}')
+	assert r.exit_code == 0, 'a source pump deciding while live dials landed killed the process (rc=${r.exit_code}) — #997:\n${r.output}'
+	assert !r.output.contains('DENIED, skipped and acked'), 'the pump PEP-denied an entry whose actor holds a STANDING grant — the decision read a basis another thread was growing, and a §3.1.2 denial is skip-and-ack, so that entry is gone (#997):\n${r.output}'
+	assert r.output.contains('FOLDED=${n}'), 'the pump did not ingest every entry while dials landed beside it (#997): ${r.output}'
+}
+
+// (c) THE STANDING GUARD. The mechanism in (a)/(b) is only as true as the rule
+// that no other site grows a store's basis in place. `delegations` is a plain
+// array on a struct three tiers share, so a future `s.delegations << rec` added
+// anywhere silently reopens exactly this defect — and it would not fail any
+// behavioral lane until something concurrent happened to hit it. So the roster
+// of functions permitted to touch that array is pinned by NAME.
+fn test_authz_basis_grows_only_through_the_publication_helpers() {
+	// The publication helpers (stdlib_authz.v) plus the ONE runtime-level site
+	// that must append to rt.dials in the same critical section (a pthread
+	// rwlock does not nest, so it cannot delegate to a helper).
+	allowed := ['authz_grants_append', 'authz_grants_append_many', 'authz_grants_set',
+		'xap_dial_publish']
+	pdir := os.join_path(@VMODROOT, 'platform')
+	files := os.ls(pdir) or { panic('cannot list ${pdir}: ${err}') }
+	mut scanned := 0
+	mut offenders := []string{}
+	for f in files {
+		if !f.ends_with('.v') || f.ends_with('_test.v') {
+			continue
+		}
+		src := os.read_file(os.join_path(pdir, f)) or { continue }
+		if !src.contains('delegations') {
+			continue
+		}
+		scanned++
+		mut cur := ''
+		for i, line in src.split_into_lines() {
+			t := line.trim_space()
+			if t.starts_with('fn ') || t.starts_with('pub fn ') {
+				body := t.all_after('fn ')
+				cur = body.all_before('(').all_after_last(' ').trim_space()
+			}
+			if t.starts_with('//') {
+				continue
+			}
+			if !(t.contains('delegations <<') || t.contains('delegations =')) {
+				continue
+			}
+			if cur in allowed {
+				continue
+			}
+			offenders << '${f}:${i + 1} in fn ${cur}: ${t}'
+		}
+	}
+	assert scanned > 0, 'the guard scanned no file mentioning `delegations` — it has lost its subject; re-anchor it'
+	assert offenders.len == 0, 'a store\'s delegation basis is grown OUTSIDE the publication helpers (${allowed.join(', ')}) — that reopens #997: a PEP decision on a pump or reactor thread walks the array while it reallocates, and a lost/torn grant is an authority decision made against memory nobody granted.\n  ' +
+		offenders.join('\n  ')
+}
+
+// The READ-side half of the same standing guard (#1024). #997 pinned who may GROW
+// the basis; that is only half the discipline, because an unbracketed WALK of a
+// concurrently-pushed array is undefined behavior too — and a new walk added
+// anywhere would fail no behavioral lane until something concurrent happened to
+// hit it, exactly the property that made the write-side roster necessary.
+//
+// So the roster of functions permitted to WALK `delegations` is pinned BY NAME.
+// Adding a name here is a claim that the walk is covered: either the function
+// takes the bracket itself, or every caller does. The per-verb classification the
+// roster encodes lives on authz_grants_rlock in stdlib_authz.v — read it before
+// adding a row, because the answer for a new verb is NOT automatically "bracket
+// the verb": four existing verbs cannot be bracketed whole (they re-enter the
+// verb table or hold journal I/O), and three write, which a read bracket
+// deadlocks on.
+fn test_authz_basis_is_walked_only_by_the_bracketed_readers() {
+	// The bracket-TAKING functions (each opens its own critical section) …
+	takes_bracket := [
+		'authz_grants_mark_revoked', // write lock: walks to flip `revoked`
+		'authz_grants_append_many', // write lock: appends a whole table
+		'authz_check_impl', // brackets the whole authz_decide call
+		'authz_grants_of_impl',
+		'authz_trace_impl',
+		'authz_resolve_cap_impl',
+		'authz_effective_impl', // brackets authz_effective_set + _intersect
+		'authz_meters_impl', // brackets the fold + the emit walk
+		'authz_allocate_impl', // brackets the find, then the fold + index
+		'authz_debit_impl', // ditto
+		'authz_commit_impl', // brackets ONLY authz_chain_propose_only
+		'authz_find_impl',
+		'authz_delegate_impl', // brackets the read phase, then writes
+		'authz_grant_guardian_impl',
+		'authz_revoke_impl',
+		'authz_revoke_cascade', // brackets each LEVEL's child collect
+		'authz_replay_journal',
+	]
+	// … and the leaf readers, which must NOT take it (they run under a caller's
+	// bracket — a nested take is what #1024's whole-verb naive fix deadlocks on).
+	reads_under_caller := ['authz_find_rec', 'authz_decide', 'authz_effective_set',
+		'authz_effective_intersect', 'authz_has_relationship', 'authz_meter_fold',
+		'authz_chain_propose_only', 'authz_attenuation_ok', 'authz_nearest_bounds',
+		'authz_inherit_window', 'authz_chain_to_principal', 'authz_budget_check']
+	mut allowed := takes_bracket.clone()
+	allowed << reads_under_caller
+	// The XAP and XSP tiers hold their basis under their OWN serialization points
+	// (rt-level bracket / srv.mu) — documented per tier on the AuthzStore comment,
+	// and out of this file's scope.
+	tier_owned := ['store_xsp_authority.v', 'stdlib_xap.v', 'stdlib_xap_dist.v']
+	pdir := os.join_path(@VMODROOT, 'platform')
+	files := os.ls(pdir) or { panic('cannot list ${pdir}: ${err}') }
+	mut scanned := 0
+	mut offenders := []string{}
+	for f in files {
+		if !f.ends_with('.v') || f.ends_with('_test.v') || f in tier_owned {
+			continue
+		}
+		src := os.read_file(os.join_path(pdir, f)) or { continue }
+		if !src.contains('delegations') {
+			continue
+		}
+		scanned++
+		mut cur := ''
+		for i, line in src.split_into_lines() {
+			t := line.trim_space()
+			if t.starts_with('fn ') || t.starts_with('pub fn ') {
+				body := t.all_after('fn ')
+				cur = body.all_before('(').all_after_last(' ').trim_space()
+			}
+			if t.starts_with('//') {
+				continue
+			}
+			// a READ walk: `for … in <something>.delegations {`. The write forms
+			// (`delegations <<` / `delegations =`) are the other guard's subject.
+			if !(t.contains('in ') && t.contains('.delegations')) {
+				continue
+			}
+			if t.contains('delegations <<') || t.contains('delegations =') {
+				continue
+			}
+			if cur in allowed {
+				continue
+			}
+			offenders << '${f}:${i + 1} in fn ${cur}: ${t}'
+		}
+	}
+	assert scanned > 0, 'the read-side guard scanned no file mentioning `delegations` — it has lost its subject; re-anchor it'
+	assert offenders.len == 0, 'a store\'s delegation basis is WALKED by a function outside the bracketed-reader roster — that reopens #1024: a walk of an array another thread is pushing to is undefined behavior, and on the registry tier a torn read is a DENY for an actor who holds the grant. Add the function to `takes_bracket` (it opens its own critical section) or to `reads_under_caller` (every caller brackets it) — and read the classification table on authz_grants_rlock first.\n  ' +
+		offenders.join('\n  ')
+	// The roster is only a real constraint while its subjects exist. A rename that
+	// silently emptied it would leave the guard vacuously green — the #997 lesson
+	// about a gate that cannot fail.
+	azsrc := os.read_file(os.join_path(pdir, 'stdlib_authz.v')) or {
+		panic('cannot read stdlib_authz.v: ${err}')
+	}
+	for name in reads_under_caller {
+		assert azsrc.contains('fn ${name}('), 'the read-side roster names `${name}`, which no longer exists in stdlib_authz.v — the guard is drifting toward vacuous; re-anchor the roster'
+		// A leaf reader that started taking the lock itself would deadlock under a
+		// caller that already holds it, so the roster's two halves are exclusive.
+		body := azsrc.all_after('fn ${name}(')
+		next := if body.contains('\nfn ') { body.all_before('\nfn ') } else { body }
+		assert !next.contains('authz_grants_rlock('), '`${name}` is on the reads-under-caller roster but takes the read bracket itself — its callers already hold it, and a pthread rwlock nested behind a waiting writer deadlocks (#1024)'
+	}
+}
+
+// The standing guard #982 asks for: the next run option added to xap_run cannot
+// become silently unreachable from the host. xap_run's opts reads are the
+// authority; every key it honors must have a HOSTED spelling — the deployment
+// document ([runtime …] / [principals [deriver …]]) or the host's own opts —
+// and this roster is where a new one is claimed.
+fn test_xap_run_opts_are_all_reachable_from_the_host() {
+	src := os.read_file(os.join_path(@VMODROOT, 'platform', 'stdlib_xap.v')) or {
+		panic('cannot read stdlib_xap.v: ${err}')
+	}
+	// #994 split run assembly out of the `[$xap:run]` entry point: xap_run is
+	// now a two-line wrapper and xap_run_composed IS the body that reads opts.
+	// Anchor on the body, never on the entry point — anchoring on a wrapper is
+	// how this guard would pass vacuously.
+	body := src.all_after('\nfn xap_run_composed(args []cx.Node')
+	run_body := if i := body.index('\nfn ') { body[..i] } else { body }
+	assert run_body.contains("xap_map_get_node(opts, 'grammar')"), 'the guard lost run assembly: xap_run_composed is not where the opts are read any more — re-anchor it'
+	// hosted spellings, per run-option key.
+	hosted := {
+		'tenant':     'host opts tenant:, else the document name='
+		'grammar':    'composed by the host from the pinned [feature] rows'
+		'derivers':   'document [principals [deriver …]] (supersedes) / opts derivers:'
+		'journal':    'document [runtime [journal …]] (#982, RULED: CO-9)'
+		'sources':    'document [runtime [sources …]] (#982, RULED: CO-9)'
+		'resolver':   'document [runtime [resolver …]] (#982, RULED: CO-9)'
+		'log-reduce': 'document [runtime [log-reduce …]] (#982, RULED: CO-9)'
+		'authz':      'not yet a host surface — claim it here when it becomes one'
+		'sessions':   'not yet a host surface — claim it here when it becomes one'
+		'components': 'in-process registration; a hosted XAP composes features instead'
+		'surfaces':   'in-process registration; a hosted XAP composes features instead'
+		'handlers':   'in-process registration; a hosted XAP composes features instead'
+	}
+	mut seen := []string{}
+	for reader in ['xap_map_get_node(opts, \'', 'xap_map_get_str(opts, \''] {
+		mut rest := run_body
+		for {
+			idx := rest.index(reader) or { break }
+			rest = rest[idx + reader.len..]
+			key := rest.all_before("'")
+			if key !in seen {
+				seen << key
+			}
+		}
+	}
+	assert seen.len > 0, 'the opts-read scan found nothing — xap_run was restructured, fix this guard'
+	mut unreachable := []string{}
+	for k in seen {
+		if k !in hosted {
+			unreachable << k
+		}
+	}
+	assert unreachable.len == 0, 'run option(s) ${unreachable.join(', ')} are honored by xap_run and have no claimed hosted spelling — give each a deployment-document binding (distribution spec §6.3.1) or record here why the host does not carry it (#982 acceptance 4)'
+}
+
 // ── source: vcx/tests/xap_journal_bind_test.v ──
 // xap_journal_bind_test.v — BEHAVIORAL proof of the §3.1.1 durable journal
 // binding (#582): with `[$xap:run {journal: …}]` the cascade's commit IS the
@@ -928,11 +2096,10 @@ fn test_xap_serve_auth_journal_bound_839() {
 		'      [= \$d [\$xap:dial \$rt [from id="principal:vessel"] [to id="${xa_client_did}"] [scope :guestbook]]]\n' +
 		'  [\$xap:serve "http://127.0.0.1:${port}" {runtime: \$rt auth: ${auth_block}}]]\n')
 	os.setenv('CX_XAP_HOST_SEED', xa_host_seed_hex, true)
-	mut proc := os.new_process(cxbin)
-	proc.set_args(['--allow-read', '--allow-write', '--allow-net=127.0.0.1:${port}',
-		'--allow-env', srv])
-	proc.set_redirect_stdio()
-	proc.run()
+	// #1006: log FILE, not an undrained pipe — see xh_host_process.
+	hlog := os.join_path(tmp, 'serve.log')
+	mut proc := xh_host_process(cxbin, ['--allow-read', '--allow-write',
+		'--allow-net=127.0.0.1:${port}', '--allow-env', srv], hlog)
 	defer {
 		proc.signal_kill()
 	}
@@ -946,7 +2113,7 @@ fn test_xap_serve_auth_journal_bound_839() {
 		}
 	}
 	if !up {
-		out := proc.stdout_slurp() + proc.stderr_slurp()
+		out := xh_host_log(hlog)
 		panic('auth serve never came up: ${out}')
 	}
 
@@ -2243,10 +3410,10 @@ fn test_archetype_two_instances_compose_clean() {
 		'instance 1 keeps the archetype surface minus nothing, plus nothing colliding: ${out}'
 	assert out.contains("n2 'vendor-endorsement'") && out.contains('v2 5'),
 		'instance 2 carries its added verb: ${out}'
-	assert out.contains("cq ('irreversible')"), 'the tighten must apply: ${out}'
-	assert out.contains("rule ('product-review/approve')"),
+	assert out.contains("cq 'irreversible'"), 'the tighten must apply: ${out}'
+	assert out.contains("rule 'product-review/approve'"),
 		'qualified self-references must follow the rename (§4.3): ${out}'
-	assert out.contains('sel1 1') && out.contains("vb ('Vendor')") && out.contains('prov 1'),
+	assert out.contains('sel1 1') && out.contains("vb 'Vendor'") && out.contains('prov 1'),
 		'selection, renames, and provenance must all ride the effective document: ${out}'
 }
 
@@ -2314,7 +3481,7 @@ fn test_archetype_rebless_is_deliberate() {
 	out := xa_run_cx('--allow-read --allow-write', p)
 	assert out.contains('CXER4879'),
 		'a v1-pinned binding presented the v2 base must refuse — propagation is never silent: ${out}'
-	assert out.contains("reblessed-cq ('irreversible')"),
+	assert out.contains("reblessed-cq 'irreversible'"),
 		'the re-blessed instance must carry the v2 base trait: ${out}'
 	assert out.contains("sibling-ok 'vendor-endorsement'"),
 		'the un-re-blessed sibling against its pinned base is untouched: ${out}'
@@ -2638,6 +3805,78 @@ fn test_reference_library_code_actually_runs() {
 		'the library calls something that does not exist — the exports gate cannot see this: ${out}'
 }
 
+// #1017 — the RETURNS-KIND pin. `total-of` declares `[returns decimal]`, and
+// a money total that is a float is precisely the anti-pattern this reference
+// exists to teach against. The image is a witness on its own since CO-12 (a
+// float spells exponent-form, so the total read `4.448e1`), but the image is
+// not the contract — so this pins the KIND directly with the `::T`
+// value-kind test (§5.2 rule 14), which no coincidentally-matching image can
+// satisfy.
+//
+// It landed RED. `[$sum]` classified its operands by the shape of their V
+// payload rather than by `data_type`, and an exact-family scalar carries its
+// base-10 image as a string — so every `decimal` fell into the XPath
+// fn:number string-leniency arm and came back f64-parsed. `[$max]` / `[$min]`
+// had the same defect (and a `bigint` beyond 2^53 additionally SATURATED
+// through i64). The aggregates now fold the exact family with the same
+// digit arithmetic `+` uses, so `[$sum (a, b)]` agrees with `[+ a b]`.
+//
+// Three lanes, because each one alone proves too little:
+//   1. the shipped reference yields a DECIMAL, exact image, no exponent;
+//   2. a float SOURCE still reads as a float — which is what proves lane 1's
+//      kind test discriminates rather than always answering 'decimal';
+//   3. the same float source under `--strict` RAISES CXER0207. The
+//      declared-`[returns]` contract is real and kind-precise; it stayed
+//      quiet through #1017 only because type expressions are inert in
+//      default execution (code.md §12.7.6, dev-strict / prod-silent). The
+//      gap was never the checker — it was that no lane drove the reference
+//      strictly. This one does.
+fn test_reference_money_total_is_a_decimal_not_a_float() {
+	dir := os.join_path(os.temp_dir(), 'cx-xap-money-${os.getpid()}')
+	os.rmdir_all(dir) or {}
+	os.mkdir_all(dir) or { panic('mkdir: ${err}') }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	lib := os.read_file(os.join_path(xa_ref_dir(), 'shop-money.cx')) or {
+		panic('read shop-money.cx: ${err}')
+	}
+	kind_case := "[?match \$t [case _::decimal 'decimal'] [case _::float 'float']" +
+		" [case _::int 'int'] [else 'other']]"
+
+	// (1) the shipped library, verbatim, asked what KIND its total is.
+	p := xa_write(dir, 'kind.cx', lib +
+		"\n[?let [= \$t [\$total-of ([line qty=2 unit=19.99], [line qty=1 unit=4.50])]]\n" +
+		"  [probe [total \$t] [kind " + kind_case + ']]]\n')
+	out := xa_run_cx('', p)
+	assert out.contains("[kind 'decimal']"),
+		'a def declaring [returns decimal] must yield a DECIMAL: ${out}'
+	assert out.contains('[total 44.48]'),
+		'and the exact decimal image — scale preserved, never rounded: ${out}'
+	assert !out.contains('4.448e1'),
+		'an exponent image means the total went through f64 (#1017): ${out}'
+
+	// (2) RED-PROOF — the float source the issue names. Float-spelled unit
+	// prices are floats, and the pin must SAY so; if this read 'decimal'
+	// the assertion above would be vacuous.
+	fl := xa_write(dir, 'kindfloat.cx', lib +
+		"\n[?let [= \$t [\$total-of ([line qty=2 unit=1.999e1], [line qty=1 unit=4.5e0])]]\n" +
+		'  [probe [kind ' + kind_case + ']]]\n')
+	fout := xa_run_cx('', fl)
+	assert fout.contains("[kind 'float']"),
+		'the float SOURCE must still read as a float, or the decimal pin proves nothing: ${fout}'
+
+	// (3) the declared-[returns] contract, actually enforced. The reference
+	// satisfies it; the float source is refused.
+	sout := xa_run_cx('--strict', p)
+	assert sout.contains("[kind 'decimal']"),
+		'the shipped library must satisfy its own [returns] under --strict: ${sout}'
+	sfl := os.execute('${xa_cx_binary()} --strict ${fl}')
+	assert sfl.exit_code != 0, 'a float posing as a decimal must not pass --strict: ${sfl.output}'
+	assert sfl.output.contains('CXER0207'),
+		'and must refuse as E_TYPE_RETURN_MISMATCH, naming the declared kind: ${sfl.output}'
+}
+
 // The per-kind gate is the point of the install, so it has to REFUSE. Two
 // classes, both fail-closed: a library that claims authority, and a feature
 // that cannot compose with what the XAP already has enabled.
@@ -2737,6 +3976,11 @@ fn xa_ref_client_serve(port int) &os.Process {
 	mut proc := os.new_process('/bin/sh')
 	proc.set_args(['-c', 'cd ${root} && CX_SHOP_PORT=${port} exec "${xa_cx_binary()}" ' +
 		'--allow-read --allow-write --allow-env --allow-net=127.0.0.1:${port} ${script} >/dev/null 2>&1'])
+	// The one set_redirect_stdio in this file #1006 deliberately LEAVES: the
+	// redirect inside the shell sends the client's own output to /dev/null
+	// before exec, so the pipe only ever carries a `cd` failure — bytes the
+	// shell writes before it is replaced, far inside any pipe buffer. Nothing
+	// here reads the pipe, and nothing here needs to.
 	proc.set_redirect_stdio()
 	proc.run()
 	for _ in 0 .. 120 {

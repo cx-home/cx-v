@@ -5,9 +5,9 @@ erDiagram
     int max_depth "1"
   }
   rec {
-    int i
-    float f
-    bool b
-    string s
-    atom a
+    int i "1"
+    float f "1.5"
+    bool b "true"
+    string s "'x'"
+    atom a ":atom"
   }

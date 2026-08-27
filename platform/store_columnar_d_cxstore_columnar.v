@@ -113,6 +113,27 @@ fn store_columnar_read_file(path string, encoding string) ![]u8 {
 fn store_columnar_open(url string, path string, encoding string, codec string, read_only bool, schema_text string) cx.Node {
 	enc := if encoding == '' { 'parquet' } else { encoding }
 	comp := if codec == '' { 'zstd' } else { codec }
+	// #891 same-root sharing. The columnar substrate rewrites the WHOLE object
+	// on every mutation, so two independent writable opens of one path do not
+	// merely race — the second flush discards the first's entire document
+	// collection. That makes a shared live view the only sound multi-handle
+	// shape here, exactly as it is for file/cxobj/cxpack (#628), and a loud
+	// refusal the only sound answer when the at-rest options disagree.
+	if r := store_open_shared_or_conflict('columnar', path, read_only,
+		'|document|${enc}|${comp}|${schema_text}')
+	{
+		return r
+	}
+	// #1005 cross-process guard. The whole-object rewrite makes this the worst
+	// case of the lot: a second WRITING process does not interleave with the
+	// first, it DISCARDS the first's entire document collection on its next
+	// flush. The sentinel is a sibling of the columnar file. (The s3 arm —
+	// store_columnar_open_s3 — has no local root to lock; its identity is
+	// endpoint+bucket+key and its concurrency story is the object store's.)
+	clk, clerr, clok := store_root_lock_take('columnar', path, read_only, url)
+	if !clok {
+		return clerr
+	}
 	mut ms := &MemStore{
 		url:             url
 		backend:         'columnar'
@@ -124,9 +145,11 @@ fn store_columnar_open(url string, path string, encoding string, codec string, r
 		is_open:         true
 		op_lock:         sync.new_mutex()
 		columnar_schema: schema_text
+		lock_key:        clk
 	}
 	if os.exists(path) {
 		store_columnar_load(mut ms) or {
+			store_root_unlock(clk)
 			return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
 		}
 	} else if !read_only {
@@ -134,6 +157,7 @@ fn store_columnar_open(url string, path string, encoding string, codec string, r
 		dir := os.dir(path)
 		if dir != '' && dir != '.' {
 			os.mkdir_all(dir) or {
+				store_root_unlock(clk)
 				return mk_err('cx-err:CXER1100',
 					'E_STORE_UNRESOLVED_BACKEND: cannot create ${dir}: ${err.msg()}')
 			}
@@ -826,6 +850,18 @@ fn store_columnar_open_s3(base_url string, encoding string, codec string, read_o
 	rb.prefix = ''
 	enc := if encoding == '' { 'parquet' } else { encoding }
 	comp := if codec == '' { 'zstd' } else { codec }
+	// #891: s3 CAN participate in same-root sharing — the issue left that
+	// open ("no local inode to key on — may need the bucket+key as the
+	// identity"), and it does. endpoint + bucket + key is a stable identity
+	// with the same meaning a path has locally, and the whole-object rewrite
+	// that makes sharing necessary for columnar is if anything worse over s3:
+	// a clobbering PUT is not even recoverable from a local temp file.
+	share_root := store_share_root_s3(rb.endpoint, rb.bucket, key)
+	if r := store_open_shared_or_conflict('columnar', share_root, read_only,
+		'|document|${enc}|${comp}|${schema_text}')
+	{
+		return r
+	}
 	mut ms := &MemStore{
 		url:             base_url
 		backend:         'columnar'
@@ -838,8 +874,10 @@ fn store_columnar_open_s3(base_url string, encoding string, codec string, read_o
 		columnar_s3:     S3Transport(&S3HttpTransport{
 			rb: rb
 		})
-		columnar_s3_key: key
-		columnar_schema: schema_text
+		columnar_s3_key:      key
+		columnar_s3_endpoint: rb.endpoint
+		columnar_s3_bucket:   rb.bucket
+		columnar_schema:      schema_text
 	}
 	store_columnar_load(mut ms) or {
 		return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')

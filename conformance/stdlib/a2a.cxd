@@ -111,6 +111,7 @@ note: as skill tags.
 
   [case id=a2a-009-skills-for-propagates-projection-failure level=core
    [tags a2a skills projection fail-loud stream-18 690 L143]
+   [; R-A1 migration: envelope → spliced children (2026-08-25) ]
    [meta [#
 note: a projection failure propagates as its [err] — an Agent Card must
 note: never advertise a silently empty or partial skill set.
@@ -121,7 +122,7 @@ note: never advertise a silently empty or partial skill set.
 [$a2a:skills-for "[?def undocumented-cmd impure [effects [write]] ($x::string) [w $x]]"]
 #]]
    [out-text [#
-[err code=missing-summary ([missing-summary def=undocumented-cmd])]
+[err code=missing-summary [missing-summary def=undocumented-cmd]]
 #]]
   ]
 ]

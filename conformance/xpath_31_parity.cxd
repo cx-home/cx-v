@@ -1,21 +1,84 @@
 [test-suite name=xpath-31-parity ring=1
   [doc [#
-# CX vs. Saxon-HE XPath 3.1 parity fixtures (gate 28.5)
+# CXPath / XPath 3.1 alignment corpus — gates 28.5a and 28.5b.
 #
-# Each fixture asserts cx-evaluator behavior against Saxon-HE 12 on
-# the same XPath 3.1 expression.
+# Normative reference: spec/02-working/cxpath_alignment.md (authored under
+# RULED: VC-7, #945; PROPOSED for graduation, NOT graduated).
 #
-# Tags:
-#   xpath31-parity      — engines MUST agree on byte-canonical output
-#   xpath31-divergence  — engines MUST disagree per documented divergence
+# TWO ROWS READ THIS FILE.
+#   28.5a  CX side, AUTOMATED, in TEST_TARGETS, no Docker.
+#          scripts/check_xpath_parity_fixtures.cx
+#          `make test-xpath-parity-cx`
+#          Gate tier: conformance/gates.cxd, suite `xpath-31-parity`.
+#   28.5b  Saxon-HE 12 cross-check, MANUAL by ruling.
+#          scripts/test_xpath_parity.sh holds the operator recipe.
 #
-# Normative reference: spec/cxpath_alignment.md.
-# Runner: scripts/test_xpath_parity.sh.
-
-# ═════════════════════════════════════════════════════════════════
-# §1. Selection — basic axes (parity)
-# ═════════════════════════════════════════════════════════════════
+# Both rows read the SAME [input-xml] body, so the manual row can never
+# drift onto a different document than the lane grades.
+#
+# SECTIONS
+#   [tag]           xpath31-parity | xpath31-divergence
+#   [input-xml]     the XML document. `cx select` reads a CX document, not
+#                   XML, so 28.5a converts it first: `cx --from=xml --to=cx`.
+#   [path]          the expression. CXPath spelling on parity cases; the
+#                   XPath 3.1 spelling on the divergence cases that exist to
+#                   pin a refusal.
+#   [out-text]      28.5a: the exact `cx select` output in canonical CX.
+#   [out-err]       28.5a: the cx-err:CXERNNNN code on a refusal. The
+#                   assertion is on the CODE, never the message text —
+#                   misc/cli.md makes message text explicitly unstable across
+#                   patch versions while error codes carry a stability policy.
+#   [expect-saxon]  28.5b: the XPath-engine result. HAND-AUTHORED AND NEVER
+#                   VERIFIED against a running Saxon — verifying these is
+#                   28.5b's first job, not an assumption it may rest on.
+#   [expect-diff]   28.5b: prose, why the engines differ, keyed to a clause of
+#                   cxpath_alignment.md.
+#
+# EVERY [out-text] AND [out-err] BODY IN THIS FILE WAS DERIVED BY RUNNING THE
+# SHIPPED BINARY (the cx built from commit 72881ab0f, 2026-08-24). None is
+# hand-authored. That is the discipline whose absence caused #945: the
+# previous [out-text] bodies recorded XML (`<user id="1"/>`) while cx emits
+# canonical CX (`[user id=1]`), so every case would have failed on frame
+# alone, in every environment — and nobody found out, because the runner
+# exited 2 before doing any work and no lane called it.
+#
+# TAGS AND WHAT THEY ASSERT
+#   xpath31-parity      CX accepts the expression and emits exactly
+#                       [out-text]; exit 0 for a non-empty expectation, 1 for
+#                       an empty one (the misc/cli.md `cx select` contract).
+#                       28.5b additionally asserts the same NODE SET as Saxon
+#                       — never the same bytes, since the two engines
+#                       serialize differently by design.
+#   xpath31-divergence  CX and XPath 3.1 differ here, in the recorded way.
+#                       Two shapes, both machine-checked by 28.5a:
+#                         (a) with [out-err] — CX REFUSES: exit 2 and the
+#                             recorded code on stderr. Saxon accepts (28.5b).
+#                         (b) with [out-text] — CX ACCEPTS but produces a
+#                             different result, recorded exactly. The only
+#                             instance is xpath31-002 (attribute auto-typing).
+#                       An accidental convergence is a regression: if Saxon
+#                       ever refuses an (a)-shape case too, the divergence has
+#                       evaporated and the case tests nothing.
+#
+# SEVEN CASES WERE RE-TAGGED parity -> divergence UNDER VC-7, because
+# measurement contradicted the tag and approved normative text says the
+# measurement is right, not the tag:
+#   002  attribute auto-typing (shape b)
+#   030  `cx select` takes a PATH expression, not an arbitrary call
+#   031  032  033  the paren-call form is retired everywhere
+#   041  infix pipe is retired
+#   042  infix `||` is retired
+# Each carries its [expect-diff] naming the clause. The corpus therefore now
+# makes 12 parity claims, not 19 — a real reduction in the number of PARITY
+# assertions, stated here rather than absorbed silently. The capabilities
+# those seven meant to reach (aggregate and string built-ins reached through
+# head dispatch inside a predicate) are NOT pinned by this corpus; that gap
+# is tracked, not papered over.
 #]]
+
+ [# ═════════════════════════════════════════════════════════════════
+    §1. Selection — basic axes (parity)
+    ═════════════════════════════════════════════════════════════════ #]
 
  [case id=xpath31-001-descendant-or-self-name
   [tag [#
@@ -28,6 +91,11 @@ xpath31-parity
 //user
 #]]
   [out-text [#
+[user id=1]
+[user id=2]
+[user id=3]
+#]]
+  [expect-saxon [#
 <user id="1"/>
 <user id="2"/>
 <user id="3"/>
@@ -36,7 +104,7 @@ xpath31-parity
 
  [case id=xpath31-002-attribute-predicate-equality
   [tag [#
-xpath31-parity
+xpath31-divergence
 #]]
   [input-xml [#
 <users><user id="1" active="true"/><user id="2" active="false"/></users>
@@ -45,7 +113,24 @@ xpath31-parity
 //user[= $_@active 'true']
 #]]
   [out-text [#
+#]]
+  [expect-saxon [#
 <user id="1" active="true"/>
+#]]
+  [expect-diff [#
+Saxon returns the first user: absent a schema every attribute is
+xs:untypedAtomic, so @active='true' is a STRING comparison and matches.
+
+CX accepts the expression and selects NOTHING (exit 1). xml_to_cx auto-types
+attribute values, so active="true" arrives as the BOOLEAN true, and CX is
+type-strict: [= true 'true'] is false. Measured end to end 2026-08-24.
+
+This is the typed-value-layer divergence — cxpath_alignment.md, "no XSD type
+layer" and "sequence flatness and the typed-value model". It is the SPECIFIED
+answer on both sides, and it is the reason the alignment claim is scoped to
+path SYNTAX rather than to value comparison. It is also the one divergence in
+this corpus that is not a parse refusal, which is why the divergence tag
+carries two shapes.
 #]]
  ]
 
@@ -60,9 +145,19 @@ xpath31-parity
 //user/@email
 #]]
   [out-text [#
+[email 'a@x.org']
+[email 'b@x.org']
+#]]
+  [expect-saxon [#
 a@x.org
 b@x.org
 #]]
+  [# The attribute step is spelled with its separator, `/@email` — the glued
+     `//user@email` tail is binding-path surface, not a path production
+     (grammar.ebnf [130a]). Attribute-axis matches materialize as [name value]
+     fields per the misc/cli.md `cx select` output rule, which is why the CX
+     frame is `[email 'a@x.org']` and the XPath frame is a bare string: same
+     node set, different serialization. #]
  ]
 
  [case id=xpath31-004-positional-predicate
@@ -76,6 +171,9 @@ xpath31-parity
 //item[2]
 #]]
   [out-text [#
+[item n=2]
+#]]
+  [expect-saxon [#
 <item n="2"/>
 #]]
  ]
@@ -91,6 +189,10 @@ xpath31-parity
 //item[1]/following-sibling::item
 #]]
   [out-text [#
+[item n=2]
+[item n=3]
+#]]
+  [expect-saxon [#
 <item n="2"/>
 <item n="3"/>
 #]]
@@ -107,6 +209,9 @@ xpath31-parity
 //para/ancestor::section
 #]]
   [out-text [#
+[section [para 'text']]
+#]]
+  [expect-saxon [#
 <section><para>text</para></section>
 #]]
  ]
@@ -122,9 +227,19 @@ xpath31-parity
 //*[or [= [$name $_] "a"] [= [$name $_] "c"]]
 #]]
   [out-text [#
+[a]
+[c]
+#]]
+  [expect-saxon [#
 <a/>
 <c/>
 #]]
+  [# The XPath spelling of this predicate would be
+     `[self::a or self::c]` — infix `or` and no brackets. CX writes the same
+     selection as a fused prefix form over the head-dispatch `[$name …]`
+     built-in. The SELECTION is the parity claim; the SPELLING diverges by
+     the homoiconic invariant (cxpath_alignment.md, the retired predicate
+     sublanguage). #]
  ]
 
  [case id=xpath31-008-descendant-axis-explicit
@@ -138,13 +253,16 @@ xpath31-parity
 //descendant::z
 #]]
   [out-text [#
+[z]
+#]]
+  [expect-saxon [#
 <z/>
-
-# ═════════════════════════════════════════════════════════════════
-# §2. Predicates — comparisons (parity on value-comparison semantics)
-# ═════════════════════════════════════════════════════════════════
 #]]
  ]
+
+ [# ═════════════════════════════════════════════════════════════════
+    §2. Predicates — comparisons
+    ═════════════════════════════════════════════════════════════════ #]
 
  [case id=xpath31-020-predicate-ge
   [tag [#
@@ -157,9 +275,18 @@ xpath31-parity
 //user[>= $_@age 25]
 #]]
   [out-text [#
+[user age=25]
+[user age=30]
+#]]
+  [expect-saxon [#
 <user age="25"/>
 <user age="30"/>
 #]]
+  [# The engines agree HERE, and the agreement is partly luck: CX compares
+     INTEGERS (xml_to_cx auto-typed the age="25" attribute into the integer 25) while XPath compares
+     untyped atomics numerically for `>=`. They would disagree on age="025".
+     Contrast xpath31-002, where the same auto-typing makes an equality
+     comparison diverge. #]
  ]
 
  [case id=xpath31-021-predicate-not-equal
@@ -173,6 +300,9 @@ xpath31-parity
 //user[!= $_@role 'admin']
 #]]
   [out-text [#
+[user role=member]
+#]]
+  [expect-saxon [#
 <user role="member"/>
 #]]
  ]
@@ -188,17 +318,20 @@ xpath31-parity
 //item[< $_@price 10]
 #]]
   [out-text [#
+[item price=5]
+#]]
+  [expect-saxon [#
 <item price="5"/>
-
-# ═════════════════════════════════════════════════════════════════
-# §3. Functions (parity)
-# ═════════════════════════════════════════════════════════════════
 #]]
  ]
 
+ [# ═════════════════════════════════════════════════════════════════
+    §3. Built-in functions
+    ═════════════════════════════════════════════════════════════════ #]
+
  [case id=xpath31-030-count
   [tag [#
-xpath31-parity
+xpath31-divergence
 #]]
   [input-xml [#
 <users><user/><user/><user/></users>
@@ -206,14 +339,34 @@ xpath31-parity
   [path [#
 [$count //user]
 #]]
-  [out-text [#
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
 3
+#]]
+  [expect-diff [#
+Saxon returns 3 for count(//user).
+
+CX refuses, exit 2:
+  cx select: cx-err:CXER0100: PATH must be a CXPath path expression
+  ($doc/…, /… or //…), got: [$count //user]
+
+Two separate reasons, and the distinction matters:
+ (1) XPath's paren-call count(…) is retired everywhere in CX
+     (cxpath_alignment.md, the retired predicate sublanguage).
+ (2) The expression above is ALREADY in valid CX head-dispatch spelling, and
+     `cx select` still refuses it — because misc/cli.md scopes the PATH
+     argument to a single CXPath path expression ($doc-anchored, rooted, or
+     descendant), and a call whose ARGUMENT is a path is not a path. So this
+     case pins a CLI-SURFACE scope fact, not only an XPath divergence.
+     `[$count //user]` evaluates fine as a program.
 #]]
  ]
 
  [case id=xpath31-031-name-function
   [tag [#
-xpath31-parity
+xpath31-divergence
 #]]
   [input-xml [#
 <doc><foo/></doc>
@@ -221,14 +374,29 @@ xpath31-parity
   [path [#
 name(//foo)
 #]]
-  [out-text [#
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
 foo
+#]]
+  [expect-diff [#
+Saxon evaluates name(//foo) to 'foo'.
+
+CX refuses at parse, exit 2:
+  paren-call `name(…)` is retired — there is no paren-call anywhere in the
+  language; write the head-dispatch form `[$name …]`
+
+There is NO paren-call at any position in CX, CXPath predicate bodies
+included (cxpath_alignment.md, the retired predicate sublanguage). The
+capability is reached head-dispatch; xpath31-007 exercises `[$name $_]`
+inside a predicate.
 #]]
  ]
 
  [case id=xpath31-032-string-length
   [tag [#
-xpath31-parity
+xpath31-divergence
 #]]
   [input-xml [#
 <doc><greeting>hello</greeting></doc>
@@ -236,14 +404,23 @@ xpath31-parity
   [path [#
 string-length(//greeting)
 #]]
-  [out-text [#
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
 5
+#]]
+  [expect-diff [#
+Saxon returns 5 for string-length(//greeting).
+
+CX refuses at parse, exit 2: the paren-call form is retired; the head-dispatch
+spelling is `[$string-length …]`. Same clause as xpath31-031.
 #]]
  ]
 
  [case id=xpath31-033-contains
   [tag [#
-xpath31-parity
+xpath31-divergence
 #]]
   [input-xml [#
 <doc><user email="alice@example.org"/></doc>
@@ -251,8 +428,17 @@ xpath31-parity
   [path [#
 contains(//user/@email, 'example')
 #]]
-  [out-text [#
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
 true
+#]]
+  [expect-diff [#
+Saxon evaluates contains(//user/@email, 'example') to true.
+
+CX refuses at parse, exit 2: the paren-call form is retired; the head-dispatch
+spelling is `[$contains …]`. Same clause as xpath31-031.
 #]]
  ]
 
@@ -267,8 +453,15 @@ xpath31-parity
 //item[2]
 #]]
   [out-text [#
+[item n=2]
+#]]
+  [expect-saxon [#
 <item n="2"/>
 #]]
+  [# The positional notation atom [N] is spelled identically in both
+     languages and means `$_position = N` (grammar.ebnf [159a]). Same shape
+     as xpath31-004 by design — 004 pins it as a predicate form, 034 pins it
+     as the position() equivalent. #]
  ]
 
  [case id=xpath31-035-last
@@ -282,13 +475,19 @@ xpath31-parity
 //item[= $_position $_last]
 #]]
   [out-text [#
-<item n="3"/>
-
-# ═════════════════════════════════════════════════════════════════
-# §4. Sequence operators (parity)
-# ═════════════════════════════════════════════════════════════════
+[item n=3]
 #]]
+  [expect-saxon [#
+<item n="3"/>
+#]]
+  [# XPath writes this `[position() = last()]`. CX's reserved predicate
+     bindings $_position / $_last are the context accessors, and the
+     comparison is the prefix operator form. #]
  ]
+
+ [# ═════════════════════════════════════════════════════════════════
+    §4. Sequence operators
+    ═════════════════════════════════════════════════════════════════ #]
 
  [# xpath31-040-range REMOVED — the XPath 3.1 `to` range operator is retired
     from CX (the no-infix / homoiconic invariant; ranges are the prefix builtin
@@ -297,7 +496,7 @@ xpath31-parity
 
  [case id=xpath31-041-union
   [tag [#
-xpath31-parity
+xpath31-divergence
 #]]
   [input-xml [#
 <doc><a id="1"/><b id="2"/><a id="3"/></doc>
@@ -305,16 +504,32 @@ xpath31-parity
   [path [#
 //a | //b
 #]]
-  [out-text [#
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
 <a id="1"/>
 <b id="2"/>
 <a id="3"/>
+#]]
+  [expect-diff [#
+Saxon evaluates the union and returns all three elements in document order.
+
+CX refuses at parse, exit 2:
+  unexpected token '|' in expression position
+
+grammar.ebnf is explicit: "Pipe `|` is retired (use the prefix
+combinators)". The CAPABILITY exists — `[union A B]` is a reserved prefix
+head valid in every expression position — but it is not reachable through
+the `cx select` PATH argument, for the same surface-scope reason as
+xpath31-030. So the SET-COMBINATION capability aligns and the SPELLING
+diverges (cxpath_alignment.md, set combination).
 #]]
  ]
 
  [case id=xpath31-042-string-concat
   [tag [#
-xpath31-parity
+xpath31-divergence
 #]]
   [input-xml [#
 <doc/>
@@ -322,14 +537,28 @@ xpath31-parity
   [path [#
 'foo' || '-' || 'bar'
 #]]
-  [out-text [#
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
 foo-bar
+#]]
+  [expect-diff [#
+Saxon evaluates the concatenation to 'foo-bar'.
 
-# ═════════════════════════════════════════════════════════════════
-# §5. Documented divergences (engines MUST disagree)
-# ═════════════════════════════════════════════════════════════════
+CX refuses at parse, exit 2:
+  unexpected token '|' in expression position
+
+Infix `||` is retired; concatenation is the `[$concat …]` built-in
+(grammar.ebnf, the [132]-[134] retirement note). The expression is also not a
+path, so `cx select` would refuse it even in CX spelling — the same
+surface-scope fact xpath31-030 pins.
 #]]
  ]
+
+ [# ═════════════════════════════════════════════════════════════════
+    §5. Documented divergences — CX refuses what XPath 3.1 accepts
+    ═════════════════════════════════════════════════════════════════ #]
 
  [case id=xpath31-100-general-comparison-divergence
   [tag [#
@@ -341,10 +570,21 @@ xpath31-divergence
   [path [#
 //users/@age=25
 #]]
+  [out-err [#
+cx-err:CXER0100
+#]]
   [expect-diff [#
-Saxon returns 'true' (general comparison existentially over sequence).
-CX rejects at parse with CXER0100 — infix comparison is retired everywhere
-(grammar [132]-[134] retirement; predicates are homoiconic prefix forms).
+Saxon returns 'true' — the general comparison quantifies existentially over
+the sequence.
+
+CX refuses at parse, exit 2:
+  unexpected token '=' in expression position
+
+Infix comparison is retired at every position (grammar.ebnf [132]-[134]
+retirement); predicates are homoiconic prefix forms. CX has no general
+comparison at all: `[= …]` is a value comparison over two operands, and
+existential intent is written explicitly (cxpath_alignment.md, sequence
+flatness and the typed-value model).
 #]]
  ]
 
@@ -358,9 +598,20 @@ xpath31-divergence
   [path [#
 for $x in //user return $x/@email
 #]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
+a@x
+#]]
   [expect-diff [#
 Saxon returns 'a@x'.
-CX raises CXER0100 (unrecognised path expression — use [?for] directive).
+
+CX refuses, exit 2:
+  PATH must be a CXPath path expression ($doc/…, /… or //…)
+
+FLWOR has no CXPath production: iteration is the `[?for …]` directive, a
+program construct, not a path construct (cxpath_alignment.md, no FLWOR).
 #]]
  ]
 
@@ -374,9 +625,21 @@ xpath31-divergence
   [path [#
 42 instance of xs:integer
 #]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
+true
+#]]
   [expect-diff [#
 Saxon returns 'true'.
-CX raises CXER0100 (unknown type 'xs:integer'; use :int).
+
+CX refuses, exit 2:
+  PATH must be a CXPath path expression ($doc/…, /… or //…)
+
+`instance of` and the whole XSD type lattice are absent; CX's kind surface is
+its own and coercion is the prefix `[cast $v :int]` (cxpath_alignment.md, no
+XSD type layer).
 #]]
  ]
 
@@ -390,9 +653,24 @@ xpath31-divergence
   [path [#
 declare namespace ns = 'http://example.org'; //ns:foo
 #]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+  [expect-saxon [#
+<ns:foo xmlns:ns="http://example.org"/>
+#]]
   [expect-diff [#
-Saxon evaluates successfully.
-CX raises CXER0100 (namespace declarations not permitted in CXPath expressions).
+Saxon evaluates successfully after the prolog declaration.
+
+CX refuses at parse, exit 2:
+  unexpected character ; (byte 0x3b)
+
+A CXPath expression carries no namespace environment of its own: prefixes
+resolve against the DOCUMENT's in-scope xmlns map (cxpath_alignment.md, no
+in-expression namespace declarations). The conversion preserves the
+declaration — `cx --from=xml --to=cx` on this input yields
+`[doc xmlns:ns=http://example.org [ns:foo]]` — so `//ns:foo` alone resolves;
+only the prolog spelling is refused.
 #]]
  ]
 ]

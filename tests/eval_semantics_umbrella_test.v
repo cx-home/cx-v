@@ -2440,7 +2440,7 @@ fn test_rooted_path_predicate_then_slash_attr_still_computes() {
 	src := '[teams\n' +
 		'  [team name="alpha" [member id=1] [member id=2]]\n' +
 		'  [team name="beta" [member id=3]]]\n' +
-		'[r //team/member[= \$_@id 1]/@id]\n'
+		'[r [?splice //team/member[= \$_@id 1]/@id]]\n' // R-A1: the node-set splices into content
 	f := tmp_doc('attrtailslash', src)
 	defer { os.rm(f) or {} }
 	r := os.execute('${cx_bin()} ${f}')
@@ -2454,7 +2454,7 @@ fn test_rooted_path_predicate_then_slash_attr_still_computes() {
 
 fn test_binding_path_glued_attr_tail_still_computes() {
 	src := '[?let [= \$d [teams [team name="alpha" [member id=1] [member id=2]] [team name="beta" [member id=3]]]]\n' +
-		' [r \$d//team/member[= \$_@id 1]@id]]\n'
+		' [r [?splice \$d//team/member[= \$_@id 1]@id]]]\n' // R-A1: the node-set splices into content
 	f := tmp_doc('attrtailbind', src)
 	defer { os.rm(f) or {} }
 	r := os.execute('${cx_bin()} ${f}')

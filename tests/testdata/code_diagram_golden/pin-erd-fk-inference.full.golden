@@ -5,7 +5,7 @@ erDiagram
     int max_depth "1"
   }
   order {
-    int order-id
-    int total
+    int order-id "1, 2"
+    int total "2, 3"
     string note "appears 2× depth 0"
   }

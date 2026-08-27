@@ -1,5 +1,5 @@
 erDiagram
   point {
-    int x
-    int y
+    int x "e.g. 1"
+    int y "e.g. 2"
   }

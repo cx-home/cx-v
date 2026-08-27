@@ -1,0 +1,5 @@
+sequenceDiagram
+  participant jobs
+  participant results
+  participant dispatcher
+  participant worker

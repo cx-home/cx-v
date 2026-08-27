@@ -685,10 +685,27 @@ fn parse_input_doc(input string) !cx.Node {
 	// inherited attrs/items).
 	parsed := cx.parse(input) or { return error(err.msg()) }
 	doc := cx.resolve_document(parsed) or { return error(err.msg()) }
+	// R-A2 binding contract (2026-08-25): exactly ONE top-level element →
+	// bind the root element (the platform's `$doc/field` idiom; leading
+	// comments neither count against uniqueness nor join the bound value).
+	// Several roots → bind the DOCUMENT node, navigated per the document
+	// row — the previous behavior silently dropped every root but the
+	// first, which was a defect, not a contract.
+	mut root := ?cx.Node(none)
+	mut n_elements := 0
 	for n in doc.elements {
 		if n is cx.Element {
-			return n
+			n_elements++
+			if n_elements == 1 {
+				root = cx.Node(n)
+			}
 		}
+	}
+	if n_elements == 1 {
+		return root or { return error('input document contains no element') }
+	}
+	if n_elements > 1 {
+		return cx.doc_to_node(doc)
 	}
 	return error('input document contains no element')
 }

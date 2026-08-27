@@ -92,10 +92,11 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?lib 'cx-x/ux-web' :as web]
-[list [$web:htmx-subset] [$web:htmx-allowed "hx-post"] [$web:htmx-allowed "hx-on"] [$web:htmx-allowed "hx-boost"]]
+[; R-A1 migration: envelope → spliced children (2026-08-25) ]
+[list [?splice [$web:htmx-subset]] [$web:htmx-allowed "hx-post"] [$web:htmx-allowed "hx-on"] [$web:htmx-allowed "hx-boost"]]
 #]]
   [out-text [#
-[list (hx-get, hx-post, hx-target, hx-swap, hx-swap-oob, hx-trigger, hx-include, hx-indicator, hx-ext, sse-connect, sse-swap) true false false]
+[list 'hx-get' 'hx-post' 'hx-target' 'hx-swap' 'hx-swap-oob' 'hx-trigger' 'hx-include' 'hx-indicator' 'hx-ext' 'sse-connect' 'sse-swap' true false false]
 #]]
  ]
 
@@ -113,11 +114,12 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?lib 'cx-x/ux-web' :as web]
-[list [$web:off-subset-attrs "<div hx-post=\"/x\" hx-target=\"#y\"></div>"]
-      [$web:off-subset-attrs "<div hx-on=\"click: x\" hx-boost=\"true\"></div>"]]
+[; R-A1 migration: envelope → spliced children (2026-08-25) ]
+[list [?splice [$web:off-subset-attrs "<div hx-post=\"/x\" hx-target=\"#y\"></div>"]]
+      [?splice [$web:off-subset-attrs "<div hx-on=\"click: x\" hx-boost=\"true\"></div>"]]]
 #]]
   [out-text [#
-[list () ([ux-refusal code=ux-attr-off-subset attr=hx-on], [ux-refusal code=ux-attr-off-subset attr=hx-boost])]
+[list [ux-refusal code=ux-attr-off-subset attr=hx-on] [ux-refusal code=ux-attr-off-subset attr=hx-boost]]
 #]]
  ]
 
@@ -155,13 +157,14 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?lib 'cx-x/ux-web' :as web]
-[list [$web:csp-violations "<div style=\"x\"></div>"]
-      [$web:csp-violations "<script>alert(1)</script>"]
-      [$web:csp-violations "<div onclick=\"x\"></div>"]
-      [$web:csp-violations "<script src=\"/static/htmx.min.js\" integrity=\"sha384-a\"></script>"]]
+[; R-A1 migration: envelope → spliced children (2026-08-25) ]
+[list [?splice [$web:csp-violations "<div style=\"x\"></div>"]]
+      [?splice [$web:csp-violations "<script>alert(1)</script>"]]
+      [?splice [$web:csp-violations "<div onclick=\"x\"></div>"]]
+      [?splice [$web:csp-violations "<script src=\"/static/htmx.min.js\" integrity=\"sha384-a\"></script>"]]]
 #]]
   [out-text [#
-[list ([ux-refusal code=ux-inline-style]) ([ux-refusal code=ux-inline-script], [ux-refusal code=ux-inline-script]) ([ux-refusal code=ux-event-handler]) ()]
+[list [ux-refusal code=ux-inline-style] [ux-refusal code=ux-inline-script] [ux-refusal code=ux-inline-script] [ux-refusal code=ux-event-handler]]
 #]]
  ]
 
@@ -178,13 +181,14 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
 [?lib 'cx-x/ux' :as ux]
 [?lib 'cx-x/ux-web' :as web]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $ok  [ux:theme [token name=bg value="#111"] [token name=fg value="white"]]]
   [= $bad [ux:theme [token name=bg value="red;} body{display:none"]]]
   ([$web:token-value-safe "#111"], [$web:token-value-safe "red;}"],
    [$web:theme-refusals $bad], [$web:theme-css $bad])]
 #]]
   [out-text [#
-(true, false, [ux-refusal code=ux-bad-token-value token=bg], [err code=ux-refused ([ux-refusal code=ux-bad-token-value token=bg])])
+(true, false, [ux-refusal code=ux-bad-token-value token=bg], [err code=ux-refused [ux-refusal code=ux-bad-token-value token=bg]])
 #]]
  ]
 
@@ -212,6 +216,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
     reaches the terminal renderer intact. Both output scans come back clean. #]
  [case id=web-009-the-live-region-rides-the-render-context level=core
   [tags ux web liveness sse P0-44 R5]
+  [; R-A1 migration: absence contributes nothing (2026-08-25) ]
   [title 'sse-connect and sse-swap come from the feed BINDING, never from the tree']
   [in-cx [#
 [empty]
@@ -229,7 +234,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
   [list $r [$web:off-subset-attrs $r] [$web:csp-violations $r]]]
 #]]
   [out-text [#
-[list '<section class="ux-region" id="cx-2905217911f2a7e8" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /open]\n]\n" hx-ext="sse" sse-connect="/stream"><p class="ux-text">live</p></section>' () ()]
+[list '<section class="ux-region" id="cx-2905217911f2a7e8" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /open]\n]\n" hx-ext="sse" sse-connect="/stream"><p class="ux-text">live</p></section>']
 #]]
  ]
 
@@ -278,6 +283,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
              [feed name=orders endpoint="/stream" event="orders-changed"]
              [fragment affects="/live/open/rows" endpoint="/orders/rows"]
              [swap default=outerHTML]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $ctx {route: "/orders", feature: "orders", path: "/", bind: $rctx}]
   [= $ok  [ux:region feature=orders path="/live"
             [ux:filter name=q label="Find" affects="/live/open/rows"]
@@ -287,7 +293,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
   ([$web:render $ok $ctx], [$web:render $bad $ctx])]
 #]]
   [out-text [#
-('<section class="ux-region" id="cx-b9aa0e4902fe6a43" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live]\n]\n"><div class="ux-control-field ux-filter"><label class="ux-label" for="ux-filter-q">Find</label><input class="ux-control" type="search" id="ux-filter-q" name="q" hx-get="/orders/rows" hx-target="#cx-cb25c893adec8e5e" hx-swap="outerHTML" hx-trigger="keyup changed delay:200ms, search"></div><table class="ux-table" id="cx-70c02252bf05598f" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live/open]\n]\n"><tbody class="ux-rows" id="cx-cb25c893adec8e5e" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live/open/rows]\n]\n"><tr class="ux-row" id="cx-a20fa70a7778ad68" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path \'/live/open/rows/row[r1]\']\n]\n"><td class="ux-cell">a</td></tr></tbody></table></section>', [err code=ux-refused ([ux-refusal code=ux-unbound-filter filter=q], [ux-refusal code=ux-dangling-affects element=ux:filter affects='/live/nowhere'])])
+('<section class="ux-region" id="cx-b9aa0e4902fe6a43" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live]\n]\n"><div class="ux-control-field ux-filter"><label class="ux-label" for="ux-filter-q">Find</label><input class="ux-control" type="search" id="ux-filter-q" name="q" hx-get="/orders/rows" hx-target="#cx-cb25c893adec8e5e" hx-swap="outerHTML" hx-trigger="keyup changed delay:200ms, search"></div><table class="ux-table" id="cx-70c02252bf05598f" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live/open]\n]\n"><tbody class="ux-rows" id="cx-cb25c893adec8e5e" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path /live/open/rows]\n]\n"><tr class="ux-row" id="cx-a20fa70a7778ad68" data-cx-frag="[frag\n  [route /orders]\n  [feature orders]\n  [path \'/live/open/rows/row[r1]\']\n]\n"><td class="ux-cell">a</td></tr></tbody></table></section>', [err code=ux-refused [ux-refusal code=ux-unbound-filter filter=q] [ux-refusal code=ux-dangling-affects element=ux:filter affects='/live/nowhere']])
 #]]
  ]
 
@@ -358,11 +364,12 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?lib 'cx-x/ux-web' :as web]
+[; R-A1 migration: envelope → spliced children (2026-08-25) ]
 ([$web:render [ux:action verb=v target="#x"] {route: "/o", feature: "f", path: "/"}],
  [$web:render [ux:region feature=f path="/r" [ux:card id=d] [ux:card id=d]] {route: "/o", feature: "f", path: "/"}])
 #]]
   [out-text [#
-([err code=ux-refused ([ux-refusal code=ux-renderer-private-attr element=ux:action attr=target])], [err code=ux-refused ([ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8])])
+([err code=ux-refused [ux-refusal code=ux-renderer-private-attr element=ux:action attr=target]], [err code=ux-refused [ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8]])
 #]]
  ]
 
@@ -408,12 +415,13 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
              [feed name=orders endpoint="/stream" event="orders-changed"]
              [fragment affects="/live/open/rows" endpoint="/orders/rows"]
              [swap default=outerHTML]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $t [ux:group name=lines label="Lines" affects="/f/entry/place-order/lines" add-label="Add a line"
           [ux:card [ux:input name="lines.0.qty" label="Qty"]]]]
   [$web:render $t {route: "/o", feature: "f", path: "/entry/place-order", fragment: true, bind: $rctx}]]
 #]]
   [out-text [#
-[err code=ux-refused ([ux-refusal code=ux-dangling-affects element=ux:group affects='/f/entry/place-order/lines'])]
+[err code=ux-refused [ux-refusal code=ux-dangling-affects element=ux:group affects='/f/entry/place-order/lines']]
 #]]
  ]
 
@@ -437,6 +445,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
              [feed name=orders endpoint="/stream" event="orders-changed"]
              [fragment affects="/live/open/rows" endpoint="/orders/rows"]
              [swap default=outerHTML]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $t [ux:form verb=place-order affects="/f/entry" [ux:submit label="Go"]]]
   [= $bad [ux:form verb=place-order affects="/nowhere" [ux:submit label="Go"]]]
   ([$web:render $t   {route: "/o", feature: "f", path: "/", bind: $rctx}],
@@ -444,7 +453,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
    [$web:render $bad {route: "/o", feature: "f", path: "/", fragment: true, bind: $rctx}])]
 #]]
   [out-text [#
-([err code=ux-refused ([ux-refusal code=ux-dangling-affects element=ux:form affects='/f/entry'])], [err code=ux-refused ([ux-refusal code=ux-dangling-affects element=ux:form affects='/f/entry'])], [err code=ux-refused ([ux-refusal code=ux-dangling-affects element=ux:form affects='/nowhere'])])
+([err code=ux-refused [ux-refusal code=ux-dangling-affects element=ux:form affects='/f/entry']], [err code=ux-refused [ux-refusal code=ux-dangling-affects element=ux:form affects='/f/entry']], [err code=ux-refused [ux-refusal code=ux-dangling-affects element=ux:form affects='/nowhere']])
 #]]
  ]
 
@@ -465,6 +474,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
 [?lib 'cx-x/ux' :as ux]
 [?lib 'cx-x/ux-web' :as web]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $two [ux:theme [token name=gap value="4px"]
             [palette scheme=light default=true [token name=bg value="#fff"] [token name=fg value="#111"]]
             [palette scheme=dark [token name=bg value="#111"] [token name=fg value="#eee"]]]]
@@ -477,7 +487,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
    [$web:theme-css $odd])]
 #]]
   [out-text [#
-(':root{--cx-gap:4px;--cx-bg:#fff;--cx-fg:#111;}\n@media (prefers-color-scheme: dark){:root{--cx-bg:#111;--cx-fg:#eee;}}\n', ':root{--cx-bg:#111;--cx-fg:white;}\n', [ux-refusal code=ux-bad-palette-scheme scheme=sepia], [ux-refusal code=ux-bad-palette-default], [err code=ux-refused ([ux-refusal code=ux-bad-palette-scheme scheme=sepia])])
+(':root{--cx-gap:4px;--cx-bg:#fff;--cx-fg:#111;}\n@media (prefers-color-scheme: dark){:root{--cx-bg:#111;--cx-fg:#eee;}}\n', ':root{--cx-bg:#111;--cx-fg:white;}\n', [ux-refusal code=ux-bad-palette-scheme scheme=sepia], [ux-refusal code=ux-bad-palette-default], [err code=ux-refused [ux-refusal code=ux-bad-palette-scheme scheme=sepia]])
 #]]
  ]
 

@@ -14,14 +14,29 @@
 // Wire format: JSON-RPC 2.0 over stdio with LSP's `Content-Length`
 // header framing. See https://microsoft.github.io/language-server-protocol/.
 //
-// Capabilities:
-//   - textDocument/{didOpen,didChange,didClose}
-//   - textDocument/publishDiagnostics (push from parse errors)
-//   - textDocument/hover (directive + filter docstrings)
-//   - textDocument/completion (directive names + in-scope bindings)
-//   - textDocument/semanticTokens (full)
-//   - textDocument/formatting (wraps cx fmt)
+// Capabilities. This list had drifted to seven entries while
+// handle_initialize advertised fifteen — the same advertise-vs-implement
+// drift class #423 and #940 found in the README and the hover docs, here in
+// the implementation file itself. It is now the full advertised set, in
+// handle_initialize's order; vcx/tests/lint_lsp_umbrella_test.v's #996
+// harness pins that set on the wire and probes every entry for a live
+// handler, so the two cannot silently part again.
+//   - textDocument/{didOpen,didChange,didSave,didClose}  (textDocumentSync: Full)
+//   - textDocument/publishDiagnostics (push from parse errors + CXLS00N)
+//   - textDocument/hover (directive + filter docstrings, CXPath focus)
+//   - textDocument/completion (directives, module fns, stdlib, path context)
 //   - textDocument/definition (#id + &anchor + ?def name resolution)
+//   - textDocument/formatting (wraps cx fmt; whole-document TextEdit)
+//   - textDocument/semanticTokens (full)
+//   - textDocument/documentSymbol
+//   - textDocument/foldingRange
+//   - textDocument/selectionRange
+//   - textDocument/references
+//   - textDocument/{rename,prepareRename}
+//   - textDocument/codeAction
+//   - textDocument/codeLens (View diagram lens)
+//   - textDocument/inlayHint (declared pipe-stage flow hints)
+//   - textDocument/signatureHelp
 //
 // Editor configs: tooling/lsp/{vscode,neovim,helix}.example.
 
@@ -631,7 +646,18 @@ fn handle_formatting(msg LspMessage, mut state LspState) {
 		write_lsp_response(msg.id, json2.Any([]json2.Any{}))
 		return
 	}
-	// Single TextEdit replacing the whole document.
+	// Single TextEdit replacing the whole document — including the line after
+	// the file's final newline, so the edit owns the terminator.
+	//
+	// #980 — fmt_source returns UNTERMINATED text and its callers supply the
+	// final newline (`cx fmt` via println). This edit is the other caller and
+	// did not, so every `:w` through the LSP dropped the file's trailing
+	// newline. That went unnoticed because the lane it did NOT affect was the
+	// buggy one: the fail-closed lanes used to hand back the source verbatim,
+	// terminator included, which is the same defect that grew a file by one
+	// line per `cx fmt` pass. Fixing fmt_source's contract makes those lanes
+	// unterminated too, so the terminator has to be re-supplied here or a save
+	// would start truncating the files that used to be spared.
 	lines := source.split('\n').len
 	mut edit := map[string]json2.Any{}
 	mut range_obj := map[string]json2.Any{}
@@ -644,7 +670,7 @@ fn handle_formatting(msg LspMessage, mut state LspState) {
 	range_obj['start'] = json2.Any(start)
 	range_obj['end'] = json2.Any(end_pos)
 	edit['range'] = json2.Any(range_obj)
-	edit['newText'] = json2.Any(formatted)
+	edit['newText'] = json2.Any(formatted + '\n')
 	write_lsp_response(msg.id, json2.Any([json2.Any(edit)]))
 }
 

@@ -31,7 +31,7 @@ conformance fixtures for cx-stdlib/geo (spec/std-lib/geo.md §6).
 [?let [= $p [$geo:point 37.7749 -122.4194]] $p/lat]
 #]]
   [out-text [#
-37.7749
+3.77749e1
 #]]
  ]
 
@@ -45,7 +45,7 @@ conformance fixtures for cx-stdlib/geo (spec/std-lib/geo.md §6).
 [?let [= $p [$geo:point 37.7749 -122.4194]] $p/lon]
 #]]
   [out-text [#
--122.4194
+-1.224194e2
 #]]
  ]
 
@@ -76,7 +76,7 @@ cx-err:CXER3601
 [?let [= $p [$geo:point 0.0 200.0]] $p/lon]
 #]]
   [out-text [#
--160.0
+-1.6e2
 #]]
  ]
 
@@ -90,7 +90,7 @@ cx-err:CXER3601
 [?let [= $bb [$geo:bbox ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35])]] $bb/min-lat]
 #]]
   [out-text [#
-37.7
+3.77e1
 #]]
  ]
 
@@ -104,7 +104,7 @@ cx-err:CXER3601
 [?let [= $bb [$geo:bbox ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35])]] $bb/max-lon]
 #]]
   [out-text [#
--122.35
+-1.2235e2
 #]]
  ]
 
@@ -155,6 +155,39 @@ true
 #]]
  ]
 
+ # geo-009a / geo-011a (#998): the ROUNDED forms, pinned EXACTLY (no tol).
+ #
+ # The two tol=0.01 rows above are band pins and correct as such — §6 specifies
+ # the NYC→LAX distance only as "≈ 3944 km within 1% tolerance", and declines to
+ # fix the float a conforming Haversine prints. But the fn-doc examples in
+ # stdlib/geo.cx were showing that band CENTRE as the function's output, and the
+ # doc-backing gate (scripts/gen_guide/stdlib_docs_check.cx) cannot tell a band
+ # centre from an evaluated result: it checks that the example's [expect] text
+ # appears VERBATIM somewhere in this file, never that the example runs. `3944.0`
+ # was present, so the gate stayed green while a reader who pasted the example
+ # got `3.954646903577672e3`.
+ #
+ # The examples now round explicitly, which makes the shown output both TRUE and
+ # STABLE — a rounded whole number of km does not depend on the unspecified
+ # low-order float bits — and these rows are what back them. Pinned exactly on
+ # purpose: rounding collapses the spec's 1% band to a single integer, so there
+ # is nothing left for a tolerance to absorb, and an exact pin is what makes the
+ # documented example an EXECUTED one rather than a re-stated band centre.
+ [case id=geo-009a-distance-haversine-nyc-lax-rounded level=core
+  [tags geo distance haversine rounding fn-doc-backing]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?lib 'cx-stdlib/math']
+[$math:round [$geo:distance [$geo:point 40.7128 -74.0060] [$geo:point 33.9416 -118.4085] "km"]]
+#]]
+  [out-text [#
+3955
+#]]
+ ]
+
  [case id=geo-010-distance-invalid-unit level=core
   [tags geo distance unit CXER3601]
   [in-cx [#
@@ -186,6 +219,22 @@ cx-err:CXER3601
 #]]
  ]
 
+ # The Vincenty half of the #998 pair — same argument as geo-009a above.
+ [case id=geo-011a-distance-vincenty-nyc-lax-rounded level=core
+  [tags geo distance-vincenty ellipsoid rounding fn-doc-backing]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/geo']
+[?lib 'cx-stdlib/math']
+[$math:round [$geo:distance-vincenty [$geo:point 40.7128 -74.0060] [$geo:point 33.9416 -118.4085] "km"]]
+#]]
+  [out-text [#
+3963
+#]]
+ ]
+
  [case id=geo-012-vincenty-antipodal-convergence level=core
   [tags geo distance-vincenty antipodal CXER3600]
   [in-cx [#
@@ -210,7 +259,7 @@ cx-err:CXER3600
 [$geo:bearing [$geo:point 0.0 0.0] [$geo:point 0.0 1.0]]
 #]]
   [out-text [#
-90.0
+9.0e1
 #]]
  ]
 
@@ -224,7 +273,7 @@ cx-err:CXER3600
 [?let [= $d [$geo:destination [$geo:point 0.0 0.0] 0.0 100.0 "km"]] $d/lon]
 #]]
   [out-text [#
-0.0
+0.0e0
 #]]
  ]
 
@@ -240,7 +289,7 @@ cx-err:CXER3600
 [?let [= $bb [$geo:bbox-of ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35], [$geo:point 37.8 -122.4])]] $bb/min-lat]
 #]]
   [out-text [#
-37.7
+3.77e1
 #]]
  ]
 
@@ -254,7 +303,7 @@ cx-err:CXER3600
 [?let [= $bb [$geo:bbox-of ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35], [$geo:point 37.8 -122.4])]] $bb/max-lon]
 #]]
   [out-text [#
--122.35
+-1.2235e2
 #]]
  ]
 
@@ -268,7 +317,7 @@ cx-err:CXER3600
 [?let [= $bb [$geo:bbox-of-polygon [$geo:polygon ([$geo:point 37.7 -122.5], [$geo:point 37.7 -122.4], [$geo:point 37.8 -122.4], [$geo:point 37.8 -122.5])]]] $bb/min-lon]
 #]]
   [out-text [#
--122.5
+-1.225e2
 #]]
  ]
 
@@ -354,7 +403,7 @@ false
 [$geo:bbox-area [$geo:bbox ([$geo:point 5.0 5.0], [$geo:point 5.0 5.0])] "km2"]
 #]]
   [out-text [#
-0.0
+0.0e0
 #]]
  ]
 
@@ -382,7 +431,7 @@ cx-err:CXER3601
 [?let [= $bb [$geo:bbox-expand [$geo:bbox ([$geo:point 37.7 -122.5], [$geo:point 37.85 -122.35])] 0.0]] $bb/min-lat]
 #]]
   [out-text [#
-37.7
+3.77e1
 #]]
  ]
 
@@ -396,7 +445,7 @@ cx-err:CXER3601
 [?let [= $c [$geo:bbox-center [$geo:bbox ([$geo:point 0.0 0.0], [$geo:point 10.0 20.0])]]] $c/lat]
 #]]
   [out-text [#
-5.0
+5.0e0
 #]]
  ]
 
@@ -410,7 +459,7 @@ cx-err:CXER3601
 [?let [= $c [$geo:bbox-center [$geo:bbox ([$geo:point 0.0 0.0], [$geo:point 10.0 20.0])]]] $c/lon]
 #]]
   [out-text [#
-10.0
+1.0e1
 #]]
  ]
 
@@ -458,7 +507,7 @@ cx-err:CXER3602
 [$geo:polygon-perimeter [$geo:polygon ([$geo:point 5.0 5.0], [$geo:point 5.0 5.0], [$geo:point 5.0 5.0], [$geo:point 5.0 5.0])] "km"]
 #]]
   [out-text [#
-0.0
+0.0e0
 #]]
  ]
 
@@ -472,7 +521,7 @@ cx-err:CXER3602
 [?let [= $c [$geo:polygon-centroid [$geo:polygon ([$geo:point 0.0 0.0], [$geo:point 0.0 10.0], [$geo:point 10.0 10.0], [$geo:point 10.0 0.0], [$geo:point 0.0 0.0])]]] $c/lat]
 #]]
   [out-text [#
-5.0
+5.0e0
 #]]
  ]
 
@@ -606,7 +655,7 @@ false
 [$geo:normalize-lat 95.0]
 #]]
   [out-text [#
-90.0
+9.0e1
 #]]
  ]
 
@@ -620,7 +669,7 @@ false
 [$geo:normalize-lat -100.0]
 #]]
   [out-text [#
--90.0
+-9.0e1
 #]]
  ]
 
@@ -635,7 +684,7 @@ false
 [$geo:normalize-lon 190.0]
 #]]
   [out-text [#
--170.0
+-1.7e2
 #]]
  ]
 
@@ -649,7 +698,7 @@ false
 [?let [= $p [$geo:normalize-point [$geo:point 45.0 190.0]]] $p/lon]
 #]]
   [out-text [#
--170.0
+-1.7e2
 #]]
  ]
 
@@ -663,7 +712,7 @@ false
 [?let [= $bb [$geo:normalize-bbox [$geo:bbox ([$geo:point 0.0 170.0], [$geo:point 10.0 190.0])]]] $bb/max-lon]
 #]]
   [out-text [#
--170.0
+-1.7e2
 #]]
  ]
 
@@ -736,7 +785,7 @@ false
 [?let [= $p [$geo:parse-wkt "POINT(-122.4194 37.7749)"]] $p/lat]
 #]]
   [out-text [#
-37.7749
+3.77749e1
 #]]
  ]
 
@@ -750,7 +799,7 @@ false
 [?let [= $p [$geo:parse-wkt "POINT(-122.4194 37.7749)"]] $p/lon]
 #]]
   [out-text [#
--122.4194
+-1.224194e2
 #]]
  ]
 
@@ -811,7 +860,7 @@ cx-err:CXER3603
 [?let [= $p [$geo:parse-geojson "{\"type\":\"Point\",\"coordinates\":[-122.4194,37.7749]}"]] $p/lat]
 #]]
   [out-text [#
-37.7749
+3.77749e1
 #]]
  ]
 
@@ -825,7 +874,7 @@ cx-err:CXER3603
 [?let [= $p [$geo:parse-geojson "{\"type\":\"Point\",\"coordinates\":[-122.4194,37.7749]}"]] $p/lon]
 #]]
   [out-text [#
--122.4194
+-1.224194e2
 #]]
  ]
 
@@ -871,7 +920,7 @@ cx-err:CXER3605
 [?let [= $p [$geo:parse-geojson [$geo:format-geojson [$geo:point 37.7749 -122.4194]]]] $p/lat]
 #]]
   [out-text [#
-37.7749
+3.77749e1
 #]]
  ]
  [case id=geo-059-normalize-lon-large-magnitude-no-hang level=core gate=enforced
@@ -884,7 +933,7 @@ cx-err:CXER3605
 [$geo:normalize-lon 10000000000000.0]
 #]]
   [out-text [#
--80.0
+-8.0e1
 #]]
  ]
 
@@ -898,7 +947,7 @@ cx-err:CXER3605
 [$geo:normalize-lon 540.0]
 #]]
   [out-text [#
-180.0
+1.8e2
 #]]
  ]
 

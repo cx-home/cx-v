@@ -152,11 +152,13 @@ fn schema_arg_text(n cx.Node) ?string {
 		if v is string {
 			return v
 		}
+		note_operand_fault('validate', 'validate-', 'string or element', n)
 		return none
 	}
 	if n is cx.Element {
 		return cx.emit_cx(cx.Document{ elements: [cx.Node(n)] })
 	}
+	note_operand_fault('validate', 'validate-', 'string or element', n)
 	return none
 }
 

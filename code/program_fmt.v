@@ -15,15 +15,47 @@ import cx
 //   - data-format the source (d);
 //   - if d has the SAME canonical program form as the source, the data format
 //     preserved the program reading → use d (genuine data, or a program the data
-//     formatter happens to preserve). Data files always hit this branch (the data
-//     formatter is lossless, so src and d share one program reading);
+//     formatter happens to preserve);
 //   - otherwise the data format changed the program's meaning → it is a real
 //     program: format it FAITHFULLY via the program emitter, but only if that
 //     emitter is a fixed point on it (round-trip-stable); else leave it untouched.
+//
+// #967 correction: an older version of this note claimed "data files always hit
+// the first branch (the data formatter is lossless, so src and d share one
+// program reading)". MEASURED FALSE. The data emitter's canonical quoting rule
+// drops quotes the bare image re-reads identically — in the DATA reading. In the
+// PROGRAM reading a bare body word is a CALL: `[name "demo"]` holds a
+// string_lit, `[name demo]` holds a ProgramCall. So a plain data document with a
+// quoted string reaches the second branch, and before this fix that branch — the
+// program lane, whose parser drops comments — deleted every comment in the file.
+// The second branch now fails closed on a comment-bearing source instead.
 
 // fmt_source formats CX source text safely: lossless for data, faithful for
 // programs, never corrupting.
+//
+// The returned text is UNTERMINATED. That is a total contract of this entry
+// point, not a per-lane courtesy: every caller supplies the final newline
+// (`cx fmt`'s println, the LSP whole-document edit), so a lane that hands back
+// a terminated string adds one line to the file on every pass.
+//
+// #980 — the fail-closed lanes did exactly that. `faithful_program_fmt`
+// returns the SOURCE when the program emitter cannot prove a faithful round
+// trip, and it returned the source BYTES, trailing newline and all; the
+// second pass then re-fails-closed on text carrying one more newline than the
+// first, unbounded (corpus/rosetta/21-fetch-csv-validate.cx: 57 → 58 → 59
+// lines) and formatting.md §7 idempotence failed by a growing blank line.
+// The comment lane below had already met this obligation locally with its own
+// `trim_right`; normalizing at the boundary instead makes every lane —
+// including any added later — inherit it, and leaves each lane free to reason
+// about meaning rather than about terminators.
 pub fn fmt_source(input string) !string {
+	return fmt_source_lane(input)!.trim_right('\n')
+}
+
+// fmt_source_lane is fmt_source's lane selection. It may return terminated
+// text (the fail-closed lanes return the source verbatim); fmt_source owns the
+// termination contract for all of them.
+fn fmt_source_lane(input string) !string {
 	mut cf_src := ''
 	if prog := cx.parse_program(input) {
 		cf_src = program_node_to_source(prog.body)
@@ -64,7 +96,84 @@ pub fn fmt_source(input string) !string {
 		}
 	}
 	// The data formatter would change the program's meaning → format faithfully.
+	//
+	// #967 / R-A7 — but the faithful PROGRAM lane is not lossless, and
+	// `cx fmt` is specified as the LOSSLESS canonical formatter (cli.md:107 /
+	// :209; canonical.md §1.2 makes comments exactly what separates lossless
+	// from strict canonical). `cx.parse_program` discards CommentNode
+	// outright, so `program_node_to_source` has nothing to re-emit and the
+	// lane returns a canonical program text with every comment DELETED —
+	// silent user data loss in the command the LSP calls on save.
+	//
+	// The lossless CX emitter the data lane uses is therefore the ONLY lane
+	// that ever emits a comment-bearing document; when its output has just
+	// been shown to change this file's meaning, there is no lossless
+	// canonical form to emit, so fmt fails closed on the SOURCE — the same
+	// answer faithful_program_fmt gives when it cannot verify a round trip.
+	// Unchanged text is lossless, re-parses, and is a fixed point; a
+	// comment-stripped canonicalization is none of those. Comment-free
+	// sources are untouched by this branch and keep the program lane.
+	if data_reading_carries_comment(input) {
+		return input
+	}
 	return faithful_program_fmt(input, cf_src, shape_src)
+}
+
+// data_reading_carries_comment reports whether the DATA reading of `input`
+// retains at least one comment node. The data reader is the authority here:
+// it is the only reader in the tree that keeps comments (the program reader
+// drops them at parse), and a lexical `#` scan would count hashes inside
+// strings, raw blocks and table cells. A source with no data reading has no
+// comment inventory to protect — the program lane is then the only lane.
+fn data_reading_carries_comment(input string) bool {
+	doc := cx.parse(input) or { return false }
+	for c in doc.prolog {
+		if node_carries_comment(c) {
+			return true
+		}
+	}
+	for e in doc.elements {
+		if node_carries_comment(e) {
+			return true
+		}
+	}
+	return false
+}
+
+fn node_carries_comment(n cx.Node) bool {
+	if n is cx.CommentNode {
+		return true
+	}
+	if n is cx.Element {
+		for it in n.items {
+			if node_carries_comment(it) {
+				return true
+			}
+		}
+		return false
+	}
+	if n is cx.DocumentNode {
+		for c in n.prolog {
+			if node_carries_comment(c) {
+				return true
+			}
+		}
+		for c in n.elements {
+			if node_carries_comment(c) {
+				return true
+			}
+		}
+		return false
+	}
+	if n is cx.EvalDirectiveNode {
+		for it in n.items {
+			if node_carries_comment(it) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // prog_shape is a position-insensitive structural fingerprint of `input`'s

@@ -259,20 +259,39 @@ const re2_perl_s_flat = [u32(0x09), 0x0a, 0x0c, 0x0d, 0x20, 0x20]
 // complementing so negated-set expansions never name them.
 const re2_surrogates_flat = [u32(0xd800), 0xdfff]
 
-// Precomputed class-item expansions for the two shorthands whose sets are
-// complements of a union (inexpressible as positive class items):
-// \S = ¬(\s ∪ \p{Z}), \W = ¬(\p{L} ∪ \p{Nd} ∪ {_}). Computed once at init.
-const re2_class_not_s_items = re2_class_items_for(re2_complement_ranges(re2_union_ranges([
-	re2_ranges_from_flat(re2_perl_s_flat),
-	re2_ranges_from_flat(re2_ucd_z),
-	re2_ranges_from_flat(re2_surrogates_flat),
-])))
-const re2_class_not_w_items = re2_class_items_for(re2_complement_ranges(re2_union_ranges([
-	re2_ranges_from_flat(re2_ucd_l),
-	re2_ranges_from_flat(re2_ucd_nd),
-	re2_ranges_from_flat([u32(0x5f), 0x5f]),
-	re2_ranges_from_flat(re2_surrogates_flat),
-])))
+// Class-item expansions for the two shorthands whose sets are complements of
+// a union (inexpressible as positive class items):
+// \S = ¬(\s ∪ \p{Z}), \W = ¬(\p{L} ∪ \p{Nd} ∪ {_}).
+//
+// #1055 — these were `const`s whose initialisers were function CALLS, so V
+// emitted them into `_vinit` and EVERY process paid the interval arithmetic
+// before dispatch: `cx --version` walked \p{L}'s ~560 intervals, rendered them
+// to \x{...} items, and threw the result away. Measured at 78% of a cold
+// `--version` on the artifact that reded the UDP delivery lane. They are now
+// computed ON DEMAND, at the only two call sites that can want them: a `[...]`
+// class containing \S or \W under unicode=true — rare enough that per-call is
+// cheaper than any cached-at-boot arrangement, and it needs no shared mutable
+// state (so no lock, and no benign-race string tear under the reactor).
+//
+// The rendering itself is allocation-lean (see re2_class_items_for): one
+// output buffer, sized up front, no per-interval temporaries. Boot pays zero;
+// a caller that actually writes `[\S]` pays tens of microseconds.
+fn re2_class_not_s_items() string {
+	return re2_class_items_for(re2_complement_ranges(re2_union_ranges([
+		re2_ranges_from_flat(re2_perl_s_flat),
+		re2_ranges_from_flat(re2_ucd_z),
+		re2_ranges_from_flat(re2_surrogates_flat),
+	])))
+}
+
+fn re2_class_not_w_items() string {
+	return re2_class_items_for(re2_complement_ranges(re2_union_ranges([
+		re2_ranges_from_flat(re2_ucd_l),
+		re2_ranges_from_flat(re2_ucd_nd),
+		re2_ranges_from_flat([u32(0x5f), 0x5f]),
+		re2_ranges_from_flat(re2_surrogates_flat),
+	])))
+}
 
 // re2_ranges_from_flat converts a flat [lo, hi, lo, hi, ...] table into
 // interval structs.
@@ -343,38 +362,53 @@ fn re2_complement_ranges(sorted []Re2CpRange) []Re2CpRange {
 	return out
 }
 
-// re2_cp_hex renders a codepoint as minimal lowercase hex (no padding —
-// deterministic input for RE2's \x{...} parser).
-fn re2_cp_hex(cp u32) string {
+// re2_cp_hex_into appends a codepoint as minimal lowercase hex (no padding —
+// deterministic input for RE2's \x{...} parser) to an existing byte buffer.
+//
+// #1055 — this used to be `re2_cp_hex(cp u32) string`, which allocated a
+// reversal array, an output array and a string PER CODEPOINT; every caller
+// then called `.bytes()` on the result, allocating a fourth time. Rendering
+// \p{L}'s complement (~560 intervals, two codepoints each) therefore burned
+// ~4500 allocations through the vgc span allocator to produce one ~12 KB
+// string. Writing digits straight into the caller's buffer through a fixed
+// scratch array drops that to zero.
+fn re2_cp_hex_into(mut sb []u8, cp u32) {
 	if cp == 0 {
-		return '0'
+		sb << `0`
+		return
 	}
 	digits := '0123456789abcdef'
-	mut rev := []u8{}
+	// A u32 codepoint is at most 8 hex digits; Unicode caps it at 6.
+	mut scratch := [8]u8{}
+	mut n := 0
 	mut v := cp
 	for v > 0 {
-		rev << digits[v & 0xf]
+		scratch[n] = digits[v & 0xf]
+		n++
 		v >>= 4
 	}
-	mut out := []u8{cap: rev.len}
-	for i := rev.len - 1; i >= 0; i-- {
-		out << rev[i]
+	for i := n - 1; i >= 0; i-- {
+		sb << scratch[i]
 	}
-	return out.bytestr()
 }
 
 // re2_class_items_for renders intervals as class items: \x{lo}-\x{hi}
 // (or a single \x{cp}).
 fn re2_class_items_for(ranges []Re2CpRange) string {
-	mut sb := []u8{cap: ranges.len * 18}
+	// Worst case per interval: `\x{10ffff}-\x{10ffff}` = 20 bytes.
+	mut sb := []u8{cap: ranges.len * 20 + 1}
 	for r in ranges {
-		sb << '\\x{'.bytes()
-		sb << re2_cp_hex(r.lo).bytes()
+		sb << `\\`
+		sb << `x`
+		sb << `{`
+		re2_cp_hex_into(mut sb, r.lo)
 		sb << `}`
 		if r.hi > r.lo {
 			sb << `-`
-			sb << '\\x{'.bytes()
-			sb << re2_cp_hex(r.hi).bytes()
+			sb << `\\`
+			sb << `x`
+			sb << `{`
+			re2_cp_hex_into(mut sb, r.hi)
 			sb << `}`
 		}
 	}
@@ -462,8 +496,8 @@ fn re2_rewrite_class(cls string) string {
 				`D` { out << '\\P{Nd}'.bytes() }
 				`w` { out << '\\p{L}\\p{Nd}_'.bytes() }
 				`s` { out << '\\s\\p{Z}'.bytes() }
-				`S` { out << re2_class_not_s_items.bytes() }
-				`W` { out << re2_class_not_w_items.bytes() }
+				`S` { out << re2_class_not_s_items().bytes() }
+				`W` { out << re2_class_not_w_items().bytes() }
 				else {
 					out << c
 					out << n

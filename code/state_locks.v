@@ -8,10 +8,16 @@ import time
 // Encapsulates the per-field `sync.RwMutex` discipline so directive
 // evaluators don't sprinkle inline `.lock()` / `.unlock()` calls. Each
 // helper acquires the appropriate lock, performs one minimal map /
-// scalar operation, and releases. Read-modify-write callers acquire
-// once, call helper-pair, release — or use the closure-based
-// `*_with_write_lock` helpers for atomic update sequences that must
-// span the read + write.
+// scalar operation, and releases.
+//
+// A read-modify-write MUST NOT be built by pairing a `*_get` with a
+// `*_set`: the gap between them is unlocked, so a concurrent writer's
+// update is read stale and then clobbered. Give each RMW its own helper
+// that does the whole decision inside ONE critical section — see
+// `clock_advance` for the scalar case and the `bh_*` permit helpers
+// below for the record case. (#1050 was exactly this: the `[?bulkhead]`
+// permit counter was a get/set pair, and it lost both increments and
+// decrements under real threads.)
 //
 // Critically, these helpers do NOT span an `eval_node` body. POSIX
 // rwlocks are non-recursive: holding `cb_state_lock` and recursing
@@ -84,6 +90,104 @@ fn (mut s ProgramState) bh_set(key string, r BulkheadStateRecord) {
 	s.bulkhead_state_lock.lock()
 	defer { s.bulkhead_state_lock.unlock() }
 	s.bulkhead_state[key] = r
+}
+
+// ── bulkhead permit path (#1050) ────────────────────────────────────────────
+//
+// The permit counter is a read-modify-write — "is a slot free? then take
+// it" on entry, "give it back" on exit. Split across `bh_get` … `bh_set`
+// it was NOT atomic: two arrivals could read the same `in_flight`, both
+// admit over capacity, and the later `bh_set` clobber the earlier's
+// increment. The same split lost DECREMENTS on release, so `in_flight`
+// only ever drifted upward and every later arrival shed CXER0152 while
+// the bulkhead sat under capacity. Wrong in both directions, permanently.
+//
+// The helpers below each perform one whole decision inside a SINGLE
+// write-lock critical section — the shape `clock_advance` already uses
+// for the mock clock. They are the only supported way to move a permit;
+// `bh_get`/`bh_set` remain for the config/inspection paths that do not
+// touch the counter.
+
+// bh_try_acquire records the directive's configured caps and takes a slot
+// if one is free, atomically. Returns true when the caller owns a permit,
+// which it MUST pair with exactly one `bh_release`.
+fn (mut s ProgramState) bh_try_acquire(key string, max_n i64, queue_n i64) bool {
+	s.bulkhead_state_lock.lock()
+	defer { s.bulkhead_state_lock.unlock() }
+	mut r := BulkheadStateRecord{}
+	if existing := s.bulkhead_state[key] {
+		r = existing
+	}
+	// Record max + queue cap so the cooperative scheduler's settle phase
+	// (scheduler.v `settle`) can detect "slot freed → wake first queued
+	// waiter" without reaching back into the originating directive's AST.
+	// Recorded on EVERY arrival, admitted or shed, as before the fix.
+	r.max_concurrent = int(max_n)
+	r.queue_cap = int(queue_n)
+	mut took := false
+	if i64(r.in_flight) < max_n {
+		r.in_flight++
+		took = true
+	}
+	s.bulkhead_state[key] = r
+	return took
+}
+
+// bh_try_enqueue parks `tid` on the FIFO wait queue when the queue has
+// room, atomically. Returns true when the caller is queued — the
+// scheduler will convert that entry into an in-flight slot via
+// `bh_grant_next`, so a true return also owes exactly one `bh_release`.
+fn (mut s ProgramState) bh_try_enqueue(key string, queue_n i64, tid int) bool {
+	s.bulkhead_state_lock.lock()
+	defer { s.bulkhead_state_lock.unlock() }
+	mut r := BulkheadStateRecord{}
+	if existing := s.bulkhead_state[key] {
+		r = existing
+	}
+	if i64(r.queued) >= queue_n {
+		return false
+	}
+	r.queued++
+	r.wait_queue << tid
+	s.bulkhead_state[key] = r
+	return true
+}
+
+// bh_release returns one in-flight slot, atomically. Exactly one call per
+// successful `bh_try_acquire` / granted `bh_try_enqueue`.
+fn (mut s ProgramState) bh_release(key string) {
+	s.bulkhead_state_lock.lock()
+	defer { s.bulkhead_state_lock.unlock() }
+	mut r := BulkheadStateRecord{}
+	if existing := s.bulkhead_state[key] {
+		r = existing
+	}
+	r.in_flight--
+	s.bulkhead_state[key] = r
+}
+
+// bh_grant_next pops the wait-queue head and converts it into an
+// in-flight slot, atomically — the scheduler's half of the permit
+// handshake. Returns the granted task id, or none when no slot is free
+// or nobody is waiting.
+fn (mut s ProgramState) bh_grant_next(key string) ?int {
+	s.bulkhead_state_lock.lock()
+	defer { s.bulkhead_state_lock.unlock() }
+	mut r := BulkheadStateRecord{}
+	if existing := s.bulkhead_state[key] {
+		r = existing
+	} else {
+		return none
+	}
+	if r.in_flight >= r.max_concurrent || r.wait_queue.len == 0 {
+		return none
+	}
+	granted := r.wait_queue[0]
+	r.wait_queue.delete(0)
+	r.queued--
+	r.in_flight++
+	s.bulkhead_state[key] = r
+	return granted
 }
 
 // bh_snapshot_all returns a copy of every (key, record) pair under

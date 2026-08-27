@@ -41,6 +41,7 @@ the shipped binary (cx <file> — the single oracle).
 
  [case id=tools-001-refund-order-golden-descriptor level=core
   [tags tools projection descriptor command effects param-doc stream-18 690 L141 L142 L143]
+  [; R-A1 migration: absence contributes nothing (2026-08-25) ]
   [meta [#
 note: the M5 worked example — refund-order projected end-to-end: description
 note: from [fn-doc][summary]; properties typed via the stream-16 carriers
@@ -66,7 +67,7 @@ note: JSON-emission schema ids.
   [$tools:descriptors-of $src]]
 #]]
   [out-text [#
-[tool name=refund-order [description 'Refund an order via the payment provider.'] [input-schema {type: object, properties: {order-id: {type: string, description: 'The order identifier.'}, amount: {type: string, description: 'The refund amount (decimal string).'}}, required: (order-id, amount), additionalProperties: false}] [output-schema {type: object}] [annotations read-only=false idempotent=false destructive=true open-world=true] [meta [source 'sha2-256:907e9f12b8a65cca1d35e763ad27a434502f95882a56f7e68289c67139c5b3a7'] [code 'computes-as:sha2-256:81ef3ae6a7561c8c1a9b01d59bcd9c2132e0c2898c0ff7075aff761b5fb700b8'] [input-schema-id 'sha2-256:2b933c24d1c04939b247686c723ac3cbc9194c69f89098dd56355de665a1aa4e'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires ()]]]
+[tool name=refund-order [description 'Refund an order via the payment provider.'] [input-schema {type: object, properties: {order-id: {type: string, description: 'The order identifier.'}, amount: {type: string, description: 'The refund amount (decimal string).'}}, required: (order-id, amount), additionalProperties: false}] [output-schema {type: object}] [annotations read-only=false idempotent=false destructive=true open-world=true] [meta [source 'sha2-256:907e9f12b8a65cca1d35e763ad27a434502f95882a56f7e68289c67139c5b3a7'] [code 'computes-as:sha2-256:81ef3ae6a7561c8c1a9b01d59bcd9c2132e0c2898c0ff7075aff761b5fb700b8'] [input-schema-id 'sha2-256:2b933c24d1c04939b247686c723ac3cbc9194c69f89098dd56355de665a1aa4e'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires]]]
 #]]
  ]
 
@@ -74,6 +75,7 @@ note: JSON-emission schema ids.
 
  [case id=tools-002-missing-summary-fails-loud level=core
   [tags tools projection fail-loud summary stream-18 690 L143]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [meta [#
 note: a command def whose [fn-doc] lacks a [summary] refuses the WHOLE
 note: projection with one [err] naming every undocumented command — never
@@ -87,7 +89,7 @@ note: a partial descriptor list.
 [$tools:descriptors-of "[?def undocumented-cmd impure [effects [write]] ($x::string) [w $x]]"]
 #]]
   [out-text [#
-[err code=missing-summary ([missing-summary def=undocumented-cmd])]
+[err code=missing-summary [missing-summary def=undocumented-cmd]]
 #]]
  ]
 
@@ -121,6 +123,7 @@ note: contributes nothing; a module with no commands projects ().
 
  [case id=tools-004-zero-item-effects-is-a-command level=core
   [tags tools projection discriminator zero-item effects read-only stream-18 690 L142]
+  [; R-A1 migration: absence contributes nothing (2026-08-25) ]
   [meta [#
 note: clause PRESENCE discriminates (stream 6): [effects] with zero items
 note: still projects — and the empty effect set is trivially inside the
@@ -140,7 +143,7 @@ note: read-only set, so read-only=true and destructive=false (L142).
   [$tools:descriptors-of $src]]
 #]]
   [out-text [#
-[tool name=touch [description 'A zero-item-effects command (still a command).'] [input-schema {type: object, properties: {x: {type: string}}, required: (x), additionalProperties: false}] [output-schema {type: string}] [annotations read-only=true idempotent=false destructive=false open-world=false] [meta [source 'sha2-256:f4f07639305cc94650b0a3108912e29635964a4ffd905742e3fe24a864ad4aad'] [code 'computes-as:sha2-256:531a5e15748b3545e0f1d8b38efe1e7d9353b597d9468cd6969a1f38a2e619da'] [input-schema-id 'sha2-256:e83d97d3f70736b8f54f426885f1875873cfed9c61cb88656e81dd8a0c534e61'] [output-schema-id 'sha2-256:00404e686415370f1711c4d7acfa2905444d3cf23cef2e10c47d445ebe690f96'] [returns-type 'string'] [requires ()]]]
+[tool name=touch [description 'A zero-item-effects command (still a command).'] [input-schema {type: object, properties: {x: {type: string}}, required: (x), additionalProperties: false}] [output-schema {type: string}] [annotations read-only=true idempotent=false destructive=false open-world=false] [meta [source 'sha2-256:f4f07639305cc94650b0a3108912e29635964a4ffd905742e3fe24a864ad4aad'] [code 'computes-as:sha2-256:531a5e15748b3545e0f1d8b38efe1e7d9353b597d9468cd6969a1f38a2e619da'] [input-schema-id 'sha2-256:e83d97d3f70736b8f54f426885f1875873cfed9c61cb88656e81dd8a0c534e61'] [output-schema-id 'sha2-256:00404e686415370f1711c4d7acfa2905444d3cf23cef2e10c47d445ebe690f96'] [returns-type 'string'] [requires]]]
 #]]
  ]
 
@@ -148,6 +151,7 @@ note: read-only set, so read-only=true and destructive=false (L142).
 
  [case id=tools-005-rest-param-opens-additional-properties level=core
   [tags tools projection params rest additionalProperties stream-18 690 L142]
+  [; R-A1 migration: absence contributes nothing (2026-08-25) ]
   [meta [#
 note: a rest param (*$extras) never becomes a named property — it opens
 note: additionalProperties instead; without one the object is CLOSED (a
@@ -167,7 +171,7 @@ note: command's args-map binds the parameter list — the cx:propose basis).
   [$tools:descriptors-of $src]]
 #]]
   [out-text [#
-[tool name=broadcast [description 'A rest-param command (open args).'] [input-schema {type: object, properties: {chan: {type: string}}, required: (chan), additionalProperties: true}] [output-schema {type: object}] [annotations read-only=true idempotent=false destructive=false open-world=false] [meta [source 'sha2-256:bf4b38f3aaca14e47e1a4ca6039748aaf97b833a530ffb1d1305be84d6036e2d'] [code 'computes-as:sha2-256:d94623eab2a10919428a10455f786011bd8ae8dbfc771abf30c6d9a1638c84cd'] [input-schema-id 'sha2-256:475f284c5970c054423286360df927bbdb8213d3d9c95f4bd8e14d6ca3d7bdb9'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires ()]]]
+[tool name=broadcast [description 'A rest-param command (open args).'] [input-schema {type: object, properties: {chan: {type: string}}, required: (chan), additionalProperties: true}] [output-schema {type: object}] [annotations read-only=true idempotent=false destructive=false open-world=false] [meta [source 'sha2-256:bf4b38f3aaca14e47e1a4ca6039748aaf97b833a530ffb1d1305be84d6036e2d'] [code 'computes-as:sha2-256:d94623eab2a10919428a10455f786011bd8ae8dbfc771abf30c6d9a1638c84cd'] [input-schema-id 'sha2-256:475f284c5970c054423286360df927bbdb8213d3d9c95f4bd8e14d6ca3d7bdb9'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires]]]
 #]]
  ]
 
@@ -195,6 +199,7 @@ note: never a silent empty projection.
 
  [case id=tools-007-requires-and-idempotent-carriage level=core
   [tags tools projection requires idempotent meta stream-18 690 L142]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [meta [#
 note: [requires cap:…] projects into [meta][requires] (enforced regardless —
 note: the lossy-downward rule); [idempotent] → idempotent=true EXACT.
@@ -213,7 +218,7 @@ note: the lossy-downward rule); [idempotent] → idempotent=true EXACT.
   [$tools:descriptors-of $src]]
 #]]
   [out-text [#
-[tool name=archive-order [description 'Archive an order (idempotent).'] [input-schema {type: object, properties: {opts: {type: object}}, required: (), additionalProperties: false}] [output-schema {type: object}] [annotations read-only=false idempotent=true destructive=true open-world=false] [meta [source 'sha2-256:223e66a93f6efd71a938761394b6511854e3b9bcdea76266d7e846f5f906a0cb'] [code 'computes-as:sha2-256:58a3c2bb6aafad54183e012d03a1d69637201a3bb3c6aa551136b6dc012f495b'] [input-schema-id 'sha2-256:70163a54e6531120b453428673522f1c4aa7b411906b19661244fde3a3b44edd'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires ([cap 'cap:orders/archive'])]]]
+[tool name=archive-order [description 'Archive an order (idempotent).'] [input-schema {type: object, properties: {opts: {type: object}}, required: (), additionalProperties: false}] [output-schema {type: object}] [annotations read-only=false idempotent=true destructive=true open-world=false] [meta [source 'sha2-256:223e66a93f6efd71a938761394b6511854e3b9bcdea76266d7e846f5f906a0cb'] [code 'computes-as:sha2-256:58a3c2bb6aafad54183e012d03a1d69637201a3bb3c6aa551136b6dc012f495b'] [input-schema-id 'sha2-256:70163a54e6531120b453428673522f1c4aa7b411906b19661244fde3a3b44edd'] [output-schema-id 'sha2-256:a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0'] [returns-type 'element'] [requires [cap 'cap:orders/archive']]]]
 #]]
  ]
 

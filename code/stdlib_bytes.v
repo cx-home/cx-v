@@ -81,6 +81,10 @@ pub fn arg_bytes(n cx.Node) ?[]u8 {
 			return v.bytes()
 		}
 	}
+	// R-A8 (#955). These four readers are SHARED (bytes + diagram), so the
+	// owning module is left blank and recovered from the primitive's own
+	// leading segment at the chain head (stdlib_operand_fault.v).
+	note_operand_fault('', '', 'bytes', n)
 	return none
 }
 
@@ -92,6 +96,7 @@ pub fn arg_string(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('', '', 'string', n)
 	return none
 }
 
@@ -103,6 +108,7 @@ pub fn arg_int(n cx.Node) ?i64 {
 			return v
 		}
 	}
+	note_operand_fault('', '', 'int', n)
 	return none
 }
 
@@ -115,9 +121,13 @@ fn arg_items(n cx.Node) ?[]cx.Node {
 			if n.name == '__cx_seq__' || n.name == '__cx_arr__' {
 				return n.items
 			}
+			note_operand_fault('', '', 'sequence', n)
 			return none
 		}
-		else { return none }
+		else {
+			note_operand_fault('', '', 'sequence', n)
+			return none
+		}
 	}
 }
 

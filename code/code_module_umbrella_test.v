@@ -586,7 +586,12 @@ fn test_wildcard_child_axis_lane_parity_847() {
 		assert false, '847 parity program failed: ${err}'
 		return
 	}
-	assert out.contains('[list 1 1 2 2 true]'), '#847 lane parity broke: ${out}'
+	// R-A1 (2026-08-25): [?for] in element content contributes one REAL
+	// child per yield, so this program never builds an envelope — /* is 2
+	// in BOTH lanes. The #847 invariant this test exists for (equal values
+	// navigate identically, lane parity + hash equality) HOLDS at the new
+	// values.
+	assert out.contains('[list 2 2 2 2 true]'), '#847 lane parity broke: ${out}'
 }
 
 fn test_wildcard_child_axis_downstream_steps_847() {
@@ -606,7 +611,12 @@ fn test_wildcard_child_axis_downstream_steps_847() {
 		assert false, '847 downstream program failed: ${err}'
 		return
 	}
-	assert out.contains('[list 2 2 0 0 2 2]'), '#847 downstream/splice rows moved: ${out}'
+	// R-A1 (2026-08-25): the [?for] body contributes real [x …] children,
+	// so /*/x is 0 (no x under an x) and /x is 2 (direct children) — in
+	// BOTH lanes, pairwise parity intact; the [?splice] idiom keeps its
+	// settled 2/2. The parsed-envelope opacity cells stay pinned by
+	// program-pvmatrix-036/039.
+	assert out.contains('[list 0 0 2 2 2 2]'), '#847 downstream/splice rows moved: ${out}'
 }
 
 fn test_path_axis_parent_returns_parent() {
@@ -1966,6 +1976,164 @@ fn test_data_with_url_and_slashes_formats() {
 	assert out.contains('[store'), out
 }
 
+// ── #967 — `cx fmt` is the LOSSLESS canonical formatter ────────────────────
+//
+// cli.md:107/:209 define `cx fmt` as lossless canonical: comments and anchors
+// are preserved, whitespace and quoting normalised. canonical.md §1.2 makes
+// comments EXACTLY what separates lossless canonical from strict canonical.
+// Measured before the fix: every comment in every position was deleted.
+//
+// Root cause (measured, not assumed): fmt_source discriminates data from
+// program by asking whether the DATA formatting preserves the source's
+// PROGRAM reading. The data emitter's canonical quoting drops quotes the bare
+// image re-reads identically — in the DATA reading. In the PROGRAM reading a
+// bare body word is a CALL (`[name "demo"]` holds a string_lit, `[name demo]`
+// holds a ProgramCall), so a plain data document carrying a quoted string is
+// classified as "a real program" and routed to the program lane — whose
+// parser (cx.tokenize / parse_program) discards comments outright, so the
+// canonical text comes back with every comment gone.
+//
+// The fix keeps the meaning guard (it is right: string → call IS a meaning
+// change) and stops that lane from ever seeing a comment-bearing source.
+
+fn count_comments_in_data_reading(src string) int {
+	doc := cx.parse(src) or { return -1 }
+	mut n := 0
+	for c in doc.prolog {
+		n += count_comments_in_node(c)
+	}
+	for e in doc.elements {
+		n += count_comments_in_node(e)
+	}
+	return n
+}
+
+fn count_comments_in_node(n cx.Node) int {
+	if n is cx.CommentNode {
+		return 1
+	}
+	if n is cx.Element {
+		mut t := 0
+		for it in n.items {
+			t += count_comments_in_node(it)
+		}
+		return t
+	}
+	return 0
+}
+
+// The four positions of #967's table: line / block × top-level / element-body.
+// The quoted `"demo"` body is the issue's own spelling — and the shape that
+// triggers the misclassification, so it is load-bearing, not incidental.
+const fmt_967_positions = [
+	'[xap\n# c\n[name "demo"]\n]\n',
+	'[xap [; c ] [name "demo"]]\n',
+	'# c\n[xap [name "demo"]]\n',
+	'[; c ]\n[xap [name "demo"]]\n',
+	// the same four with an unquoted body — these route through the data
+	// lane's lossless emitter and come back NORMALISED, comments intact.
+	'[xap\n# c\n[name demo]\n]\n',
+	'[xap [; c ] [name demo]]\n',
+	'# c\n[xap [name demo]]\n',
+	'[; c ]\n[xap [name demo]]\n',
+]
+
+fn test_967_fmt_preserves_comments_in_every_position() {
+	for src in fmt_967_positions {
+		want := count_comments_in_data_reading(src)
+		assert want == 1, 'fixture is wrong, not the formatter: ${src}'
+		out := fmt_source(src) or {
+			assert false, 'fmt_source errored on ${src}: ${err}'
+			continue
+		}
+		assert out.contains('c'), 'comment text gone from `${src}` -> `${out}`'
+		got := count_comments_in_data_reading(out)
+		assert got == want, 'cx fmt DELETED a comment: `${src}` -> `${out}` (${want} -> ${got})'
+	}
+}
+
+fn test_967_fmt_output_reparses_in_every_position() {
+	for src in fmt_967_positions {
+		out := fmt_source(src) or {
+			assert false, 'fmt_source errored on ${src}: ${err}'
+			continue
+		}
+		cx.parse(out) or {
+			assert false, 'cx fmt output does not re-parse: `${src}` -> `${out}`: ${err}'
+			continue
+		}
+	}
+}
+
+fn test_967_fmt_is_idempotent_on_comment_bearing_sources() {
+	// formatting.md §7 — and the shape the bug fix could most easily break:
+	// a lane that returns its input verbatim grows a trailing newline per run
+	// unless the trailing newline is normalised.
+	for src in fmt_967_positions {
+		a := fmt_source(src) or {
+			assert false, 'fmt_source errored on ${src}: ${err}'
+			continue
+		}
+		b := fmt_source(a) or {
+			assert false, 'fmt_source(fmt_source(x)) errored on ${src}: ${err}'
+			continue
+		}
+		assert a == b, 'fmt is not idempotent on `${src}`: `${a}` != `${b}`'
+	}
+}
+
+fn test_967_fmt_purity_the_data_tree_is_unchanged() {
+	// formatting.md §1 purity: same tree in, same tree out — presentation
+	// only. This is what makes "preserved the comment" mean the comment is
+	// still in the same PLACE, not merely present somewhere in the text.
+	for src in fmt_967_positions {
+		out := fmt_source(src) or {
+			assert false, 'fmt_source errored on ${src}: ${err}'
+			continue
+		}
+		d_in := cx.parse(src) or {
+			assert false, 'fixture does not parse: ${src}'
+			continue
+		}
+		d_out := cx.parse(out) or {
+			assert false, 'fmt output does not parse: ${out}'
+			continue
+		}
+		assert cx.emit_cx(d_in) == cx.emit_cx(d_out), 'cx fmt changed the tree: `${src}` -> `${out}`'
+	}
+}
+
+fn test_967_comment_bearing_program_keeps_its_comments() {
+	// A genuine PROGRAM carrying comments. The program lane cannot emit them
+	// (its parser drops them), so fmt must fail closed on the source rather
+	// than ship a comment-stripped canonicalization — silent data loss in the
+	// command the LSP calls on save.
+	src := '[?lib \'cx-stdlib/store\' :as store]\n# open the store first\n[?let\n  [= \$c [\$store:open "mem://"]]\n  \$c]'
+	out := fmt_source(src) or { panic('fmt_source errored on a valid program: ${err}') }
+	assert out.contains('# open the store first'), 'cx fmt deleted a comment from a PROGRAM file:\n${out}'
+	assert !out.contains("[('"), 'program was data-corrupted:\n${out}'
+	twice := fmt_source(out) or { panic('fmt(fmt) errored: ${err}') }
+	assert twice == out, 'fmt is not idempotent on a comment-bearing program'
+}
+
+fn test_967_comment_free_sources_are_untouched_by_the_fix() {
+	// The comment-free program lane must be byte-identical to its pre-fix
+	// behaviour — the fix is scoped to comment-bearing sources precisely so
+	// no golden moves for anything else.
+	for src in ['[xap [name "demo"]]', prog_118, '[note [body "x"] [n 1]]'] {
+		a := fmt_source(src) or {
+			assert false, 'fmt_source errored on ${src}: ${err}'
+			continue
+		}
+		b := fmt_source(a) or {
+			assert false, 'fmt(fmt) errored on ${src}: ${err}'
+			continue
+		}
+		assert a == b, 'fmt not idempotent on comment-free `${src}`'
+		assert !a.ends_with('\n'), 'fmt lanes return unterminated text: `${a}`'
+	}
+}
+
 // ── source: vcx/code/render_test.v ──
 // render_test.v — unit tests for render_element_to / render_attr_value_to.
 // Gate: attribute values that contain `"` must survive round-trip without
@@ -2334,6 +2502,33 @@ fn test_caps_mixed_list_with_net_scope() {
 	assert cap_net_specs() == ['example.com:443']
 	assert !cap_net_is_all()
 	caps_set_empty()
+}
+
+// #1059, ABI surface: read/write/env scoping is NOT IMPLEMENTED, so a
+// `cap=resource` suffix on those three REFUSES (typed CXER0274, no set
+// installed) instead of silently installing BLANKET authority. The CLI's
+// five parse sites refuse at exit 2; this pins the sixth grant surface
+// (`cx_code_eval_caps` and every embedder riding caps_apply_spec) to the
+// same discipline. Real scoping is #1061.
+fn test_caps_unenforced_scope_suffix_refuses_abi() {
+	caps_set_empty()
+	for spec in ['read=/nonexistent', 'write=/tmp', 'env=HOME', 'read=,write'] {
+		caps_apply_spec(spec) or {
+			assert err.msg().contains('NOT IMPLEMENTED'), 'refusal must say scoping is unimplemented: ${err.msg()}'
+			assert err.msg().contains('1061'), 'refusal must name the scoping-design issue: ${err.msg()}'
+			assert err.msg().contains('CXER0274'), 'refusal must carry the typed code: ${err.msg()}'
+			continue
+		}
+		assert false, 'spec `${spec}` must refuse (unenforced scope suffix)'
+	}
+	// On a refused spec the active set is NOT modified — nothing from the
+	// tokens before the offending one leaks in.
+	caps_apply_spec('read,write=/x') or {
+		assert !cap_allowed('read'), 'a refused spec must install NOTHING'
+		caps_set_empty()
+		return
+	}
+	assert false, 'read,write=/x must refuse'
 }
 
 fn test_caps_empty_is_pure_only() {

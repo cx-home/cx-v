@@ -62,6 +62,7 @@ fn math_arg_f64(n cx.Node) ?f64 {
 			else {}
 		}
 	}
+	note_operand_fault('math', 'math-', 'number', n)
 	return none
 }
 
@@ -74,6 +75,7 @@ fn math_arg_i64(n cx.Node) ?i64 {
 			else {}
 		}
 	}
+	note_operand_fault('math', 'math-', 'int', n)
 	return none
 }
 
@@ -119,6 +121,28 @@ fn math_seq_floats(n cx.Node) []f64 {
 		}
 	}
 	return out
+}
+
+// math_has_exact_kind reports whether a $math: argument carries an
+// exact-family scalar (decimal / bigint) — either as the argument itself or
+// as an item of a sequence-shaped one (CO-14). One level of items is the
+// whole story: `math_items` is exactly the view the statistical verbs fold
+// over, so anything it can reach is an operand and anything it cannot is
+// not.
+fn math_has_exact_kind(n cx.Node) bool {
+	if n is cx.ScalarNode {
+		return n.data_type == cx.ScalarType.decimal_type
+			|| n.data_type == cx.ScalarType.bigint_type
+	}
+	for it in math_items(n) {
+		if it is cx.ScalarNode {
+			if it.data_type == cx.ScalarType.decimal_type
+				|| it.data_type == cx.ScalarType.bigint_type {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // math_seq_all_int reports whether every item of the sequence is an
@@ -389,14 +413,22 @@ fn math_stdlib_builtin(name string, args []cx.Node) ?cx.Node {
 	// decimal↔float bridge is [cast], nothing implicit; exact
 	// floor/ceiling/round live on the EVALUATOR builtins (entry 15);
 	// the exact module-lane rounding context is `div-decimal` above.
+	//
+	// CO-14: the refusal reaches INSIDE a sequence argument too. It used to
+	// inspect only top-level scalars, so the statistical aggregates — whose
+	// argument IS a sequence — never saw an exact operand: `math_arg_f64`
+	// matches on the V payload (i64 / f64), a decimal's payload is a
+	// `string`, so the item just failed to read and was SKIPPED. The money
+	// value did not bridge, it VANISHED — `[$math:sum (19.99, 19.99)]` was
+	// `0.0e0`, and `[$math:stddev (19.99, 2.0e0)]` reached `nan`, which
+	// code.md's finite-only rule says no CX float may ever be. One
+	// discipline over the whole family means the refusal is the same
+	// whether the operand arrives as an argument or as an item.
 	if name.starts_with('math-') {
 		for a in args {
-			if a is cx.ScalarNode {
-				if a.data_type == cx.ScalarType.decimal_type
-					|| a.data_type == cx.ScalarType.bigint_type {
-					return mk_err('cx-err:CXER3002',
-						'${name}: not defined over the exact kinds (decimal/bigint) — [cast … :float] first (math.md §4.4)')
-				}
+			if math_has_exact_kind(a) {
+				return mk_err('cx-err:CXER3002',
+					'${name}: not defined over the exact kinds (decimal/bigint) — [cast … :float] first (math.md §4.4)')
 			}
 		}
 	}

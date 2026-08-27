@@ -448,7 +448,9 @@ fn test_store_serve_tls_bind() {
 
 	srv_out := os.join_path(dir, 'srv.out')
 	// the store-serve subcommand comes FIRST; it parses its own --allow-* flags.
-	allow := '--allow-net=127.0.0.1:${port} --allow-read=${dir}'
+	// The net scope IS enforced and stays; the read scope was NOT (#1059) —
+	// it now refuses at startup, so the read grant is spelled bare.
+	allow := '--allow-net=127.0.0.1:${port} --allow-read'
 	pid_s := os.execute('${tls_cx_binary()} store-serve ${allow} --config ${cfg_path} >${srv_out} 2>&1 & echo \$!')
 	if pid_s.exit_code != 0 {
 		eprintln('SKIP: could not spawn cx store-serve')
@@ -528,7 +530,8 @@ fn test_store_serve_tls_cert_rotation() {
 	os.write_file(cfg_path, cfg) or { panic('write cfg: ${err}') }
 
 	srv_out := os.join_path(dir, 'srv.out')
-	allow := '--allow-net=127.0.0.1:${port} --allow-read=${dir}'
+	// #1059: bare read grant — the `=${dir}` suffix was never enforced.
+	allow := '--allow-net=127.0.0.1:${port} --allow-read'
 	pid_s := os.execute('${rot_cx_binary()} store-serve ${allow} --config ${cfg_path} >${srv_out} 2>&1 & echo \$!')
 	if pid_s.exit_code != 0 {
 		eprintln('SKIP: could not spawn cx store-serve')
@@ -723,7 +726,7 @@ fn test_xsp_client_full_surface() {
 		'[?let [= \$nq [\$count [\$store:query \$c "//title"]]]\n' +
 		'[?let [= \$matched [\$store:query \$c "//title"]]\n' +
 		'[?let [= \$ni [\$count [\$store:iter-docs \$c]]]\n' +
-		'[result [nq \$nq] [matched \$matched] [ni \$ni]]\n' +
+		'[result [nq \$nq] [matched [?splice \$matched]] [ni \$ni]]\n' + // R-A1: node-set splices into content
 		']]]]\n')
 	assert qi.exit_code == 0, 'query/iter exited ${qi.exit_code}: ${qi.output} | daemon: ${xc_daemon_log(tmp)}'
 	assert qi.output.contains('[nq 1]'), 'query //title must be pushed server-side and match once: ${qi.output}'
@@ -1210,6 +1213,16 @@ fn sxt_boot_cfg(offset int, grants string) (int, int, string, &os.Process) {
 // set ([] = the sole "main" store): the R3.2 CXER5013 ambiguity lane needs a
 // daemon that mounts MORE than one store.
 fn sxt_boot_xsp(offset int, identity_did string, seed_env string, seed_hex string, xsp_extra string, extra_net string, stores []string) (int, int, string, &os.Process) {
+	return sxt_boot_xsp_row(offset, '[identity did="${identity_did}" seed-env="${seed_env}"]',
+		seed_env, seed_hex, xsp_extra, extra_net, stores)
+}
+
+// sxt_boot_xsp_row is the same boot with the `[identity …]` row supplied as
+// TEXT rather than assembled from a did/seed-env pair. The #985 lane needs
+// it: it splices the row `cx store-mint-principal --for identity` printed,
+// verbatim, so the pin proves the printed row is copy-paste into a config —
+// not merely that its two values, re-typed by the harness, happen to work.
+fn sxt_boot_xsp_row(offset int, identity_row string, seed_env string, seed_hex string, xsp_extra string, extra_net string, stores []string) (int, int, string, &os.Process) {
 	cxbin := testenv.cx_bin()
 	// offset < 1000 = a band offset over the salted base; ≥ 1000 = an
 	// ABSOLUTE port (the two-daemon peer test pins both daemons off one
@@ -1231,7 +1244,7 @@ fn sxt_boot_xsp(offset int, identity_did string, seed_env string, seed_hex strin
   [bind addr="127.0.0.1:${port}"]
   [stores ${stores_rows}]
   [xsp enabled=true addr="127.0.0.1:${xport}"
-    [identity did="${identity_did}" seed-env="${seed_env}"]
+    ${identity_row}
     [policy mode=floor floor="guest"]${xsp_extra}]
   [workers query-pool=2]]'
 	cfg_path := sx_write(tmp, 'cxstore.service.cx', cfg)
@@ -2679,4 +2692,180 @@ fn test_xsp_wire_pull_reconcile_status() {
 	assert r.output.contains('[target true]'), 'the replica ref lands on the origin tip: ${r.output}'
 	assert r.output.contains('[div false]'), 'the diverged wire pull-report says ok=false: ${r.output}'
 	assert r.output.contains('state=:diverged'), 'status {peer:} classifies the diverged ref over the wire: ${r.output}'
+}
+
+// ── #969 / RULED: CO-5 — mint → grant → deny-by-default → present ───────────
+//
+// The END-TO-END clean-state bootstrap, exactly as the store-service docs
+// walk it: `cx store-mint-principal` mints a principal OFFLINE, its printed
+// [grant …] row goes into the daemon's [xsp [grants …]] table, the daemon
+// comes up deny-by-default, and the minted principal presents itself through
+// the xsp-did / xsp-seed-env open-opts. A second minted principal is the
+// control: identically well-formed, never granted, refused.
+//
+// This is the pin that makes the mint REAL rather than cosmetic — the daemon
+// itself is the oracle for whether the printed stanza and the written seed
+// work together. It lives here, not in the CLI lane, because the store-serve
+// boot harness (sxt_boot_cfg) already lives here; duplicating it into the CLI
+// umbrella would re-add the compile weight #700 removed.
+
+// smp_mint runs the verb and returns (did, seed_hex) — the two values the
+// config stanza and the client open-opts are built from.
+fn smp_mint(dir string, id string, caps string) (string, string) {
+	return smp_mint_for(dir, id, '--caps "${caps}"')
+}
+
+// smp_mint_for is the same mint with the row-selecting flags spelled by the
+// caller: `--caps "…"` for a grant row (#985 (iii) — there is no default),
+// `--for identity` for the daemon's own responder row (#985 (ii)).
+fn smp_mint_for(dir string, id string, flags string) (string, string) {
+	seed_path := os.join_path(dir, '${id}.seed')
+	// stdout only: the operator prose on stderr would otherwise ride into the
+	// token scan below (os.execute merges the two streams).
+	r := os.execute('${testenv.cx_bin()} store-mint-principal --id ${id} --seed-file ${seed_path} ${flags} 2>/dev/null')
+	if r.exit_code != 0 {
+		panic('store-mint-principal ${id} failed (${r.exit_code}): ${r.output}')
+	}
+	// The DID is read out of the verb's OWN report — never re-derived here, so
+	// a drifted report shape fails this lane instead of hiding behind a second
+	// implementation of the same derivation.
+	mut did := ''
+	for tok in r.output.split(' ') {
+		if tok.starts_with('did=') {
+			did = tok.all_after('did=').trim("'\"]")
+			break
+		}
+	}
+	if did == '' {
+		panic('no did= in the mint report: ${r.output}')
+	}
+	seed_hex := (os.read_file(seed_path) or { panic('read ${seed_path}: ${err}') }).trim_space()
+	return did, seed_hex
+}
+
+fn test_minted_principal_boots_deny_by_default_and_only_it_is_admitted() {
+	mint_dir := os.join_path(os.temp_dir(), 'cx_969_e2e_${os.getpid()}')
+	os.rmdir_all(mint_dir) or {}
+	os.mkdir_all(mint_dir) or { panic(err) }
+	defer {
+		os.rmdir_all(mint_dir) or {}
+	}
+
+	// 1 — mint two principals offline. Only the first is ever granted.
+	granted_did, granted_seed := smp_mint(mint_dir, 'granted', 'read write')
+	stranger_did, stranger_seed := smp_mint(mint_dir, 'stranger', 'read write')
+	assert granted_did != stranger_did, 'two mints must produce distinct DIDs'
+	assert granted_seed != stranger_seed, 'two mints must produce distinct seeds'
+	assert granted_did.starts_with('did:key:z'), 'the mint must produce a did:key: ${granted_did}'
+
+	// 2 — the minted [grant …] row IS the daemon's grant table. No floor
+	// grant: a principal outside the table has no authority at all.
+	grants := '\n    [grants [grant did="${granted_did}" caps="read write"]]'
+	_, xport, tmp, mut proc := sxt_boot_cfg(60, grants)
+	defer {
+		proc.signal_kill()
+		proc.wait()
+		os.rmdir_all(tmp) or {}
+	}
+	url := 'cx-store+xsp://127.0.0.1:${xport}/main/'
+
+	// The daemon says so itself: grants present ⇒ enforcement, not a posture
+	// the client can talk it out of.
+	assert xc_daemon_log(tmp).contains('auth ENFORCED'), 'the minted grant must put the daemon in the enforcing posture: ${xc_daemon_log(tmp)}'
+
+	// 3 — the granted principal presents through open-opts and writes.
+	os.setenv('CX_XSP_SEED_GRANTED', granted_seed, true)
+	ok_prog := sx_write(tmp, 'granted.cx', "[?lib 'cx-stdlib/store' :as store]\n" +
+		'[?let [= \$c [\$store:open-opts "${url}" [map xsp-did="${granted_did}" xsp-seed-env="CX_XSP_SEED_GRANTED"]]]\n' +
+		'[?let [= \$h [\$store:put-doc \$c [note [body "minted-write"]]]]\n' +
+		'[result [got [\$store:get-doc-text \$c \$h]]]]]\n')
+	ok := os.execute('${testenv.cx_bin()} --allow-net=127.0.0.1:${xport} --allow-env ${ok_prog}')
+	assert ok.exit_code == 0, 'the granted principal must be admitted, exited ${ok.exit_code}: ${ok.output} | daemon: ${xc_daemon_log(tmp)}'
+	assert ok.output.contains('minted-write'), 'the granted principal must round-trip its write: ${ok.output}'
+
+	// 4 — the control: an equally valid identity that no grant names is
+	// REFUSED. Deny-by-default is a property of the config, not of the
+	// credential's cryptographic quality.
+	os.setenv('CX_XSP_SEED_STRANGER', stranger_seed, true)
+	no_prog := sx_write(tmp, 'stranger.cx', "[?lib 'cx-stdlib/store' :as store]\n" +
+		'[?let [= \$c [\$store:open-opts "${url}" [map xsp-did="${stranger_did}" xsp-seed-env="CX_XSP_SEED_STRANGER"]]]\n' +
+		'[\$store:put-doc \$c [note [body "ungranted-write"]]]]\n')
+	no := os.execute('${testenv.cx_bin()} --allow-net=127.0.0.1:${xport} --allow-env ${no_prog}')
+	// Named, not merely nonzero: the refusal must be an AUTHORITY refusal, so
+	// this lane cannot pass on an unrelated error (a typo'd URL, an unset env
+	// var) that happens to fail too.
+	assert no.exit_code != 0, 'an ungranted principal must not succeed, got exit 0: ${no.output} | daemon: ${xc_daemon_log(tmp)}'
+	assert no.output.contains('E_STORE_AUTH_FAILED') || no.output.contains('CXER1131')
+		|| no.output.contains('CXER5021'), 'the refusal must be an authority refusal, got: ${no.output} | daemon: ${xc_daemon_log(tmp)}'
+}
+
+// ── #985 / RULED: CO-10 (ii) — the minted identity row IS the daemon's ───────
+//
+// `--for identity` exists so the walkthrough's daemon step is copy-paste
+// rather than prose. The pin that makes that claim real is this one: the row
+// the verb printed goes into a config VERBATIM, the daemon boots on it, and
+// the daemon then signs its store-advert with the key that row names —
+// proving the printed did and the written seed are the daemon's own working
+// identity, not two strings that merely parse.
+
+// smp_identity_row slices the `[identity …]` row out of the mint report
+// exactly as an operator's copy-paste would: no re-derivation, no
+// re-quoting. The row has no children, so the first `]` closes it.
+fn smp_identity_row(report string) string {
+	start := report.index('[identity ') or {
+		panic('no [identity …] row in the mint report: ${report}')
+	}
+	rest := report[start..]
+	end := rest.index(']') or { panic('unterminated [identity …] row: ${report}') }
+	return rest[..end + 1]
+}
+
+fn test_minted_identity_row_boots_the_daemon_it_was_minted_for() {
+	mint_dir := os.join_path(os.temp_dir(), 'cx_985_e2e_${os.getpid()}')
+	os.rmdir_all(mint_dir) or {}
+	os.mkdir_all(mint_dir) or { panic(err) }
+	defer {
+		os.rmdir_all(mint_dir) or {}
+	}
+
+	// 1 — mint the daemon's OWN responder identity (no --caps: an identity
+	// row carries none) and one client principal to talk to it with.
+	host_did, host_seed := smp_mint_for(mint_dir, 'host', '--for identity')
+	client_did, client_seed := smp_mint(mint_dir, 'client', 'read write')
+	assert host_did != client_did, 'the daemon identity and the client principal are distinct'
+
+	// 2 — the row goes into the config VERBATIM. Re-running the mint here (the
+	// helper above returns only did/seed) keeps the text the operator would
+	// paste, quoting and all.
+	report := os.execute('${testenv.cx_bin()} store-mint-principal --id host2 --seed-file ${mint_dir}/host2.seed --for identity 2>/dev/null')
+	assert report.exit_code == 0, 'identity mint exited ${report.exit_code}: ${report.output}'
+	row := smp_identity_row(report.output)
+	assert row.starts_with('[identity did='), 'the pasted row must be the identity row: "${row}"'
+	row_did := row.all_after('did=').all_before(' ').trim("'\"")
+	seed2 := (os.read_file('${mint_dir}/host2.seed') or { panic(err) }).trim_space()
+
+	grants := '\n    [grants [grant did="${client_did}" caps="read write"]]'
+	_, xport, tmp, mut proc := sxt_boot_xsp_row(100, row, 'CX_XSP_SEED_HOST2', seed2,
+		grants, '', [])
+	defer {
+		proc.signal_kill()
+		proc.wait()
+		os.rmdir_all(tmp) or {}
+	}
+	// The daemon coming up at all is already an assertion: svc_parse_xsp
+	// refuses to boot unless the row parses, the env var resolves, and the
+	// seed DERIVES the declared did.
+	assert xc_daemon_log(tmp).contains('auth ENFORCED'), 'grants present ⇒ enforcing: ${xc_daemon_log(tmp)}'
+
+	// 3 — the daemon SIGNS with the identity the row named. The store-advert's
+	// signer is the responder's own DID (§7a.1), so this is the daemon
+	// asserting its identity rather than the harness assuming it.
+	mut ch, m4 := sxt_attach(xport, tmp, 'minted-identity', client_did, client_seed, 'store',
+		'credit', 'main')
+	defer {
+		ch.close()
+	}
+	assert m4.ftype == 3, 'the granted principal must attach: ${m4.raw.bytestr()} | daemon: ${xc_daemon_log(tmp)}'
+	assert ch.advert.contains('signer="${row_did}"'), 'the daemon must sign under the MINTED identity: ${ch.advert}'
+	assert host_seed != seed2, 'each mint writes a distinct seed'
 }

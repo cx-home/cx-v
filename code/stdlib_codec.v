@@ -47,6 +47,10 @@ fn codec_arg_str(n cx.Node) ?string {
 	if n is cx.TextNode {
 		return n.value
 	}
+	// R-A8 (#955): the codec surface dispatches one primitive per registered
+	// format (`xml-parse` / `xml:parse`), so the owning module is recovered
+	// from the primitive name at the chain head, not fixed here.
+	note_operand_fault('', '', 'string', n)
 	return none
 }
 

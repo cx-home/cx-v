@@ -139,6 +139,7 @@ fn http_arg_bytes(n cx.Node) ?[]u8 {
 			return v.bytes()
 		}
 	}
+	note_operand_fault('http', 'http-', 'bytes', n)
 	return none
 }
 

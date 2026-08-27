@@ -241,8 +241,8 @@ note: never order after a group-by).
   [yield [g key=$key count=$count sum=[$sum $group/x] max=[$max $group/x] min=[$min $group/x] avg=[$avg $group/x] distinct=[$count [$distinct $group/x]]]]]
 #]]
   [out-text [#
-[g key=1 count=3 sum=9 max=5 min=1 avg=3.0 distinct=3]
-[g key=0 count=3 sum=12 max=6 min=2 avg=4.0 distinct=3]
+[g key=1 count=3 sum=9 max=5 min=1 avg=3.0e0 distinct=3]
+[g key=0 count=3 sum=12 max=6 min=2 avg=4.0e0 distinct=3]
 #]]
  ]
 
@@ -679,6 +679,32 @@ note: was true across every consumer.
 #]]
   [out-text [#
 [probe a=false b=true c=false d=true e=true f=2 g=true h=false]
+#]]
+ ]
+
+ [case id=program-eq-021-two-equality-notions level=core
+  [tags equality atomization value-eq identity CO-11 990]
+  [meta [#
+note: RULED: CO-11 — CX has TWO deliberate equality notions. [$eq] is
+note: VALUE equality under the atomization policy (compare atomizes):
+note: a decimal attribute and the string of its image compare EQUAL,
+note: an atom and its same-named string compare EQUAL. The type-
+note: faithful IDENTITY notion (strict-canonical bytes: cx eq, cx
+note: hash, structural node equality) DISTINGUISHES both pairs and
+note: mints distinct addresses — pinned per kind by the CO-12 image
+note: matrix. This case pins the VALUE half so neither notion can
+note: drift into the other silently.
+#]]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[probe
+  dec-str=[$eq [u a=1.5] [u a='1.5']]
+  atom-str=[$eq [u a=:ops] [u a='ops']]]
+#]]
+  [out-text [#
+[probe dec-str=true atom-str=true]
 #]]
  ]
 
@@ -1551,7 +1577,7 @@ note: a permutation, source-order reassembly returns exactly this.
 [r [?for [in $i (1, 2, 3, 4, 5, 6, 7, 8)] [= $burn [$sum [$range 1 [* [- 9 $i] 20000]]]] [par] [yield [* $i 10]]]]
 #]]
   [out-text [#
-[r (10, 20, 30, 40, 50, 60, 70, 80)]
+[r 10 20 30 40 50 60 70 80]
 #]]
  ]
 note: the [?for … [par]] path (par_for_run) is distinct from the
@@ -1582,15 +1608,21 @@ note: without [par] stays CXER0100 (program-map-004).
 [ignored]
 #]]
   [in-code [#
-[$sum [?for [in $x (0.1, 0.2, 0.3, 10000000000.0, -10000000000.0, 0.1)] [par] [yield $x]]]
+[$sum [?for [in $x (1.0e-1, 2.0e-1, 3.0e-1, 1.0e10, -1.0e10, 1.0e-1)] [par] [yield $x]]]
 #]]
   [out-text [#
-0.7000003814697265
+7.000003814697265e-1
 #]]
  ]
 note: float aggregation over a [par] result is SOURCE order — the sum is
 note: byte-identical to the sequential fold (no reassociation, L105);
 note: completion-order assembly would make this value nondeterministic.
+note: The inputs MUST be spelled as floats (exponent form). They were bare
+note: fixed-point, which autotypes DECIMAL (the 2b ruling) — and once #1017
+note: made `[$sum]` fold the exact family exactly, this case answered 0.7
+note: and stopped testing anything: exact decimal addition IS associative,
+note: so no decimal sum can ever witness source order. The float artifact
+note: in the pinned value is the whole witness; only a float carries it.
 
  [case id=program-iterator-map-001-lazy level=core
   [tags iterator map]
@@ -2597,6 +2629,37 @@ ran
 #]]
  ]
 
+ [case id=program-bulkhead-004-permit-counter-is-atomic level=resilience
+  [tags bulkhead CXER0152 concurrency atomic-permit]
+  [; #1050 — the permit counter was bh_get -> in_flight-- -> bh_set, a
+     read-modify-write with no atomicity. Under real threads ([?map [par]],
+     not the cooperative [?test-concurrent] runner) concurrent completions
+     lost decrements, so in_flight drifted UP and never came back; concurrent
+     arrivals lost increments, so it could also drift DOWN past zero. Wrong in
+     both directions, and permanent.
+
+     The assertion is admission ARITHMETIC, not timing, so it is deterministic
+     over a genuinely racy phase. The stress phase runs 16 threads x 8 rounds
+     at max-concurrent=32 -- every arrival is admitted, so every arrival owes
+     exactly one release and a correct counter MUST return to 0. Then, single
+     threaded:
+       * a max-concurrent=1 arrival admits (`free`) -- proves the counter came
+         back DOWN to 0. Pre-fix this shed spuriously at an idle bulkhead.
+       * a second arrival NESTED inside a held max-concurrent=1 permit sheds
+         CXER0152 -- proves the permit is genuinely TAKEN. Pre-fix a
+         negative-drifted counter admitted it and `nested` ran over capacity.
+     Measured pre-fix: 10/10 runs wrong, both directions observed. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $stress [?map (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16) [using [?fn $x [?for [in $i (1, 2, 3, 4, 5, 6, 7, 8)] [yield [?bulkhead max-concurrent=32 queue=0 name="bh-004" ok]]]]] [par]]] ([?bulkhead max-concurrent=1 queue=0 name="bh-004" free], [?bulkhead max-concurrent=1 queue=0 name="bh-004" [?bulkhead max-concurrent=1 queue=0 name="bh-004" nested]])]
+#]]
+  [out-text [#
+(free, [err code=cx-err:CXER0152 message='bulkhead saturated' max=1])
+#]]
+ ]
+
  [case id=program-compose-001-retry-over-timeout level=resilience
   [tags composition retry timeout]
   [in-cx [#
@@ -3412,7 +3475,7 @@ fb
                  [response status=200
                         [body [received bytes=[$count $request/body]]]]]]]
    [client-call [?let [= $c [?http-client target=$test-target]] [?pipe $c [$post _ "/stream" [opts stream=true chunk-size=4096
-                                                [data [$range 1 1000]]]]]]]]
+                                                [data [?splice [$range 1 1000]]]]]]]]]
 #]]
   [out-text [#
 [response status=200 [body [received bytes=1000]]]
@@ -3783,7 +3846,7 @@ lookupable
 [b-order [?for [in [b $j] $items] [yield $j]]]]]
 #]]
   [out-text [#
-[pairs [a-order (1, 2, 3)] [b-order (1, 2, 3)]]
+[pairs [a-order 1 2 3] [b-order 1 2 3]]
 #]]
  ]
 
@@ -5166,7 +5229,7 @@ true
 [$avg (10, 20, 30)]
 #]]
   [out-text [#
-20.0
+2.0e1
 #]]
  ]
 
@@ -5183,8 +5246,11 @@ true
 #]]
  ]
 
- [case id=program-builtin-abs-negative-float level=core
-  [tags builtin numeric abs float]
+ [; #1010: `-3.5` is a DECIMAL literal, so this row pinned decimal abs while
+    its id advertised float. Renamed to what it tests; the float reading it was
+    claiming to cover is now its own row below, with an e-exponent literal. ]
+ [case id=program-builtin-abs-negative-decimal level=core
+  [tags builtin numeric abs decimal]
   [in-cx [#
 [ignored]
 #]]
@@ -5193,6 +5259,19 @@ true
 #]]
   [out-text [#
 3.5
+#]]
+ ]
+
+ [case id=program-builtin-abs-negative-float level=core
+  [tags builtin numeric abs float]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[$abs -3.5e0]
+#]]
+  [out-text [#
+3.5e0
 #]]
  ]
 
@@ -5344,12 +5423,19 @@ false
  ]
 
  [case id=program-render-sequence-literal-in-element-body level=core
-  [tags render sequence-literal mixed-content regression-2026-05-22]
+  [tags render sequence-literal mixed-content regression-2026-05-22 parsed-lane]
+  [; R-A1 migration: PIVOTED TO THE PARSED LANE (2026-08-25). The pin is
+     that a sequence sitting in an element body RENDERS as a paren sequence
+     — no __cx_seq__ marker leak in the result image. R-A1 (#847-1a) refuses
+     the runtime construction [item ('a', 'b', 'c')] at eval, so that value
+     is no longer constructible by evaluation; the PARSED shape still is, so
+     the same document now arrives via [$cx:parse] of the identical source
+     text and the original render assertion is kept verbatim against it. ]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
-[item ('a', 'b', 'c')]
+[$cx:parse "[item ('a', 'b', 'c')]"]
 #]]
   [out-text [#
 [item (a, b, c)]
@@ -7293,17 +7379,18 @@ true
 
  [case id=program-def-args-mixed level=core
   [tags def args mixed positional named rest gate-34.4]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [in-cx [#
 [doc]
 #]]
   [in-code [#
 [?def http-get
   ($url::string $timeout=30 *$extra-headers)
-  [request url=$url timeout=$timeout [headers $extra-headers]]]
+  [request url=$url timeout=$timeout [headers [?splice $extra-headers]]]]
 [$http-get "https://example.com" timeout=60 "X-Trace: abc"]
 #]]
   [out-text [#
-[request url='https://example.com' timeout=60 [headers ('X-Trace: abc')]]
+[request url='https://example.com' timeout=60 [headers 'X-Trace: abc']]
 #]]
  ]
 
@@ -7556,7 +7643,7 @@ cx-err:CXER0207
   [probe [n1 $ok1] [n2 $ok2] [u1 $u1] [u2 $u2] [malformed $bad]]]
 #]]
   [out-text [#
-[probe [n1 5] [n2 2.5] [u1 7] [u2 's'] [malformed [code 'cx-err:CXER0100']]]
+[probe [n1 5] [n2 2.5e0] [u1 7] [u2 's'] [malformed [code 'cx-err:CXER0100']]]
 #]]
  ]
 
@@ -9302,6 +9389,7 @@ note: produced.
 
  [case id=ev-park-001-mock-clock-deadline-order level=async
   [tags async sleep mock parking deadline-order witness stream-14 686 stream-22 694]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [meta [#
 note: mock-clock parking across CONCURRENT futures: the 100ms future
 note: wakes FIRST (order counter 1), the 500ms future second (2) —
@@ -9314,10 +9402,10 @@ note: deterministically, regardless of spawn order.
   [in-code [#
 [?let [= $slow [?async [?let [= $s [?sleep 500ms mock]] [?let [= $o [?test-counter name=order op=inc]] (:slow, $o)]]]]
       [= $fast [?async [?let [= $s [?sleep 100ms mock]] [?let [= $o [?test-counter name=order op=inc]] (:fast, $o)]]]]
-  [park [slow [?await $slow]] [fast [?await $fast]]]]
+  [park [slow [?splice [?await $slow]]] [fast [?splice [?await $fast]]]]]
 #]]
   [out-text [#
-[park [slow (:slow, 2)] [fast (:fast, 1)]]
+[park [slow :slow 2] [fast :fast 1]]
 #]]
  ]
 
@@ -9404,7 +9492,7 @@ note: stream-14 ledger; the format can no longer drift meanwhile).
          [hash-stable [$eq [$cx:hash $tape] [$cx:hash $rt]]]]]
 #]]
   [out-text [#
-[probe [version 1] [steps (1, 2)] [round-trip true] [hash-stable true]]
+[probe [version 1] [steps 1 2] [round-trip true] [hash-stable true]]
 #]]
  ]
 
@@ -9746,7 +9834,7 @@ convention (§9.2).
 [cast "3.14" :float]
 #]]
   [out-text [#
-3.14
+3.14e0
 #]]
  ]
 
@@ -9785,12 +9873,18 @@ true
 [cast 5 :float]
 #]]
   [out-text [#
-5.0
+5.0e0
 #]]
  ]
 
- [case id=program-cast-float-to-int-truncate level=core
-  [tags cast float-to-int truncate]
+ [; #1010: this pair was ONE row named `program-cast-float-to-int-truncate`
+    whose body was `[cast 3.7 :int]` — a DECIMAL literal, which does not
+    truncate at all: it raises CXER0290. So the id was wrong about the kind AND
+    the behavior, and — because the two kinds genuinely diverge here — the
+    truncation the id named had no fixture anywhere. Both readings are now
+    pinned, each under the kind it belongs to. ]
+ [case id=program-cast-decimal-to-int-non-integral level=core
+  [tags cast decimal-to-int non-integral CXER0290]
   [in-cx [#
 [doc]
 #]]
@@ -9799,6 +9893,42 @@ true
 #]]
   [out-text [#
 [err code=cx-err:CXER0290 message='cast: decimal `3.7` is not integral — :int requires a whole value (L44)']
+#]]
+ ]
+
+ [; #1016 — the POSITIVE half of L44's "decimal→int errors unless integral"
+    had no fixture, so only the refusal was pinned and the clause read as if
+    decimal never reached :int at all. Pinning both halves is what shows the
+    rule is integrality, not kind. ]
+ [case id=program-cast-decimal-to-int-integral level=core
+  [tags cast decimal-to-int integral L44]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[cast 3.0 :int]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [; #1016 — the `[cast X :int]` asymmetry the issue names is DELIBERATE and
+    ruled on both sides, so both sides are pinned adjacently here. Float is
+    approximate by construction, so narrowing truncates (code.md §6.5 P6
+    coercion table, "Truncate toward zero"); decimal exists to be exact, so
+    narrowing refuses unless it loses nothing (L44). Same spelling, different
+    kind, different rule — by design. ]
+ [case id=program-cast-float-to-int-truncate level=core
+  [tags cast float-to-int truncate]
+  [in-cx [#
+[doc]
+#]]
+  [in-code [#
+[cast 3.7e0 :int]
+#]]
+  [out-text [#
+3
 #]]
  ]
 
@@ -11001,7 +11131,7 @@ cx-err:CXER0233
   [tags range float count-based step]
   [in-cx [# [empty] #]]
   [in-code [# [$range 0.0 1.0 0.25] #]]
-  [out-text [# (0.0, 0.25, 0.5, 0.75, 1.0) #]]
+  [out-text [# (0.0e0, 2.5e-1, 5.0e-1, 7.5e-1, 1.0e0) #]]
  ]
  [case id=program-gen-range-float-002-count level=core
   [tags range float count]
@@ -11888,9 +12018,13 @@ false
 
  [case id=program-descendant-seq-roundtrip-003-child-axis-unchanged level=core
   [tags cxpath child sequence roundtrip]
-  [; #587 — the CHILD axis over a bare sequence-valued body stays 0 in BOTH
-     lanes (the sequence is the single child; its items are not direct child
-     elements): the fix aligns the descendant axis, it does not widen child. ]
+  [; #587 pinned 0|0 here (envelope opaque to child in both lanes). R-A1
+     migration (2026-08-25): [?for] in element content contributes one
+     REAL child per yield, so this program never builds an envelope — the
+     child axis sees 3, and the reparsed lane agrees (the #587/#847
+     equal-values-navigate-identically invariant HOLDS, at the new value).
+     The parsed paren-seq envelope's child-opacity stays pinned by
+     program-pvmatrix-036. ]
   [in-cx [#
 [empty]
 #]]
@@ -11901,7 +12035,7 @@ false
   [?str '{[$count $seq/item]}|{[$count $rt/item]}']]
 #]]
   [out-text [#
-'0|0'
+'3|3'
 #]]
  ]
 
@@ -11964,8 +12098,11 @@ false
 #]]
  ]
 
- [case id=program-arith-add-mixed-float level=core
-  [tags arithmetic operator n-ary float]
+ [; #1010: `2.5` is a DECIMAL literal — this row and its mul/sub siblings below
+    pinned int/DECIMAL mixing while their ids said float. Each keeps its body
+    under an honest id and gains an e-exponent float twin. ]
+ [case id=program-arith-add-mixed-decimal level=core
+  [tags arithmetic operator n-ary decimal]
   [in-cx [#
 [empty]
 #]]
@@ -11974,6 +12111,19 @@ false
 #]]
   [out-text [#
 6.5
+#]]
+ ]
+
+ [case id=program-arith-add-mixed-float level=core
+  [tags arithmetic operator n-ary float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[+ 1 2.5e0 3]
+#]]
+  [out-text [#
+6.5e0
 #]]
  ]
 
@@ -12042,8 +12192,8 @@ false
 #]]
  ]
 
- [case id=program-arith-mul-mixed-float level=core
-  [tags arithmetic operator n-ary float]
+ [case id=program-arith-mul-mixed-decimal level=core
+  [tags arithmetic operator n-ary decimal]
   [in-cx [#
 [empty]
 #]]
@@ -12052,6 +12202,19 @@ false
 #]]
   [out-text [#
 12.0
+#]]
+ ]
+
+ [case id=program-arith-mul-mixed-float level=core
+  [tags arithmetic operator n-ary float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[* 2 1.5e0 4]
+#]]
+  [out-text [#
+1.2e1
 #]]
  ]
 
@@ -12094,8 +12257,8 @@ false
 #]]
  ]
 
- [case id=program-arith-sub-mixed-float level=core
-  [tags arithmetic operator float]
+ [case id=program-arith-sub-mixed-decimal level=core
+  [tags arithmetic operator decimal]
   [in-cx [#
 [empty]
 #]]
@@ -12104,6 +12267,19 @@ false
 #]]
   [out-text [#
 7.5
+#]]
+ ]
+
+ [case id=program-arith-sub-mixed-float level=core
+  [tags arithmetic operator float]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[- 10 2.5e0]
+#]]
+  [out-text [#
+7.5e0
 #]]
  ]
 
@@ -12116,7 +12292,7 @@ false
 [/ 4]
 #]]
   [out-text [#
-0.25
+2.5e-1
 #]]
  ]
 
@@ -12142,7 +12318,7 @@ false
 [/ 7 2]
 #]]
   [out-text [#
-3.5
+3.5e0
 #]]
  ]
 
@@ -12185,8 +12361,13 @@ cx-err:CXER0101
 #]]
  ]
 
- [case id=program-arith-float-contaminates level=core
-  [tags arithmetic operator float-preservation]
+ [; #1010: the row the issue names as its example. `3.0` is a DECIMAL literal,
+    so what this pinned was decimal contamination of an int fold — the float
+    reading is the twin below. Both matter: the two kinds contaminate to
+    DIFFERENT results (`6.0` vs `6.0e0`), which is precisely what one row named
+    for the wrong kind could not show. ]
+ [case id=program-arith-decimal-contaminates level=core
+  [tags arithmetic operator decimal-preservation]
   [in-cx [#
 [empty]
 #]]
@@ -12195,6 +12376,19 @@ cx-err:CXER0101
 #]]
   [out-text [#
 6.0
+#]]
+ ]
+
+ [case id=program-arith-float-contaminates level=core
+  [tags arithmetic operator float-preservation]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[+ 1 2 3.0e0]
+#]]
+  [out-text [#
+6.0e0
 #]]
  ]
 
@@ -12341,11 +12535,16 @@ cx-err:CXER0100
 #]]
  ]
 
- [; Float EBV (#382): cxdm.md §6 rule 2 — int and float share the numeric
+ [; Numeric EBV (#382): cxdm.md §6 rule 2 — int and float share the numeric
     truthiness rule (value ≠ 0, and not NaN). Pinned across every boolean
     position: [?if], [?match] [where] guards, bare and $-head logical
     operators, and CXPath predicate bodies (which also pin the #384
     absence-marker rule: an absent attribute is the empty sequence, falsy).
+    Each position is pinned TWICE (#1010) — once with a decimal literal
+    (`…-decimal-0NN-…`) and once with an e-exponent float literal
+    (`…-float-1NN-…`). The family carried only the first kind while every id
+    claimed the second, so the float rule this note cites was, until #1010,
+    asserted by a name and by nothing else.
     No NaN cases exist because CX floats are finite-only (normative,
     code.md §6.5): pure CX arithmetic raises CXER0101 before a NaN or
     ±Inf can arise, so the "(and not NaN)" EBV clause is FFI-defensive
@@ -12399,12 +12598,22 @@ cx-err:CXER0001
 [out [ok [?if false [then 'a']]]]
 #]]
   [out-text [#
-[out [ok ()]]
+[out [ok]]
 #]]
  ]
 
- [case id=program-if-float-001-nonzero-truthy level=core
-  [tags control-flow if float ebv truthiness]
+ [; #1010 — the DECIMAL half. Every row in this family used to be named
+    `…-float-…` while carrying literals like `0.98` / `0.0`, which are DECIMAL
+    literals: the family therefore pinned decimal EBV in every boolean position
+    and left the float rule its comment cites (cxdm.md §6 rule 2) unpinned
+    anywhere. The rows below keep their bodies under honest `…-decimal-…` ids;
+    the `…-float-1NN-…` twins that follow are the same positions with
+    e-exponent literals, which is what actually exercises the float reading.
+    The two kinds agree on every verdict here — and that agreement is now a
+    MEASURED result rather than an assumption the naming hid. ]
+
+ [case id=program-if-decimal-001-nonzero-truthy level=core
+  [tags control-flow if decimal ebv truthiness]
   [in-cx [#
 [empty]
 #]]
@@ -12416,8 +12625,8 @@ cx-err:CXER0001
 #]]
  ]
 
- [case id=program-if-float-002-zero-falsy level=core
-  [tags control-flow if float ebv truthiness]
+ [case id=program-if-decimal-002-zero-falsy level=core
+  [tags control-flow if decimal ebv truthiness]
   [in-cx [#
 [empty]
 #]]
@@ -12429,8 +12638,8 @@ cx-err:CXER0001
 #]]
  ]
 
- [case id=program-if-float-003-typed-attr-read level=core
-  [tags control-flow if float ebv attr typed-read]
+ [case id=program-if-decimal-003-typed-attr-read level=core
+  [tags control-flow if decimal ebv attr typed-read]
   [in-cx [#
 [pairs
   [pair score=0.98 [name a]]
@@ -12448,8 +12657,53 @@ cx-err:CXER0001
 #]]
  ]
 
- [case id=program-match-float-001-where-guard level=core
-  [tags control-flow match where guard float ebv]
+ [case id=program-if-float-101-nonzero-truthy level=core
+  [tags control-flow if float ebv truthiness]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if 9.8e-1 [then "hot"] [else "cold"]]
+#]]
+  [out-text [#
+'hot'
+#]]
+ ]
+
+ [case id=program-if-float-102-zero-falsy level=core
+  [tags control-flow if float ebv truthiness]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if 0.0e0 [then "hot"] [else "cold"]]
+#]]
+  [out-text [#
+'cold'
+#]]
+ ]
+
+ [case id=program-if-float-103-typed-attr-read level=core
+  [tags control-flow if float ebv attr typed-read]
+  [in-cx [#
+[pairs
+  [pair score=9.8e-1 [name a]]
+  [pair score=0.0e0 [name b]]
+  [pair [name c]]]
+#]]
+  [in-code [#
+[?for [pair $p]
+      [yield [?if $p@score [then [hot $p/name]] [else [cold $p/name]]]]]
+#]]
+  [out-text [#
+[hot 'a']
+[cold 'b']
+[cold 'c']
+#]]
+ ]
+
+ [case id=program-match-decimal-001-where-guard level=core
+  [tags control-flow match where guard decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12461,8 +12715,8 @@ cx-err:CXER0001
 #]]
  ]
 
- [case id=program-match-float-002-where-guard-zero level=core
-  [tags control-flow match where guard float ebv]
+ [case id=program-match-decimal-002-where-guard-zero level=core
+  [tags control-flow match where guard decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12474,8 +12728,34 @@ cx-err:CXER0001
 #]]
  ]
 
- [case id=program-logic-float-001-not-nonzero level=core
-  [tags logical operator not float ebv]
+ [case id=program-match-float-101-where-guard level=core
+  [tags control-flow match where guard float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?match 9.8e-1 [case $s [where $s] "nz"] [else "z"]]
+#]]
+  [out-text [#
+'nz'
+#]]
+ ]
+
+ [case id=program-match-float-102-where-guard-zero level=core
+  [tags control-flow match where guard float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?match 0.0e0 [case $s [where $s] "nz"] [else "z"]]
+#]]
+  [out-text [#
+'z'
+#]]
+ ]
+
+ [case id=program-logic-decimal-001-not-nonzero level=core
+  [tags logical operator not decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12487,8 +12767,8 @@ false
 #]]
  ]
 
- [case id=program-logic-float-002-not-zero level=core
-  [tags logical operator not float ebv]
+ [case id=program-logic-decimal-002-not-zero level=core
+  [tags logical operator not decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12500,8 +12780,8 @@ true
 #]]
  ]
 
- [case id=program-logic-float-003-dollar-not level=core
-  [tags logical operator not head-dispatch float ebv]
+ [case id=program-logic-decimal-003-dollar-not level=core
+  [tags logical operator not head-dispatch decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12513,8 +12793,8 @@ false
 #]]
  ]
 
- [case id=program-logic-float-004-dollar-and level=core
-  [tags logical operator and head-dispatch float ebv]
+ [case id=program-logic-decimal-004-dollar-and level=core
+  [tags logical operator and head-dispatch decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12526,8 +12806,8 @@ true
 #]]
  ]
 
- [case id=program-logic-float-005-dollar-and-zero level=core
-  [tags logical operator and head-dispatch float ebv]
+ [case id=program-logic-decimal-005-dollar-and-zero level=core
+  [tags logical operator and head-dispatch decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12539,8 +12819,8 @@ false
 #]]
  ]
 
- [case id=program-logic-float-006-dollar-or-zero level=core
-  [tags logical operator or head-dispatch float ebv]
+ [case id=program-logic-decimal-006-dollar-or-zero level=core
+  [tags logical operator or head-dispatch decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12552,8 +12832,8 @@ false
 #]]
  ]
 
- [case id=program-logic-float-007-dollar-or-nonzero level=core
-  [tags logical operator or head-dispatch float ebv]
+ [case id=program-logic-decimal-007-dollar-or-nonzero level=core
+  [tags logical operator or head-dispatch decimal ebv]
   [in-cx [#
 [empty]
 #]]
@@ -12565,8 +12845,99 @@ true
 #]]
  ]
 
- [case id=program-cxpath-float-001-predicate-ebv level=core
-  [tags cxpath predicate float ebv absence]
+ [case id=program-logic-float-101-not-nonzero level=core
+  [tags logical operator not float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[not 5.0e-1]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-float-102-not-zero level=core
+  [tags logical operator not float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[not 0.0e0]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-logic-float-103-dollar-not level=core
+  [tags logical operator not head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$not 5.0e-1]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-float-104-dollar-and level=core
+  [tags logical operator and head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$and 9.8e-1 true]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-logic-float-105-dollar-and-zero level=core
+  [tags logical operator and head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$and 0.0e0 true]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-float-106-dollar-or-zero level=core
+  [tags logical operator or head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$or 0.0e0 false]
+#]]
+  [out-text [#
+false
+#]]
+ ]
+
+ [case id=program-logic-float-107-dollar-or-nonzero level=core
+  [tags logical operator or head-dispatch float ebv]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$or 7.5e-1 false]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-cxpath-decimal-001-predicate-ebv level=core
+  [tags cxpath predicate decimal ebv absence]
   [in-cx [#
 [pairs
   [pair score=0.98 [name a]]
@@ -12581,12 +12952,44 @@ true
 #]]
  ]
 
- [case id=program-cxpath-float-002-predicate-survivor level=core
-  [tags cxpath predicate float ebv absence]
+ [case id=program-cxpath-decimal-002-predicate-survivor level=core
+  [tags cxpath predicate decimal ebv absence]
   [in-cx [#
 [pairs
   [pair score=0.98 [name a]]
   [pair score=0.0 [name b]]
+  [pair [name c]]]
+#]]
+  [in-code [#
+[?for [in $p //pair[$_@score]] [yield $p/name]]
+#]]
+  [out-text [#
+a
+#]]
+ ]
+
+ [case id=program-cxpath-float-101-predicate-ebv level=core
+  [tags cxpath predicate float ebv absence]
+  [in-cx [#
+[pairs
+  [pair score=9.8e-1 [name a]]
+  [pair score=0.0e0 [name b]]
+  [pair [name c]]]
+#]]
+  [in-code [#
+[$count //pair[$_@score]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-cxpath-float-102-predicate-survivor level=core
+  [tags cxpath predicate float ebv absence]
+  [in-cx [#
+[pairs
+  [pair score=9.8e-1 [name a]]
+  [pair score=0.0e0 [name b]]
   [pair [name c]]]
 #]]
   [in-code [#
@@ -12729,13 +13132,27 @@ true
 #]]
  ]
 
- [case id=program-if-seq-002-wrapped-float-zero-falsy level=core
-  [tags control-flow if sequence singleton-wrapper float ebv issue-383]
+ [; #1010: `(0.0)` wraps a DECIMAL literal; the float reading is 002a below. ]
+ [case id=program-if-seq-002-wrapped-decimal-zero-falsy level=core
+  [tags control-flow if sequence singleton-wrapper decimal ebv issue-383]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
 [?if (0.0) [then "t"] [else "f"]]
+#]]
+  [out-text [#
+'f'
+#]]
+ ]
+
+ [case id=program-if-seq-002a-wrapped-float-zero-falsy level=core
+  [tags control-flow if sequence singleton-wrapper float ebv issue-383]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?if (0.0e0) [then "t"] [else "f"]]
 #]]
   [out-text [#
 'f'
@@ -13282,6 +13699,833 @@ cx-err:CXER3000
 #]]
  ]
 
+ [; ── CO-14: the aggregates adopt the heads' numeric discipline ──────────
+    #1046. The residue of #1017: `[+ 39.98 1.5e0]` refused while
+    `[$sum (39.98, 1.5e0)]` returned an f64 — §6.5's "any float promotes the
+    result to float" row predates decimal's promotion to a full semantic
+    kind, so the aggregates were the last numeric surface still bridging
+    decimal↔float silently. That silent bridge IS #1017's defect, and one
+    numeric discipline everywhere is the orthogonality objective, so the
+    fold rules are now the heads' rules verbatim: exact end-to-end, no
+    bridge, `[cast]` the only crossing. The pair 001/002 is the same mix in
+    both operand orders — the refusal is decided by the operand that
+    COMPLETES the mix, never by which one arrived first. ]
+ [case id=program-num-aggregate-co14-001-sum-decimal-float-unbridged level=core
+  [tags aggregate sum decimal float CXER0100 exact-family L44 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (39.98, 1.5e0)]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$sum: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-002-sum-float-first-same-refusal level=core
+  [tags aggregate sum decimal float CXER0100 order-independence CO-14]
+  [; The float arrives FIRST here, so the f64 lane is already running when
+     the decimal lands. Pre-fix that lane simply absorbed it (`4.148e1`,
+     identical to 001's answer — the bridge was order-blind in the wrong
+     direction). The refusal must be order-blind in the right one. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (1.5e0, 39.98)]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$sum: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-003-max-decimal-float-unbridged level=core
+  [tags aggregate max decimal float CXER0100 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$max (39.98, 1.5e0)]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$max: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-004-min-decimal-float-unbridged level=core
+  [tags aggregate min decimal float CXER0100 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$min (39.98, 1.5e0)]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$min: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-005-avg-decimal-float-unbridged level=core
+  [tags aggregate avg decimal float CXER0100 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$avg (39.98, 1.5e0)]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$avg: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [; The bigint half of the same mix. This one lost data rather than merely
+    changing kind: pre-fix it answered `9.223372036854776e18` — the f64 lane
+    SATURATED an over-i64 value, so the operand that motivated bigint's
+    existence was the operand the aggregate destroyed. ]
+ [case id=program-num-aggregate-co14-006-sum-bigint-float-unbridged level=core
+  [tags aggregate sum bigint float CXER0100 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (9223372036854775808, 1.5e0)]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$sum: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [; The multi-arg surface is the same fold (§6.5: `[$min 5 3 8]` ≡
+    `[$min (5, 3, 8)]`), so it refuses identically — one implementation
+    behind both spellings (#598). ]
+ [case id=program-num-aggregate-co14-007-sum-multiarg-unbridged level=core
+  [tags aggregate sum multi-arg decimal float CXER0100 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum 39.98 1.5e0]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$sum: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [; ── the other direction: exact stays exact ─────────────────────────────
+    `[$sum (a, b)]` must agree with `[+ a b]` on the ANSWER, not just on the
+    error. 39.98 is what exact base-10 gives; f64 gives 39.980000000000004. ]
+ [case id=program-num-aggregate-co14-008-sum-decimal-exact level=core
+  [tags aggregate sum decimal exact-family L44 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (19.99, 19.99)]
+#]]
+  [out-text [#
+39.98
+#]]
+ ]
+
+ [; int embeds losslessly in BOTH lanes, so which lane a mix runs in is
+    decided by the non-int kind — and the two answers differ in kind, which
+    is exactly why the aggregate may not choose for the user. ]
+ [case id=program-num-aggregate-co14-009-sum-int-decimal-exact level=core
+  [tags aggregate sum int decimal exact-family CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (1, 2, 3.0)]
+#]]
+  [out-text [#
+6.0
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-010-sum-int-float-still-promotes level=core
+  [tags aggregate sum int float promotion unchanged CO-14]
+  [; The promotion §6.5 rules and CO-14 did NOT touch: int↔float is a
+     lossless widening, not a bridge across the exactness boundary. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (1, 2, 3.0e0)]
+#]]
+  [out-text [#
+6.0e0
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-011-sum-bigint-no-saturation level=core
+  [tags aggregate sum bigint exact-family CO-14]
+  [; The successor of i64-max+1, exact. The int lane would overflow
+     (CXER3000) and the f64 lane would round; the exact lane does neither. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (9223372036854775808, 1)]
+#]]
+  [out-text [#
+9223372036854775809
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-012-max-returns-own-kind level=core
+  [tags aggregate max decimal exact-family scale CO-14]
+  [; The winner comes back in its own kind, scale intact — `19.99`, not
+     `1.999e1`. Scale is data (cents-precision), so a decimal that merely
+     PASSES THROUGH an aggregate must not lose it. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$max (19.99, 2.50)]
+#]]
+  [out-text [#
+19.99
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-013-min-returns-own-kind level=core
+  [tags aggregate min decimal exact-family scale CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$min (19.99, 2.50)]
+#]]
+  [out-text [#
+2.50
+#]]
+ ]
+
+ [; ── $avg over exact operands ───────────────────────────────────────────
+    The mean is the exact SUM divided by the count through the very
+    cx_exact_div `/` folds with, so `[$avg xs]` and `[/ [$sum xs] [$count xs]]`
+    agree by construction — kind AND scale. `[/ 3.00 2]` is `1.500`, so this
+    is `1.500`. Pre-fix `avg` could not see a decimal at all: it ran a
+    private i64/f64/string match, and a decimal's base-10 image IS a V
+    string, so it fell into the fn:number leniency arm and came back
+    `1.5e0` — #1017's defect, in the one aggregate #1017 did not reach. ]
+ [case id=program-num-aggregate-co14-014-avg-decimal-exact level=core
+  [tags aggregate avg decimal exact-family division L44 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$avg (1.00, 2.00)]
+#]]
+  [out-text [#
+1.500
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-015-avg-decimal-mean-of-equals level=core
+  [tags aggregate avg decimal exact-family CO-14]
+  [; The mean of a value with itself is that value — pre-fix `1.999e1`. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$avg (19.99, 19.99)]
+#]]
+  [out-text [#
+19.990
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-016-avg-bigint-no-saturation level=core
+  [tags aggregate avg bigint exact-family CO-14]
+  [; Two over-i64 values two apart: the exact mean is the value between
+     them. Pre-fix the f64 lane saturated it to `9.223372036854776e18`. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$avg (9223372036854775808, 9223372036854775810)]
+#]]
+  [out-text [#
+9223372036854775809.0
+#]]
+ ]
+
+ [; ── THE RESERVED CELL, NOW RULED (CO-14 reserved → CO-17 rules) ────────
+    5.00 ÷ 3 does not terminate. CO-14 could not settle what `avg` should do
+    there — a 1-argument aggregate has nowhere to carry a precision + mode —
+    so it RESERVED the cell and this row pinned the float promotion `avg`
+    had always had, marked as the row that must change when #1044 ruled.
+    #1044 has ruled (CO-17): the core lane REFUSES BY NAME rather than
+    defaulting, and the refusal names $math:div-decimal — the one ruled
+    precision+mode context — so a caller who needs a quotient here is told
+    exactly where to go. The float is GONE from this cell: it was the last
+    place an exact fold silently produced a binary float.
+    This row and its 017a operator twin below now AGREE, which is the point:
+    `[$avg xs]` and `[/ [$sum xs] [$count xs]]` agree on the refusal exactly
+    as they already agreed on the answer. ]
+ [case id=program-num-aggregate-co14-017-avg-nonterminating-refuses level=core
+  [tags aggregate avg decimal non-terminating CXER3002 div-decimal CO-14 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$avg (1.00, 2.00, 2.00)]
+#]]
+  [out-text [#
+[err code=cx-err:CXER3002 message='$avg: non-terminating exact division — supply an explicit rounding context (precision + mode) with [$math:div-decimal a b {precision: N mode: :half-up}] (L44)']
+#]]
+ ]
+
+ [; 017's operator twin — the SAME division written through `/`. Under CO-14
+    these two rows were the BOUNDARY between what was ruled (the fold) and
+    what was not (the rounding), and the gap between them was pinned so it
+    could not drift closed by accident. CO-17 closes it deliberately: both
+    refuse, and both name the context. Only the head differs in the message,
+    which is exactly what "one implementation, all spellings" (#598) means. ]
+ [case id=program-num-aggregate-co14-017a-operator-refuses-nonterminating level=core
+  [tags arithmetic operator decimal division non-terminating CXER3002 L44 CO-14 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[/ [+ 1.00 2.00 2.00] 3]
+#]]
+  [out-text [#
+[err code=cx-err:CXER3002 message='/: non-terminating exact division — supply an explicit rounding context (precision + mode) with [$math:div-decimal a b {precision: N mode: :half-up}] (L44)']
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-018-avg-multiarg level=core
+  [tags aggregate avg multi-arg builtin dispatch CO-14]
+  [; §6.5 says all four aggregates take positional scalars as well as one
+     sequence, but `avg` alone rejected them ("an argument does not satisfy
+     the builtin signature") — it was the one aggregate not sharing the
+     sum/min/max argument shape. Sharing the classifier fixed both. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$avg 10 20 30]
+#]]
+  [out-text [#
+2.0e1
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-019-avg-int-stays-float level=core
+  [tags aggregate avg int float unchanged CO-14]
+  [; The unchanged half: with no exact operand, `avg` is a float mean
+     exactly as §6.5 has always said. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$avg (10, 20, 30)]
+#]]
+  [out-text [#
+2.0e1
+#]]
+ ]
+
+ [; ── fn:number string-leniency meets the discipline ─────────────────────
+    The aggregates keep XPath's string-leniency, and the two halves of it
+    land on opposite sides of the exact boundary by what fn:number
+    PRODUCES: an integer-valued string is an int and embeds losslessly; a
+    fractional one is a double, and a double is the refused mix. ]
+ [case id=program-num-aggregate-co14-020-int-string-embeds level=core
+  [tags aggregate sum decimal string-leniency fn-number CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (19.99, "5")]
+#]]
+  [out-text [#
+24.99
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-021-fractional-string-refused level=core
+  [tags aggregate sum decimal string-leniency fn-number CXER0100 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum (19.99, "1.5")]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$sum: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [; ── the node-set surface ───────────────────────────────────────────────
+    `[$sum $doc//@value]` is the aggregate's headline use, and it is where a
+    money column actually lives. Both directions over real attributes. ]
+ [case id=program-num-aggregate-co14-022-nodeset-decimal-exact level=core
+  [tags aggregate sum nodeset cxpath decimal exact-family CO-14]
+  [in-cx [#
+[items
+  [i v::decimal=19.99]
+  [i v::decimal=19.99]]
+#]]
+  [in-code [#
+[$sum $doc//i@v]
+#]]
+  [out-text [#
+39.98
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-023-nodeset-mixed-refuses level=core
+  [tags aggregate sum nodeset cxpath decimal float CXER0100 CO-14]
+  [; One float-typed attribute in a decimal column refuses the whole fold
+     rather than quietly re-typing the column. ]
+  [in-cx [#
+[items
+  [i v::decimal=19.99]
+  [i v=1.5e0]]
+#]]
+  [in-code [#
+[$sum $doc//i@v]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$sum: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [; ── streamed and materialized agree ────────────────────────────────────
+    The refusal short-circuits at the operand that completes the mix, so a
+    lazy source stops being pulled the moment the verdict is fixed. That is
+    an optimisation, never a semantic: these two rows are the generator
+    twins of 008 and 001 and must answer identically. ]
+ [case id=program-num-aggregate-co14-024-streamed-exact-matches level=core
+  [tags aggregate sum decimal generator streaming CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum [?for [in $x (19.99, 19.99)] [yield $x]]]
+#]]
+  [out-text [#
+39.98
+#]]
+ ]
+
+ [case id=program-num-aggregate-co14-025-streamed-refusal-matches level=core
+  [tags aggregate sum decimal float generator streaming CXER0100 CO-14]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$sum [?for [in $x (39.98, 1.5e0)] [yield $x]]]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$sum: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [; ══ #1044 / CO-17 — $div and $idiv join the exact lane ══════════════════
+    The last two arithmetic builtins still refusing the exact family with
+    #38's "argument 1 is not numeric". That refusal was never a rule: it
+    was the placeholder for an exact path that did not exist yet, and
+    `%`/`[$mod]` (#1016) and the aggregates (#1046) have already retired
+    their copies of it. Every row below was red-proven against the pre-fix
+    binary, where all of them read `div: argument 1 is not numeric` /
+    `idiv: argument 1 is not numeric`. ]
+
+ [; The whole point of the ruling: `[$div a b]` is a SECOND SPELLING of the
+    exact `/` fold, not a second implementation of it, so the two cannot
+    disagree on kind, scale, or refusal (#598). These rows pin the equality
+    itself rather than a transcribed literal — a divergence in EITHER
+    direction breaks them. ]
+ [case id=program-num-div-co17-001-agrees-with-operator level=core
+  [tags numeric div operator decimal exact-family L44 CO-17 598]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([= [$div 1.00 8] [/ 1.00 8]], [= [$div 39.98 2.00] [/ 39.98 2.00]])
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
+ [; The cx_exact_div scale convention CO-17 names, transcribed once so the
+    convention itself is visible: 1.00 ÷ 8 strips three 2s from the
+    denominator, so the quotient carries scale 3 + 2 = 5. Trailing zeros are
+    data — this is 0.12500, not 0.125. ]
+ [case id=program-num-div-co17-002-terminating-is-exact-decimal level=core
+  [tags numeric div decimal exact-family scale L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([$div 1.00 8], [$div 39.98 2.00], [$div -1.00 8])
+#]]
+  [out-text [#
+(0.12500, 19.99000, -0.12500)
+#]]
+ ]
+
+ [; THE RULED REFUSAL. A non-terminating exact quotient has no exact decimal
+    image and L44 §5 will not pick a scale and a mode for the caller, so the
+    core lane refuses BY NAME — naming $math:div-decimal, the one ruled
+    precision+mode context, so the caller is told where to go rather than
+    handed a hidden default. ]
+ [case id=program-num-div-co17-003-nonterminating-refuses-by-name level=core
+  [tags numeric div decimal non-terminating CXER3002 div-decimal L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$div 1.00 3]
+#]]
+  [out-text [#
+[err code=cx-err:CXER3002 message='$div: non-terminating exact division — supply an explicit rounding context (precision + mode) with [$math:div-decimal a b {precision: N mode: :half-up}] (L44)']
+#]]
+ ]
+
+ [; The refusal is not a dead end: the context it names ANSWERS the very
+    division that was refused. This row is the other half of 003 — read
+    together they are the whole ruling, the refusal and its remedy. ]
+ [case id=program-num-div-co17-004-named-context-answers-it level=core
+  [tags numeric div decimal non-terminating div-decimal rounding-context CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/math']
+[$math:div-decimal 1.00 3 {precision: 4 mode: :half-up}]
+#]]
+  [out-text [#
+0.3333
+#]]
+ ]
+
+ [; bigint operands take the same lane — exact when the quotient terminates,
+    the named refusal when it does not. Neither cell may saturate into an
+    f64, which is what the pre-fix "not numeric" refusal was guarding
+    against by refusing outright. ]
+ [case id=program-num-div-co17-005-bigint-terminating level=core
+  [tags numeric div bigint exact-family no-saturation L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$div 10000000000000000000 4]
+#]]
+  [out-text [#
+2500000000000000000.00
+#]]
+ ]
+
+ [case id=program-num-div-co17-006-bigint-nonterminating-refuses level=core
+  [tags numeric div bigint non-terminating CXER3002 L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$div 10000000000000000000 3]
+#]]
+  [out-text [#
+[err code=cx-err:CXER3002 message='$div: non-terminating exact division — supply an explicit rounding context (precision + mode) with [$math:div-decimal a b {precision: N mode: :half-up}] (L44)']
+#]]
+ ]
+
+ [; No silent bridge, here either — `[cast]` is the only decimal↔float
+    crossing, and `[$div]` refuses the mix with the same code and message
+    the heads and the aggregates raise. ]
+ [case id=program-num-div-co17-007-decimal-float-unbridged level=core
+  [tags numeric div decimal float unbridged CXER0100 L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$div 1.00 1.5e0]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$div: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [; Divide-by-zero stays CXER0101 in the exact lane — it is an arithmetic
+    trap, never a rounding question, so it must not be absorbed into the
+    CXER3002 refusal above. ]
+ [case id=program-num-div-co17-008-exact-divide-by-zero level=core
+  [tags numeric div idiv decimal divide-by-zero CXER0101 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([$div 1.00 0], [$idiv 1.00 0])
+#]]
+  [out-text [#
+([err code=cx-err:CXER0101 message='division by zero'], [err code=cx-err:CXER0101 message='division by zero'])
+#]]
+ ]
+
+ [; The UNCHANGED half. CO-17 rules the exact family only: §6.5's int/int
+    and int/float rows for `div` are untouched, so `[$div 7 2]` is still the
+    integer 3 and not the exact 3.5 the decimal lane would give. ]
+ [case id=program-num-div-co17-009-int-rows-unchanged level=core
+  [tags numeric div int float unchanged CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([$div 7 2], [$div 7 2.0e0])
+#]]
+  [out-text [#
+(3, 3.5e0)
+#]]
+ ]
+
+ [; ── $idiv over the exact family ────────────────────────────────────────
+    §6.5 already says what `idiv` MEANS — integer division truncating
+    toward zero, regardless of operand kinds — so the exact lane had only
+    to compute it, not to invent it. CXER3002 cannot arise: an integral
+    quotient always terminates, so `idiv` never needs the rounding context
+    `div` must ask for. Result kind is the exact family's integral
+    representation: int while it fits i64, bigint past it. ]
+ [case id=program-num-idiv-co17-010-decimal-integral-quotient level=core
+  [tags numeric idiv decimal exact-family truncation L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([$idiv 10.00 3], [$idiv 39.98 2.00], [$idiv -10.00 3])
+#]]
+  [out-text [#
+(3, 19, -3)
+#]]
+ ]
+
+ [; `[$idiv 10.00 3]` answers where `[$div 10.00 3]` refuses, and that is
+    not an inconsistency — it is the difference between asking for the
+    integral quotient (always exact) and asking for the full one (not
+    representable here). This row pins the pair so neither drifts onto the
+    other's rule. ]
+ [case id=program-num-idiv-co17-011-answers-where-div-refuses level=core
+  [tags numeric idiv div decimal non-terminating boundary CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$idiv 10.00 3]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [; The divmod identity — `a = b × idiv(a,b) + mod(a,b)` — over exact
+    operands, both halves truncating toward zero. `%` got its exact lane in
+    #1016 and `idiv` gets its complement here, so this holds by
+    construction rather than by coincidence; it is the check that the two
+    lanes agree on which way the truncation goes. ]
+ [case id=program-num-idiv-co17-012-divmod-identity-holds level=core
+  [tags numeric idiv mod decimal exact-family identity L44 CO-17 1016]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([= 10.00 [+ [* [$idiv 10.00 3] 3] [% 10.00 3]]], [= -10.00 [+ [* [$idiv -10.00 3] 3] [% -10.00 3]]])
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
+ [; The quotient exceeds i64, so it comes back bigint rather than a
+    saturated i64 — L44's no-silent-saturation rule, and the reason the
+    result kind is "int while it fits" and not "int". ]
+ [case id=program-num-idiv-co17-013-over-i64-quotient-is-bigint level=core
+  [tags numeric idiv bigint no-saturation exact-family L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$idiv 100000000000000000000 2]
+#]]
+  [out-text [#
+50000000000000000000
+#]]
+ ]
+
+ [; The v0.17.0 audit's silent band (version-literal-ok): strconv.parse_int
+    SATURATES out-of-range input instead of erroring, so every integral image
+    in (i64.max, 2^64) came back as a clamped i64.max — co17-013's operand sat
+    one binade ABOVE the band, so the suite was green while L44's
+    no-silent-saturation rule was violated. These pin the band itself, for
+    each verb that narrows an exact integral image to int-or-bigint. ]
+ [case id=program-num-idiv-band-quotient-is-bigint level=core
+  [tags numeric idiv bigint no-saturation band exact-family L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$idiv 20000000000000000000 2]
+#]]
+  [out-text [#
+10000000000000000000
+#]]
+ ]
+
+ [case id=program-num-floor-band-is-bigint level=core
+  [tags numeric floor bigint no-saturation band exact-family L44]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$floor 10000000000000000000.5]
+#]]
+  [out-text [#
+10000000000000000000
+#]]
+ ]
+
+ [case id=program-num-ceiling-band-is-bigint level=core
+  [tags numeric ceiling bigint no-saturation band exact-family L44]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$ceiling 10000000000000000000.5]
+#]]
+  [out-text [#
+10000000000000000001
+#]]
+ ]
+
+ [case id=program-num-idiv-band-divmod-identity level=core
+  [tags numeric idiv mod divmod-identity band bigint exact-family L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[= 10000000000000000000 [+ [* 1 [$idiv 10000000000000000000 1]] [% 10000000000000000000 1]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [; The int-only lane is CHECKED, like `[+ i i]`: the one int ÷ int cell whose
+    quotient leaves i64 (MIN ÷ -1 = 2^63) refuses CXER3000 — before this pin
+    it answered a saturated i64.max, and |MIN| answered MIN itself. `/` is true
+    division, so its cell answers the exactly-representable float 2^63 instead. ]
+ [case id=program-num-idiv-int-min-neg1-refuses level=core
+  [tags numeric idiv int overflow CXER3000 checked L44]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$idiv -9223372036854775808 -1]
+#]]
+  [out-err [#
+cx-err:CXER3000
+#]]
+ ]
+
+ [case id=program-num-div-int-min-neg1-refuses level=core
+  [tags numeric div int overflow CXER3000 checked L44]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$div -9223372036854775808 -1]
+#]]
+  [out-err [#
+cx-err:CXER3000
+#]]
+ ]
+
+ [case id=program-num-abs-int-min-refuses level=core
+  [tags numeric abs int overflow CXER3000 checked L44]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$abs -9223372036854775808]
+#]]
+  [out-err [#
+cx-err:CXER3000
+#]]
+ ]
+
+ [case id=program-num-divide-int-min-neg1-is-float level=core
+  [tags numeric divide int no-saturation true-division L44]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[/ -9223372036854775808 -1]
+#]]
+  [out-text [#
+9.223372036854776e18
+#]]
+ ]
+
+ [; int ÷ int computes in i64, never through f64: past 2^53 the float route
+    rounded the DIVIDEND before dividing, so an exact odd operand answered the
+    wrong integer with exit 0. ]
+ [case id=program-num-div-int-past-2p53-is-exact level=core
+  [tags numeric div int precision exact L44]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$div 9007199254740993 3]
+#]]
+  [out-text [#
+3002399751580331
+#]]
+ ]
+
+ [case id=program-num-divide-int-past-2p53-divisible-is-exact level=core
+  [tags numeric divide int precision exact L44]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[/ 18014398509481989 3]
+#]]
+  [out-text [#
+6004799503160663
+#]]
+ ]
+
+ [case id=program-num-idiv-co17-014-decimal-float-unbridged level=core
+  [tags numeric idiv decimal float unbridged CXER0100 L44 CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$idiv 1.00 1.5e0]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='$idiv: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [; The unchanged half for `idiv`: no exact operand, no change. ]
+ [case id=program-num-idiv-co17-015-int-row-unchanged level=core
+  [tags numeric idiv int unchanged CO-17]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+([$idiv 7 2], [$idiv -7 2])
+#]]
+  [out-text [#
+(3, -3)
+#]]
+ ]
+
  [case id=program-builtin-multiarg-001-min level=core
   [tags builtin dispatch element-call multi-arg]
   [in-cx [#
@@ -13458,15 +14702,16 @@ cx-err:CXER3000
   [; #540 — an inline [?element NAME-EXPR …] constructor is a valid positional
      argument to a bareword def call: the call applies; it does NOT silently
      fall through to data construction. ]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
 [?def render scope=public pure ($fmt $e) [rendered [fmt $fmt] $e]]
-[render 'cx' [?element 'batch' ([entry seq=1], [entry seq=2])]]
+[render 'cx' [?element 'batch' [?splice ([entry seq=1], [entry seq=2])]]]
 #]]
   [out-text [#
-[rendered [fmt 'cx'] [batch ([entry seq=1], [entry seq=2])]]
+[rendered [fmt 'cx'] [batch [entry seq=1] [entry seq=2]]]
 #]]
  ]
 
@@ -13493,6 +14738,7 @@ cx-err:CXER3000
      the final item, head the first, tail drops one, reverse reorders
      (before the fix: last/head passed the collection through whole, tail
      was empty, reverse was unreversed — all silent). ]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [in-cx [#
 [empty]
 #]]
@@ -13500,10 +14746,10 @@ cx-err:CXER3000
 [?let [= $flt [$filter ([e x=1], [e x=2], [e x=3]) [?fn ($s) true]]]
   [probe
     [last [$last $flt]] [head [$head $flt]]
-    [tail [$tail $flt]] [rev [$reverse $flt]]]]
+    [tail [?splice [$tail $flt]]] [rev [?splice [$reverse $flt]]]]]
 #]]
   [out-text [#
-[probe [last [e x=3]] [head [e x=1]] [tail ([e x=2], [e x=3])] [rev ([e x=3], [e x=2], [e x=1])]]
+[probe [last [e x=3]] [head [e x=1]] [tail [e x=2] [e x=3]] [rev [e x=3] [e x=2] [e x=1]]]
 #]]
  ]
 
@@ -13683,9 +14929,21 @@ null
 #]]
  ]
 
- [case id=program-num-percent-002-float-promotes level=core
-  [tags numeric mod operator percent float]
-  [; #598 — float operand promotes, sign of dividend (XPath 3.1 §3.5). ]
+ [; #1010 exposed this row's misnaming; #1016 fixed the behavior underneath it.
+    History: it was ONE row named `program-num-percent-002-float-promotes`,
+    annotated with #598's promotion ruling, whose body `[% 7.5 2]` is a DECIMAL.
+    #1010 split it — 002 kept the body and pinned the OBSERVED refusal, 002a
+    pinned the promotion — which then made the asymmetry #1016 names red-provable:
+    `+ − × ÷` route decimals through the L44 exact lane while `%` alone still
+    refused them. L44 rules `decimal ⊕ int` EXACT (only `decimal ⊕ float` is an
+    error), so the refusal was a defect, not a rule, and 002 now pins the exact
+    remainder. The refusal L44 DOES rule — the unbridged float mix — is 002b. ]
+ [case id=program-num-percent-002-decimal-exact level=core
+  [tags numeric mod operator percent decimal exact-family L44]
+  [; #1016 / L44 — a decimal operand is EXACT, not refused and not promoted:
+     `%` joins `+ − × ÷` in the exact lane. Scale is max(s₁,s₂), which L44
+     forces by composition (the remainder is a subtraction, and the integral
+     quotient contributes s₂), so `7.5 % 2` is `1.5` at scale 1. ]
   [in-cx [#
 [empty]
 #]]
@@ -13693,7 +14951,104 @@ null
 [% 7.5 2]
 #]]
   [out-text [#
-[err code=cx-err:CXER0100 message='mod: argument 1 is not numeric']
+1.5
+#]]
+ ]
+
+ [case id=program-num-percent-002b-decimal-float-unbridged level=core
+  [tags numeric mod operator percent decimal float CXER0100 L44]
+  [; #1016 / L44 — `decimal ⊕ float` is the refusal the spec DOES rule:
+     silent coercion in either direction destroys the exactness the decimal
+     kind exists for, so `[cast]` is the only bridge. Same message and code as
+     the `+ − × ÷` lane, so the whole arithmetic surface refuses alike. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[% 7.5 2.0e0]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='%: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+ ]
+
+ [case id=program-num-percent-002c-decimal-both-operands level=core
+  [tags numeric mod operator percent decimal exact-family]
+  [; #1016 — decimal ⊕ decimal. The remainder is zero but the SCALE survives
+     (`0.0`, not `0`): decimal identity is scale-preserving, and the exact
+     lane's `[- 7.5 7.5]` already renders `0.0` on the same max(s₁,s₂) rule. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[% 7.5 2.5]
+#]]
+  [out-text [#
+0.0
+#]]
+ ]
+
+ [case id=program-num-percent-002d-bigint-exact level=core
+  [tags numeric mod operator percent bigint exact-family]
+  [; #1016 — the bigint half of the same lane. Pre-fix this refused with
+     `mod: argument 1 is not numeric`; #38 had made bigint reject so it could
+     not be silently i64-wrapped, and the exact lane is what makes the operand
+     admissible without that loss. No decimal operand, so the result is bigint. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[% 9223372036854775808 3]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-num-percent-002e-decimal-divide-by-zero level=core
+  [tags numeric mod operator percent decimal error CXER0101]
+  [; #1016 — a zero divisor is CXER0101 in the exact lane too, matching 003's
+     int lane. Pre-fix this reported `argument 1 is not numeric`, refusing on
+     the operand KIND before it ever looked at the divisor — so the wrong
+     error class was reported for a divide-by-zero. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[% 7.5 0]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0101 message='division by zero']
+#]]
+ ]
+
+ [case id=program-num-percent-002f-mod-builtin-parity level=core
+  [tags numeric mod operator percent decimal parity]
+  [; #598 requires ONE implementation behind two spellings, so the #1016 fix
+     had to land in the `mod` builtin rather than the `%` head — this pins that
+     `[$mod]` moved with `[%]` and the two spellings did not drift apart. ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?str '{[$mod 7.5 2]}|{[= [% 7.5 2] [$mod 7.5 2]]}']
+#]]
+  [out-text [#
+'1.5|true'
+#]]
+ ]
+
+ [case id=program-num-percent-002a-float-promotes level=core
+  [tags numeric mod operator percent float]
+  [; #598 — float operand promotes, sign of dividend (XPath 3.1 §3.5). ]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[% 7.5e0 2]
+#]]
+  [out-text [#
+1.5e0
 #]]
  ]
 
@@ -14054,8 +15409,19 @@ cx-err:CXER0272
 #]]
  ]
 
- [case id=program-num-err-idiv-bigint level=core
-  [tags numeric idiv error-shape bigint type-mismatch]
+ [; #1044 / CO-17 — this row MOVED from the error-shape family to the exact
+    lane, and its id changed with it, exactly as its `mod` twin below did in
+    #1016. It pinned #38's refusal, which existed only because `idiv` had no
+    exact path and an over-i64 dividend would otherwise have been silently
+    i64-wrapped. #1016 left it refusing with a NAMED reason — "giving it one
+    needs its own ruling on result kind" — and CO-17 is that ruling: `idiv`
+    yields an integer per §6.5, in the exact family's integral representation
+    (int while it fits i64, bigint past it, never a saturated i64).
+    Read this row WITH its `mod` twin: 7 × 1428571428571428571 + 3 is exactly
+    10000000000000000000, so the two rows together pin the divmod identity
+    over an operand no i64 or f64 lane can hold. ]
+ [case id=program-num-idiv-bigint-exact level=core
+  [tags numeric idiv bigint exact-family L44 CO-17]
   [in-cx [#
 [empty]
 #]]
@@ -14063,12 +15429,18 @@ cx-err:CXER0272
 [$idiv 10000000000000000000 7]
 #]]
   [out-text [#
-[err code=cx-err:CXER0100 message='idiv: argument 1 is not numeric']
+1428571428571428571
 #]]
  ]
 
- [case id=program-num-err-mod-bigint level=core
-  [tags numeric mod error-shape bigint type-mismatch]
+ [; #1016 — this row MOVED from the error-shape family to the exact lane, and
+    its id changed with it: `mod` over a bigint is no longer an error at all.
+    It pinned #38's refusal, which existed only because `mod` had no exact path
+    and an over-i64 dividend would otherwise have been silently i64-wrapped.
+    L44 rules the operand pair exact, so the exact lane — not refusal — is what
+    keeps #38's value intact. ]
+ [case id=program-num-mod-bigint-exact level=core
+  [tags numeric mod bigint exact-family L44]
   [in-cx [#
 [empty]
 #]]
@@ -14076,7 +15448,7 @@ cx-err:CXER0272
 [$mod 10000000000000000000 7]
 #]]
   [out-text [#
-[err code=cx-err:CXER0100 message='mod: argument 1 is not numeric']
+3
 #]]
  ]
 
@@ -14777,7 +16149,7 @@ cx-err:CXER0100
        [liter [?for [in $r $l] [yield $r]]]]]]
 #]]
   [out-text [#
-[out [n 2] [f {name: alice, age: 30}] [z {name: bob, age: 25}] [ln 0] [le true] [liter ()]]
+[out [n 2] [f {name: alice, age: 30}] [z {name: bob, age: 25}] [ln 0] [le true] [liter]]
 #]]
  ]
 
@@ -14793,7 +16165,7 @@ cx-err:CXER0100
 [?let [= $t [$first $input//users]] [out [a $t//row] [b [$count $t/*]]]]
 #]]
   [out-text [#
-[out [a ()] [b 0]]
+[out [a] [b 0]]
 #]]
  ]
 
@@ -14827,7 +16199,7 @@ cx-err:CXER0100
  [out [a $p[2, "age"]] [b [?for [in $r $p] [where $r.active] [yield $r.name]]]]]
 #]]
   [out-text [#
-[out [a null] [b ('alice')]]
+[out [a null] [b 'alice']]
 #]]
  ]
 
@@ -15457,7 +16829,7 @@ cx-err:CXER0100
 [?map (4, 9, 16) [using $math:sqrt]]
 #]]
   [out-text [#
-(2.0, 3.0, 4.0)
+(2.0e0, 3.0e0, 4.0e0)
 #]]
  ]
 
@@ -15639,7 +17011,7 @@ true
 [?let [= $half [$math:pow _ 2]] [$half 5]]
 #]]
   [out-text [#
-25.0
+2.5e1
 #]]
  ]
 
@@ -15653,7 +17025,7 @@ true
 [?let [= $sq [$math:pow 2 _]] [$sq 10]]
 #]]
   [out-text [#
-1024.0
+1.024e3
 #]]
  ]
 
@@ -15667,7 +17039,7 @@ true
 [?map (1, 2, 3) [using [$math:pow _ 2]]]
 #]]
   [out-text [#
-(1.0, 4.0, 9.0)
+(1.0e0, 4.0e0, 9.0e0)
 #]]
  ]
 
@@ -16879,9 +18251,19 @@ cx-err:CXER0001
     auto-typed by the data core — the program reading of the bytes IS the
     data reading. `host=0.0.0.0` used to truncate to float 0.0 and spill
     `.0.0` as two phantom body items at rc=0 (the #917 silent-mangle class
-    in attribute position). ]
+    in attribute position).
+
+    ADDRESS MOVEMENT, #991 (RULED: CO-12): `when` now images BARE. This
+    case was the deviation-1 defect standing in plain sight — it asserted
+    in one line that `$e@when` IS a `date` and that the same attribute
+    images as `when='2026-01-01'`, a spelling that re-parses as a STRING.
+    Both halves passed because the emitter was a FIXED POINT: re-emitting
+    the wrongly-typed value reproduced the same text. The `date` half was
+    always right; the image half has been corrected to match it, and the
+    case now says what its own title claims — the program reading of the
+    bytes IS the data reading, image included. ]
  [case id=program-attr-bare-001-run-is-the-string level=core
-  [tags attr bare-value run parity issue-923]
+  [tags attr bare-value run parity issue-923 991 co-12]
   [title multi-dot / ident-run / date bare attr values read as the data reading reads them]
   [in-cx [#
 [ignored]
@@ -16890,7 +18272,7 @@ cx-err:CXER0001
 [?let [= $e [server host=0.0.0.0 tls=true ver=v1.2.3 when=2026-01-01]] ($e, [?match $e@host [case $v::string str] [else other]], [?match $e@when [case $v::date date] [else other]])]
 #]]
   [out-text [#
-([server host='0.0.0.0' tls=true ver='v1.2.3' when='2026-01-01'], str, date)
+([server host='0.0.0.0' tls=true ver='v1.2.3' when=2026-01-01], str, date)
 #]]
  ]
 
@@ -17847,16 +19229,17 @@ note: the PS-1 semantic pin on the comprehension head — a stepped
 note: [?for] result is identical to binding the result and stepping the
 note: binding (O4 distribution included).
 #]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
 [?let [= $d [?for [in $u ([row v=1], [row v=2])] [yield $u]]@v]
   [?let [= $t [?for [in $u ([row v=1], [row v=2])] [yield $u]]]
-    [pair $d $t@v]]]
+    [pair [?splice $d] [?splice $t@v]]]]
 #]]
   [out-text [#
-[pair ([v 1], [v 2]) ([v 1], [v 2])]
+[pair [v 1] [v 2] [v 1] [v 2]]
 #]]
  ]
 
@@ -17873,7 +19256,7 @@ note: empty (the same shape bindings have), never an error.
 [report [+ 1 2]/x]
 #]]
   [out-text [#
-[report ()]
+[report]
 #]]
  ]
 
@@ -17916,14 +19299,15 @@ note: element-literal stepping is redundant-but-legal (PS letter §3a).
 note: array / sequence / map literals take the same postfix — `.key` on
 note: a map literal, @attr distribution over a sequence literal.
 #]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [in-cx [#
 [ignored]
 #]]
   [in-code [#
-[pair {a: 5, b: {c: 6}}.b.c [report ([row v=1], [row v=2])@v]]
+[pair {a: 5, b: {c: 6}}.b.c [report [?splice ([row v=1], [row v=2])@v]]]
 #]]
   [out-text [#
-[pair 6 [report (1, 2)]]
+[pair 6 [report 1 2]]
 #]]
  ]
 
@@ -18042,6 +19426,821 @@ $doc
 #]]
   [out-text [#
 [doc [k 1 (2, 3)] [l false (verb, label, target) (label, open, url)] [m {a: 1} {b: 2}] [p 'weight' (kg, lbs) ' shown'] [g (1, 2) [0]]]
+#]]
+ ]
+
+ [; ============================================================================
+    The path/value matrix grid (R-A1..R-A6, 2026-08-25) — one case per ruled
+    cell of the FROZEN matrix in code.md §6.2 / ledger matrix file. Changing
+    any expectation below requires a ruling naming the cell. ]
+
+ [case id=program-pvmatrix-001-seq-wildcard-distributes level=core
+  [tags cxpath pvmatrix distribution sequence wildcard]
+  [; R-A6(i): /* on a collection is the union of the members' children,
+     never the member list (was 2 — the members — before the ruling). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $s ([a [n 1]], [b [n 2] [n 3]])] [$count $s/*]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=program-pvmatrix-002-array-child-distributes level=core
+  [tags cxpath pvmatrix distribution array child]
+  [; R-A6(ii): /name distributes over arrays of elements exactly as over
+     sequences (was 0 before the ruling while /@x already distributed). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ae [[a [n 1]], [a [n 2]]]] [$count $ae/n]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-pvmatrix-003-array-wildcard-distributes level=core
+  [tags cxpath pvmatrix distribution array wildcard]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $ae [[a [n 1]], [b [n 2] [n 3]]]] [$count $ae/*]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=program-pvmatrix-004-seq-predicate-direct level=core
+  [tags cxpath pvmatrix predicate sequence]
+  [; R-A6(iv): a predicate directly on a bound collection binds $_ per
+     member (was: parses, then CXER0001 unbound variable $_). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $s ([a x=1], [a x=2])] [$count $s[= $_@x 2]]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-pvmatrix-005-element-predicate-direct level=core
+  [tags cxpath pvmatrix predicate element]
+  [; R-A3: a predicate on any non-collection focus binds $_ to the focus. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $u [user name=ada]] [$count $u[= $_@name 'ada']]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-pvmatrix-006-scalar-wildcard-absence level=core
+  [tags cxpath pvmatrix scalar wildcard absence]
+  [; R-A6(iii): /* is a child step; on a scalar it yields absence like
+     /name already did (was CXER0001). Typed @attr stays the loud read. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $x 5] [$count $x/*]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=program-pvmatrix-007-doc-wildcard-toplevel level=core
+  [tags cxpath pvmatrix document wildcard parse]
+  [; R-A2: a document navigates as a container node — /* is its top-level
+     ELEMENTS, comments skip, identical on every engine path (was CXER0001
+     in the node-set lane, and the #964 refusal on any multi-node parse). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $d [$cx:parse "[; a comment ]\n[a x=1]\n[b x=2]"]] [$count $d/*]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-pvmatrix-008-doc-child-named level=core
+  [tags cxpath pvmatrix document child parse]
+  [; R-A2: /name on a document matches its top-level elements (was silent
+     absence — the worse half of #964). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $d [$cx:parse "[; a comment ]\n[a x=1]\n[b x=2]"]] [$count $d/a]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-pvmatrix-009-doc-single-root-wildcard level=core
+  [tags cxpath pvmatrix document parse single-root]
+  [; R-A2: single-root parse results answer /* with the root element — the
+     retired fast-path unwrap answered with the root's CHILDREN on the bare
+     lane and refused on the count lane. One value, one answer. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $d [$cx:parse "[root [item x=1]]"]] [$count $d/*]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-pvmatrix-010-doc-count-items level=core
+  [tags cxpath pvmatrix document count items-view]
+  [; R-A5: document count = top-level item count. A LEADING comment is
+     document prolog (metadata), not an item; the two elements count. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $d [$cx:parse "[; a comment ]\n[a x=1]\n[b x=2]"]] [$count $d]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-pvmatrix-012-pred-count-zero level=core
+  [tags cxpath pvmatrix predicate count nodeset]
+  [; R-A3 (#966): predicate-rooted paths are node-set forms — no field
+     collapse, so [$count $_/tag] is a MATCH count. bo has one tag; nobody
+     has zero (was: bo matched count 0 via the collapse). ]
+  [in-cx [#
+[doc [user name=ada [tag] [tag]] [user name=bo [tag]]]
+#]]
+  [in-code [#
+[$count $doc/user[= [$count $_/tag] 0]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=program-pvmatrix-013-pred-count-one level=core
+  [tags cxpath pvmatrix predicate count nodeset]
+  [; R-A3 (#966): count == 1 selects bo, who has exactly one tag (was 0). ]
+  [in-cx [#
+[doc [user name=ada [tag] [tag]] [user name=bo [tag]]]
+#]]
+  [in-code [#
+[$count $doc/user[= [$count $_/tag] 1]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-pvmatrix-014-pred-count-two level=core
+  [tags cxpath pvmatrix predicate count nodeset]
+  [in-cx [#
+[doc [user name=ada [tag] [tag]] [user name=bo [tag]]]
+#]]
+  [in-code [#
+[$count $doc/user[= [$count $_/tag] 2]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-pvmatrix-015-pred-eq-atomizes level=core
+  [tags cxpath pvmatrix predicate atomization compare]
+  [; R-A3 companion (settled 2026-05-31 rule): comparison atomizes — an
+     element with single scalar/text content compares as that value, so the
+     dominant value-predicate idiom holds WITHOUT the field collapse. ]
+  [in-cx [#
+[doc [user [name ada] [tag]] [user [name bo] [tag]]]
+#]]
+  [in-code [#
+[$count $doc/user[= $_/name 'ada']]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-pvmatrix-016-atomize-element-vs-scalar level=core
+  [tags pvmatrix atomization compare element scalar]
+  [; The companion cell outside predicates: [= element-with-single-item
+     scalar] compares the typed content value (measured false before). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $u [user [name 'ada']]] [= [$first $u//name] 'ada']]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-pvmatrix-017-atomize-existential level=core
+  [tags pvmatrix atomization compare nodeset existential]
+  [; Multi-member node-set general comparison is existential (any member),
+     per the settled rule's own "like XPath general comparison". ]
+  [in-cx [#
+[doc [user [name 'ada']] [user [name 'bo']]]
+#]]
+  [in-code [#
+[= $doc//name 'bo']
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=program-pvmatrix-018-pred-err-loud level=core
+  [tags cxpath pvmatrix predicate err loud]
+  [; R-A4 (#965 root): an err RAISED in a predicate body refuses the whole
+     query — was err-as-truthy, which turned a broken filter into
+     select-all. ]
+  [in-cx [#
+[doc [user name=ada] [user name=bo]]
+#]]
+  [in-code [#
+[$count $doc/user[$nosuch:fn $_@name]]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-pvmatrix-020-count-array-items level=core
+  [tags pvmatrix count array items-view]
+  [; R-A5: aggregates are items-view and kind-total (the cxdm sentence
+     making this a type error was struck as reconciled). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[$count [1, 2, 3]]
+#]]
+  [out-text [#
+3
+#]]
+ ]
+
+ [case id=program-pvmatrix-021-count-map-entries level=core
+  [tags pvmatrix count map items-view]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[$count {host: 'h', port: 5432}]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-pvmatrix-022-count-scalar-one level=core
+  [tags pvmatrix count scalar items-view]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[$count 5]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+ [case id=program-pvmatrix-023-count-absence-zero level=core
+  [tags pvmatrix count absence items-view]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $u [user [tag 'a']]] [$count $u/nothing]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=program-pvmatrix-024-count-err-propagates level=core
+  [tags pvmatrix count err propagation]
+  [; R-A5: an err operand propagates through aggregates — errs are operands
+     everywhere except navigation. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $e [?fallback [$cx:parse "[unclosed"] [recover-with $err]]] [$count $e]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-pvmatrix-026-construct-seq-refused level=core
+  [tags pvmatrix construction sequence refusal splice]
+  [; R-A1 (#847-1a, #961): a non-empty sequence VALUE never becomes element
+     content — refused loudly at construction, naming [?splice]. Was a
+     silent grouping envelope answering /violation with 0. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $vs ([violation kind=a], [violation kind=b])] [violations $vs]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-pvmatrix-027-construct-splice-adopts level=core
+  [tags pvmatrix construction sequence splice child]
+  [; The sound idiom: [?splice] adopts the members as children and the
+     child axis sees them — the #961 program, written correctly, answers 2. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $vs ([violation kind=a], [violation kind=b])]
+ [?let [= $bag [violations [?splice $vs]]]
+  [$count $bag/violation]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-pvmatrix-028-construct-for-contributes level=core
+  [tags pvmatrix construction for yield contribution]
+  [; R-A1: [?for] in a multi-sibling slot contributes one sibling per
+     yield — the directive's defined contribution, not a value being
+     auto-spliced. The child axis sees the yields. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $t [c [?for [in $x ('A', 'B')] [yield [x $x]]]]] [$count $t/x]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-pvmatrix-029-construct-absence-contributes-nothing level=core
+  [tags pvmatrix construction absence null-totality]
+  [; R-A1: absence contributes no child (was adopted as a visible empty
+     sequence child — [$count …/*] answered 1). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $u [user [tag 'a']]] [$count [c $u/nothing]/*]]
+#]]
+  [out-text [#
+0
+#]]
+ ]
+
+ [case id=program-pvmatrix-030-construct-element-directive-refused level=core
+  [tags pvmatrix construction element-directive sequence refusal]
+  [; R-A1: the computed-name form refuses a sequence value identically. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $vs ([violation kind=a], [violation kind=b])] [?element 'violations' $vs]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-pvmatrix-031-construct-if-seq-refused level=core
+  [tags pvmatrix construction if sequence refusal]
+  [; R-A1: [?if]/[?let]/call results are VALUES — one yielding a non-empty
+     sequence refuses; conditional multi-contribution is [?splice [?if …]]. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $vs ([v k=1], [v k=2])] [c [?if [= 1 1] [then $vs]]]]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=program-pvmatrix-032-map-attr-refused level=core
+  [tags pvmatrix map attribute refusal]
+  [; R-A6(v): a typed @attr read on a map refuses like every non-element —
+     .key is the map read; quiet absence hid exactly that confusion. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {host: 'h'}] $m@host]
+#]]
+  [out-err [#
+cx-err:CXER0001
+#]]
+ ]
+
+ [case id=program-pvmatrix-034-map-entry-read-collapses level=core
+  [tags pvmatrix map entry field-read]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {host: 'h', port: 5432}] $m/host]
+#]]
+  [out-text [#
+'h'
+#]]
+ ]
+
+ [case id=program-pvmatrix-035-map-predicate-per-entry level=core
+  [tags pvmatrix map predicate entries]
+  [; R-A3: a map's items are its entries; a direct predicate binds $_ per
+     entry (entries materialize as [key value] elements). The count is 2
+     ONLY under per-entry binding — were $_ the whole map, one focus would
+     survive and the count would be 1. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $m {host: 'h', port: 5432}] [$count $m[> [$count $_] 0]]]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-pvmatrix-036-parsed-paren-seq-opaque level=core
+  [tags pvmatrix data-lane paren-sequence opaque settled]
+  [; Regression pin for the SETTLED #587/#847 cells: parsed data keeps its
+     paren-sequence child — /name opaque (0), // through (2), /* sees the
+     sequence node (1). Unchanged by R-A1..R-A6, pinned so the construction
+     refusal is never "fixed" into the data lane. ]
+  [in-cx [#
+[bag ([v k=1], [v k=2])]
+#]]
+  [in-code [#
+[list [$count $doc/v] [$count $doc//v] [$count $doc/*]]
+#]]
+  [out-text [#
+[list 0 2 1]
+#]]
+ ]
+
+ [case id=program-pvmatrix-037-data-root-binding level=core
+  [tags pvmatrix data-lane doc root-binding]
+  [; R-A2 binding contract: $doc is the root ELEMENT when the file has
+     exactly one top-level element; leading comments neither count against
+     uniqueness nor join the bound value. The platform's $doc/field idiom. ]
+  [in-cx [#
+[; leading comment ]
+[users [user name=a] [user name=b]]
+#]]
+  [in-code [#
+[$count $doc/user]
+#]]
+  [out-text [#
+2
+#]]
+ ]
+
+ [case id=program-pvmatrix-041-loop-carriers-positional level=core
+  [tags pvmatrix loop continue break carrier positional]
+  [; R-A1's loop-carrier exemption: [continue]/[break] carry one value per
+     expression — an ABSENT value rides as the empty sequence and a
+     SEQUENCE value rides whole, or the positional rebind would shift
+     every later binding. Pins a 3-binding loop threading an absence and
+     a sequence through one rebind cycle. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $u [user [tag 'a']]]
+ [?loop [= $none $u/nothing] [= $seq ('x', 'y')] [= $n 0]
+   [?if [= $n 0]
+     [then [continue $u/nothing ('x', 'y') [+ $n 1]]]
+     [else [break [list [$count $none] [$count $seq] $n]]]]]]
+#]]
+  [out-text [#
+[list 0 2 1]
+#]]
+ ]
+
+ [case id=program-pvmatrix-040-dispatching-head-consumes-seq-arg level=core
+  [tags pvmatrix construction dispatch operator sequence argument]
+  [; R-A1's dispatch boundary: a dispatching form ($-head call, operator
+     head, closure) consumes an operand-produced sequence as an ARGUMENT —
+     the refusal is only for plain construction (pvmatrix-026). ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $doc [order [line qty=2 price=10] [line qty=1 price=20] [line qty=3 price=5]]]
+  [$sum $doc/line/@price]]
+#]]
+  [out-text [#
+35
+#]]
+ ]
+
+ [case id=program-pvmatrix-039-literal-seq-body-is-data level=core
+  [tags pvmatrix construction sequence literal position parity]
+  [; R-A1's position discriminator (the #853 literal-err principle): a
+     SOURCE-LITERAL paren sequence in element content constructs the
+     envelope the data reading gives those bytes — child-opaque, //
+     through — while an evaluated operand yielding a sequence refuses
+     (pvmatrix-026). Cross-parser parity pins the same bytes agree. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $t [pair ([v k=1], [v k=2])]]
+  [list [$count $t/v] [$count $t//v] [$count $t/*]]]
+#]]
+  [out-text [#
+[list 0 2 1]
+#]]
+ ]
+
+ [case id=program-pvmatrix-038-seq-nonelement-skips level=core
+  [tags pvmatrix distribution sequence non-element skip]
+  [; code.md step-distribution row 4, pinned: a non-element member skips —
+     optional read, not a fault. ]
+  [in-cx [#
+[ignored]
+#]]
+  [in-code [#
+[?let [= $s ([a x=1], 'str')] [$count $s/@x]]
+#]]
+  [out-text [#
+1
+#]]
+ ]
+
+
+ [; ── #976: operator heads reaching the EVALUATOR through the DATA parser ──
+    in-cx rides cx.parse, the DATA parser, and binds as $doc. A head that
+    stringifies yields an array with no Element, $doc never binds, and the
+    case fails outright — which is what these would have done for `%`, `<=`,
+    `!=`, `>=` and `~` before #976. The canonicalization half lives in
+    conformance/operator_heads.cxd. ]
+
+ [case id=program-ophead-101-plus level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[+ 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[+ 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-102-star level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[* 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[* 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-103-minus level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[- 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[- 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-104-slash level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[/ 6 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[/ 6 3]
+#]]
+ ]
+
+ [case id=program-ophead-105-percent level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[% 7 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[% 7 3]
+#]]
+ ]
+
+ [case id=program-ophead-106-equals level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[= 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[= 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-107-not-equals level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[!= 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[!= 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-108-less-than level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[< 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[< 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-109-less-or-equal level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[<= 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[<= 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-110-greater-than level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[> 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[> 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-111-greater-or-equal level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[>= 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[>= 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-112-similar level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[~ 5 3]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[~ 5 3]
+#]]
+ ]
+
+ [case id=program-ophead-113-and level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[and true false]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[and true false]
+#]]
+ ]
+
+ [case id=program-ophead-114-or level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[or true false]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[or true false]
+#]]
+ ]
+
+ [case id=program-ophead-115-not level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[not true]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[not true]
+#]]
+ ]
+
+ [case id=program-ophead-116-union level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[union (1, 2) (2, 3)]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[union (1, 2) (2, 3)]
+#]]
+ ]
+
+ [case id=program-ophead-117-intersect level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[intersect (1, 2) (2, 3)]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[intersect (1, 2) (2, 3)]
+#]]
+ ]
+
+ [case id=program-ophead-118-except level=core
+  [tags operator-heads issue-976 data-parser element head]
+  [in-cx [#
+[except (1, 2) (2, 3)]
+#]]
+  [in-code [#
+$doc
+#]]
+  [out-text [#
+[except (1, 2) (2, 3)]
 #]]
  ]
 

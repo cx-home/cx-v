@@ -1,0 +1,9 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  lh{{"for $i :in $doc//item"}}
+  lb["<table class='cxp-itbl cxp-vtbl'><tr><th colspan='2'>$i@name</th></tr><tr><td class='cxp-itbl-k'>@qty</td><td class='cxp-itbl-v'>$i@qty</td></tr><tr><td class='cxp-itbl-k'>note</td><td class='cxp-itbl-v'>$i@memo</td></tr></table>"]
+  lb --> lh
+  lh -- "binds $i" --> lb
+  start --> lh
+  lh --> done

@@ -116,7 +116,10 @@ fn test_adjudicate_review_pair_round_trip() {
 	srv.wait()
 	assert out.contains('verdict=:no-match'), 'adjudicate did not produce a :no-match resolution record; got: ${out}'
 	assert out.contains('decided-by=agent:test-model'), 'resolution record lacks agent:<model> provenance; got: ${out}'
-	assert out.contains('score=0.0 band=:no-match'), 're-run did not short-circuit the review pair to :no-match via the resolutions tier; got: ${out}'
+	// CO-12: float images are exponent-form everywhere (the score attribute
+	// is a typeless f64 — see stdlib_similar.v); this was the one V-test
+	// assertion in the CO-12 movement checklist, missed by its migration.
+	assert out.contains('score=0.0e0 band=:no-match'), 're-run did not short-circuit the review pair to :no-match via the resolutions tier; got: ${out}'
 	assert out.contains('[resolved decided-by=agent:test-model :no-match]'), 're-run evidence lacks [resolved …] provenance; got: ${out}'
 }
 

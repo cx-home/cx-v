@@ -835,7 +835,7 @@ true
 [?lib 'cx-stdlib/validate']
 [?let [= $h [$validate:register-schema "Ports" "[schema of=ports mode=open]
 [ports [body [list u16] [req]]]"]]
-  [$validate:is-ok [$validate:validate-against [ports ('nope')] "Ports"]]]
+  [$validate:is-ok [$validate:validate-against [ports [?splice ('nope')]] "Ports"]]]
 #]]
   [out-text [#
 false

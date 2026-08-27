@@ -1280,3 +1280,262 @@ fn fmt829(src string) string {
 	doc := cx.parse(src) or { panic('${err}; src=${src}') }
 	return cx.emit_cx(doc).trim_space()
 }
+
+// ── source: vcx/tests/canonical_bijectivity_matrix_test.v ──
+// #991 (RULED: CO-12) — canonical serialization is BIJECTIVE, kinds
+// included. This is the type-comparing matrix the issue calls for: EVERY
+// scalar kind x EVERY position, parsed back and compared on `data_type` —
+// never on the emitted image.
+//
+// Comparing images is structurally unable to catch what CO-12 repaired.
+// Both defects were emitter FIXED POINTS: canonical imaged a float
+// attribute `r=1.5`, which re-parses as a DECIMAL and re-emits `r=1.5`,
+// so every image comparison reported equality while the kind had silently
+// changed underneath. Only a parse-back type comparison sees it.
+//
+// The lanes covered here — cx.emit_cx / emit_cx_compact (the data
+// emitter) and cx.cx_text_canonical (the CLI form and hash preimage) —
+// must agree with each other and with the format std-lib's
+// code.render_canonical, which the format.cxd fixtures pin from the CX
+// side. format.md §2.2 permits exactly one divergence: string quoting.
+//
+// Cells that are NOT lossy are pinned here as deliberate too, so a later
+// emitter change cannot quietly make a faithful kind lossy.
+
+// bj_kind_at parses `src` and names the CXDM kind of the scalar under
+// test at `pos`. Attribute cells read the attribute named `a`.
+fn bj_kind_at(src string, pos string) string {
+	d := cx.parse(src) or { return 'PARSE-ERR' }
+	mut el := cx.Element{}
+	mut found := false
+	for n in d.elements {
+		if n is cx.Element {
+			el = n as cx.Element
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 'NO-ELEMENT'
+	}
+	if pos == 'attr' {
+		for a in el.attrs {
+			if a.name == 'a' {
+				if dt := a.data_type() {
+					return dt
+				}
+				return 'string*'
+			}
+		}
+		return 'NO-ATTR'
+	}
+	if el.items.len == 0 {
+		return 'NO-CHILD'
+	}
+	first := el.items[0]
+	match pos {
+		'body' { return bj_node_kind(first) }
+		'map' {
+			if first is cx.MapNode {
+				m := first as cx.MapNode
+				return if m.entries.len == 0 { 'EMPTY' } else { bj_node_kind(m.entries[0].value) }
+			}
+			return 'NOT-MAP'
+		}
+		'array' {
+			if first is cx.ArrayNode {
+				arr := first as cx.ArrayNode
+				return if arr.items.len == 0 { 'EMPTY' } else { bj_node_kind(arr.items[0]) }
+			}
+			return 'NOT-ARR'
+		}
+		'seq' {
+			if first is cx.SequenceNode {
+				s := first as cx.SequenceNode
+				return if s.items.len == 0 { 'EMPTY' } else { bj_node_kind(s.items[0]) }
+			}
+			return 'NOT-SEQ'
+		}
+		else {
+			return 'BAD-POS'
+		}
+	}
+}
+
+fn bj_node_kind(n cx.Node) string {
+	match n {
+		cx.ScalarNode { return cx.scalar_type_name_public(n.data_type) }
+		cx.TextNode { return 'text' }
+		cx.Element { return 'element' }
+		cx.MapNode { return 'map' }
+		cx.ArrayNode { return 'array' }
+		cx.SequenceNode { return 'sequence' }
+		else { return 'node' }
+	}
+}
+
+// bj_src spells one scalar image into one position.
+fn bj_src(pos string, img string) string {
+	return match pos {
+		'attr' { '[u a=${img}]' }
+		'body' { '[u ${img}]' }
+		'map' { '[u {k: ${img}}]' }
+		'array' { '[u [${img}, 0]]' }
+		'seq' { '[u (${img}, 0)]' }
+		else { '' }
+	}
+}
+
+// bj_assert_faithful is the matrix cell: emit through each lane, parse
+// the image back, and require the kind to survive.
+fn bj_assert_faithful(pos string, img string) {
+	src := bj_src(pos, img)
+	d := cx.parse(src) or { panic('bijectivity: source did not parse: ${src}: ${err}') }
+	k0 := bj_kind_at(src, pos)
+	emit := cx.emit_cx(d).trim_space()
+	compact := cx.emit_cx_compact(d).trim_space()
+	strict := cx.cx_text_canonical(src) or {
+		panic('bijectivity: strict canonical failed: ${src}: ${err}')
+	}
+	ke := bj_kind_at(emit, pos)
+	kc := bj_kind_at(compact, pos)
+	ks := bj_kind_at(strict.trim_space(), pos)
+	assert ke == k0, 'emit lane lost the kind: ${src} -> ${emit} (${k0} -> ${ke})'
+	assert kc == k0, 'compact lane lost the kind: ${src} -> ${compact} (${k0} -> ${kc})'
+	assert ks == k0, 'strict lane lost the kind: ${src} -> ${strict.trim_space()} (${k0} -> ${ks})'
+}
+
+// The kinds that have a bare spelling in EVERY position. `bool` and
+// `null` are absent from the array row on purpose: a bareword followed by
+// `,` is the ambiguous-bare-array refusal (CXER0100), so `[true, 0]` has
+// no source spelling to test — a parser surface fact, not an emitter one.
+const bj_all_position_kinds = [
+	["'txt'", 'string'],
+	['41', 'int'],
+	['1.5e0', 'float'],
+	['1.5', 'decimal'],
+	['123456789012345678901234567890', 'bigint'],
+	[':gold', 'atom'],
+	['2026-08-25', 'date'],
+	['2026-08-25T10:30:00Z', 'datetime'],
+	['100ms', 'duration'],
+	['3mo', 'period'],
+]
+
+fn test_bijectivity_every_kind_in_attribute_position() {
+	for k in bj_all_position_kinds {
+		bj_assert_faithful('attr', k[0])
+	}
+	bj_assert_faithful('attr', 'true')
+	bj_assert_faithful('attr', 'null')
+}
+
+fn test_bijectivity_every_kind_in_body_position() {
+	for k in bj_all_position_kinds {
+		bj_assert_faithful('body', k[0])
+	}
+	bj_assert_faithful('body', 'true')
+	bj_assert_faithful('body', 'null')
+}
+
+fn test_bijectivity_every_kind_in_collection_positions() {
+	// The collection-position ascriptions (`2::decimal`, `2::bigint`,
+	// `0x2a::bytes`) exist ONLY here — an attribute spells them on the
+	// name side (`a::bytes=0x2a`) and a body on the element head.
+	coll_extra := ['2::decimal', '2::bigint', '0x2a::bytes']
+	for pos in ['map', 'array', 'seq'] {
+		for k in bj_all_position_kinds {
+			// map / seq string is the #790 collapse, pinned separately.
+			if k[1] == 'string' && pos != 'array' {
+				continue
+			}
+			bj_assert_faithful(pos, k[0])
+		}
+		for img in coll_extra {
+			bj_assert_faithful(pos, img)
+		}
+	}
+	for pos in ['map', 'seq'] {
+		bj_assert_faithful(pos, 'true')
+		bj_assert_faithful(pos, 'null')
+	}
+}
+
+// The glued name-side ascriptions, which have no bare spelling.
+fn test_bijectivity_glued_attribute_ascriptions() {
+	for img in ['a::float=1.5', 'a::u16=8080', 'a::bytes=0x2a', 'a::duration=100ms',
+		'a::period=3mo'] {
+		src := '[u ${img}]'
+		d := cx.parse(src) or { panic('${err}: ${src}') }
+		k0 := bj_kind_at(src, 'attr')
+		emit := cx.emit_cx(d).trim_space()
+		assert bj_kind_at(emit, 'attr') == k0, '${src} -> ${emit}'
+	}
+}
+
+// ── the two repaired defects, pinned as exact images ──
+//
+// Each was a fixed point, so the pin is the IMAGE plus the kind it
+// re-parses to; the old image is named in the message so a regression
+// reports what it regressed to.
+
+// #991 deviation 2. `1.5` is DECIMAL's canonical image; a float that
+// takes it collides with decimal 1.5 on one content address (#976 class).
+// A float image always carries its exponent (canonical.md §2.5).
+fn test_float_attribute_never_takes_decimals_image() {
+	src := '[u a=1.5e0]'
+	d := cx.parse(src) or { panic('${err}') }
+	assert bj_kind_at(src, 'attr') == 'float'
+	for img in [cx.emit_cx(d).trim_space(), cx.emit_cx_compact(d).trim_space()] {
+		assert img == '[u a=1.5e0]', 'float attribute imaged ${img}; the pre-CO-12 defect was [u a=1.5]'
+		assert bj_kind_at(img, 'attr') == 'float'
+	}
+}
+
+// The disjointness the collision violated: float 1.5 and decimal 1.5 are
+// two values and MUST be two addresses.
+fn test_float_and_decimal_do_not_share_a_canonical_address() {
+	f := cx.cx_text_canonical('[u a=1.5e0]') or { panic('${err}') }
+	dec := cx.cx_text_canonical('[u a=1.5]') or { panic('${err}') }
+	assert f.trim_space() == '[u a=1.5e0]'
+	assert dec.trim_space() == '[u a=1.5]'
+	assert f != dec, 'float and decimal collided on one canonical image (the pre-CO-12 defect: both emitted [u a=1.5])'
+	assert bj_kind_at(f.trim_space(), 'attr') == 'float'
+	assert bj_kind_at(dec.trim_space(), 'attr') == 'decimal'
+}
+
+// #991 deviation 1. A quoted date/datetime attribute re-parses as a
+// STRING — the kind is gone and the emitter is still a fixed point.
+fn test_date_and_datetime_attributes_are_never_quoted() {
+	cases := [['2026-08-25', 'date'], ['2026-08-25T10:30:00Z', 'datetime']]
+	for c in cases {
+		src := '[u a=${c[0]}]'
+		d := cx.parse(src) or { panic('${err}') }
+		for img in [cx.emit_cx(d).trim_space(), cx.emit_cx_compact(d).trim_space()] {
+			assert img == '[u a=${c[0]}]', '${c[1]} attribute imaged ${img}; the pre-CO-12 defect quoted it'
+			assert !img.contains("'"), '${c[1]} attribute is quoted in ${img}'
+			assert bj_kind_at(img, 'attr') == c[1]
+		}
+	}
+}
+
+// ── the ONE non-defect the matrix reports as a kind change ──
+//
+// A `string` ScalarNode in map-value / sequence-item position re-reads as
+// a TextNode, in every lane alike. That is #790 (RULED: 790-1a): CX has
+// ONE semantic string kind and the Text/Scalar distinction is erased by
+// the semantic projection, so both spellings name the same value and the
+// same address. Pinned so it stays deliberate rather than drifting into a
+// defect report — or into a silent second string kind.
+fn test_string_scalar_and_text_node_are_one_string_kind() {
+	for pos in ['map', 'seq'] {
+		src := bj_src(pos, "'txt'")
+		d := cx.parse(src) or { panic('${err}') }
+		emit := cx.emit_cx(d).trim_space()
+		assert bj_kind_at(src, pos) == 'string'
+		assert bj_kind_at(emit, pos) == 'text', 'the #790 one-string-kind collapse changed shape'
+		// One value, one spelling, one address: the image is a fixpoint.
+		d2 := cx.parse(emit) or { panic('${err}') }
+		assert cx.emit_cx(d2).trim_space() == emit
+	}
+}

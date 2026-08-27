@@ -101,12 +101,12 @@
       [case "ux:list"     [$box "ul"      "ux-list"    $el $ctx [$lower-kids $el $ctx]]]
       [case "ux:item"     [$box "li"      "ux-item"    $el $ctx [$lower-body $el $ctx]]]
       [case "ux:table"    [$box "table"   "ux-table"   $el $ctx [$lower-kids $el $ctx]]]
-      [case "ux:columns"  [$box "thead"   "ux-columns" $el $ctx [?element "tr" [$lower-kids $el $ctx]]]]
+      [case "ux:columns"  [$box "thead"   "ux-columns" $el $ctx [?element "tr" [?splice [$lower-kids $el $ctx]]]]]
       [case "ux:column"   [$box-x "th" "ux-column" "scope" "col" $el $ctx [$lower-body $el $ctx]]]
       [case "ux:rows"     [$lower-rows-el $el $ctx]]
       [case "ux:row"      [$lower-row $el $ctx ()]]
       [case "ux:cell"     [$box "td"      "ux-cell"    $el $ctx [$lower-body $el $ctx]]]
-      [case "ux:nav"      [$box "nav"     "ux-nav"     $el $ctx [?element "ul" [$lower-kids $el $ctx]]]]
+      [case "ux:nav"      [$box "nav"     "ux-nav"     $el $ctx [?element "ul" [?splice [$lower-kids $el $ctx]]]]]
       [case "ux:nav-item" [$lower-nav-item $el $ctx]]
       [case "ux:link"     [?element "a" class="ux-link" [?attr "href" [$string $el@href]] [$ux:label-of $el]]]
       [case "ux:action"   [$lower-action $el $ctx]]
@@ -161,7 +161,7 @@
       [case "ux:step"       [$lower-step $el $ctx]]
       [case "ux:quantity"    [$lower-quantity $el $ctx]]
       [case "ux:breadcrumb" [$box-x "nav" "ux-breadcrumb" "aria-label" "Breadcrumb" $el $ctx
-                                    [?element "ol" [$lower-kids $el $ctx]]]]
+                                    [?element "ol" [?splice [$lower-kids $el $ctx]]]]]
       [case "ux:crumb"      [$lower-crumb $el $ctx]]
       [case "ux:pager"      [$lower-pager $el $ctx]]
       [case "ux:page-link"  [$lower-page-link $el $ctx]]
@@ -172,7 +172,7 @@
                                 [?attr [?if [$exists $el@id] [then "data-cx-frag"] [else ()]] [?if [$exists $el@id] [then $r] [else ""]]]
                                 [?element "h3" class="ux-facet-label"
                                   [$ux:str-or $el@label [$ux:label-of-name [$ux:str-or $el@name ""]]]]
-                                [?element "ul" class="ux-facet-values" [$lower-kids $el $ctx]]]]]
+                                [?element "ul" class="ux-facet-values" [?splice [$lower-kids $el $ctx]]]]]]
       [case "ux:facet-value" [$lower-facet-value $el $ctx]]
       [case "ux:sort"       [?let [= $r [?if [$exists $el@id] [then [$ux:frag-repr [$ux:ctx-frag $ctx]]] [else ()]]]
                               [?element "nav" class="ux-sort" aria-label="Sort order"
@@ -181,7 +181,7 @@
                                 [?attr [?if [$exists $el@id] [then "data-cx-frag"] [else ()]] [?if [$exists $el@id] [then $r] [else ""]]]
                                 [?element "span" class="ux-sort-label"
                                   [$ux:str-or $el@label [$ux:label-of-name [$ux:str-or $el@name ""]]]]
-                                [?element "ul" class="ux-sort-options" [$lower-kids $el $ctx]]]]]
+                                [?element "ul" class="ux-sort-options" [?splice [$lower-kids $el $ctx]]]]]]
       [case "ux:sort-option" [$lower-sort-option $el $ctx]]
       [case "ux:aside"      [$lower-aside $el $ctx]]
       [; P0-101: a named group of peer blocks — a `section` landmark carrying
@@ -235,7 +235,7 @@
       [?attr "data-cx-name" [$ux:str-or $el@name ""]]
       [?attr [?if [$exists $el@id] [then "id"] [else ()]]           [?if [$exists $el@id] [then [$ux:frag-id-of $r]] [else ""]]]
       [?attr [?if [$exists $el@id] [then "data-cx-frag"] [else ()]] [?if [$exists $el@id] [then $r] [else ""]]]
-      [?element "ol" class="ux-steps-list" [$lower-kids $el $ctx]]]]]
+      [?element "ol" class="ux-steps-list" [?splice [$lower-kids $el $ctx]]]]]]
 
 [?def lower-step pure [returns any] ($el::any $ctx::map)
   [?let
@@ -383,7 +383,7 @@
        [?attr [?if [= [$ux:str-or $el@prev-href ""] ""] [then "aria-disabled"] [else "href"]]
               [?if [= [$ux:str-or $el@prev-href ""] ""] [then "true"] [else [$ux:str-or $el@prev-href ""]]]]
        "Previous"],
-     [?element "ol" class="ux-pager-pages" [$lower-kids $el $ctx]],
+     [?element "ol" class="ux-pager-pages" [?splice [$lower-kids $el $ctx]]],
      [?element "a" class="ux-pager-next"
        [?attr [?if [= [$ux:str-or $el@next-href ""] ""] [then "aria-disabled"] [else "href"]]
               [?if [= [$ux:str-or $el@next-href ""] ""] [then "true"] [else [$ux:str-or $el@next-href ""]]]]
@@ -471,13 +471,14 @@
     [= $b  [?if [$exists $fb] [then [$first $fb]] [else ()]]]
     [= $rf [?if [$exists $fb] [then [$ux:str-or $b@refetch ""]] [else ""]]]
     [= $head [?element "div" class="ux-aside-head"
-               ([?element "h2" class="ux-aside-title" [$string $el@label]],
-                [?if $open
-                  [then [?element "a" class="ux-aside-dismiss"
-                          [?attr "href" [$string $el@dismiss-href]]
-                          [?attr "aria-label" [$concat "Close " [$string $el@label]]] "\u00d7"]]
-                  [else ()]])]]
-    [= $body [?element "div" class="ux-aside-body" [$lower-kids $el $ctx]]]
+               [?splice
+                 ([?element "h2" class="ux-aside-title" [$string $el@label]],
+                  [?if $open
+                    [then [?element "a" class="ux-aside-dismiss"
+                            [?attr "href" [$string $el@dismiss-href]]
+                            [?attr "aria-label" [$concat "Close " [$string $el@label]]] "\u00d7"]]
+                    [else ()]])]]]
+    [= $body [?element "div" class="ux-aside-body" [?splice [$lower-kids $el $ctx]]]]
     [?if [= $rf ""]
       [then [$box-x "aside" [?if $open [then "ux-aside ux-aside-open"] [else "ux-aside"]]
                     "aria-label" [$string $el@label] $el $ctx
@@ -519,7 +520,7 @@
       [?attr [?if [$exists $el@id] [then "data-cx-frag"] [else ()]] [?if [$exists $el@id] [then $r] [else ""]]]
       [?attr [$hx-name "sse-swap" [?if [$exists $fb] [then $b@event] [else ()]]] [$string $b@event]]
       [?attr [$hx-name "hx-swap"  [?if [$exists $fb] [then "innerHTML"] [else ()]]] "innerHTML"]
-      [$lower-kids $el $ctx]]]]
+      [?splice [$lower-kids $el $ctx]]]]]
 
 [?def box pure [returns any] ($tag::string $class::string $el::any $ctx::map $body::any)
   [$box-x $tag $class () "" $el $ctx $body]]
@@ -594,7 +595,7 @@
       [?attr [?if [$ux:found $v2] [then [$concat "data-cx-var-" [$ux:str-or $v2@name ""]]] [else ()]] [$ux:str-or $v2@value ""]]
       [?attr [?if [$ux:found $v3] [then [$concat "data-cx-var-" [$ux:str-or $v3@name ""]]] [else ()]] [$ux:str-or $v3@value ""]]
       [?attr [?if [$ux:found $v4] [then [$concat "data-cx-var-" [$ux:str-or $v4@name ""]]] [else ()]] [$ux:str-or $v4@value ""]]
-      $body]]]
+      [?splice $body]]]]
 
 # lower-kids / lower-body — container children vs a text leaf. Mixed content
 # was refused by the core's shared gate, so exactly one of these applies to any
@@ -874,7 +875,7 @@
       [?attr [?if [$exists $step] [then "id"] [else ()]]           [?if [$exists $step] [then [$ux:frag-id-of $rr]] [else ""]]]
       [?attr [?if [$exists $step] [then "data-cx-frag"] [else ()]] [?if [$exists $step] [then $rr] [else ""]]]
       [?attr [$hx-name "hx-swap-oob" $oob] [$string $oob]]
-      [$lower-kids $el $inner]]]]
+      [?splice [$lower-kids $el $inner]]]]]
 
 # lower-field — the label/value pair; `box` supplies the wrapper and any
 # placed-element address.
@@ -886,7 +887,7 @@
   ([?element "span" class="ux-field-label" [$ux:str-or $el@label ""]],
    [?element "span" class="ux-field-value"
      [?attr [?if [$exists $el@format] [then "data-cx-format"] [else ()]] [$ux:str-or $el@format ""]]
-     [$lower-body $el $ctx]])]
+     [?splice [$lower-body $el $ctx]]])]
 
 # lower-action — THE write control. A projected action submits as
 # `POST /intent/<verb>` — the shipped web intent wire, ρ-resolution + PEP +
@@ -1072,7 +1073,7 @@
         [?attr "name" $n]
         [?attr [?if [= [$ux:str-or $el@required "false"] "true"] [then "required"] [else ()]] "required"]
         [?attr [?if [$exists $el@error] [then "aria-invalid"] [else ()]] "true"]
-        [$lower-kids-selected $el $ctx [$ux:str-or $el@value ""]]]
+        [?splice [$lower-kids-selected $el $ctx [$ux:str-or $el@value ""]]]]
       [?if [$exists $el@error]
         [then [?element "span" class="ux-field-error" [$string $el@error]]]
         [else [?if [$exists $el@help]
@@ -1105,7 +1106,7 @@
     [= $ep  [?if [$ux:absent $eps] [then ""] [else [$concat [$first $eps] "?drop=1"]]]]
     [?for [in $inst [$ux:child-elements $el "ux:card"]]
       [yield [?element "div" class="ux-group-row"
-               [$lower $inst $ctx]
+               [?splice [$lower $inst $ctx]]
                [?if [= $ep ""]
                  [then ()]
                  [else [?element "button" class="ux-remove" type="button"
@@ -1179,7 +1180,7 @@
       [?element "legend" class="ux-group-label" [$ux:str-or $el@label [$ux:label-of-name $n]]]
       [?element "div" class="ux-group-items"
         [?attr "id" [$concat $gid "-items"]]
-        [$lower-group-items $el $ctx]]
+        [?splice [$lower-group-items $el $ctx]]]
       [?if [$ux:absent $ep]
         [then ()]
         [else [?element "button" class="ux-action ux-action-quiet" type="button"
@@ -1259,11 +1260,11 @@
     [then [ux-refusals [?for [in $m $el] [yield [$filter-tree $m $rctx]]]]]
     [else
       [ux-refusals
-        [?if [and [= [$name $el] "ux:filter"]
+        [?splice [?if [and [= [$name $el] "ux:filter"]
                   [and [not [$exists $el@route]]
                        [not [$exists [$filter-endpoint $rctx [$ux:str-or $el@affects ""]]]]]]
           [then ([ux-refusal code=ux-unbound-filter filter=[$ux:str-or $el@name ""]])]
-          [else ()]]
+          [else ()]]]
         [?for [in $k $el/*] [yield [$filter-tree $k $rctx]]]]]]]
 
 # input-kind-of — the declared CX kind → the HTML control type. The carrier
@@ -1361,12 +1362,12 @@
                   [$ux:joined [$unbound-filter-refusals $el [$rctx-of $ctx]]
                               [$ux:dangling-affects-with $el $ctx $pairs]]]]]]
     [?if [$exists $bad]
-      [then [err code=ux-refused $bad]]
+      [then [err code=ux-refused [?splice $bad]]]
       [else
         [?let
           [= $dupe [$ux:collisions-with $pairs]]
           [?if [$exists $dupe]
-            [then [err code=ux-refused $dupe]]
+            [then [err code=ux-refused [?splice $dupe]]]
             [else
               [?let
                 [; the lowered tree, not just the semantic one: THIS is where
@@ -1451,7 +1452,7 @@
     [= $id [$ux:frag-id [$ux:ctx-frag $c2]]]
     [?element "div"
       [?attr [$hx-name "hx-swap-oob" "1"] [$concat "outerHTML:#" $id]]
-      [$lower $el $ctx]]]]
+      [?splice [$lower $el $ctx]]]]]
 
 # lower-rows — the row container carrying an out-of-band directive. Its id is
 # the container's own address, so "replace by id" is the whole swap.
@@ -3216,7 +3217,7 @@
 [?def theme-css scope=public pure [returns any] ($theme::element)
   [?let [= $bad [$theme-refusals $theme]]
     [?if [$exists $bad]
-      [then [err code=ux-refused $bad]]
+      [then [err code=ux-refused [?splice $bad]]]
       [else [$concat [$theme-fonts $theme] [$theme-vars $theme] [$rules-css]]]]]]
 
 # ── §6 The content readback — the equivalence subject, from HTML ────────────
@@ -3244,7 +3245,7 @@
 
 [?def content-of-html scope=public pure [returns any] ($h::any)
   [?if [$ux:seq-child $h]
-    [then [c:seq [$content-html-flat $h]]]
+    [then [c:seq [?splice [$content-html-flat $h]]]]
     [else [$content-html-el $h]]]]
 
 # The same sequence-flattening the core does, for the same reason: a lowered
@@ -3272,7 +3273,7 @@
       [case "ux-heading"  [c:heading [?attr "level" [$substring $t 2 1]] [?splice [$content-html-leaf $h]]]]
       [case "ux-text"     [c:text    [?splice [$content-html-leaf $h]]]]
       [case "ux-field"    [c:field   [?attr "label" [$span-text $h "ux-field-label"]]
-                                     [$content-html-leaf [$first $h//*[= $_@class "ux-field-value"]]]]]
+                                     [?splice [$content-html-leaf [$first $h//*[= $_@class "ux-field-value"]]]]]]
       [case "ux-list"     [c:list    [?splice [$content-html-kids $h]]]]
       [case "ux-item"     [c:item    [?splice [$content-html-leaf $h]]]]
       [case "ux-table"    [c:table   [?splice [$content-html-kids $h]]]]
@@ -3566,7 +3567,7 @@
 [?def content-html-other pure [returns any] ($h::any $c::string $t::string)
   [?if [$starts-with $c "ux-badge "]
     [; "ux-badge ux-badge-" is 18 characters; the tone is everything after it. ]
-    [then [c:badge [?attr "tone" [$substring $c 19 [- [$string-length $c] 18]]] [$content-html-leaf $h]]]
+    [then [c:badge [?attr "tone" [$substring $c 19 [- [$string-length $c] 18]]] [?splice [$content-html-leaf $h]]]]
     [else
       [?if [or [= $c "ux-action"] [= $c "ux-action ux-submit"]]
         [then
@@ -3788,12 +3789,12 @@
                   [$ux:joined [$unbound-filter-refusals $el [$rctx-of $ctx]]
                               [$ux:dangling-affects-with $el $ctx $pairs]]]]]]
     [?if [$exists $bad]
-      [then [err code=ux-refused $bad]]
+      [then [err code=ux-refused [?splice $bad]]]
       [else
         [?let
           [= $dupe [$ux:collisions-with $pairs]]
           [?if [$exists $dupe]
-            [then [err code=ux-refused $dupe]]
+            [then [err code=ux-refused [?splice $dupe]]]
             [else
               [?let
                 [; the LOWERED tree is gated exactly as `render` gates it
@@ -3831,7 +3832,7 @@
     [= $recs [?for [in $n $names] [yield [$asset-record $dir [$string $n]]]]]
     [= $bad  [?for [in $r $recs] [where [= [$name $r] "ux-refusal"]] [yield $r]]]
     [?if [$exists $bad]
-      [then [err code=ux-refused $bad]]
+      [then [err code=ux-refused [?splice $bad]]]
       [else $recs]]]]
 
 # The refusal carries the READ's OWN error code rather than asserting "missing":

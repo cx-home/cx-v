@@ -124,6 +124,7 @@ fn csv_arg_str(n cx.Node) ?string {
 	if n is cx.TextNode {
 		return n.value
 	}
+	note_operand_fault('csv', 'csv-', 'string', n)
 	return none
 }
 

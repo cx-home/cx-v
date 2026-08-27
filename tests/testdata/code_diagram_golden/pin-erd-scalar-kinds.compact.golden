@@ -1,8 +1,8 @@
 erDiagram
   rec {
-    int i
-    float f
-    bool b
-    string s
-    atom a
+    int i "e.g. 1"
+    float f "e.g. 1.5"
+    bool b "e.g. true"
+    string s "e.g. x"
+    atom a "e.g. :atom"
   }

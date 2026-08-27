@@ -8,6 +8,6 @@ erDiagram
   users {
   }
   user {
-    int id "@ 1, 2, 3"
+    int id "1, 2, 3"
     string note "appears 3× depth 1"
   }

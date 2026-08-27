@@ -245,6 +245,30 @@ fn (mut p ProgramParser) parse_atom() !ProgramNode {
 			// postfix and the outer parser will error / position-recover
 			// per usual.
 			if p.peek_kind() == .lbrack && p.lbrack_adjacent_to_prev()
+			   && bracket_body_references_pred_ctx(p) {
+				// R-A6(iv) (2026-08-25): a byte-adjacent bracket whose body
+				// references the predicate context (`$_` / `$_position`) is
+				// a PREDICATE directly on the binding — `$s[= $_@x 2]`
+				// binds `$_` per member and keeps the survivors. Parsed
+				// with the fused-bracket predicate grammar; carried as a
+				// single-axis SliceAccess whose start expression the
+				// evaluator statically discriminates back to predicate
+				// semantics.
+				pred_start := p.peek().pos
+				pred := p.parse_path_predicate()!
+				body := pred.body or {
+					return ParseError{
+						message: 'predicate on a binding requires an expression body'
+						pos:     pred_start
+					}
+				}
+				return ProgramSliceAccess{
+					binding: binding
+					axes:    [SliceAxis{ kind: .single, start: body, pos: pred_start }]
+					pos:     pred_start
+				}
+			}
+			if p.peek_kind() == .lbrack && p.lbrack_adjacent_to_prev()
 			   && is_slice_postfix_after_binding(p) {
 				return p.parse_slice_postfix(binding)!
 			}
@@ -1635,6 +1659,40 @@ fn (mut p ProgramParser) parse_postfix_path_steps() ![]ProgramPathStep {
 //
 // The function is `pure` w.r.t. parser state — it inspects tokens
 // starting at `p.pos` without advancing.
+// bracket_body_references_pred_ctx token-scans a `[…]` body (cursor on the
+// `[`) for a read of the predicate context bindings `$_` / `$_position`
+// (never `$_last`, which is slice vocabulary). Depth-bounded to the
+// matching `]`. Nested brackets are scanned too — a nested form reading
+// `$_` still makes the OUTER bracket the predicate that must bind it.
+fn bracket_body_references_pred_ctx(p ProgramParser) bool {
+	if p.peek_kind() != .lbrack {
+		return false
+	}
+	mut d := 0
+	for j := p.pos + 1; j < p.tokens.len; j++ {
+		k := p.tokens[j].kind
+		match k {
+			.lbrack, .ldirective, .lparen, .lbrace {
+				d++
+			}
+			.rbrack, .rparen, .rbrace {
+				if d == 0 {
+					return false
+				}
+				d--
+			}
+			.dollar {
+				if j + 1 < p.tokens.len && p.tokens[j + 1].kind == .ident
+					&& p.tokens[j + 1].text in ['_', '_position'] {
+					return true
+				}
+			}
+			else {}
+		}
+	}
+	return false
+}
+
 fn is_slice_postfix_after_binding(p ProgramParser) bool {
 	// Sanity: caller asserts the lbrack peek, but we don't depend on it.
 	if p.peek_kind() != .lbrack {

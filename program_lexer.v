@@ -555,10 +555,11 @@ fn (mut l Lexer) next_token() !ProgramToken {
 			return ProgramToken{ kind: .tilde, text: '~', pos: start }
 		}
 		`'`, `"` {
-			// Peek ahead: if the next two bytes are the same quote char,
-			// enter triple-quote mode ('''…''' or """…"""). Mirrors the
-			// data parser's read_triple_quoted_str_with_quote logic.
-			if l.peek(1) == c && l.peek(2) == c {
+			// Triple-quote mode ('''…''' or """…"""): the opener test is
+			// `triple_quote_prefix_len`'s (cx/lexical.v), the single home the
+			// data parser asks too. `c` is a quote byte, so a hit is prefix 0
+			// — the plain (non-raw) form (#1021).
+			if triple_quote_prefix_len(l.src, l.pos) == 0 {
 				return l.read_triple_string(start, c, false)
 			}
 			return l.read_string(start, c)
@@ -601,12 +602,14 @@ fn (mut l Lexer) next_token() !ProgramToken {
 			// (#93). The `r` prefix is recognised ONLY immediately before a
 			// triple quote; a bare `r` (or `r` before a single quote / name
 			// char) stays an ordinary identifier.
-			if c == `r` {
-				q := l.peek(1)
-				if (q == `'` || q == `"`) && l.peek(2) == q && l.peek(3) == q {
-					l.advance() // consume the `r`; cursor now at the opening triple
-					return l.read_triple_string(start, q, true)
-				}
+			// The `r`-prefixed opener is `triple_quote_prefix_len`'s test too:
+			// prefix 1 IS the raw form, so the delimiter byte is `l.src[l.pos+1]`
+			// (#1021). The `c == \`r\`` guard stays: it keeps every other first
+			// byte off the call on this per-token hot path.
+			if c == `r` && triple_quote_prefix_len(l.src, l.pos) == 1 {
+				q := l.src[l.pos + 1]
+				l.advance() // consume the `r`; cursor now at the opening triple
+				return l.read_triple_string(start, q, true)
 			}
 			if is_name_start(c) {
 				return l.read_identifier_or_duration(start)

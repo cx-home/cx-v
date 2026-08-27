@@ -102,6 +102,7 @@ fn loc_arg_str(n cx.Node) ?string {
 	if n is cx.TextNode {
 		return n.value
 	}
+	note_operand_fault('locale', 'locale-', 'string', n)
 	return none
 }
 
@@ -113,9 +114,10 @@ fn loc_arg_num(n cx.Node) ?f64 {
 			i64 { return f64(v) }
 			f64 { return v }
 			string { return v.f64() }
-			else { return none }
+			else {}
 		}
 	}
+	note_operand_fault('locale', 'locale-', 'number', n)
 	return none
 }
 
@@ -129,6 +131,7 @@ fn loc_arg_atom(n cx.Node) ?string {
 	if n is cx.TextNode {
 		return n.value
 	}
+	note_operand_fault('locale', 'locale-', 'atom', n)
 	return none
 }
 

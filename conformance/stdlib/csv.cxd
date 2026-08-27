@@ -366,7 +366,7 @@ true
   $row/ratio]
 #]]
   [out-text [#
-1.5
+1.5e0
 #]]
  ]
 

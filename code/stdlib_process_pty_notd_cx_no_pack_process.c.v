@@ -60,7 +60,12 @@ fn proc_spawn_pty(args []cx.Node, rows int, cols int) cx.Node {
 		return mk_err('cx-err:CXER4006', 'E_PROC_INVALID_ARGV: empty argv')
 	}
 	search_path := if args.len > 5 { proc_arg_bool_def(args[5], true) } else { true }
-	exec_path, rerr, ok := proc_resolve_exec(argv[0], search_path)
+	// Composed BEFORE resolution, because §4.1 resolves a separator-free argv[0]
+	// against the child's PATH when `$env` names it (#1052) — and the same value
+	// becomes the envp block below, so the pty child is resolved against exactly
+	// the environment it is handed.
+	child_env := proc_child_env_args(args)
+	exec_path, rerr, ok := proc_resolve_exec(argv[0], search_path, child_env)
 	if !ok {
 		return rerr
 	}
@@ -75,7 +80,7 @@ fn proc_spawn_pty(args []cx.Node, rows int, cols int) cx.Node {
 		cargv << &char(a.str)
 	}
 	cargv << &char(unsafe { nil })
-	envp := proc_build_envp(args)
+	envp := proc_build_envp(child_env)
 	mut cenvp := []&char{}
 	for e in envp {
 		cenvp << &char(e.str)
@@ -107,31 +112,22 @@ fn proc_spawn_pty(args []cx.Node, rows int, cols int) cx.Node {
 	return proc_handle_element_pty(id, h)
 }
 
-// proc_build_envp builds the child's environment block ("KEY=VALUE" strings)
-// from the env opts: env-clear=true starts empty, else the parent's environ;
-// then the [map …] overlay applies (a null value deletes a key). Mirrors
-// proc_apply_env's semantics for the os.Process path.
-fn proc_build_envp(args []cx.Node) []string {
-	mut env := map[string]string{}
-	env_clear := if args.len > 2 { proc_arg_bool(args[2]) } else { false }
-	if !env_clear {
-		for k, v in os.environ() {
-			env[k] = v
-		}
-	}
-	if args.len > 1 {
-		sets, dels, ok := proc_env_map(args[1])
-		if ok {
-			for k, v in sets {
-				env[k] = v
-			}
-			for k in dels {
-				env.delete(k)
-			}
-		}
-	}
+// proc_build_envp renders an ALREADY-COMPOSED child environment as the
+// NULL-terminated "KEY=VALUE" block posix_spawn wants. It used to re-derive
+// §4.2's layering itself — a second copy of proc_env_base + proc_env_overlay,
+// living in a different file from the one the os.Process path used — and #1052
+// removed it: the composition now happens once, in proc_child_env, and this
+// function only formats the result. A second copy would be a second chance to
+// disagree about what the child's environment is, which after #1052 is also a
+// disagreement about which BINARY the child runs (§4.1 resolves against it).
+//
+// `vars` is the full environment on every path, including the plain
+// inherit-the-parent case, so the pty child is handed the same explicit block it
+// always was — `ProcChildEnv.explicit` gates set_environment on the os.Process
+// path, not this one, because posix_spawn has no "inherit" mode to fall back to.
+fn proc_build_envp(e ProcChildEnv) []string {
 	mut out := []string{}
-	for k, v in env {
+	for k, v in e.vars {
 		out << '${k}=${v}'
 	}
 	return out

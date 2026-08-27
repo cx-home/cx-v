@@ -1,6 +1,6 @@
 erDiagram
   user {
-    int id "@"
-    string name "@"
-    string email
+    int id "e.g. 1"
+    string name "e.g. alice"
+    string email "e.g. a@x.test"
   }

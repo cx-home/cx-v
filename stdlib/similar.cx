@@ -43,13 +43,13 @@
   [sig """-> element"""]
   [summary """Build a similarity-predicate value from an options map: scorer, normalizers, per-field weights, decision cuts, tolerance/scale, and known-verdict resolutions."""]
   [example [code """[?lib 'cx-stdlib/similar']
-[$similar:score-of [~ "acme corp" "corp acme" [$similar:predicate {score: :token-set}]]]"""] [expect """1.0"""]]
+[$similar:score-of [~ "acme corp" "corp acme" [$similar:predicate {score: :token-set}]]]"""] [expect """1.0e0"""]]
 ]
 [fn-doc name=score scope=public purity=pure
   [sig """-> float"""]
   [summary """Apply one named scorer directly to a pair of values and return the raw score in [0,1], with no banding."""]
   [example [code """[?lib 'cx-stdlib/similar']
-[$similar:score :levenshtein "flaw" "lawn"]"""] [expect """0.5"""]]
+[$similar:score :levenshtein "flaw" "lawn"]"""] [expect """5.0e-1"""]]
 ]
 [fn-doc name=similarity-to scope=public purity=pure
   [sig """-> element"""]
@@ -61,7 +61,7 @@
   [sig """-> float"""]
   [summary """Read the score off a [similar …] comparison report."""]
   [example [code """[?lib 'cx-stdlib/similar']
-[$similar:score-of [~ "acme" "acme"]]"""] [expect """1.0"""]]
+[$similar:score-of [~ "acme" "acme"]]"""] [expect """1.0e0"""]]
 ]
 [fn-doc name=band-of scope=public purity=pure
   [sig """-> any"""]

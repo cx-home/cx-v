@@ -1,4 +1,4 @@
 erDiagram
   user {
-    string name
+    string name "e.g. ada"
   }

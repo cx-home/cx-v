@@ -82,7 +82,11 @@ fn sx_authority_new(cfg XspConfig, mount string, principal string) &AuthzStore {
 			continue
 		}
 		n++
-		s.delegations << &AuthzDelegation{
+		// #997: this store is still PRIVATE to this call (nothing can be reading
+		// it yet), so the lock the helper takes is redundant here — routed
+		// through it anyway so the rule stays absolute: no site anywhere grows a
+		// store's basis in place. An exemption is how the discipline rots.
+		authz_grants_append(mut s, &AuthzDelegation{
 			id:           'grant-${n}'
 			tenant:       mount
 			from_kind:    'principal'
@@ -97,9 +101,91 @@ fn sx_authority_new(cfg XspConfig, mount string, principal string) &AuthzStore {
 			action:       cx.Node(cx.Element{})
 			value:        cx.Node(cx.Element{})
 			bounds_value: cx.Node(cx.Element{})
-		}
+		})
 	}
 	return s
+}
+
+// sx_seat_config_roots installs the CURRENT `[xsp [grants …]]` table as this
+// session's config-derived roots (#986), replacing whatever the previous table
+// seated. Presentation-compiled delegations are left ALONE — they do not need
+// re-verifying, because they only ever convey authority through a chain that
+// ends at one of these roots (authz_chain_to_principal): drop a root here and
+// every credential attenuated from it stops permitting at the very next PEP
+// decision, with reason `no-principal-root`. That is what makes a hot
+// revocation COMPLETE rather than merely cosmetic — the operator's `[grants]`
+// edit reaches presented authority too, without this surface re-walking a
+// single credential.
+fn sx_seat_config_roots(mut c SxConn, cfg XspConfig) {
+	if c.authz == unsafe { nil } {
+		c.authz = &AuthzStore{
+			tenant:  c.mount
+			is_open: true
+		}
+	}
+	if c.cfg_roots.len > 0 {
+		mut kept := []&AuthzDelegation{}
+		for d in c.authz.delegations {
+			if c.cfg_roots[d.id] {
+				c.meters.delete(d.id)
+				continue
+			}
+			kept << d
+		}
+		authz_grants_set(mut c.authz, kept)
+	}
+	fresh := sx_authority_new(cfg, c.mount, c.principal)
+	mut ids := map[string]bool{}
+	for d in fresh.delegations {
+		ids[d.id] = true
+	}
+	// #997: the fresh table seats as ONE act — a half-seated root set is a basis
+	// nothing granted. (srv.mu already makes this atomic against every PEP
+	// decision on this listener, #986; the helper is the store-side rule.)
+	authz_grants_append_many(mut c.authz, fresh.delegations)
+	c.cfg_roots = ids.move()
+}
+
+// sx_refold_grants_locked is the #986 hot path: when an applied config-reload
+// moved the generation, re-fold the live grant table into srv.cfg and into
+// EVERY live session's authority basis. Caller holds srv.mu — which is the
+// atomicity mechanism: every PEP decision on this listener runs under the same
+// srv.mu (sx_conn_reader takes it around sx_dispatch_locked), so an in-flight
+// verb either decided before this swap under the OLD table or after it under
+// the NEW one. There is no window in which a decision reads a torn table.
+// Idempotent per generation.
+//
+// Direction rule (§6.1 — a live session's authority NARROWS, never widens):
+//   • grants added to a session ⇒ seated, and the session begins enforcing even
+//     if it attached under the open posture (an operator locking a daemon down
+//     must not leave the already-attached sessions unrestricted — that is the
+//     same fail-open shape #986 is about).
+//   • grants removed ⇒ dropped, and with them every presented chain rooted
+//     there; a session that attached enforcing STAYS enforcing even if the
+//     table is now empty. Re-attach is how a session picks up the open posture.
+fn sx_refold_grants_locked(mut srv StoreXspServer) {
+	if srv.ctx.cfgbox == unsafe { nil } {
+		return
+	}
+	mut box := srv.ctx.cfgbox
+	gen := box.generation()
+	if gen == srv.grants_gen {
+		return
+	}
+	srv.grants_gen = gen
+	srv.cfg = XspConfig{
+		...srv.cfg
+		grants: box.xsp_grants()
+	}
+	for _, mut c in srv.conns {
+		if !c.established {
+			continue
+		}
+		if c.authz == unsafe { nil } && srv.cfg.grants.len == 0 {
+			continue // open posture on both sides — nothing to seat
+		}
+		sx_seat_config_roots(mut c, srv.cfg)
+	}
 }
 
 // sx_pep_decide runs the one decision function over the session basis with
@@ -127,7 +213,7 @@ fn sx_pep_decide(mut c SxConn, cap_name string, slice string, revoked map[string
 			kept << d
 		}
 		if dropped {
-			c.authz.delegations = kept
+			authz_grants_set(mut c.authz, kept)
 		}
 	}
 	now_ms := time.now().unix_milli()
@@ -426,7 +512,7 @@ fn sx_present_locked(mut srv StoreXspServer, mut c SxConn, vp cx.Element) cx.Nod
 		}
 		mut nrec := rec
 		authz_inherit_window(c.authz, mut nrec)
-		c.authz.delegations << rec
+		authz_grants_append(mut c.authz, rec)
 		// remember the source VC per compiled record — the second local
 		// enforcement point (§6.1): a later revocation of that VC drops
 		// this delegation at the next PEP check.

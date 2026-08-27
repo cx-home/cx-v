@@ -15,12 +15,12 @@ flowchart TD
   output([OUTPUT]):::output
   start([entry])
   done([exit])
-  lt["[= $x /root/item]"]
+  lt1["[= $x /root/item]"]
   b["$x"]
-  lt --> b
-  start --> lt
+  lt1 --> b
+  start --> lt1
   b --> done
   input --> start
   done --> output
   b_x((("$x"))):::binding
-  b_x -. "resolves" .-> lt
+  b_x -. "resolves" .-> lt1

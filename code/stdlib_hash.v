@@ -87,6 +87,7 @@ fn hash_arg_bytes(n cx.Node) ?[]u8 {
 			return v.bytes()
 		}
 	}
+	note_operand_fault('hash', 'hash-', 'bytes', n)
 	return none
 }
 
@@ -97,6 +98,7 @@ fn hash_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('hash', 'hash-', 'string', n)
 	return none
 }
 
@@ -109,6 +111,7 @@ fn hash_arg_int(n cx.Node) ?i64 {
 			else {}
 		}
 	}
+	note_operand_fault('hash', 'hash-', 'int', n)
 	return none
 }
 

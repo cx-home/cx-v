@@ -1,0 +1,1 @@
+[?for [in $i $doc//item] [yield [?element $i/@name qty=$i/@qty [note $i/@memo]]]]

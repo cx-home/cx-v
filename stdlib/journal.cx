@@ -231,7 +231,7 @@
 [= $hops [$count $path]]
 [= $ambig [?fallback [$journal:lineage-path ($c12, $c23, $c13) $v1 $v3] [recover-with [context] [code $err@code]]]]
 [= $gap [?fallback [$journal:lineage-path ($c12,) $v2 $v1] [recover-with [context] [code $err@code]]]]
-  [probe hops=$hops [rels $path/relation] [ambig $ambig] [gap $gap]]]"""] [expect """[probe hops=2 [rels ([relation :additive], [relation :split])] [ambig [code 'cx-err:CXER4643']] [gap [code 'cx-err:CXER4644']]]"""]]
+  [probe hops=$hops [rels [?splice $path/relation]] [ambig $ambig] [gap $gap]]]"""] [expect """[probe hops=2 [rels [relation :additive] [relation :split]] [ambig [code 'cx-err:CXER4643']] [gap [code 'cx-err:CXER4644']]]"""]]
 ]
 [fn-doc name=legal-holds scope=public purity=impure
   [sig """-> element"""]

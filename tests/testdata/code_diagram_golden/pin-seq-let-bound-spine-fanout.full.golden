@@ -1,0 +1,23 @@
+sequenceDiagram
+  participant INPUT
+  participant jobs
+  participant results
+  participant dispatcher
+  participant worker
+  participant OUTPUT
+  activate dispatcher
+  dispatcher ->>+ jobs : $j
+  Note over dispatcher : [?close]
+  deactivate dispatcher
+  activate worker
+  worker ->>+ results : [processed]
+  deactivate worker
+  participant main
+  Note over main : [?wait-for]
+  Note over INPUT : bind $jobs
+  Note over INPUT : bind $results
+  Note over INPUT : bind $d
+  Note over INPUT : bind $_
+  Note over INPUT : bind $j
+  Note over INPUT : bind $w
+  Note over INPUT : bind $k

@@ -91,6 +91,12 @@ fn s_err(err_code string, message string) cx.Node {
 }
 
 // ── arg extraction ──────────────────────────────────────────────────────────
+//
+// R-A8 (#955): the reject path of every reader NOTES the operand-kind
+// fault (module, primitive prefix, expected kind, offending node) before
+// returning none. The arms keep their `or { return none }` shape — the
+// chain head in stdlib_dispatch.v turns a standing fault into the CXER0100
+// err naming `strings:<fn>`, never the internal `str-<fn>` primitive.
 
 fn s_arg_str(n cx.Node) ?string {
 	if n is cx.ScalarNode {
@@ -99,6 +105,7 @@ fn s_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('strings', 'str-', 'string', n)
 	return none
 }
 
@@ -108,9 +115,10 @@ fn s_arg_int(n cx.Node) ?int {
 		match v {
 			i64 { return int(v) }
 			f64 { return int(v) }
-			else { return none }
+			else {}
 		}
 	}
+	note_operand_fault('strings', 'str-', 'int', n)
 	return none
 }
 
@@ -123,9 +131,14 @@ fn s_arg_string_list(n cx.Node) ?[]string {
 			for it in n.items {
 				out << s_arg_str(it) or { '' }
 			}
+			// The per-item reads above may have noted a fault for a
+			// non-string member; this reader ACCEPTED the argument, so the
+			// note is stale — drop it rather than let it outlive the read.
+			clear_operand_fault()
 			return out
 		}
 	}
+	note_operand_fault('strings', 'str-', 'sequence of strings', n)
 	return none
 }
 

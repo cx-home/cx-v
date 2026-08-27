@@ -8,6 +8,6 @@ erDiagram
   a {
   }
   b {
-    string c
+    string c "'x', 'y'"
     string note "appears 2× depth 1"
   }

@@ -126,6 +126,11 @@ mut:
 	// W5 §6.1: compiled-delegation id → source VC id — the map the PEP
 	// consults to drop revoked-sourced authority at the next check.
 	vc_of map[string]string
+	// #986: the ids of the delegations compiled from `[xsp [grants …]]` — the
+	// exact records a config re-fold replaces. Tracked explicitly rather than
+	// recognized by shape, so a presented credential that happens to name its
+	// delegation `grant-N` can never be mistaken for a config root.
+	cfg_roots map[string]bool
 }
 
 @[heap]
@@ -142,6 +147,9 @@ mut:
 	// W5 §7a.1: the last config generation advertised — the sweeper's F3
 	// watch re-advertises every established session when it moves.
 	last_gen int
+	// #986: the last config generation whose `[xsp [grants …]]` table was
+	// folded into srv.cfg + every live session. Idempotent per generation.
+	grants_gen int
 	// W5 §7: the daemon's revoked-set (vc-id → true), folded from its own
 	// designated revocations journal and from every peer subscription.
 	// Enforcement is LOCAL (§6.1): refuse at present; drop compiled-from-
@@ -382,6 +390,12 @@ pub fn store_xsp_liveness_sweeper(mut srv StoreXspServer) {
 		// W4 §5: the cross-listener wake — writes landing through CSRP/gRPC
 		// (or embedded, on a shared mount) reach feed subscribers here.
 		sx_pump_all_feeds_locked(mut srv)
+		// #986: the grant-table watch — a reload applied through ANY listener
+		// re-folds `[xsp [grants …]]` into every live session, so an IDLE
+		// session's authority narrows within one sweep even if it never sends
+		// another verb. The dispatch entry runs the same fold, which is what
+		// makes the next call deterministic rather than sweep-timed.
+		sx_refold_grants_locked(mut srv)
 		// W5 §7a.1: the F3 generation watch — a reload applied through ANY
 		// listener re-advertises every established session.
 		sx_readvertise_locked(mut srv)
@@ -394,6 +408,12 @@ pub fn store_xsp_liveness_sweeper(mut srv StoreXspServer) {
 // ── dispatch ───────────────────────────────────────────────────────────────
 
 fn sx_dispatch_locked(mut srv StoreXspServer, mut c SxConn, fe cx.Element) {
+	// #986: fold any applied grant-table reload BEFORE this frame is decided —
+	// the revoked principal's NEXT call refuses, deterministically, rather than
+	// waiting on the 250 ms liveness sweep. Idempotent per generation, so the
+	// steady-state cost is one integer compare (plus the box's generation read)
+	// per frame.
+	sx_refold_grants_locked(mut srv)
 	ftype := xap_elem_attr(fe, 'type')
 	stream := xap_elem_attr(fe, 'stream').i64()
 	if ftype == 'ping' {
@@ -694,7 +714,10 @@ fn sx_attach_locked(mut srv StoreXspServer, mut c SxConn, stream i64, payload cx
 			// W4 §6.1: with [grants …] configured the session carries a
 			// VC-compilable authority basis and every verb is PEP-checked.
 			if srv.cfg.grants.len > 0 {
-				c.authz = sx_authority_new(srv.cfg, mount_name, principal)
+				// #986: seated through the ONE re-fold entry point, so the
+				// config-root id set is recorded and a later reload
+				// replaces exactly these records.
+				sx_seat_config_roots(mut c, srv.cfg)
 			}
 			// an M3 [attach [vp "<canonical text>"]] presentation compiles
 			// BEFORE the attach completes — a bad credential fails the attach

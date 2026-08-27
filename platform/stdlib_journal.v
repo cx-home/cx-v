@@ -1117,7 +1117,20 @@ fn jrn_store_put_doc(store_id int, doc cx.Node) ?string {
 // rejection, transport) instead of the bare "could not persist" mask that
 // cost the reporter a debugging round.
 fn jrn_store_put_doc_err(store_id int, doc cx.Node) (string, ?cx.Node) {
-	r := store_stdlib_builtin('store-put-doc', [jrn_store_handle(store_id), doc]) or {
+	// RULED: CO-8 — the journal is NOT an err-at-boundary refusal point:
+	// an error event is a first-class record, so the journal's own store
+	// writes carry the errs=:permit the CO-2 guard reads. Without it the
+	// store-side CXER0275 fired on every event (and every fabric emit,
+	// which rides this funnel) containing an [err] at rest — the exemption
+	// defeated by its own plumbing.
+	permit := cx.Node(cx.Element{
+		name:  'opts'
+		attrs: [cx.Attribute{
+			name:  'errs'
+			value: cx.ScalarValue('permit')
+		}]
+	})
+	r := store_stdlib_builtin('store-put-doc', [jrn_store_handle(store_id), doc, permit]) or {
 		return '', none
 	}
 	if r is cx.ScalarNode {

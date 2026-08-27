@@ -304,6 +304,36 @@ cx-err:CXER3501
  ]
 
  # §5 CXER3504: string does not match the locale's number conventions.
+ # locale-018a (#998, found by that issue's suggested sweep): the EXACT printed
+ # form, no tol.
+ #
+ # locale-018 above is a band pin (tol=0.0000001) illustrating the §6 round-trip
+ # property, and correct as such. But stdlib/locale.cx's fn-doc for
+ # parse-number-locale was advertising that row's DECIMAL text `1234567.89` as
+ # the function's output, and the doc-backing gate only checks that the [expect]
+ # text appears verbatim in this file — so the claim went unchecked while the
+ # call actually prints `1.23456789e6`. Same mechanism as the geo pair in #998;
+ # this file and geo.cxd are the only two stdlib corpora carrying `tol=`, so the
+ # sweep for the pattern is closed by these two fixes.
+ #
+ # Unlike the geo distances, the value here is NOT an unspecified float: parsing
+ # "1,234,567.89" under en-US has one correct answer, and `1.23456789e6` is its
+ # shortest round-trip form. So the honest doc example is the real output, and
+ # this row pins it exactly — which is also what backs the fn-doc.
+ [case id=locale-018a-parse-number-en-us-exact level=core
+  [tags locale parse-number-locale en-US fn-doc-backing]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/locale']
+[$locale:parse-number-locale "1,234,567.89" "en-US"]
+#]]
+  [out-text [#
+1.23456789e6
+#]]
+ ]
+
  [case id=locale-020-parse-number-failed level=core
   [tags locale parse-number-locale CXER3504]
   [in-cx [#

@@ -367,4 +367,440 @@ cx-err:CXER2702
 '[1, 2, 3]'
 #]]
  ]
+
+ [; ─────────────────────────────────────────────────────────────────
+    #978 (RULED: CO-3) — round-trip fidelity, spec §2.1.
+
+    026-029 pin `parse(format(v)) ≡ v` for EACH formatter form over one
+    witness carrying string / int / decimal / bool / atom in BOTH
+    attribute and body-scalar position.
+
+    They compare the CANONICAL IMAGES of the two sides rather than the
+    values themselves, and that is load-bearing: `[$eq]` atomizes a
+    decimal or atom ATTRIBUTE against its string spelling — `[$eq [u
+    a=1.5] [u a="1.5"]]` and `[$eq [u a=:ops] [u a="ops"]]` are both
+    `true` — so a value-level comparison passes VACUOUSLY on exactly the
+    two kinds these pins exist to catch. Canonical text is type-faithful
+    (`a=1.5` vs `a='1.5'`, `a=:ops` vs `a=ops`), so comparing images
+    discriminates. Red-proven: before the fix 026 and 029 were `false`.
+
+    The witness lists its attributes already in alphabetical order so
+    diff-friendly (which sorts) compares against the same canonical
+    image as the order-preserving forms.
+    ───────────────────────────────────────────────────────────────── ]
+
+ [case id=format-026-round-trip-pretty-typed-scalars level=core
+  [tags format pretty round-trip types 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $w [user active=true age=41 name=alice role="ops lead" score=1.5 tier=:gold [s "text"] [i 7] [d 2.50] [b false] [a :ok]]]
+  [$eq [$format:canonical [$cx:parse [$format:pretty $w]]] [$format:canonical $w]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=format-027-round-trip-canonical-typed-scalars level=core
+  [tags format canonical round-trip types 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $w [user active=true age=41 name=alice role="ops lead" score=1.5 tier=:gold [s "text"] [i 7] [d 2.50] [b false] [a :ok]]]
+  [$eq [$format:canonical [$cx:parse [$format:canonical $w]]] [$format:canonical $w]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=format-028-round-trip-compact-typed-scalars level=core
+  [tags format compact round-trip types 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $w [user active=true age=41 name=alice role="ops lead" score=1.5 tier=:gold [s "text"] [i 7] [d 2.50] [b false] [a :ok]]]
+  [$eq [$format:canonical [$cx:parse [$format:compact $w]]] [$format:canonical $w]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [case id=format-029-round-trip-diff-friendly-typed-scalars level=core
+  [tags format diff-friendly round-trip types 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $w [user active=true age=41 name=alice role="ops lead" score=1.5 tier=:gold [s "text"] [i 7] [d 2.50] [b false] [a :ok]]]
+  [$eq [$format:canonical [$cx:parse [$format:diff-friendly $w]]] [$format:canonical $w]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [; 030/031 — the #978 regression witness itself, pinned twice: once as
+    exact text (the defect was `score="1.5"`, which re-parsed as a
+    STRING) and once as the round trip it broke. ]
+
+ [case id=format-030-pretty-regression-witness-978 level=core
+  [tags format pretty scalar decimal 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty [user name=alice role="ops lead" age=41 active=true score=1.5]]
+#]]
+  [out-text [#
+'[user name="alice" role="ops lead" age=41 active=true score=1.5]'
+#]]
+ ]
+
+ [case id=format-031-pretty-regression-witness-978-round-trip level=core
+  [tags format pretty round-trip decimal 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $w [user name=alice role="ops lead" age=41 active=true score=1.5]]
+  [$eq [$format:canonical [$cx:parse [$format:pretty $w]]] [$format:canonical $w]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [; 032-036 — per-kind emission pins: each non-string kind keeps the
+    bare canonical image that re-types it on re-parse (spec §2.1). ]
+
+ [case id=format-032-pretty-atom-attribute-keeps-sigil level=core
+  [tags format pretty scalar atom 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty [u tier=:gold]]
+#]]
+  [out-text [#
+'[u tier=:gold]'
+#]]
+ ]
+
+ [case id=format-033-pretty-body-scalars-unquoted level=core
+  [tags format pretty scalar decimal bigint duration body 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty [u [d 1.5] [n 123456789012345678901234567890] [t 100ms]]]
+#]]
+  [out-text [#
+'[u\n  [d\n    1.5\n  ]\n  [n\n    123456789012345678901234567890\n  ]\n  [t\n    100ms\n  ]\n]'
+#]]
+ ]
+
+ [case id=format-034-pretty-keeps-glued-type-annotation level=core
+  [tags format pretty scalar sized-numeric duration 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty [u port::u16=8080 t=100ms]]
+#]]
+  [out-text [#
+'[u port::u16=8080 t::duration=100ms]'
+#]]
+ ]
+
+ [case id=format-035-diff-friendly-scalars-unquoted level=core
+  [tags format diff-friendly scalar decimal atom 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:diff-friendly [u tier=:gold score=1.5 name=alice]]
+#]]
+  [out-text [#
+'[u name="alice" score=1.5 tier=:gold]'
+#]]
+ ]
+
+ [case id=format-036-pretty-map-values-typed level=core
+  [tags format pretty map scalar decimal atom 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty {a: 1, b: 1.5, c: :ops, d: "s"}]
+#]]
+  [out-text [#
+'{\n  a: 1\n  b: 1.5\n  c: :ops\n  d: "s"\n}'
+#]]
+ ]
+
+ [; 037 — :attribute-alignment pads to the RENDERED attribute name, so a
+    glued `::T` annotation widens the column (it is part of the name
+    side). NOTE: this lane compares whitespace-normalised token-by-token,
+    so it pins the annotation surviving an aligned render, NOT the exact
+    pad width. ]
+
+ [case id=format-037-pretty-alignment-measures-rendered-name level=core
+  [tags format pretty-with-opts attribute-alignment sized-numeric 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$format:pretty-with-opts [u port::u16=8080 id=7] {attribute-alignment: "value"}]
+#]]
+  [out-text [#
+'[u port::u16=8080 id=       7]'
+#]]
+ ]
+
+ [; 038 — pretty and canonical agree on a float attribute's image. The
+    claim is unchanged since #978; the IMAGE the two agree ON moved at
+    #991 (RULED: CO-12). It was `1.5` — V's `.str()` spelling, which
+    re-parses as a DECIMAL and collides with decimal 1.5 — and is now the
+    CX-owned Ryū image `1.5e0`, the only spelling that re-types float.
+    Pretty must diverge from canonical on string quoting and NOTHING else
+    (spec §2.2), so this pins the two images equal; 039 pins what the
+    shared image now IS. ]
+
+ [case id=format-038-pretty-float-matches-canonical level=core
+  [tags format pretty canonical scalar float 978]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[$eq [$format:pretty [u a=1.5e0]] [$format:canonical [u a=1.5e0]]]
+#]]
+  [out-text [#
+true
+#]]
+ ]
+
+ [; ─────────────────────────────────────────────────────────────────
+    #991 (RULED: CO-12) — canonical serialization is BIJECTIVE.
+
+    039-046 are the TYPE-comparing pins §2.1 now requires. They parse the
+    emitted text back and name the resulting scalar's KIND; they never
+    compare images. That is the whole point: the two defects CO-12 closed
+    were emitter FIXED POINTS — canonical imaged a float attribute `1.5`,
+    which re-parses DECIMAL and re-emits `1.5`, so every image-comparison
+    pin in this file reported equality while the kind was silently gone.
+    An image pin structurally cannot catch a fixed point.
+
+    `kind-of` below is the type channel: `[?match]`'s `::T` type-test
+    arms read the value's KIND, not its spelling, and they are the only
+    thing in the language that can tell float 1.5 from decimal 1.5 —
+    `[$eq]` cannot, by CO-11's ruling (attribute atomization is VALUE
+    equality by design).
+    ───────────────────────────────────────────────────────────────── ]
+
+ [case id=format-039-canonical-float-attribute-keeps-float-kind level=core
+  [tags format canonical scalar float type-roundtrip 991 co-12]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?def kind-of ($v) [?match $v
+  [case _::float 'float'] [case _::decimal 'decimal'] [case _::string 'string']
+  [case _::date 'date'] [case _::datetime 'datetime'] [else 'other']]]
+[?let [= $w [$cx:parse '[u a=1.5e0]']]
+      [= $c [$format:canonical $w]]
+      [= $r [$cx:parse $c]]
+  ($c, [$kind-of $w@a], [$kind-of $r@a])]
+#]]
+  [out-text [#
+('[u a=1.5e0]', float, float)
+#]]
+ ]
+
+ [; 040 — the ADDRESS COLLISION itself (#976 class), pinned with the old
+    colliding pair named. Before CO-12 both sides imaged `[u a=1.5]` and
+    this comparison was `true`: one content address, two distinct values.
+    Digest witnesses (sha256 over the canonical bytes):
+      float   [u a=1.5e0]  bcb80e9d378cdabc9adb9bece527a525b66a691ec61067bd2656ea1f0b6dd1f8
+      decimal [u a=1.5]    1dcd990561fba6f274ea3892f55b2c7068225d569603cf1c9f59f357e8e34193
+    Only FLOAT's address moved; decimal's is unchanged. ]
+
+ [case id=format-040-float-and-decimal-are-distinct-addresses level=core
+  [tags format canonical float decimal address-collision negative 991 co-12]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?let [= $f [$format:canonical [$cx:parse '[u a=1.5e0]']]]
+      [= $d [$format:canonical [$cx:parse '[u a=1.5]']]]
+  ($f, $d, [$eq $f $d])]
+#]]
+  [out-text [#
+('[u a=1.5e0]', '[u a=1.5]', false)
+#]]
+ ]
+
+ [case id=format-041-canonical-date-attribute-keeps-date-kind level=core
+  [tags format canonical scalar date type-roundtrip 991 co-12]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?def kind-of ($v) [?match $v
+  [case _::date 'date'] [case _::datetime 'datetime'] [case _::string 'string']
+  [else 'other']]]
+[?let [= $w [$cx:parse '[u a=2026-08-25]']]
+      [= $c [$format:canonical $w]]
+      [= $r [$cx:parse $c]]
+  ($c, [$kind-of $w@a], [$kind-of $r@a])]
+#]]
+  [out-text [#
+('[u a=2026-08-25]', date, date)
+#]]
+ ]
+
+ [case id=format-042-canonical-datetime-attribute-keeps-datetime-kind level=core
+  [tags format canonical scalar datetime type-roundtrip 991 co-12]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?def kind-of ($v) [?match $v
+  [case _::date 'date'] [case _::datetime 'datetime'] [case _::string 'string']
+  [else 'other']]]
+[?let [= $w [$cx:parse '[u a=2026-08-25T10:30:00Z]']]
+      [= $c [$format:canonical $w]]
+      [= $r [$cx:parse $c]]
+  ($c, [$kind-of $w@a], [$kind-of $r@a])]
+#]]
+  [out-text [#
+('[u a=2026-08-25T10:30:00Z]', datetime, datetime)
+#]]
+ ]
+
+ [; 043 — the same two kinds through COMPACT, which shares canonical's
+    renderer (§3.1: compact == canonical bytes) and therefore shared both
+    defects. Pinned separately so the sharing cannot be quietly undone. ]
+
+ [case id=format-043-compact-date-and-float-keep-their-kinds level=core
+  [tags format compact scalar date float type-roundtrip 991 co-12]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?def kind-of ($v) [?match $v
+  [case _::float 'float'] [case _::decimal 'decimal'] [case _::date 'date']
+  [case _::string 'string'] [else 'other']]]
+[?let [= $cf [$format:compact [$cx:parse '[u a=1.5e0]']]]
+      [= $cd [$format:compact [$cx:parse '[u a=2026-08-25]']]]
+      [= $rf [$cx:parse $cf]]
+      [= $rd [$cx:parse $cd]]
+  ($cf, [$kind-of $rf@a], $cd, [$kind-of $rd@a])]
+#]]
+  [out-text [#
+('[u a=1.5e0]', float, '[u a=2026-08-25]', date)
+#]]
+ ]
+
+ [; 044-045 — all FOUR forms, one witness, one kind list. §2.1 is
+    normative for every form, so the type round trip is pinned for every
+    form rather than for canonical alone. The witness carries one scalar
+    of each kind that has a bare attribute spelling. ]
+
+ [case id=format-044-type-roundtrip-all-kinds-canonical-and-compact level=core
+  [tags format canonical compact type-roundtrip all-kinds 991 co-12]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?def kind-of ($v) [?match $v
+  [case _::atom 'atom'] [case _::bool 'bool'] [case _::null 'null']
+  [case _::int 'int'] [case _::float 'float'] [case _::decimal 'decimal']
+  [case _::bigint 'bigint'] [case _::datetime 'datetime'] [case _::date 'date']
+  [case _::string 'string'] [else 'other']]]
+[?def kinds ($e) ([$kind-of $e@s], [$kind-of $e@i], [$kind-of $e@f], [$kind-of $e@d],
+                  [$kind-of $e@g], [$kind-of $e@b], [$kind-of $e@n], [$kind-of $e@t],
+                  [$kind-of $e@y], [$kind-of $e@m])]
+[?let [= $w [$cx:parse "[u s='txt' i=41 f=1.5e0 d=1.5 g=123456789012345678901234567890 b=true n=null t=:gold y=2026-08-25 m=2026-08-25T10:30:00Z]"]]
+      [= $rc [$cx:parse [$format:canonical $w]]]
+      [= $rk [$cx:parse [$format:compact $w]]]
+  ([$eq [$kinds $rc] [$kinds $w]], [$eq [$kinds $rk] [$kinds $w]], [$kinds $w])]
+#]]
+  [out-text [#
+(true, true, (string, int, float, decimal, bigint, bool, 'null', atom, date, datetime))
+#]]
+ ]
+
+ [case id=format-045-type-roundtrip-all-kinds-pretty-and-diff-friendly level=core
+  [tags format pretty diff-friendly type-roundtrip all-kinds 991 co-12]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?def kind-of ($v) [?match $v
+  [case _::atom 'atom'] [case _::bool 'bool'] [case _::null 'null']
+  [case _::int 'int'] [case _::float 'float'] [case _::decimal 'decimal']
+  [case _::bigint 'bigint'] [case _::datetime 'datetime'] [case _::date 'date']
+  [case _::string 'string'] [else 'other']]]
+[?def kinds ($e) ([$kind-of $e@s], [$kind-of $e@i], [$kind-of $e@f], [$kind-of $e@d],
+                  [$kind-of $e@g], [$kind-of $e@b], [$kind-of $e@n], [$kind-of $e@t],
+                  [$kind-of $e@y], [$kind-of $e@m])]
+[?let [= $w [$cx:parse "[u s='txt' i=41 f=1.5e0 d=1.5 g=123456789012345678901234567890 b=true n=null t=:gold y=2026-08-25 m=2026-08-25T10:30:00Z]"]]
+      [= $rp [$cx:parse [$format:pretty $w]]]
+      [= $rd [$cx:parse [$format:diff-friendly $w]]]
+  ([$eq [$kinds $rp] [$kinds $w]], [$eq [$kinds $rd] [$kinds $w]])]
+#]]
+  [out-text [#
+(true, true)
+#]]
+ ]
+
+ [; 046 — body-scalar position. The float defect was NOT attribute-only:
+    the program-result renderer imaged every f64 with V's `.str()`, so a
+    float in element-body position took decimal's image too. Pinned so
+    the body lane cannot regress independently of the attribute lane. ]
+
+ [case id=format-046-canonical-body-float-keeps-float-kind level=core
+  [tags format canonical body-scalar float type-roundtrip 991 co-12]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/format']
+[?def kind-of ($v) [?match $v
+  [case _::float 'float'] [case _::decimal 'decimal'] [else 'other']]]
+[?let [= $w [$cx:parse '[d 1.5e0]']]
+      [= $c [$format:canonical $w]]
+      [= $r [$cx:parse $c]]
+  ($c, [?match $r [case [d $v] [$kind-of $v]] [else 'nomatch']])]
+#]]
+  [out-text [#
+('[d 1.5e0]', float)
+#]]
+ ]
 ]

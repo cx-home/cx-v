@@ -1,5 +1,5 @@
 erDiagram
   item {
-    int id "@"
-    string kind "@"
+    int id "e.g. 1"
+    string kind "e.g. a"
   }

@@ -100,7 +100,7 @@
   [sig """-> float"""]
   [summary """Draw a uniform float in the half-open range 0.0 to 1.0 from the process-global PRNG."""]
   [example [code """[?lib 'cx-stdlib/random']
-[?let [= $a [$random:seed 42]] [= $f [$random:next-float]] [and [>= $f 0.0] [< $f 1.0]]]"""] [expect """true"""]]
+[?let [= $a [$random:seed 42]] [= $f [$random:next-float]] [and [>= $f 0.0e0] [< $f 1.0e0]]]"""] [expect """true"""]]
 ]
 [fn-doc name=next-bool scope=public purity=impure
   [sig """-> bool"""]
@@ -118,7 +118,7 @@
   [sig """-> float"""]
   [summary """Draw a uniform float in the half-open range lo to hi."""]
   [example [code """[?lib 'cx-stdlib/random']
-[$random:float-range 2.5e0 2.5e0]"""] [expect """2.5"""]]
+[$random:float-range 2.5e0 2.5e0]"""] [expect """2.5e0"""]]
 ]
 [fn-doc name=shuffle scope=public purity=impure
   [sig """-> [sequence any]"""]
@@ -154,7 +154,7 @@
   [sig """-> element"""]
   [summary """Draw a float in 0.0 to 1.0 from an explicit generator, returning the value and next generator."""]
   [example [code """[?lib 'cx-stdlib/random']
-[?let [= $r [$random:next-float-with [$random:from-seed 42]]] $r/value]"""] [expect """0.8143051451229099"""]]
+[?let [= $r [$random:next-float-with [$random:from-seed 42]]] $r/value]"""] [expect """8.143051451229099e-1"""]]
 ]
 [fn-doc name=next-bool-with scope=public purity=pure
   [sig """-> element"""]
@@ -172,7 +172,7 @@
   [sig """-> element"""]
   [summary """Draw a float in lo to hi from an explicit generator, returning the value and next generator."""]
   [example [code """[?lib 'cx-stdlib/random']
-[?let [= $r [$random:float-range-with [$random:from-seed 7] 2.5e0 2.5e0]] $r/value]"""] [expect """2.5"""]]
+[?let [= $r [$random:float-range-with [$random:from-seed 7] 2.5e0 2.5e0]] $r/value]"""] [expect """2.5e0"""]]
 ]
 [fn-doc name=shuffle-with scope=public purity=pure
   [sig """-> element"""]
@@ -226,7 +226,7 @@
   [sig """-> float"""]
   [summary """Draw a normally-distributed float with the given mean and standard deviation."""]
   [example [code """[?lib 'cx-stdlib/random']
-[$random:gaussian 5.0e0 0.0e0]"""] [expect """5.0"""]]
+[$random:gaussian 5.0e0 0.0e0]"""] [expect """5.0e0"""]]
 ]
 [fn-doc name=exponential scope=public purity=impure
   [sig """-> float"""]
@@ -244,13 +244,13 @@
   [sig """-> element"""]
   [summary """Draw a normal value with an explicit generator, returning the value and next generator."""]
   [example [code """[?lib 'cx-stdlib/random']
-[?let [= $r [$random:gaussian-with [$random:from-seed 11] 3.0e0 0.0e0]] $r/value]"""] [expect """3.0"""]]
+[?let [= $r [$random:gaussian-with [$random:from-seed 11] 3.0e0 0.0e0]] $r/value]"""] [expect """3.0e0"""]]
 ]
 [fn-doc name=exponential-with scope=public purity=pure
   [sig """-> element"""]
   [summary """Draw an exponential value with an explicit generator, returning the value and next generator."""]
   [example [code """[?lib 'cx-stdlib/random']
-[?let [= $r [$random:exponential-with [$random:from-seed 42] 1.0e0]] $r/value]"""] [expect """1.683650517646569"""]]
+[?let [= $r [$random:exponential-with [$random:from-seed 42] 1.0e0]] $r/value]"""] [expect """1.683650517646569e0"""]]
 ]
 [fn-doc name=poisson-with scope=public purity=pure
   [sig """-> element"""]
@@ -298,7 +298,7 @@
   [sig """-> element"""]
   [summary """Generate n floats with an explicit generator, returning the sequence and next generator."""]
   [example [code """[?lib 'cx-stdlib/random']
-[?let [= $r [$random:next-floats-with [$random:from-seed 42] 3]] $r/value]"""] [expect """(0.8143051451229099, 0.3188210400616611, 0.9838941681774888)"""]]
+[?let [= $r [$random:next-floats-with [$random:from-seed 42] 3]] $r/value]"""] [expect """(8.143051451229099e-1, 3.188210400616611e-1, 9.838941681774888e-1)"""]]
 ]
 [fn-doc name=next-ints-with scope=public purity=pure
   [sig """-> element"""]
@@ -328,7 +328,7 @@
   [sig """-> float"""]
   [summary """Draw a uniform float in 0.0 to 1.0 from a generator handle."""]
   [example [code """[?lib 'cx-stdlib/random']
-[$random:gen-float [$random:new 42]]"""] [expect """0.8143051451229099"""]]
+[$random:gen-float [$random:new 42]]"""] [expect """8.143051451229099e-1"""]]
 ]
 [fn-doc name=gen-bool scope=public purity=impure
   [sig """-> bool"""]
@@ -346,7 +346,7 @@
   [sig """-> float"""]
   [summary """Draw a uniform float in lo (inclusive) to hi (exclusive) from a generator handle."""]
   [example [code """[?lib 'cx-stdlib/random']
-[$random:gen-float-range [$random:new 7] 2.5e0 2.5e0]"""] [expect """2.5"""]]
+[$random:gen-float-range [$random:new 7] 2.5e0 2.5e0]"""] [expect """2.5e0"""]]
 ]
 [fn-doc name=gen-shuffle scope=public purity=impure
   [sig """-> [sequence any]"""]
@@ -370,13 +370,13 @@
   [sig """-> float"""]
   [summary """Draw a normal(mean, stddev) sample from a generator handle."""]
   [example [code """[?lib 'cx-stdlib/random']
-[$random:gen-gaussian [$random:new 1] 5.0e0 0.0e0]"""] [expect """5.0"""]]
+[$random:gen-gaussian [$random:new 1] 5.0e0 0.0e0]"""] [expect """5.0e0"""]]
 ]
 [fn-doc name=gen-exponential scope=public purity=impure
   [sig """-> float"""]
   [summary """Draw an exponential(lambda) sample from a generator handle."""]
   [example [code """[?lib 'cx-stdlib/random']
-[$random:gen-exponential [$random:new 42] 1.0e0]"""] [expect """1.683650517646569"""]]
+[$random:gen-exponential [$random:new 42] 1.0e0]"""] [expect """1.683650517646569e0"""]]
 ]
 [fn-doc name=gen-poisson scope=public purity=impure
   [sig """-> int"""]

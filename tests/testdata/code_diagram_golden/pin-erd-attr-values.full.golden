@@ -5,7 +5,7 @@ erDiagram
     int max_depth "0"
   }
   item {
-    int id "@ 1, 2, 3"
-    string kind "@ 'a', 'b', 'c'"
+    int id "1, 2, 3"
+    string kind "'a', 'b', 'c'"
     string note "appears 3× depth 0"
   }

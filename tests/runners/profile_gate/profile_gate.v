@@ -39,7 +39,11 @@ import math
 // every profile ≥ Ring 0 — the I2 extraction gate is the doc-lane
 // authority (and `conform` already runs at the cli composition).
 //
+// On a grading failure the runner applies the #951 serial-re-grade honesty
+// contract (#1054) — see is_951_family / serial_regrade below.
+//
 // Usage: v [-d cx_no_pack_*…] run profile_gate.v [--bin=<profile cx>]
+//        …[--regrade=<proc|bin>:<label>]…   (internal: the serial re-grade)
 
 // excluded_packs probes the SAME `-d cx_no_pack_*` gates the build uses —
 // composition is read off the artifact, never passed as free text.
@@ -134,6 +138,17 @@ const dependent_module_probe = {
 	]
 }
 
+// A recorded failure. `msg` is the same string this gate has always printed;
+// the sidecar fields are what the #951 retry classifier reads (#1054), so
+// classification never has to guess a fixture's identity back out of prose.
+struct Failure {
+	label string // fixture label ('supervise.cxd/sup-011-…'); '' for a probe
+	suite string // suite file basename ('supervise.cxd'); '' for a probe
+	level string // the fixture's level= ('concurrency' for the #951 family)
+	lane  string // 'proc' (in-process grade) | 'bin' (profile binary) | 'probe'
+	msg   string // the verbatim failure line
+}
+
 struct GateStats {
 mut:
 	ran               int
@@ -141,8 +156,14 @@ mut:
 	bin_ran           int // R3.11: cases graded through the profile BINARY
 	bin_inexpressible int // R3.11: counted + reported, never silent
 	bin_data_fallback int // R3.11: §1.3 data-echo answers on parse-error fixtures
-	failures          []string
+	failures          []Failure
 	advisory          []string
+	// Grading context — set once at each grade entry, read by record() so
+	// every failure carries the fixture identity the classifier needs.
+	cur_label string
+	cur_suite string
+	cur_level string
+	cur_lane  string
 }
 
 // load_gate_policy mirrors code_eval_fixtures_test.v (conformance/gates.cxd:
@@ -322,6 +343,10 @@ fn thrown_matches_out_err(msg string, out_err string) bool {
 }
 
 fn grade_case(label string, c fixtures.FixtureCase, mut st GateStats, advisory bool) {
+	st.cur_label = label
+	st.cur_suite = label.all_before('/')
+	st.cur_level = c.level
+	st.cur_lane = 'proc'
 	in_code := section(c, 'in_code')
 	in_cx := section(c, 'in_cx')
 	out_text := section(c, 'out_text')
@@ -440,7 +465,22 @@ fn (mut st GateStats) record(msg string, advisory bool) {
 	if advisory {
 		st.advisory << msg
 	} else {
-		st.failures << msg
+		st.failures << Failure{
+			label: st.cur_label
+			suite: st.cur_suite
+			level: st.cur_level
+			lane:  st.cur_lane
+			msg:   msg
+		}
+	}
+}
+
+// probe_fail records a REFUSAL/BINARY probe failure — no fixture behind it,
+// so no retry class can ever apply to one.
+fn (mut st GateStats) probe_fail(msg string) {
+	st.failures << Failure{
+		lane: 'probe'
+		msg:  msg
 	}
 }
 
@@ -486,6 +526,10 @@ fn binary_expressible(c fixtures.FixtureCase) bool {
 }
 
 fn grade_case_binary(label string, c fixtures.FixtureCase, bin string, tmp string, mut st GateStats, advisory bool) {
+	st.cur_label = label
+	st.cur_suite = label.all_before('/')
+	st.cur_level = c.level
+	st.cur_lane = 'bin'
 	in_code := section(c, 'in_code')
 	in_cx := section(c, 'in_cx')
 	out_text := section(c, 'out_text')
@@ -620,17 +664,17 @@ fn probe_refusal(what string, program string, mut st GateStats) {
 	code.register_conformance_test_modules(mut env.state.module_table)
 	code.caps_set_all()
 	prog := cx.parse_program(program) or {
-		st.failures << 'refusal probe ${what}: parse: ${err}'
+		st.probe_fail('refusal probe ${what}: parse: ${err}')
 		return
 	}
 	mut result := code.eval(prog.body, mut env) or {
-		st.failures << 'refusal probe ${what}: eval error (${err}) — expected the user-undefined err VALUE'
+		st.probe_fail('refusal probe ${what}: eval error (${err}) — expected the user-undefined err VALUE')
 		return
 	}
 	result = code.force_lazy_result(result, mut env)
 	rendered := code.render_canonical(result)
 	if !rendered.contains('user-undefined') {
-		st.failures << 'refusal probe ${what}: expected user-undefined refusal, got ${rendered}'
+		st.probe_fail('refusal probe ${what}: expected user-undefined refusal, got ${rendered}')
 		return
 	}
 	st.ran++
@@ -644,17 +688,17 @@ fn probe_typed_refusal(what string, program string, want string, mut st GateStat
 	code.register_conformance_test_modules(mut env.state.module_table)
 	code.caps_set_all()
 	prog := cx.parse_program(program) or {
-		st.failures << 'typed refusal probe ${what}: parse: ${err}'
+		st.probe_fail('typed refusal probe ${what}: parse: ${err}')
 		return
 	}
 	mut result := code.eval(prog.body, mut env) or {
-		st.failures << 'typed refusal probe ${what}: eval error (${err}) — expected the ${want} err VALUE'
+		st.probe_fail('typed refusal probe ${what}: eval error (${err}) — expected the ${want} err VALUE')
 		return
 	}
 	result = code.force_lazy_result(result, mut env)
 	rendered := code.render_canonical(result)
 	if !rendered.contains(want) {
-		st.failures << 'typed refusal probe ${what}: expected ${want}, got ${rendered}'
+		st.probe_fail('typed refusal probe ${what}: expected ${want}, got ${rendered}')
 		return
 	}
 	st.ran++
@@ -744,38 +788,339 @@ fn run_bin(bin string, args []string, stdin_data string) RunResult {
 fn probe_binary(bin string, comp string, mut st GateStats) {
 	v := run_bin(bin, ['-v'], '')
 	if v.rc != 0 || !v.out.contains('profile  ${comp}') {
-		st.failures << 'binary ${bin}: `-v` must report "profile  ${comp}" (rc=${v.rc}):\n${v.out}'
+		st.probe_fail('binary ${bin}: `-v` must report "profile  ${comp}" (rc=${v.rc}):\n${v.out}')
 	} else {
 		st.ran++
 	}
 	for verb in ['store-serve', 'fabric-serve', 'store-health', 'store-rotate-kek'] {
 		r := run_bin(bin, [verb], '')
 		if r.rc != 2 || !r.err.contains('not available in the ${comp} profile') {
-			st.failures << 'binary ${bin}: `cx ${verb}` must refuse BY NAME with rc=2 naming the ${comp} profile (rc=${r.rc}): ${r.err.trim_space()}'
+			st.probe_fail('binary ${bin}: `cx ${verb}` must refuse BY NAME with rc=2 naming the ${comp} profile (rc=${r.rc}): ${r.err.trim_space()}')
 		} else {
 			st.ran++
 		}
 	}
 	e := run_bin(bin, ['-e', '[+ 1 2]'], '')
 	if e.rc != 0 || e.out.trim_space() != '3' {
-		st.failures << 'binary ${bin}: `-e [+ 1 2]` must print 3 (rc=${e.rc}, out=${e.out.trim_space()})'
+		st.probe_fail('binary ${bin}: `-e [+ 1 2]` must print 3 (rc=${e.rc}, out=${e.out.trim_space()})')
 	} else {
 		st.ran++
 	}
 }
 
+// ── #1054: the #951 honesty contract, extended to this runner ────────────
+//
+// The root Makefile's SUITE_SERIAL_RETRY gives the whole-binary eval lane a
+// classified, NAMED, once-only serial retry for the #951 supervise
+// note/terminal load-race. This runner grades the SAME supervise fixtures
+// and had no such contract, so the characterized flake could — and on
+// 2026-08-26 did — red the v0.17.0 tag run from profile_gate[cli] alone. (version-literal-ok)
+//
+// The contract is copied intact, not loosened:
+//   • only the classified family re-grades (is_951_family below);
+//   • the log NAMES the retry and its reason, per lane, before it happens
+//     (RETRY_REASON_CASE discipline — a silent retry is worse than none);
+//   • a re-failure stays RED;
+//   • anything outside the family is announced as a real failure and is
+//     never re-graded.
+//
+// MECHANISM — why the re-grade is a CHILD PROCESS and not an in-place call:
+// re-grading a channel-bearing supervise fixture IN-PROCESS segfaults in
+// eval_close on the first grade's leftover fixed-name channel state
+// (measured 2026-08-23, recorded on #951; the evaluator's channel registry
+// is process-global). A fresh child is therefore the only state-clean
+// re-grade available for the in-process lane — and it is also the honest
+// analogue of the Makefile's contract, which re-runs the failing lane's
+// whole binary serially rather than re-entering it.
+
+// The markers #951's characterization actually NAMES for "the terminal, or
+// its paired [err], did not arrive". These are the observed-side tokens —
+// see observed_of(): the classifier must never read a fixture's EXPECTED
+// half, or a fixture edited to expect one of these would earn a retry for
+// its own deterministic mismatch.
+//
+//   :no-terminal-within-deadline — the guard marker #951's fixture fix
+//     landed for a [?receive] that expired (an expired receive returns the
+//     empty sequence). This is the exact text that failed the tag run.
+//   cause-unreported — the v0.16.0 CO-hardening's event (version-literal-ok) for a note that
+//     arrived WITHOUT its paired [err] (empty error filter).
+const supervise_race_markers = [':no-terminal-within-deadline', 'cause-unreported']
+
+// is_951_family decides, per failure, whether the #951 retry class applies.
+// Three conjuncts, each taken from what the issue names — never "a
+// concurrency case failed", which is the blanket shape this replaces:
+//   1. the FIXTURE FAMILY: conformance/stdlib/supervise.cxd. sup-011 and
+//      sup-012 are the only cases #951 ever names, and the race is a fact
+//      about supervise's note/terminal transit, not about concurrency
+//      fixtures at large;
+//   2. the LEVEL: level=concurrency — the monitor/inbox machinery the race
+//      needs. A doc- or behavior-level supervise case cannot lose a note;
+//   3. the OBSERVED MISMATCH SHAPE: one of the markers above, or the
+//      PRE-marker costume of the same absence — the empty-sequence refusal
+//      on the `code=` attribute write (CXER0100 at vcx/code/eval.v:1628),
+//      which #951's relocation comment reproduced deterministically.
+// Every other supervise.cxd failure — a wrong count, a wrong reason
+// keyword, a CXER5094 that never fires — is a deterministic regression and
+// stays red with no re-grade.
+//
+// NOT in this class, deliberately: sup-012's WEDGE costume (a case that
+// never returns). That is the hang watchdog's job (case_hang_limit_s
+// above), which kills the child and fails LOUDLY; a retry must not be the
+// thing that hides a deadlock.
+fn is_951_family(f Failure) bool {
+	if f.suite != 'supervise.cxd' || f.level != 'concurrency' {
+		return false
+	}
+	obs := observed_of(f.msg)
+	for m in supervise_race_markers {
+		if obs.contains(m) {
+			return true
+		}
+	}
+	return obs.contains('CXER0100') && obs.contains("attribute 'code'")
+}
+
+// observed_of isolates the OBSERVED half of a failure message, so the
+// classifier reads what the run DID and never what the fixture EXPECTS.
+// (sup-011's own expectation carries `CXER0100`, so a whole-message match
+// would classify any sup-011 mismatch as the load race.)
+fn observed_of(msg string) string {
+	body := msg.all_after_first(': ') // drop the `label: ` / `label[bin]: ` prefix
+	if i := body.index('\n  got:') {
+		rest := body[i + 7..]
+		if j := rest.index('\n  expected:') {
+			return rest[..j]
+		}
+		return rest
+	}
+	if i := body.last_index(', got ') {
+		return body[i + 6..]
+	}
+	// `parse threw "…" but expected …` — the observed half is what precedes
+	// the expectation.
+	if i := body.index(' but expected ') {
+		return body[..i]
+	}
+	// `eval: <err>` / `parse: <err>` — a thrown error, all of it observed.
+	return body
+}
+
+// retry_reason mirrors the Makefile's RETRY_REASON_CASE, including its
+// discipline: a family with no declared reason still GETS its re-grade (the
+// mechanism is load-bearing and is not weakened here), but the log says the
+// reason is undeclared rather than inventing one.
+fn retry_reason(f Failure) string {
+	return match f.suite {
+		'supervise.cxd' {
+			'#951 supervise note/terminal load-race under -j compile storms; green 25/25 and 80/80 in isolation'
+		}
+		else {
+			'NO REASON DECLARED for this family -- re-graded anyway; declare it in retry_reason() in profile_gate.v'
+		}
+	}
+}
+
+// serial_regrade partitions the recorded failures, announces both halves,
+// and re-grades EXACTLY the classified ones — once, serially, in one fresh
+// child process (the same executable, so the pack composition is identical
+// by construction and can never be re-stated as free text). Only entries
+// the child reports PASS are cleared; everything else stays red.
+fn serial_regrade(mut st GateStats, bin string) {
+	mut classified := []Failure{}
+	mut plain := []Failure{}
+	for f in st.failures {
+		if is_951_family(f) {
+			classified << f
+		} else {
+			plain << f
+		}
+	}
+	for i, f in plain {
+		if i == 20 {
+			eprintln('──── … and ${plain.len - 20} further failure(s), none in a retry class ────')
+			break
+		}
+		who := if f.label == '' { '(probe)' } else { '${f.label} [${f.lane}]' }
+		eprintln('──── real failure (no retry class applies): ${who} ────')
+	}
+	if classified.len == 0 {
+		return
+	}
+	mut args := []string{}
+	if bin != '' {
+		args << '--bin=${bin}'
+	}
+	for f in classified {
+		eprintln('──── serial re-grade (${retry_reason(f)}): ${f.label} [${f.lane}] ────')
+		args << '--regrade=${f.lane}:${f.label}'
+	}
+	r := run_bin(os.executable(), args, '')
+	for line in (r.out + '\n' + r.err).split_into_lines() {
+		if line.trim_space() != '' {
+			eprintln('     | ${line}')
+		}
+	}
+	mut passed := map[string]bool{}
+	for line in r.out.split_into_lines() {
+		p := line.trim_space().split(' ')
+		if p.len == 4 && p[0] == 'REGRADE' && p[3] == 'PASS' {
+			passed['${p[1]}:${p[2]}'] = true
+		}
+	}
+	mut kept := plain.clone()
+	mut cleared := 0
+	for f in classified {
+		if passed['${f.lane}:${f.label}'] {
+			eprintln('──── TRANSIENT (#951 class, green on the serial re-grade): ${f.label} [${f.lane}] ────')
+			cleared++
+		} else {
+			eprintln('──── serial re-grade RE-FAILED (deterministic — the verdict stays RED): ${f.label} [${f.lane}] ────')
+			kept << f
+		}
+	}
+	if cleared > 0 && kept.len == 0 {
+		eprintln('──── every failure green on its classified serial re-grade (#951 supervise load-race family) ────')
+	}
+	st.failures = kept
+}
+
+// ── the classifier's own gate (#1054) ────────────────────────────────────
+//
+// A retry classifier is exactly the kind of code that rots into a blanket:
+// widen one conjunct and every supervise failure starts buying itself a
+// re-grade, with nothing going red to say so. So the classifier is PINNED
+// here, against the VERBATIM mismatch text of the real 2026-08-26 tag-run
+// failure (profile_gate[cli], /tmp tag-release make-test log) plus the
+// near-misses that must NOT classify. It runs at every gate start, costs
+// microseconds, prints nothing when it holds, and exits 2 when it does not.
+const tagrun_951_mismatch = 'supervise.cxd/sup-011-give-up-emits-final-event-and-panics-CXER5094: mismatch
+  got:      (([child-exited name=a reason=:panicked err-code=cx-err:CXER0100], [gave-up restarts=1 window-ms=5000]), [escalates code=:no-terminal-within-deadline])
+  expected: (([child-exited name=a reason=:panicked err-code=cx-err:CXER0100], [gave-up restarts=1 window-ms=5000]), [escalates code=cx-err:CXER5094])'
+
+// the SAME two halves swapped: a fixture edited to EXPECT the marker, whose
+// run produced the healthy answer. Deterministic — must never re-grade.
+const swapped_951_mismatch = 'supervise.cxd/sup-011-give-up-emits-final-event-and-panics-CXER5094: mismatch
+  got:      (([child-exited name=a reason=:panicked err-code=cx-err:CXER0100], [gave-up restarts=1 window-ms=5000]), [escalates code=cx-err:CXER5094])
+  expected: (([child-exited name=a reason=:panicked err-code=cx-err:CXER0100], [gave-up restarts=1 window-ms=5000]), [escalates code=:no-terminal-within-deadline])'
+
+// the PRE-marker costume: the thrown empty-sequence refusal on the `code=`
+// attribute write, byte-for-byte as #951's relocation comment reproduced it.
+const premarker_951_throw = "supervise.cxd/sup-011-give-up-emits-final-event-and-panics-CXER5094: eval: error: cx-err:CXER0100: attribute 'code' value evaluated to the empty sequence (); refusing to write code='' silently — supply a scalar value"
+
+fn classifier_self_check() {
+	sup := fn (level string, msg string) Failure {
+		return Failure{
+			label: 'supervise.cxd/sup-011-give-up-emits-final-event-and-panics-CXER5094'
+			suite: 'supervise.cxd'
+			level: level
+			lane:  'proc'
+			msg:   msg
+		}
+	}
+	mut bad := []string{}
+	// MUST classify — the real tag-run failure, and its pre-marker costume.
+	if !is_951_family(sup('concurrency', tagrun_951_mismatch)) {
+		bad << 'the real 2026-08-26 tag-run mismatch no longer classifies as #951 — the retry this gate exists to provide is dead'
+	}
+	if !is_951_family(sup('concurrency', premarker_951_throw)) {
+		bad << "the pre-marker costume (CXER0100 on attribute 'code') no longer classifies as #951"
+	}
+	// MUST NOT classify — each conjunct, proven load-bearing on its own.
+	if is_951_family(sup('concurrency', swapped_951_mismatch)) {
+		bad << 'a fixture EXPECTING the marker classifies — the classifier is reading the expected half (observed_of is broken)'
+	}
+	if is_951_family(sup('behavior', tagrun_951_mismatch)) {
+		bad << 'the level=concurrency conjunct is not load-bearing'
+	}
+	if is_951_family(Failure{
+		label: 'sched.cxd/sch-001'
+		suite: 'sched.cxd'
+		level: 'concurrency'
+		lane:  'proc'
+		msg:   tagrun_951_mismatch
+	})
+	{
+		bad << 'the supervise.cxd conjunct is not load-bearing — the class has widened past the fixture family #951 names'
+	}
+	if is_951_family(sup('concurrency', 'supervise.cxd/sup-011-give-up-emits-final-event-and-panics-CXER5094: mismatch\n  got:      [gave-up restarts=2 window-ms=5000]\n  expected: [gave-up restarts=1 window-ms=5000]')) {
+		bad << 'a plain deterministic supervise mismatch classifies — the class is a blanket, not the #951 shape'
+	}
+	if is_951_family(Failure{
+		lane: 'probe'
+		msg:  'refusal probe ring-2 store: expected user-undefined refusal, got :no-terminal-within-deadline'
+	})
+	{
+		bad << 'a refusal probe classifies — probes have no fixture and can hold no retry class'
+	}
+	if bad.len > 0 {
+		eprintln('profile_gate: the #951 retry classifier no longer holds its pinned contract (#1054):')
+		for b in bad {
+			eprintln('  ${b}')
+		}
+		exit(2)
+	}
+}
+
+// grade_lanes runs one case through the two grading lanes. In re-grade mode
+// it runs only the lanes the parent asked for and emits one machine-readable
+// verdict per lane — a lane that never runs emits nothing here and is
+// reported FAIL by the caller, so a filtered-out request can never read as
+// green.
+fn grade_lanes(label string, c fixtures.FixtureCase, bin string, tmp string, mut st GateStats, advisory bool, regrade map[string][]string, mut verdicts []string) {
+	re := regrade.len > 0
+	if !re || 'proc' in regrade[label] {
+		before := st.failures.len
+		grade_case(label, c, mut st, advisory)
+		if re {
+			res := if st.failures.len == before { 'PASS' } else { 'FAIL' }
+			verdicts << 'REGRADE proc ${label} ${res}'
+		}
+	}
+	if bin != '' && (!re || 'bin' in regrade[label]) {
+		before := st.failures.len
+		grade_case_binary(label, c, bin, tmp, mut st, advisory)
+		if re {
+			res := if st.failures.len == before { 'PASS' } else { 'FAIL' }
+			verdicts << 'REGRADE bin ${label} ${res}'
+		}
+	}
+}
+
 fn main() {
+	classifier_self_check()
 	comp := composition()
 	if comp == 'custom' {
 		eprintln('profile_gate: compiled at a custom pack composition (${excluded_packs()}) — the gate runs at exactly the cli (no exclusions) and embed (all nine) compositions')
 		exit(2)
 	}
 	mut bin := ''
+	// --regrade=<lane>:<label> (repeatable) puts the runner in RE-GRADE mode:
+	// it grades only the named cases, only in the named lanes, skips the
+	// probes, and answers one `REGRADE <lane> <label> PASS|FAIL` line each.
+	// The parent process spawns itself this way for the #951 serial re-grade
+	// (#1054) — never invoked by hand in the gate.
+	mut regrade := map[string][]string{}
 	for a in os.args[1..] {
 		if a.starts_with('--bin=') {
 			bin = a[6..]
 		}
+		if a.starts_with('--regrade=') {
+			spec := a[10..]
+			lane := spec.all_before(':')
+			rlabel := spec.all_after_first(':')
+			if rlabel != '' && (lane == 'proc' || lane == 'bin') {
+				// read-modify-write, never `regrade[k] << lane` — the direct
+				// map-index append does not survive -prod (#994).
+				mut lanes := regrade[rlabel].clone()
+				lanes << lane
+				regrade[rlabel] = lanes
+			} else {
+				eprintln('profile_gate: malformed --regrade (want <proc|bin>:<label>): ${spec}')
+				exit(2)
+			}
+		}
 	}
+	mut verdicts := []string{}
 	bin_tmp := os.join_path(os.temp_dir(), 'cx_profile_gate_bin_${os.getpid()}')
 	if bin != '' {
 		os.mkdir_all(bin_tmp) or { panic('mkdir ${bin_tmp}: ${err}') }
@@ -823,11 +1168,11 @@ fn main() {
 			st.skipped++
 			continue
 		}
-		grade_case('code.cxd/${c.name.all_before(' ')}', c, mut st, eff == 'advisory')
-		if bin != '' {
-			grade_case_binary('code.cxd/${c.name.all_before(' ')}', c, bin, bin_tmp, mut st,
-				eff == 'advisory')
+		label := 'code.cxd/${c.name.all_before(' ')}'
+		if regrade.len > 0 && label !in regrade {
+			continue
 		}
+		grade_lanes(label, c, bin, bin_tmp, mut st, eff == 'advisory', regrade, mut verdicts)
 	}
 	sdir := os.join_path(conf_dir, 'stdlib')
 	mut sfiles := os.ls(sdir) or { []string{} }
@@ -865,33 +1210,45 @@ fn main() {
 				continue
 			}
 			label := '${fname}/${c.name.all_before(' ')}'
-			grade_case(label, c, mut st, eff == 'advisory')
-			if bin != '' {
-				// #951 supervise load-race family: a concurrency-level fixture
-				// whose note/terminal transit loses a message ONLY under the
-				// full-parallel suite (measured green 25/25 + 80/80 isolated;
-				// red across gates only under -j12 load; root on #951). The
-				// BINARY lane grades in a fresh subprocess, so one re-grade is
-				// state-clean — same contract as the extraction gate's
-				// divergence retry: a deterministic failure re-fails and the
-				// gate stays red. The IN-PROCESS lane gets no retry here:
-				// re-grading a channel-bearing fixture in the same process
-				// SEGFAULTS in eval_close on the first grade's leftover
-				// fixed-name channel state (measured 2026-08-23; noted on
-				// #951) — its flake coverage is the Makefile's serial retry
-				// of the whole test binary instead.
-				before_b := st.failures.len
-				grade_case_binary(label, c, bin, bin_tmp, mut st, eff == 'advisory')
-				if c.level == 'concurrency' && st.failures.len > before_b {
-					first_b := st.failures[before_b..].clone()
-					st.failures.trim(before_b)
-					grade_case_binary(label, c, bin, bin_tmp, mut st, eff == 'advisory')
-					if st.failures.len == before_b {
-						eprintln('profile_gate: TRANSIENT (#951 class, green on re-grade) ${label}[bin]: ${first_b[0]}')
-					}
+			if regrade.len > 0 && label !in regrade {
+				continue
+			}
+			// Both lanes grade straight through here. The bin lane used to
+			// carry its own inline re-grade for ANY concurrency-level failure
+			// — a blanket class that would absorb a real concurrency
+			// regression, and one that stayed SILENT when the re-grade also
+			// failed. It is replaced by serial_regrade() below: same #951
+			// coverage, narrowed to the classified family, and named in the
+			// log whichever way it lands (#1054).
+			grade_lanes(label, c, bin, bin_tmp, mut st, eff == 'advisory', regrade, mut verdicts)
+		}
+	}
+
+	// ── RE-GRADE mode terminates here: no probes, no gate verdict ───────────
+	if regrade.len > 0 {
+		for line in verdicts {
+			println(line)
+		}
+		for rlabel, lanes in regrade {
+			for lane in lanes {
+				if 'REGRADE ${lane} ${rlabel} PASS' !in verdicts
+					&& 'REGRADE ${lane} ${rlabel} FAIL' !in verdicts {
+					// Filtered out by ring / gate / excluded pack, or an
+					// unknown label. Never silently green.
+					println('REGRADE ${lane} ${rlabel} FAIL')
+					eprintln('profile_gate-regrade: ${rlabel} [${lane}] was never graded (ring/gate/pack filter, or unknown label) — reported FAIL')
 				}
 			}
 		}
+		if st.failures.len > 0 {
+			eprintln('profile_gate-regrade[${comp}]: ${st.failures.len} failure(s) on the serial re-grade:')
+			for f in st.failures {
+				eprintln('  ${f.msg}')
+			}
+			exit(1)
+		}
+		println('profile_gate-regrade[${comp}] OK — ${st.ran} re-graded')
+		exit(0)
 	}
 
 	// ── refusal probes ───────────────────────────────────────────────────────
@@ -912,13 +1269,19 @@ fn main() {
 		probe_binary(bin, comp, mut st)
 	}
 
+	// #1054: the #951 honesty contract. Nothing below fires on a green run —
+	// no failures, no re-grade, and the OK verdict line is untouched.
+	if st.failures.len > 0 {
+		serial_regrade(mut st, bin)
+	}
+
 	if st.advisory.len > 0 {
 		println('profile_gate[${comp}]: ${st.advisory.len} advisory failure(s) — frontier modules, reported not blocking')
 	}
 	if st.failures.len > 0 {
 		eprintln('profile_gate[${comp}]: ${st.failures.len} FAILURE(S) of ${st.ran} graded (${st.skipped} skipped):')
 		for f in st.failures {
-			eprintln('  ${f}')
+			eprintln('  ${f.msg}')
 		}
 		exit(1)
 	}

@@ -223,13 +223,14 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?lib 'cx-x/ux-tui' :as tui]
+[; R-A1 migration: envelope → spliced children (2026-08-25) ]
 [list [$tui:token-value-safe "38;5;114"] [$tui:token-value-safe "0m\u001b]0;pwned"]
-      [$tui:theme-refusals [ux:term-theme [token name=bad value="0m x"]]]
+      [?splice [$tui:theme-refusals [ux:term-theme [token name=bad value="0m x"]]]]
       [$tui:vis-len [$tui:style "late" [$tui:base-theme] "tone-warn" true]]
       [$tui:vis-len "late"]]
 #]]
   [out-text [#
-[list true false ([ux-refusal code=ux-bad-token-value token=bad]) 4 4]
+[list true false [ux-refusal code=ux-bad-token-value token=bad] 4 4]
 #]]
  ]
 
@@ -374,7 +375,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
   [list [= $s [$web:content-repr-html $t $ctx]] [= $s [$tui:content-repr-tui $t $ctx]]]]
 #]]
   [out-text [#
-[list false true]
+[list true true]
 #]]
  ]
 
@@ -427,6 +428,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
 [?lib 'cx-x/ux-web' :as web]
 [?lib 'cx-x/ux-tui' :as tui]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $ctx {route: "/o", feature: "f", path: "/"}]
   [= $priv [ux:action verb=v target="#x"]]
   [= $dup  [ux:region feature=f path="/r" [ux:card id=d] [ux:card id=d]]]
@@ -434,7 +436,7 @@ Every expected output was re-derived by RUNNING the program (cx <file>).
    [$web:render $dup $ctx],  [$tui:render $dup $ctx {width: 40}])]
 #]]
   [out-text [#
-([err code=ux-refused ([ux-refusal code=ux-renderer-private-attr element=ux:action attr=target])], [err code=ux-refused ([ux-refusal code=ux-renderer-private-attr element=ux:action attr=target])], [err code=ux-refused ([ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8])], [err code=ux-refused ([ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8])])
+([err code=ux-refused [ux-refusal code=ux-renderer-private-attr element=ux:action attr=target]], [err code=ux-refused [ux-refusal code=ux-renderer-private-attr element=ux:action attr=target]], [err code=ux-refused [ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8]], [err code=ux-refused [ux-refusal code=ux-address-reused id=cx-fa5c41a015045bf8]])
 #]]
  ]
 

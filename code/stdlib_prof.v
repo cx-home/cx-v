@@ -173,6 +173,7 @@ fn prof_arg_str(n cx.Node) ?string {
 		}
 		else {}
 	}
+	note_operand_fault('prof', 'prof-', 'string', n)
 	return none
 }
 
@@ -185,6 +186,7 @@ fn prof_arg_int(n cx.Node) ?i64 {
 			else {}
 		}
 	}
+	note_operand_fault('prof', 'prof-', 'int', n)
 	return none
 }
 
@@ -197,6 +199,7 @@ fn prof_arg_float(n cx.Node) ?f64 {
 			else {}
 		}
 	}
+	note_operand_fault('prof', 'prof-', 'float', n)
 	return none
 }
 

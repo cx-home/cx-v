@@ -209,17 +209,21 @@ fn render_node(n cx.Node) string {
 			return '(${parts.join(', ')})'
 		}
 		// DATA↔PROGRAM seam: an embedded pure-DATA node value (from a `node_lit`
-		// literal) renders through the data CX emitter so `cx file.cx` (eval)
-		// matches `cx --from=cx --to=cx file.cx` (data) byte-for-byte.
+		// literal or a `[$cx:parse]` subtree — comments included) renders
+		// through the data CX emitter so `cx file.cx` (eval) matches
+		// `cx --from=cx --to=cx file.cx` (data) byte-for-byte.
 		// CXDirectiveNode is the `[?cx …]` PI/config namespace (#421) —
 		// preserved verbatim per code.md §13.2 (include resolution is opt-in).
 		// EvalDirectiveNode is a directive carried as DATA (a `[$cx:parse]`
 		// of directive-bearing source, #436) — it renders as its CX surface
 		// form via the data emitter, never as a V struct repr.
+		// CommentNode (#962): ast.md gives the Comment node exactly one CX
+		// spelling; without this arm it fell to the debug-print `else` and
+		// printed a raw V struct image into program output.
 		cx.RawTextNode, cx.EntityRefNode, cx.DoctypeDecl, cx.EntityDeclNode,
 		cx.ElementDeclNode, cx.AttlistDeclNode, cx.NotationDeclNode,
 		cx.PEReferenceNode, cx.ConditionalSectNode, cx.DocumentNode,
-		cx.CXDirectiveNode, cx.EvalDirectiveNode {
+		cx.CXDirectiveNode, cx.EvalDirectiveNode, cx.CommentNode {
 			return cx.cx_emit_node_str(n, true)
 		}
 		else {
@@ -281,11 +285,11 @@ pub fn render_node_to(mut b strings.Builder, n cx.Node) {
 		}
 		// DATA↔PROGRAM seam: render embedded pure-DATA node values via the data
 		// CX emitter (see render_node above; CXDirectiveNode per #421,
-		// EvalDirectiveNode per #436).
+		// EvalDirectiveNode per #436, CommentNode per #962).
 		cx.RawTextNode, cx.EntityRefNode, cx.DoctypeDecl, cx.EntityDeclNode,
 		cx.ElementDeclNode, cx.AttlistDeclNode, cx.NotationDeclNode,
 		cx.PEReferenceNode, cx.ConditionalSectNode, cx.DocumentNode,
-		cx.CXDirectiveNode, cx.EvalDirectiveNode {
+		cx.CXDirectiveNode, cx.EvalDirectiveNode, cx.CommentNode {
 			b.write_string(cx.cx_emit_node_str(n, true))
 		}
 		else {
@@ -352,28 +356,46 @@ fn render_scalar_to(mut b strings.Builder, n cx.ScalarNode) {
 			}
 		}
 		i64    { b.write_string(v.str()) }
-		f64    { b.write_string(v.str()) }
+		f64    { b.write_string(cx.cx_format_float(v)) }
 		bool   { b.write_string(v.str()) }
 		cx.NullValue { b.write_string('null') }
 	}
 }
 
-// attr_needs_typed_render reports whether an attribute carries a type the
-// value-only path can't render losslessly — an atom (needs the `:` sigil)
-// or a non-auto-recoverable scalar type (sized int / decimal / bigint /
-// bytes, needs the glued `::T` annotation). Such attributes defer to the
-// shared `cx.cx_attr_scalar` so the eval / gate renderer agrees with the
-// canonical-CX emitter (D3). Untyped, auto-recoverable, and reference
-// attributes keep their existing value-only rendering. (D3)
+// attr_needs_typed_render reports whether an attribute must be rendered
+// through the shared type-aware authority `cx.cx_attr_scalar` rather than
+// the value-only path below.
+//
+// #991 (RULED: CO-12): the answer is now "every attribute that CARRIES a
+// type and is not a `string`". The old rule exempted the types
+// `type_name_is_auto_recoverable` names — int / float / bool / null /
+// date / datetime — on the theory that a value-only render reproduces
+// their image. That held for int / bool / null and FAILED for the other
+// two, because the value-only path decides from the `ScalarValue` union
+// alone and the union cannot express the kind:
+//
+//   • `date` / `datetime` park their verbatim CX image in a *string*
+//     payload, so `render_attr_value` read them as strings and
+//     `needs_quoted_attr` quoted the digit-led image — `on='2026-08-25'`
+//     re-parses as a STRING. (spec/std-lib/format.md §2.1 deviation 1.)
+//   • `float` reached `v.str()`, V's formatting policy, instead of the
+//     CX-owned Ryū image the rest of the language uses — `r=1.5`, which
+//     re-parses as a DECIMAL, and which COLLIDES with decimal 1.5's own
+//     canonical image. (deviation 2; the #976 address-collision class.)
+//
+// That is exactly the trap `cx_attr_scalar_parts` was split out to close
+// for pretty / diff-friendly under #978 (RULED: CO-3). Canonical and
+// compact now share the same one decision, so quoting is decided from the
+// scalar's TYPE in every form. Untyped and reference attributes keep the
+// value-only rendering, and so does `string` — its program-reader-strict
+// quoting (`needs_quoted_attr`) is the deliberate divergence documented
+// there.
 fn attr_needs_typed_render(a cx.Attribute) bool {
 	if a.is_ref {
 		return false
 	}
 	dt := a.data_type() or { return false }
-	if dt == 'atom' {
-		return true
-	}
-	return !(cx.type_name_is_auto_recoverable(dt) || dt == 'string')
+	return dt != 'string'
 }
 
 fn render_attr_value_to(mut b strings.Builder, v cx.ScalarValue) {
@@ -388,7 +410,7 @@ fn render_attr_value_to(mut b strings.Builder, v cx.ScalarValue) {
 			}
 		}
 		i64    { b.write_string(v.str()) }
-		f64    { b.write_string(v.str()) }
+		f64    { b.write_string(cx.cx_format_float(v)) }
 		bool   { b.write_string(v.str()) }
 		cx.NullValue { b.write_string('null') }
 	}
@@ -583,6 +605,20 @@ fn render_body_item_to(mut b strings.Builder, n cx.Node) {
 		b.write_string(')')
 		return
 	}
+	// #962 — a LINE comment (`# …`) in element-body position keeps its
+	// terminating newline: the form runs to end-of-line, so an inline emit
+	// would swallow every following sibling (and the closing `]`) on
+	// re-parse — silent document truncation, a worse defect than the struct
+	// dump this arm replaces. Block comments `[;…]` are self-delimiting and
+	// stay inline via render_node_to.
+	if n is cx.CommentNode {
+		if n.is_line {
+			b.write_string('# ')
+			b.write_string(n.value)
+			b.write_string('\n')
+			return
+		}
+	}
 	render_node_to(mut b, n)
 }
 
@@ -621,7 +657,7 @@ pub fn render_scalar(n cx.ScalarNode) string {
 			return choose_render_quote(v)
 		}
 		i64    { return v.str() }
-		f64    { return v.str() }
+		f64    { return cx.cx_format_float(v) }
 		bool   { return v.str() }
 		cx.NullValue { return 'null' }
 	}
@@ -1024,6 +1060,13 @@ fn render_body_item(n cx.Node) string {
 		}
 		return '(${parts.join(', ')})'
 	}
+	// #962 — line comment in body position → newline-terminated; see
+	// render_body_item_to for the swallowed-sibling rationale.
+	if n is cx.CommentNode {
+		if n.is_line {
+			return '# ${n.value}\n'
+		}
+	}
 	return render_node(n)
 }
 
@@ -1039,7 +1082,7 @@ fn render_attr_value(v cx.ScalarValue) string {
 			return v
 		}
 		i64    { return v.str() }
-		f64    { return v.str() }
+		f64    { return cx.cx_format_float(v) }
 		bool   { return v.str() }
 		cx.NullValue { return 'null' }
 	}

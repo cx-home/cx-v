@@ -301,4 +301,46 @@ cx eval: error reading program "[+ 1 2]": failed to open file "[+ 1 2]"; code: 2
 #]]
   [exit-code [#0#]]
  ]
+
+ [; ── A6. a bare fraction is a DECIMAL, and decimals do not mix with floats ── ]
+
+ [case id=ap-decimal-float-mix-wrong level=core
+  [title [#Mixing a decimal literal with a float in arithmetic#]]
+  [tags scalars decimal float arithmetic antipattern 698]
+  [why [#
+Almost every language reads a bare fraction as a binary float. CX does not:
+`1.5` is a **decimal** — exact, base-10, arbitrary precision — and only an
+`e`-exponent literal (`1.5e0`), a `::float` annotation, a `[cast … :float]`,
+a division, `[$avg]`, or a float-returning `math` function produces a float.
+
+The two kinds do not silently mix. Adding them is a loud refusal naming the
+only bridge, rather than a quiet promotion that would put binary rounding
+into a money column — which is precisely the class this rule exists to close.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[+ 1.5 1.0e0]
+#]]
+  [out-text [#
+[err code=cx-err:CXER0100 message='+: decimal/bigint arithmetic admits only int/bigint/decimal operands — [cast] is the only decimal↔float bridge (L44)']
+#]]
+  [exit-code [#1#]]
+ ]
+
+ [case id=ap-decimal-float-mix-right level=core
+  [title [#Keep exact quantities in decimals#]]
+  [tags scalars decimal arithmetic 698]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $subtotal 19.99] [= $shipping 5.01] [total [+ $subtotal $shipping]]]
+#]]
+  [out-text [#
+[total 25.00]
+#]]
+  [exit-code [#0#]]
+ ]
 ]

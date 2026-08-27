@@ -504,7 +504,7 @@ note: window; only the 50 spent after midnight counts at now.
   [$authz:meters $az {now: '2026-01-02T02:00:00Z'}]]
 #]]
   [out-text [#
-[meters [meter id=d-1 spend-used=50.0]]
+[meters [meter id=d-1 spend-used=5.0e1]]
 #]]
  ]
 
@@ -975,7 +975,7 @@ note: reservation that would have exceeded the cap now fits.
   [probe [reserved $a1] [rate $rate-refused] [over-reserve $over] [draw $draw1] [draw-over $draw-over] [expired $exp] [draw-late $draw-late] [reclaimed-then-ok $after]]]
 #]]
   [out-text [#
-[probe [reserved [allocated alloc=esc-1 from=d-parent count=4 spend=40.0 currency=USD]] [rate [code 'cx-err:CXER4711']] [over-reserve [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :spend] [delegation 'd-parent']]] [draw [debited id=d-parent alloc=esc-1 count=2 spend=15.0 currency=USD]] [draw-over [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-count] [delegation 'esc-1']]] [expired [allocation-expired alloc=esc-1 reclaimed-count=2 reclaimed-spend=25.0]] [draw-late [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-expired] [delegation 'esc-1']]] [reclaimed-then-ok [allocated alloc=esc-3 from=d-parent spend=70.0 currency=USD]]]
+[probe [reserved [allocated alloc=esc-1 from=d-parent count=4 spend=4.0e1 currency=USD]] [rate [code 'cx-err:CXER4711']] [over-reserve [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :spend] [delegation 'd-parent']]] [draw [debited id=d-parent alloc=esc-1 count=2 spend=1.5e1 currency=USD]] [draw-over [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-count] [delegation 'esc-1']]] [expired [allocation-expired alloc=esc-1 reclaimed-count=2 reclaimed-spend=2.5e1]] [draw-late [deny [code 'cx-err:CXER4713'] [reason :budget-exhausted] [conjunct :allocation-expired] [delegation 'esc-1']]] [reclaimed-then-ok [allocated alloc=esc-3 from=d-parent spend=7.0e1 currency=USD]]]
 #]]
  ]
 

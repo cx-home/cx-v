@@ -76,7 +76,7 @@ conformance fixtures for cx-stdlib/store (spec/std-lib/store.md §8).
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $s [$store:open "mem://"]] [= $doc [?element "rows" ([?element "row" [?attr "id" "a"] [?attr "title" "has 'quotes' — tricky"]], [?element "row" [?attr "id" "b"] [?attr "title" "has 'quotes' — tricky"]])]] [= $h [$store:put-doc $s $doc]] [$cx:equal [$store:get-doc $s $h] $doc]]
+[?let [= $s [$store:open "mem://"]] [= $doc [?element "rows" [?splice ([?element "row" [?attr "id" "a"] [?attr "title" "has 'quotes' — tricky"]], [?element "row" [?attr "id" "b"] [?attr "title" "has 'quotes' — tricky"]])]]] [= $h [$store:put-doc $s $doc]] [$cx:equal [$store:get-doc $s $h] $doc]]
 #]]
   [out-text [#
 true
@@ -104,7 +104,7 @@ true
 #]]
   [in-code [#
 [?lib 'cx-stdlib/store']
-[?let [= $kids [?for [in $i ("a", "b")] [yield [?element "row" [?attr "id" $i]]]]] [= $doc [?element "rows" $kids]] [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s $doc]] ([$cx:equal [$store:get-doc $s $h] $doc], [$eq [$cx:serialize [$store:get-doc $s $h]] [$cx:serialize $doc]])]
+[?let [= $kids [?for [in $i ("a", "b")] [yield [?element "row" [?attr "id" $i]]]]] [= $doc [?element "rows" [?splice $kids]]] [= $s [$store:open "mem://"]] [= $h [$store:put-doc $s $doc]] ([$cx:equal [$store:get-doc $s $h] $doc], [$eq [$cx:serialize [$store:get-doc $s $h]] [$cx:serialize $doc]])]
 #]]
   [out-text [#
 (true, true)
@@ -1883,6 +1883,7 @@ true
 
  [case id=store-034-explain-query-slices-and-rewrites level=core
   [tags store explain-query planar quoted slices rewrites l99 l96 stream-2]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [; the slice set is extracted statically (kind/handle/path) and the L96
      rewrite report rides the same element — an order-by/where pair shows
      one APPLIED σ-pushdown (the honest-reporting surface). ]
@@ -1896,10 +1897,10 @@ true
     [order-by $o@n] [where [= $o@k "x"]] [yield $o]]]]]
   [report slices=[$count $qp//slice]
     pushdown=[$count $qp//applied[= $_@kind "sigma-pushdown-below-tau"]]
-    [p $qp//slice/@path]]]
+    [p [?splice $qp//slice/@path]]]]
 #]]
   [out-text [#
-[report slices=1 pushdown=1 [p ([path '//order'])]]
+[report slices=1 pushdown=1 [p [path '//order']]]
 #]]
  ]
 
@@ -2257,7 +2258,10 @@ cx-err:CXER1117
  [= $in [$store:put-doc $s [v 1]]]
  [= $rec {computation: {fn: {code: [$cx:computation-id $src], source: $fsrc}, inputs: {x: $in}, env: [$cx:env], caps: [$caps]}}]
  [= $rid [$store:put-doc $s $rec]]
- [= $bad [$store:put-doc-text $s "[err code='cx-err:CXER0273' message='evaluation budget exceeded']"]]
+ [; CO-2 migration: storing a bare err document is a deliberate act — the
+    setup step names it with errs=:permit so the case still reaches the
+    CXER1119 uncacheable-result refusal it exists to pin. ]
+ [= $bad [$store:put-doc-text $s "[err code='cx-err:CXER0273' message='evaluation budget exceeded']" {errs: :permit}]]
  [$store:set-alias $s [$concat 'computation/' $rid] $bad]]
 #]]
   [out-err [#
@@ -2519,6 +2523,72 @@ cx-err:CXER4619
 #]]
   [out-err [#
 cx-err:CXER1144
+#]]
+ ]
+
+ [; CO-2 975: the err-at-boundary rule — a store document write is an
+    externalizing effect; an err element at any depth refuses CXER0275
+    unless the effect form carries errs=:permit. commands_effects §7.5. ]
+
+ [case id=store-err-boundary-001-put-doc-nested-err-refuses level=core gate=enforced
+  [tags store err-boundary CXER0275 975]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]]
+      [= $rows ([row [v 2.5]], [err code=cx-err:CXER0100 message="a refusal at rest"], [row [v 4.5]])]
+  [$store:put-doc $s [report [count [$count $rows]] [?splice $rows]]]]
+#]]
+  [out-err [#
+cx-err:CXER0275
+#]]
+ ]
+
+ [case id=store-err-boundary-002-put-doc-permit-externalizes level=core gate=enforced
+  [tags store err-boundary permit 975]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]]
+      [= $h [$store:put-doc $s [report [err code=cx-err:CXER0100 message="stored deliberately"]] {errs: :permit}]]
+  [$store:get-doc $s $h]]
+#]]
+  [out-text [#
+[report [err code=cx-err:CXER0100 message='stored deliberately']]
+#]]
+ ]
+
+ [case id=store-err-boundary-003-modify-action-err-refuses level=core gate=enforced
+  [tags store err-boundary modify CXER0275 975]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/store']
+[?let [= $s [$store:open "mem://"]]
+      [= $h [$store:put-doc $s [doc [item "x"]]]]
+  [$store:modify-doc $s $h [append [err code=cx-err:CXER0100 message="injected"]]]]
+#]]
+  [out-err [#
+cx-err:CXER0275
+#]]
+ ]
+
+ [case id=store-err-boundary-004-err-stays-a-value-in-process level=core gate=enforced
+  [tags store err-boundary regression collection-literal 975]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?let [= $rows ([row [v 2.5]], [err code=cx-err:CXER0100 message="a value, in process"], [row [v 4.5]])]
+  [summary [n [$count $rows]] [first-err-code [?for [in $e $rows] [where [?match $e [case [err] true] [else false]]] [yield [$concat "" $e@code]]]]]]
+#]]
+  [out-text [#
+[summary [n 3] [first-err-code 'cx-err:CXER0100']]
 #]]
  ]
 ]

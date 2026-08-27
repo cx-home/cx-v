@@ -46,6 +46,9 @@ fn arr_native_int_arg(n cx.Node) ?i64 {
 			}
 		}
 	}
+	// R-A8 (#955): note the operand-kind fault so an end-of-chain miss
+	// answers CXER0100 naming `array:<fn>`, not `no callable "arr-<fn>"`.
+	note_operand_fault('array', 'arr-', 'int', n)
 	return none
 }
 

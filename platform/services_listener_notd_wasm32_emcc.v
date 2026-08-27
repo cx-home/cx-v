@@ -1547,6 +1547,30 @@ fn cx_sse_topic_publish(topic string, frame string) int {
 }
 
 fn cx_response_to_wire(node cx.Node, defaults []cx.Attribute) WireResp {
+	// RULED: CO-2 (#975): response emission is an externalizing effect — a
+	// handler result containing an [err] at ANY depth (root included: a bare
+	// [err] result previously left as a 200 with the err serialized into the
+	// body, the exact rendered-into-HTML class) refuses as a LOUD 500 naming
+	// the first err's code and path, unless the [response]/[sse-subscribe]
+	// element carries errs=:permit. The daemon's own error paths build wires
+	// via mk_wire directly and never pass here, so framework refusals stay
+	// loud and unaffected.
+	mut co2_permit := false
+	if node is cx.Element {
+		pe := node as cx.Element
+		if pe.name == 'response' || pe.name == 'sse-subscribe' {
+			co2_permit = code.errs_permitted_node(cx.Node(cx.Element{
+				name:  pe.name
+				attrs: pe.attrs
+			}))
+		}
+	}
+	if !co2_permit {
+		if hit := code.find_err_at_rest(node) {
+			hcode := if hit.code == '' { 'an [err] with no code' } else { hit.code }
+			return mk_wire(500, defaults, 'cx-err:CXER0275 E_ERR_AT_BOUNDARY: refusing the http response — the handler result contains ${hcode} at ${hit.path}; a refusal must not leave the program as silent data (set errs=:permit on the [response] to externalize it deliberately)\n')
+		}
+	}
 	// #28 concurrent-SSE: a handler promotes its connection to a live feed by
 	// returning `[sse-subscribe topic="…" [event …]?]`. The reactor holds the fd
 	// and subscribes it to the topic; pushes arrive via [$http:sse-publish] from
@@ -2031,6 +2055,11 @@ fn services_listener_init_globals() {
 	xap_push_lock = sync.new_mutex()
 	xap_push_last = map[int]i64{}
 	xap_push_waiting = map[int]bool{}
+	// #994: the held-pump registry is written by the booting thread and read
+	// by the arm/abandon call on that same boot, but a process may boot more
+	// than one runtime concurrently — same real-mutex requirement.
+	xap_pump_lock = sync.new_mutex()
+	xap_pending_pumps = map[int][]XapSourcePump{}
 	// #875: the TLS/h2 serve lane's registries + connection cap
 	// (http_h2_serve_notd_wasm32_emcc.v) — same real-mutex requirement.
 	http_tls_serve_init_globals()

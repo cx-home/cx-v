@@ -526,6 +526,7 @@ fn term_duration_ms(n cx.Node) ?int {
 			return int(v)
 		}
 	}
+	note_operand_fault('term', 'term-', 'int', n)
 	return none
 }
 

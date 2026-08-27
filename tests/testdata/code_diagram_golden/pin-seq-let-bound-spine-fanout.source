@@ -1,0 +1,13 @@
+[?let [= $jobs [?channel name="jobs" buffer=8]]
+  [?let [= $results [?channel name="results" buffer=16]]
+    [?let [= $d [?worker name="dispatcher"
+                  [body [?let [= $_ [?for [in $j [$range 1 4]]
+                                      [yield [?send $j to=$jobs]]]]
+                          [?close $jobs]]]]]
+      [?let [= $w [?worker name="worker"
+                    [body [?for [in $j [$range 1 4]]
+                            [yield [?send [processed value=[?receive from=$jobs]]
+                                     to=$results]]]]]]
+        [?let [= $_ [?wait-for worker=$d]]
+          [?for [in $k [$range 1 4]]
+            [yield [?receive from=$results]]]]]]]]

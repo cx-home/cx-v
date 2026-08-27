@@ -673,7 +673,7 @@ true
 [?let [= $p [$first [$mime:parse-accept "text/html"]]] $p/@q]
 #]]
   [out-text [#
-1.0
+1.0e0
 #]]
  ]
 

@@ -417,7 +417,7 @@
   [sig """-> [or number absence]"""]
   [summary """Parse a locale-free numeric string into a number — int for pure-integer syntax, float for fractional / exponent syntax. Surrounding whitespace is trimmed; a non-numeric input (trailing junk, grouping separators, empty) yields the absence channel () rather than a silent string passthrough, so callers branch with [?else]. For grouping / Unicode digits use cx-stdlib/locale."""]
   [example [code """[?lib 'cx-stdlib/strings']
-[$strings:to-number "3.07"]"""] [expect """3.07"""]]
+[$strings:to-number "3.07"]"""] [expect """3.07e0"""]]
 ]
 [fn-doc name=to-int scope=public purity=pure
   [sig """-> [or int absence]"""]
@@ -429,5 +429,5 @@
   [sig """-> [or float absence]"""]
   [summary """Parse any locale-free numeric string into a float ("5" -> 5.0); a non-numeric input yields the absence channel ()."""]
   [example [code """[?lib 'cx-stdlib/strings']
-[$strings:to-float "5"]"""] [expect """5.0"""]]
+[$strings:to-float "5"]"""] [expect """5.0e0"""]]
 ]

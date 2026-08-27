@@ -37,6 +37,24 @@ conformance fixtures for the cx: self-host module (spec/03-approved/modules/cx.m
               membership negatives at the checker's first runtime
               consumer (ambient generator / impure predicate / [?eval]
               body → typed CXER0120)
+     122-131  #940 / RULED VC-6 — cx:eval + cx:render, the §2.2 string-eval
+              pair. Context-only bindings and no ambient capture (§3.1),
+              [?lib] narrowing-only (§3.2 / CXER4113), the depth cap
+              (§3.3 / CXER4114) and its ONE budget shared across eval and
+              render, malformed source (CXER4100), the `eval` capability
+              lane (CXER0271), and the purity refusal a pure [?def] earns
+              for reaching either (CXER0233)
+     132-156  #940 / RULED VC-6 — the eight §2.2 analysis / §2.3 transform
+              functions: validate (empty sequence = valid; the one
+              [violation …] vocabulary), anchors / ids / references (the
+              two disjoint cxdm.md §4 namespaces, all four reference
+              forms), resolve-includes (splice, plus CXER4107 cycle /
+              CXER4108 not-found / CXER4109 traversal / CXER0271 under
+              the `read` gate), strip-comments, strip-attrs (name glob +
+              CXER4115), pretty-print (every §2.3 opt)
+     160-161  #940 / RULED VC-6 — the §2.2 arity contract: $context is
+              REQUIRED for cx:eval and cx:render (only $opts defaults),
+              unlike cx:eval-tree where $context does default
 
    No inter-fixture comment dividers and no inline comments inside
    in-code (the harness extracts sections to end-of-chunk).
@@ -225,12 +243,20 @@ true
  ]
 
  [case id=cx-017-serialize-sequence-body-no-marker-leak level=core
-  [tags cx serialize sequence element issue-564]
+  [tags cx serialize sequence element issue-564 parsed-lane]
+  [; R-A1 migration: PIVOTED TO THE PARSED LANE (2026-08-25). This case pins
+     that an element whose body IS a sequence serializes as a paren sequence
+     with NO __cx_seq__ marker leak. Under R-A1 (#847-1a) the RUNTIME
+     construction that used to produce that value — [?element "rows" (…)] —
+     is refused at eval, so the shape is unconstructible at runtime; the
+     PARSED shape still exists, so the same document now arrives via
+     [$cx:parse] of paren-seq-body source text and the original
+     serialize/no-marker-leak assertion is kept verbatim against it. ]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
-[$cx:serialize [?element "rows" ([?element "row" [?attr "id" "a"]], [?element "row" [?attr "id" "b"]])]]
+[$cx:serialize [$cx:parse "[rows ([row id=a], [row id=b])]"]]
 #]]
   [out-text [#
 '[rows ([row id=a], [row id=b])]\n'
@@ -238,15 +264,24 @@ true
  ]
 
  [case id=cx-018-serialize-anon-wrapper-body-is-sequence level=core
-  [tags cx serialize sequence for-comprehension issue-566]
+  [tags cx serialize sequence for-comprehension issue-566 parsed-lane round-trip]
+  [; R-A1 migration: PIVOTED TO THE PARSED LANE (2026-08-25). The original
+     built the sequence body from a [?for] comprehension result and pinned
+     its serialization; R-A1 (#847-1a) refuses that runtime construction, so
+     the wrapper-with-sequence-body value now arrives via [$cx:parse] of
+     paren-seq-body source text. The no-marker-leak assertion is kept intact
+     (the exact serialized image is still the pinned second member), and the
+     case is distinguished from cx-017 by additionally pinning that the image
+     is STABLE under re-parse — a leaked __cx_seq__ marker could not survive
+     that round trip silently. ]
   [in-cx [#
 [empty]
 #]]
   [in-code [#
-[?let [= $kids [?for [in $i ("a", "b")] [yield [?element "row" [?attr "id" $i]]]]] [$cx:serialize [?element "rows" $kids]]]
+[?let [= $t [$cx:parse "[rows ([row id=a], [row id=b])]"]] [= $s [$cx:serialize $t]] ([$eq $s [$cx:serialize [$cx:parse $s]]], $s)]
 #]]
   [out-text [#
-'[rows ([row id=a], [row id=b])]\n'
+(true, '[rows ([row id=a], [row id=b])]\n')
 #]]
  ]
 
@@ -1275,6 +1310,637 @@ note: form also exercises attr ordering + child indentation.
 #]]
   [out-text [#
 true
+#]]
+ ]
+
+ [case id=cx-122-eval-context-binding level=core grant='eval'
+  [tags cx eval sandbox context issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:eval "[a $x]" {x: 1}]
+#]]
+  [out-text [#
+[a 1]
+#]]
+ ]
+
+ [case id=cx-123-eval-context-function level=core grant='eval'
+  [tags cx eval sandbox context function issue-940 vc-6]
+  [meta [#
+note: modules/cx.md §3.1's own worked example — a function reaches an
+note: evaluated fragment ONLY as a context value.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:eval "[$transform 2]" {transform: [?fn ($x) [* $x 10]]}]
+#]]
+  [out-text [#
+20
+#]]
+ ]
+
+ [case id=cx-124-eval-no-ambient-def-capture level=core grant='eval'
+  [tags cx eval sandbox isolation issue-940 vc-6]
+  [meta [#
+note: §3.1 bullet 1 — no [?def] definitions from the caller document are
+note: visible inside the fragment. The caller HAS `helper`; the fragment
+note: cannot see it, so calling it is an ordinary unresolved-callable err.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def helper () 42]
+[?fallback [$cx:eval "[$helper]" {}] [recover-with [context] [refused $err@code]]]
+#]]
+  [out-text [#
+[refused 'user-undefined']
+#]]
+ ]
+
+ [case id=cx-125-eval-lib-narrowing-allowed level=core grant='eval'
+  [tags cx eval sandbox lib narrowing issue-940 vc-6]
+  [meta [#
+note: §3.2 — the fragment inherits the caller's [?lib] set. Re-declaring a
+note: prefix the caller already holds is not widening, so it passes.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/strings' as=s]
+[$cx:eval "[?lib 'cx-stdlib/strings' as=s] [$s:upper 'a']" {}]
+#]]
+  [out-text [#
+'A'
+#]]
+ ]
+
+ [case id=cx-126-eval-lib-widen-refused level=core grant='eval'
+  [tags cx eval sandbox lib widening issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:eval "[?lib 'cx-stdlib/strings' as=s] [$s:upper 'a']" {}]
+#]]
+  [out-err [#
+cx-err:CXER4113
+#]]
+ ]
+
+ [case id=cx-127-eval-depth-exceeded level=core grant='eval'
+  [tags cx eval sandbox depth issue-940 vc-6]
+  [meta [#
+note: §3.3 — the counter is SHARED, so the inner call's own max-depth is
+note: measured against the depth the outer call already consumed.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:eval "[$cx:eval '1' {} {max-depth: 1}]" {}]
+#]]
+  [out-err [#
+cx-err:CXER4114
+#]]
+ ]
+
+ [case id=cx-128-eval-malformed-source level=core grant='eval'
+  [tags cx eval parse issue-940 vc-6]
+  [meta [#
+note: the one refusal string-eval has that tree-eval structurally cannot
+note: (§3.4): there IS a parse step, so malformed source is CXER4100.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:eval "[unclosed" {}]
+#]]
+  [out-err [#
+cx-err:CXER4100
+#]]
+ ]
+
+ [case id=cx-129-eval-capability-denied level=core
+  [tags cx eval capability denial issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:eval "1" {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=cx-130-eval-pure-def-refused level=core grant='eval'
+  [tags cx eval purity issue-940 vc-6]
+  [meta [#
+note: §3 — cx:eval is impure, so the purity classifier refuses a pure
+note: [?def] body that reaches it.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def f pure () [$cx:eval "1" {}]]
+[$f]
+#]]
+  [out-err [#
+cx-err:CXER0233
+#]]
+ ]
+
+ [case id=cx-131-render-serializes-eval-result level=core grant='eval'
+  [tags cx render eval serialize issue-940 vc-6]
+  [meta [#
+note: §2.2 — cx:render is sugar for cx:serialize(cx:eval(t, ctx)), so the
+note: result carries serialize's trailing LF (the §4 byte identity).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:render "[greeting $who]" {who: 'world'}]
+#]]
+  [out-text [#
+'[greeting world]\n'
+#]]
+ ]
+
+ [case id=cx-132-render-shares-eval-depth-budget level=core grant='eval'
+  [tags cx render eval depth issue-940 vc-6]
+  [meta [#
+note: §3.3 — "the counter increments on each cx:eval invocation INCLUDING
+note: indirect invocation through cx:render". The render consumes depth 1,
+note: so the nested eval capped at 1 refuses.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:render "[$cx:eval '1' {} {max-depth: 1}]" {}]
+#]]
+  [out-err [#
+cx-err:CXER4114
+#]]
+ ]
+
+ [case id=cx-133-render-capability-denied level=core
+  [tags cx render capability denial issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:render "[a 1]" {}]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=cx-134-render-pure-def-refused level=core grant='eval'
+  [tags cx render purity issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?def g pure () [$cx:render "1" {}]]
+[$g]
+#]]
+  [out-err [#
+cx-err:CXER0233
+#]]
+ ]
+
+ [case id=cx-160-eval-context-not-optional level=core grant='eval'
+  [tags cx eval arity signature issue-940 vc-6]
+  [meta [#
+note: §2.2 defaults only $opts (`=$nil`). $context is REQUIRED for cx:eval
+note: and OPTIONAL for cx:eval-tree — the spec draws that distinction
+note: deliberately, so a one-argument cx:eval refuses rather than quietly
+note: evaluating against an empty context.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:eval "1"]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=cx-161-render-arity-exact level=core grant='eval'
+  [tags cx render arity signature issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:render "[a 1]"]
+#]]
+  [out-err [#
+cx-err:CXER0100
+#]]
+ ]
+
+ [case id=cx-135-validate-clean-empty-sequence level=core
+  [tags cx validate schema issue-940 vc-6]
+  [meta [#
+note: §2.2 types the return [sequence any]; an EMPTY sequence is "valid".
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:validate "[person name=ann]" "[schema of=person version='0.8'] [type person [attr name :type=string]]"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=cx-136-validate-violation-item level=core
+  [tags cx validate schema violation issue-940 vc-6]
+  [meta [#
+note: the item is the SAME [violation …] value validate-against puts inside
+note: its [invalid …] result — one violation vocabulary, not a second shape.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:validate "[person name=ann]" "[schema of=person version='0.8'] [type person [attr age :type=int :required=true]]"]
+#]]
+  [out-text [#
+([violation code=S002 path='' message="missing required attribute 'age' on <person>"])
+#]]
+ ]
+
+ [case id=cx-137-validate-schema-load-diagnostic level=core
+  [tags cx validate schema load-failure issue-940 vc-6]
+  [meta [#
+note: schema.md §10.1 surfaces schema-LOAD failure as a diagnostic inside
+note: the report, so it arrives as a violation item like any other rather
+note: than as an err — one uniform way to read the outcome.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:validate "[person name=ann]" "[not a schema"]
+#]]
+  [out-text [#
+([violation code=S009 path='' message="schema parse failure: 1:15: expected ']' got EOF (cx-err:CXER0100)"])
+#]]
+ ]
+
+ [case id=cx-138-anchors-document-order level=core
+  [tags cx anchors cxdm identity issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:anchors "[root [a &one x] [b &two y] [c z]]"]
+#]]
+  [out-text [#
+(one, two)
+#]]
+ ]
+
+ [case id=cx-139-anchors-none-empty-sequence level=core
+  [tags cx anchors empty issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:anchors "[root [a x]]"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=cx-140-ids-document-order-nested level=core
+  [tags cx ids cxdm identity issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:ids "[root [a #one x] [nest [b #two y]]]"]
+#]]
+  [out-text [#
+(one, two)
+#]]
+ ]
+
+ [case id=cx-141-ids-none-empty-sequence level=core
+  [tags cx ids empty issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:ids "[root [a x]]"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=cx-142-references-idref-record level=core
+  [tags cx references idref map issue-940 vc-6]
+  [meta [#
+note: §2.2 types the item `map` without naming keys; the record is
+note: {attr, kind, path, ref, resolved} in canonical (sorted) key order,
+note: `path` in the same /root/child[2] spelling cx:diff / cx:patch use.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:references "[root [a #one x] [b to=@one y]]"]
+#]]
+  [out-text [#
+({attr: to, kind: idref, path: '/root/b', ref: one, resolved: true})
+#]]
+ ]
+
+ [case id=cx-143-references-none-empty-sequence level=core
+  [tags cx references empty issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:references "[root [a x]]"]
+#]]
+  [out-text [#
+()
+#]]
+ ]
+
+ [case id=cx-144-references-anchor-namespace-forms level=core
+  [tags cx references anchor alias merge issue-940 vc-6]
+  [meta [#
+note: cxdm.md §4's two namespaces are disjoint — MergeRef (*name on a head,
+note: grammar [61]) and AliasElement ([*name], [62]) resolve against the
+note: ANCHOR table, not the ID table.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:references "[root [defaults &def timeout=30] [use *def] [also [*def]]]"]
+#]]
+  [out-text [#
+({attr: '', kind: merge, path: '/root/use', ref: def, resolved: true}, {attr: '', kind: alias, path: '/root/also', ref: def, resolved: true})
+#]]
+ ]
+
+ [case id=cx-145-resolve-includes-splices level=core grant='read write' packs=io
+  [tags cx resolve-includes include splice granted effort-b issue-940 vc-6]
+  [meta [#
+note: hermetic — io's own temp-dir is the include root, so the case is
+note: self-contained and the root is EXPLICIT (§3.1: no ambient cwd).
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let
+  [= $d [$io:temp-dir "cxri"]]
+  [= $p [$path:join $d "part.cx"]]
+  [= $w [$io:write-file $p "[fragment ok=yes]"]]
+  [$cx:resolve-includes "[root [?cx include=part.cx]]" $d]]
+#]]
+  [out-text [#
+[root [fragment ok=yes]]
+#]]
+ ]
+
+ [case id=cx-146-resolve-includes-not-found level=core grant='read write' packs=io
+  [tags cx resolve-includes error granted issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?let
+  [= $d [$io:temp-dir "cxri"]]
+  [$cx:resolve-includes "[root [?cx include=nope.cx]]" $d]]
+#]]
+  [out-err [#
+cx-err:CXER4108
+#]]
+ ]
+
+ [case id=cx-147-resolve-includes-traversal-refused level=core grant='read write'
+  [tags cx resolve-includes traversal security granted issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [; The traversal refusal is decided from the PATH against the root, before
+     any filesystem access — `../escape.cx` escapes every root there is. So
+     this case takes a literal root and does NOT reach for cx-stdlib/io.
+     It used to call [$io:temp-dir], which made it the one resolve-includes
+     case that failed under the PROFILE gate: a restricted profile carries no
+     `io-temp-dir` callable, so the case reported `no callable "io-temp-dir"`
+     where CXER4109 was expected — an io-availability failure wearing a
+     traversal-check verdict. Isolating the check from the filesystem is both
+     the fix and the better test. ]
+  [in-code [#
+[$cx:resolve-includes "[root [?cx include='../escape.cx']]" "/tmp/cx-no-such-root"]
+#]]
+  [out-err [#
+cx-err:CXER4109
+#]]
+ ]
+
+ [case id=cx-148-resolve-includes-cycle level=core grant='read write' packs=io
+  [tags cx resolve-includes cycle granted issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/io']
+[?lib 'cx-stdlib/path']
+[?let
+  [= $d [$io:temp-dir "cxri"]]
+  [= $a [$path:join $d "a.cx"]]
+  [= $b [$path:join $d "b.cx"]]
+  [= $wa [$io:write-file $a "[a [?cx include=b.cx]]"]]
+  [= $wb [$io:write-file $b "[b [?cx include=a.cx]]"]]
+  [$cx:resolve-includes "[root [?cx include=a.cx]]" $d]]
+#]]
+  [out-err [#
+cx-err:CXER4107
+#]]
+ ]
+
+ [case id=cx-149-resolve-includes-capability-denied level=core
+  [tags cx resolve-includes capability denial issue-940 vc-6]
+  [meta [#
+note: security.md scopes the `read` capability as "filesystem reads,
+note: [?cx include]" — and this IS [?cx include] at runtime.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:resolve-includes "[root [?cx include=missing.cx]]" "."]
+#]]
+  [out-err [#
+cx-err:CXER0271
+#]]
+ ]
+
+ [case id=cx-150-strip-comments-both-spellings level=core
+  [tags cx strip-comments transform issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:strip-comments "[root [; a note] [a x] [nest [; inner] [b y]]]"]
+#]]
+  [out-text [#
+[root [a 'x'] [nest [b 'y']]]
+#]]
+ ]
+
+ [case id=cx-151-strip-comments-none-unchanged level=core
+  [tags cx strip-comments identity issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:strip-comments "[root [a x]]"]
+#]]
+  [out-text [#
+[root [a 'x']]
+#]]
+ ]
+
+ [case id=cx-152-strip-attrs-name-glob level=core
+  [tags cx strip-attrs transform glob issue-940 vc-6]
+  [meta [#
+note: SPEC-AMBIGUOUS (recorded, not resolved): §2.3 types the argument
+note: $pattern::string and §6 gives CXER4115 for an invalid "name-pattern",
+note: but no approved text defines the pattern LANGUAGE. Implemented as the
+note: single-segment name GLOB the engine already carries (io:glob / bus
+note: head-name patterns), NOT the RE2 `pattern=` of schema/validate.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:strip-attrs "[root x-a=1 keep=2 [c x-b=3 also=4]]" "x-*"]
+#]]
+  [out-text [#
+[root keep=2 [c also=4]]
+#]]
+ ]
+
+ [case id=cx-153-strip-attrs-star-removes-all level=core
+  [tags cx strip-attrs glob issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:strip-attrs "[root a=1 b=2]" "*"]
+#]]
+  [out-text [#
+[root]
+#]]
+ ]
+
+ [case id=cx-154-strip-attrs-invalid-name-pattern level=core
+  [tags cx strip-attrs error issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:strip-attrs "[root a=1]" "x-[abc"]
+#]]
+  [out-err [#
+cx-err:CXER4115
+#]]
+ ]
+
+ [case id=cx-155-pretty-print-fits-one-line level=core
+  [tags cx pretty-print layout issue-940 vc-6]
+  [meta [#
+note: §2.3 defaults — indent 2, max-line-length 80. A value whose compact
+note: form fits the budget stays on one line.
+#]]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:pretty-print "[root [a one] [b two]]"]
+#]]
+  [out-text [#
+'[root [a one] [b two]]'
+#]]
+ ]
+
+ [case id=cx-156-pretty-print-max-line-length-blocks level=core
+  [tags cx pretty-print layout max-line-length issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:pretty-print "[root [a one] [b two]]" {max-line-length: 12}]
+#]]
+  [out-text [#
+'[root\n  [a one]\n  [b two]\n]'
+#]]
+ ]
+
+ [case id=cx-157-pretty-print-indent-four level=core
+  [tags cx pretty-print layout indent issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:pretty-print "[root [a one] [b two]]" {max-line-length: 12, indent: 4}]
+#]]
+  [out-text [#
+'[root\n    [a one]\n    [b two]\n]'
+#]]
+ ]
+
+ [case id=cx-158-pretty-print-sort-attrs level=core
+  [tags cx pretty-print sort-attrs issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:pretty-print "[root z=1 a=2]" {sort-attrs: true}]
+#]]
+  [out-text [#
+'[root a=2 z=1]'
+#]]
+ ]
+
+ [case id=cx-159-pretty-print-strip-comments level=core
+  [tags cx pretty-print strip-comments issue-940 vc-6]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[$cx:pretty-print "[root [; note] [a one]]" {strip-comments: true}]
+#]]
+  [out-text [#
+'[root [a one]]'
 #]]
  ]
 ]

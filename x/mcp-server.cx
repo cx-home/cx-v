@@ -83,7 +83,11 @@
            code: [$string $d/meta/code],
            inputSchemaId: [$string $d/meta/input-schema-id],
            outputSchemaId: [$string $d/meta/output-schema-id],
-           requires: [$fp:map [?else $d/meta/requires ()] [?fn ($r) [$string $r]]]}]
+           # R-A1 (2026-08-25): the [cap …] rows are DIRECT children of
+           # [requires] now — read them as the node-set, not the field value
+           # (a one-row field collapsed to the bare [cap …] element and the
+           # fp dispatch had no `cap` instance).
+           requires: [$fp:map [?else $d/meta/requires/* ()] [?fn ($r) [$string $r]]]}]
         [= $meta [?if [$exists [?else $d/meta/returns-type ()]]
                    [then [$cx:merge $base-meta {returnsType: [$string $d/meta/returns-type]}]]
                    [else $base-meta]]]

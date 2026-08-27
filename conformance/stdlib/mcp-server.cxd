@@ -141,7 +141,7 @@ note: silently advertise an empty or partial tool set.
 [$srv:tools-for "[?def undocumented-cmd impure [effects [write]] ($x::string) [w $x]]"]
 #]]
    [out-text [#
-[err code=missing-summary ([missing-summary def=undocumented-cmd])]
+[err code=missing-summary [missing-summary def=undocumented-cmd]]
 #]]
   ]
 
@@ -244,6 +244,7 @@ note: COMPOSITION.
 
   [case id=mcp-server-012-two-boundary-strict-args level=core
    [tags mcp-server validate-args args-record two-boundary stream-14 686 stream-18 690]
+   [; R-A1 migration: envelope → spliced children (2026-08-25) ]
    [meta [#
 note: the two-boundary strict-args pair: the CLIENT refuses what its
 note: declared jsonschema subset covers (a missing required property —
@@ -269,10 +270,10 @@ note: contract; enforcement never depends on the client.
   [= $missing [$js:violation-paths [$mcp:validate-args $tool [$json:parse "{}"]]]]
   [= $extra-client [$name [$mcp:validate-args $tool [$json:parse "{\"order-id\":\"o-1\",\"quantity\":3}"]]]]
   [= $extra-server [?fallback [$cx:propose ship {order-id: 'o-1', quantity: 3} {}] [recover-with :refused]]]
-  [two-boundary [client-missing $missing] [client-extra $extra-client] [server-extra $extra-server]]]
+  [two-boundary [client-missing [?splice $missing]] [client-extra $extra-client] [server-extra $extra-server]]]
 #]]
    [out-text [#
-[two-boundary [client-missing ('/order-id')] [client-extra 'ok'] [server-extra :refused]]
+[two-boundary [client-missing '/order-id'] [client-extra 'ok'] [server-extra :refused]]
 #]]
   ]
 ]

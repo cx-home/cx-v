@@ -105,6 +105,7 @@ fn uuid_arg_bytes(n cx.Node) ?[]u8 {
 			return v.bytes()
 		}
 	}
+	note_operand_fault('uuid', 'uuid-', 'bytes', n)
 	return none
 }
 
@@ -116,6 +117,7 @@ fn uuid_arg_string(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('uuid', 'uuid-', 'string', n)
 	return none
 }
 
@@ -127,6 +129,7 @@ fn uuid_arg_bool(n cx.Node) ?bool {
 			return v
 		}
 	}
+	note_operand_fault('uuid', 'uuid-', 'bool', n)
 	return none
 }
 

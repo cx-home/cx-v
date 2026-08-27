@@ -1,0 +1,11 @@
+flowchart TD
+  start([entry])
+  done([exit])
+  m{"match 1"}
+  a1["'he said \"hi\"'"]
+  m -- "1" --> a1
+  a1 --> done
+  a2["'she said \"bye\"'"]
+  m -- "else" --> a2
+  a2 --> done
+  start --> m

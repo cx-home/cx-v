@@ -1,0 +1,14 @@
+sequenceDiagram
+  participant jobs
+  participant producer
+  participant consumer
+  activate producer
+  producer ->>+ jobs : $i
+  Note over producer : [?close]
+  deactivate producer
+  activate consumer
+  jobs -->>- consumer : msg
+  deactivate consumer
+  participant main
+  Note over main : [?wait-for]
+  Note over main : [?wait-for]

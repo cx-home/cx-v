@@ -192,8 +192,9 @@ fn xap_check_surface_program(xap_path string, surface_path string, feature_paths
 	b << ''
 	b << '        [?let [= \$problems [?for [in \$s (\$bad-panels, \$bad-controls, \$bad-shows)]'
 	b << '                                 [in \$p \$s] [yield \$p]]]'
+	// R-A1 (2026-08-25): the problem rows splice as direct children.
 	b << '          [surface-check surface=\$surface@name xap=\$surface@xap'
 	b << '                         ok=[= [\$count \$problems] 0]'
-	b << '            \$problems]]]]]]'
+	b << '            [?splice \$problems]]]]]]]'
 	return b.join('\n')
 }

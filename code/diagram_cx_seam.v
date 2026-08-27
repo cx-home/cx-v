@@ -688,6 +688,14 @@ fn dgc_expand_defs(n cx.Node, with_lib bool) cx.Node {
 			if p := dgc_path_image(n) {
 				return p
 			}
+			// #1038 — the SECOND structural lift on this hatch, built the
+			// same way and for the same reason as `dgc_path_image` above.
+			// The lifted node is re-expanded so a hatch INSIDE it (the name
+			// expression is very often a CXPath) still reaches the path
+			// lift, and a nested `[?element]` reaches this one.
+			if e := dgc_element_image(n) {
+				return dgc_expand_defs(e, with_lib)
+			}
 		}
 		mut kids := []cx.Node{}
 		for k in n.items {
@@ -786,6 +794,103 @@ fn dgc_path_image(el cx.Element) ?cx.Node {
 		kids << dgi_el_attrs('cx:pstep', sattrs, []cx.Node{})
 	}
 	return dgi_el_attrs('cx:path', attrs, kids)
+}
+
+// dgc_element_image — the #1038 structural lift for a COMPUTED-NAME
+// element, `[?element NAME-EXPR attr=… item…]` (code.md §6.4.2).
+//
+// THE DEFECT. `dgi_element` hatches the WHOLE construct the moment
+// `name_expr` is set, so `[?element $i/@name qty=$i/@qty]` reaches the
+// renderer as one `<cx:expr>` string. Only the NAME is dynamic; the
+// attributes and the body are ordinary structure, and hatching them with
+// it costs the renderer everything it could have drawn. #1031's §9.4b
+// tables read the image's child ROLES (`cx:attr`, the value tags), so an
+// `[?element]` yield drew as a flat source line where the very same
+// document under a literal head drew a table. The tables must not
+// re-parse text (DR-7a), so the honest fix is here, in the image.
+//
+// THE SHAPE IS CONTRACTED, NOT INVENTED. `code.md` §6.4.2.2 already
+// rules the bijective image of this exact form:
+//
+//   [?element $n size=large "hi"]
+//     → <cx:element><cx:name>…$n…</cx:name>
+//          <cx:attr name="size"><cx:str>large</cx:str></cx:attr>
+//          <cx:str>hi</cx:str></cx:element>
+//
+// and the E1 quote-image builds precisely that (`element_to_data_q`,
+// dynamic_construction.v) and reads it back (`element_data_to_program`).
+// So the §4-shaped image was the ONE of the two that had no cell for a
+// construct the spec has spelled since #396 — an inversion of DRW1-1's
+// "the §4 image is the structure-complete alternative". Nothing new is
+// named here: `cx:element`, `cx:name` and `cx:attr` are the tags that
+// ruling already uses, in that arrangement.
+//
+// WHAT KEEPS THE HATCH, deliberately:
+//   - a PS-1 result step run (`[?element …]/x`) — the steps live in
+//     `lit.path` and this projection has no cell for them, so lifting
+//     would DROP them. The hatch's source text carries them; it stays.
+//   - the anonymous / operator-with-attrs forms — not this issue's, and
+//     `dgi_element` hatches them for reasons of their own.
+//   - anything whose carried text does not re-parse to this literal.
+//
+// The `dynamic` opacity class (diagram.md §11.4) is therefore NARROWED,
+// not removed: the name expression is lowered on its own and hatches by
+// itself whenever it is a CXPath or another unstructurable node, which
+// is the common case. What stops being opaque is the part that never was
+// dynamic — and a call in name position becoming VISIBLE to the effect
+// walk is strictly more honest, never less.
+//
+// "ref" mode is untouched (this runs only in `dgc_expand_defs`), so no
+// wave-1/2 golden can move.
+fn dgc_element_image(el cx.Element) ?cx.Node {
+	mut text := ''
+	for t in el.items {
+		if t is cx.TextNode {
+			text = t.value
+			break
+		}
+	}
+	if text == '' {
+		return none
+	}
+	prog := cx.parse_program(text) or { return none }
+	body := prog.body
+	if body !is cx.ProgramLiteral {
+		return none
+	}
+	lit := body as cx.ProgramLiteral
+	if lit.kind != .cx_element || lit.name_expr == none || lit.path.len > 0 {
+		return none
+	}
+	name_e := lit.name_expr or { return none }
+	mut kids := []cx.Node{}
+	mut nv := []cx.Node{}
+	nv << diagram_lower(name_e)
+	kids << dgi_el('cx:name', nv)
+	// Attributes and items lower exactly as `dgi_element` lowers a named
+	// element's — same tags, same order, same value projection — so a
+	// consumer reads one contract, not two.
+	for a in lit.attrs {
+		mut av := []cx.Node{}
+		av << diagram_lower(a.value)
+		mut aattrs := []cx.Attribute{}
+		aattrs << dgi_attr('name', a.name)
+		if a.data_type != '' {
+			aattrs << dgi_attr('type', a.data_type)
+		}
+		kids << dgi_el_attrs('cx:attr', aattrs, av)
+	}
+	for it in lit.items {
+		kids << diagram_lower(it)
+	}
+	for s in lit.slots {
+		mut sv := []cx.Node{}
+		sv << diagram_lower(s.value)
+		mut sattrs := []cx.Attribute{}
+		sattrs << dgi_attr('label', s.label)
+		kids << dgi_el_attrs('cx:slot', sattrs, sv)
+	}
+	return dgi_el('cx:element', kids)
 }
 
 // dgc_raw_source returns the text of a `cx:def`'s deferred

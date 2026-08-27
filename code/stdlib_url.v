@@ -56,6 +56,7 @@ fn url_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('url', 'url-', 'string', n)
 	return none
 }
 

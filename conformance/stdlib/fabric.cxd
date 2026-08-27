@@ -884,4 +884,31 @@ cx-err:CXER4920
 [pair silent-first-seq=2 [refused code=cx-err:CXER4991 requested=1 floor=1]]
 #]]
  ]
+
+ [; RULED: CO-8 — fabric emit/publish is channel-shaped fan-out, so the CO-2
+    channel exemption applies: an event carrying an [err] at rest publishes
+    green, never CXER0275. The err rides a resting position (map value as
+    element content); a bare err argument propagates per the frozen position
+    table before publish is reached — that is the general rule. Pinned
+    because publish rides the journal's internal store write, which once hit
+    the CO-2 guard and defeated this exemption from the plumbing. ]
+ [case id=fabric-040-err-value-publishes-green level=core gate=enforced
+  [tags fabric publish err boundary exemption CO-2 CO-8 CXER0275]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?lib 'cx-fabric' :as fabric]
+[?let [= $j [$journal:open "mem://co8-fabric" "acme"]]
+  [= $f [$fabric:open $j]]
+  [= $e [err code=cx-err:CXER9999 message='an err transiting fan-out']]
+  [= $evt [do :err.seen {cause: $e}]]
+  [= $p [$fabric:publish $f "errors" $evt {actor: "u" authority: "g"}]]
+  [ok seq=$p/@seq]]
+#]]
+  [out-text [#
+[ok seq=1]
+#]]
+ ]
 ]

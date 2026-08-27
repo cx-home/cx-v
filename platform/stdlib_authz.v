@@ -7,6 +7,7 @@ import code {
 }
 
 import cx
+import sync
 
 // stdlib_authz.v — native primitives + in-process trust state for the
 // `cx-stdlib/authz` authorization module: principals, capabilities,
@@ -201,6 +202,60 @@ mut:
 	bounds_value cx.Node // the verbatim [bounds …] element (materialize carries it)
 }
 
+// AuthzStore is the mutable trust state a PEP decides against.
+//
+// ── THE SERIALIZATION POINT (#997) ──────────────────────────────────────────
+// `delegations` is a plain V array, and V's `array.push` is not atomic: it
+// reallocates the buffer (`ensure_cap` swaps `data` and `cap`), copies the new
+// element in, and THEN bumps `len` — three unordered stores. A second thread
+// appending concurrently loses appends outright (measured on two `[$xap:dial]`
+// workers, 3000 each: 12 runs in 12 came back corrupt — 11 SIGSEGV inside the
+// evaluator, 1 surviving with 42 grants of 6000 silently absent), and a thread
+// WALKING the array while another appends can read a slot past the old buffer
+// or one whose element store is not yet visible — a garbage `&AuthzDelegation`
+// that the decision then dereferences. So a store's basis must never grow in
+// place while anything can be reading it, and there are three tiers that hold
+// one:
+//
+//   XAP RUNTIME (`XapRuntime.authz`, stdlib_xap.v) — `authz_grants_lock`, the
+//     rwmutex below. A live `[$xap:dial]` / `[$xap:revoke]` /
+//     `[$xap:pkg-enable]` runs under its WRITE lock; every PEP decision
+//     (xap_pep_admits, xap_why_allowed) and every `rt.dials` walk runs under
+//     its READ lock. That is the pair #997 names: a running §3.1.2 source pump
+//     decides on its own thread while a deployment worker dials on another,
+//     and a torn DENY there is skip-and-ack — an entry dropped permanently.
+//     Concurrent decisions still run in parallel; only a dial excludes them.
+//
+//   XSP STORE (`SxConn.authz`, store_xsp_authority.v) — `srv.mu`, the
+//     listener's one serialization point (#986): every PEP decision runs under
+//     it (sx_conn_reader holds it across sx_dispatch_locked), so a grant
+//     re-fold taken under the same lock is atomic against every in-flight
+//     verb. Its mutations ALSO go through the helpers below — redundant there,
+//     and kept so that no tier can reintroduce an in-place append.
+//
+//   `[authz-store]` REGISTRY (the CX authz verbs) — writes serialized by the
+//     helpers below, reads bracketed as of #1024. The 19 verb entry points that
+//     reach `authz_store_from_arg` were classified by hand (the table on
+//     authz_grants_rlock names every one) into three sets, because the naive
+//     whole-verb read bracket self-deadlocks: a pthread rwlock does not upgrade,
+//     and four of these verbs re-enter the authz verb table or the evaluator
+//     from inside what would have been the bracket.
+//
+// Every mutation of the `delegations` ARRAY goes through authz_grants_append /
+// authz_grants_append_many / authz_grants_set — enforced by the guard in
+// vcx/tests/xap_umbrella_test.v, because a new `<<` site is exactly how this
+// discipline would rot back out. Flipping `revoked` on a delegation ALREADY in
+// the basis is not an array mutation and carries none of the tearing class
+// (revocation is absence, §2.5 — the row stays), but it goes through
+// authz_grants_mark_revoked anyway so the flip is one act with everything else a
+// revoking caller does — #1024 closed the registry tier's last two bare in-place
+// `revoked = true` sites (authz_revoke_impl and the replay path).
+//
+// Every READ WALK of the array is bracketed too, as of #1024, and that roster is
+// pinned by NAME by a second guard in the same file. authz_revoke_cascade is no
+// longer the exception #997 recorded: it journals per link and recurses, so it
+// still holds no lock across its body, but it now collects each LEVEL's children
+// under one read bracket and applies them after the release.
 @[heap]
 struct AuthzStore {
 mut:
@@ -232,7 +287,150 @@ mut:
 
 __global (
 	g_authz_reg voidptr
+	// #997: the authority-basis serialization point — see the AuthzStore doc
+	// comment for which tier uses it and why the other two do not read through
+	// it. REFERENCE-typed and allocated in authz_init_globals(): a value-typed
+	// zeroed sync.RwMutex global is a silently non-locking pthread rwlock on
+	// Darwin, the identical defect #303 hit on the SSE registries — a lock that
+	// does not lock would leave this file's whole discipline vacuous.
+	authz_grants_lock &sync.RwMutex
 )
+
+// authz_init_globals allocates this file's real reference mutex. Called from
+// the platform module's init() (platform_init.v), before any thread exists.
+fn authz_init_globals() {
+	authz_grants_lock = sync.new_rwmutex()
+}
+
+// ── authority-basis mutation (#997) ─────────────────────────────────────────
+//
+// The ONLY four ways a store's delegation basis changes. Each is a leaf call —
+// nothing inside takes another lock — so a caller already holding srv.mu (the
+// XSP tier) cannot deadlock against a caller holding nothing (the XAP tier).
+
+// authz_grants_append adds one delegation to a store's basis.
+fn authz_grants_append(mut s AuthzStore, d &AuthzDelegation) {
+	authz_grants_lock.lock()
+	s.delegations << d
+	authz_grants_lock.unlock()
+}
+
+// authz_grants_append_many adds several delegations as ONE act — a caller that
+// seats a whole table (the XSP tier's config roots) must not publish it half
+// applied.
+fn authz_grants_append_many(mut s AuthzStore, ds []&AuthzDelegation) {
+	authz_grants_lock.lock()
+	for d in ds {
+		s.delegations << d
+	}
+	authz_grants_lock.unlock()
+}
+
+// authz_grants_set replaces a store's basis wholesale — the drop half of a
+// re-fold (revoked VCs, superseded config roots).
+fn authz_grants_set(mut s AuthzStore, rows []&AuthzDelegation) {
+	authz_grants_lock.lock()
+	s.delegations = rows
+	authz_grants_lock.unlock()
+}
+
+// authz_grants_mark_revoked flips `revoked` on every live delegation carrying
+// `id` and reports whether it found one. Revocation is ABSENCE (§2.5) — the row
+// stays in the basis, so this mutates no array; it takes the write lock anyway
+// so a concurrent reader sees the flag flip as one act with everything else a
+// revoking caller does.
+fn authz_grants_mark_revoked(mut s AuthzStore, id string) bool {
+	authz_grants_lock.lock()
+	mut found := false
+	for mut d in s.delegations {
+		if d.id == id && !d.revoked {
+			d.revoked = true
+			found = true
+		}
+	}
+	authz_grants_lock.unlock()
+	return found
+}
+
+// authz_grants_rlock / authz_grants_runlock bracket a READ WALK of a store's
+// basis (a PEP decision, a `rt.dials` chain render). Concurrent readers proceed
+// in parallel; a dial excludes them. NEVER call a write helper inside the
+// bracket — a pthread rwlock does not upgrade, so that self-deadlocks.
+//
+// ── THE REGISTRY TIER'S READ BRACKETS (#1024) ───────────────────────────────
+//
+// THE FACT THAT MAKES THIS TRACTABLE. `delegations` is `[]&AuthzDelegation` —
+// heap POINTERS. What tears is the ARRAY (ensure_cap swaps data/cap, the
+// element is copied, len is bumped last), never the records: a delegation is
+// immutable once installed except for its `revoked` flag, and it never moves.
+// So a `&AuthzDelegation` obtained under a bracket stays a valid, stable object
+// after the bracket releases, and a verb may carry one out of its bracket and
+// keep reading it. That is why a bracket only has to cover the WALK, and never
+// has to cover the journal I/O or the decision a walk feeds.
+//
+// THE THREE SETS, by hand over the 19 verbs reaching authz_store_from_arg:
+//
+//   BASIS-UNTOUCHED (4) — no bracket, because there is nothing to bracket.
+//     `close` (flips is_open, not the basis), `verify-tier` and `approve` (both
+//     resolve the handle for the tenant partition and then `_ = s`),
+//     `allocation-expire` (folds the JOURNAL's allocation state; never reads
+//     `delegations`).
+//
+//   BASIS READ-ONLY (12) — bracketed. `check` / `authorize` / `dry-run` (one
+//     entry point, authz_check_impl), `find`, `grants-of`, `effective`,
+//     `trace`, `resolve-cap` are pure basis reads with no I/O and no re-entry,
+//     so the bracket is the WHOLE verb: those get a consistent snapshot, not
+//     merely a safe one. `meters`, `allocate`, `debit` and `commit` are
+//     read-only ON THE BASIS but write the JOURNAL and/or re-enter — see below.
+//
+//   BASIS READ-THEN-WRITE (3) — `delegate`, `grant-guardian`, `revoke`. These
+//     are the ones a whole-verb read bracket would have deadlocked. They are
+//     restructured read-then-decide-then-write instead of taking the write lock
+//     for the whole verb, because the write lock would then be held across the
+//     journal append — an fsync — serializing every PEP decision in the process
+//     behind disk I/O, and creating an authz→journal lock order where today
+//     authz_grants_lock is a leaf. Soundness of releasing between the read and
+//     the write: the only mutation a concurrent thread can make to a record the
+//     read phase examined is `revoked = true` (records are otherwise immutable
+//     and the array only grows), and a revoked ancestor fails the chain walk at
+//     every subsequent DECISION (authz_chain_to_principal, §2.5/§4.1). So a
+//     stale attenuation verdict cannot convey authority — it can only install a
+//     grant that then denies. The append itself stays atomic (the helpers).
+//
+// WHY FOUR VERBS ARE BRACKETED BY REGION AND NOT WHOLE (the deadlock set):
+//   `meters` / `allocate` / `debit` fold the journal (jrn_* + a journal APPEND)
+//     around their basis walks. A bracket spanning that would hold a read lock
+//     across journal I/O and, on `debit`, across authz_journal_append.
+//   `commit` is the sharp one: inside the body it calls authz_resolve_cap_impl
+//     and authz_debit_impl — other VERBS, each with its own bracket — and then
+//     code.command_commit_execute, which runs arbitrary CX and can therefore
+//     re-enter ANY authz verb including `delegate`. A whole-verb bracket there
+//     self-deadlocks on the nested read and deadlocks outright on the nested
+//     write. Its one basis read (authz_chain_propose_only) is bracketed alone.
+//
+// THE RULE THAT KEEPS THIS DEADLOCK-FREE, and what the standing guard in
+// vcx/tests/xap_umbrella_test.v pins:
+//   (1) brackets live at VERB entry points (or a straight-line region inside
+//       one) — never inside a helper, so brackets cannot nest;
+//   (2) no read helper takes the lock: authz_find_rec, authz_decide,
+//       authz_effective_set, authz_effective_intersect, authz_has_relationship,
+//       authz_attenuation_ok, authz_nearest_bounds, authz_inherit_window,
+//       authz_chain_to_principal, authz_chain_propose_only, authz_budget_check
+//       and authz_meter_fold all read under the CALLER's bracket;
+//   (3) no bracket encloses a jrn_*, an authz_journal_append, another
+//       authz_*_impl, or a code.command_* call.
+// Together: no thread holds this lock while acquiring it again (no self-
+// deadlock), and no thread holds it while acquiring any OTHER lock, so it
+// remains a leaf and can participate in no cycle (no deadlock at all).
+@[inline]
+fn authz_grants_rlock() {
+	authz_grants_lock.rlock()
+}
+
+@[inline]
+fn authz_grants_runlock() {
+	authz_grants_lock.runlock()
+}
 
 // authz_reset_state clears the process-global authority-store registry.
 // Called from matcher.v::new_env at the start of each evaluated program so
@@ -949,18 +1147,24 @@ fn authz_replay_journal(mut s AuthzStore) ?cx.Node {
 				rec := authz_parse_delegation(evel.items[0], s.tenant, authz_mode_is_guardian(del)) or {
 					return mk_err(authz_err_store_fault, 'E_AUTHZ_STORE_FAULT: unparseable delegation in trust log at replay: ${err.msg()}')
 				}
+				// #1024: the window-inheritance read is bracketed (the append
+				// takes the write lock itself). Replay runs before the handle
+				// reaches CX, but the lock is process-global and a second
+				// thread may be replaying its own store through it.
 				mut nrec := rec
+				authz_grants_rlock()
 				authz_inherit_window(s, mut nrec)
-				s.delegations << rec
+				authz_grants_runlock()
+				authz_grants_append(mut s, rec)
 			}
 			'authz-revoked' {
 				id := authz_el_attr(evel, 'id')
 				if id == '' {
 					return mk_err(authz_err_store_fault, 'E_AUTHZ_STORE_FAULT: authz-revoked event without id at replay (corrupt trust log)')
 				}
-				if mut rec := authz_find_rec(s, id) {
-					rec.revoked = true
-				}
+				// #1024: walk + flip as ONE act under the write lock — this was
+				// the other bare in-place `revoked = true` in the registry tier.
+				authz_grants_mark_revoked(mut s, id)
 				// unknown id: another tenant's revocation on a shared
 				// journal, or an idempotent re-revoke — both skips.
 			}
@@ -1277,8 +1481,35 @@ fn authz_delegate_impl(args []cx.Node) cx.Node {
 		return mk_err(authz_err_arg_invalid, err.msg())
 	}
 	now_secs := authz_store_clock(args, 2)
+	// #1024 — READ-THEN-WRITE, restructured rather than upgraded. Both basis READS
+	// (the attenuation check and the window inheritance) run in ONE read bracket
+	// here; the journal append runs unlocked; then authz_grants_append takes the
+	// WRITE lock. A pthread rwlock cannot upgrade, so a read bracket spanning the
+	// append would self-deadlock; taking the WRITE lock for the whole verb instead
+	// would hold it across the trust-log fsync and stall every PEP decision in the
+	// process behind disk I/O.
+	//
+	// WHY THE GAP IS SOUND. Releasing between the check and the append leaves a
+	// window in which another thread could revoke the parent this grant attenuates.
+	// The result is a grant installed under a now-revoked parent — which is not an
+	// escalation: authz_chain_to_principal re-walks the chain on EVERY decision and
+	// a revoked ancestor breaks it (§2.5/§4.1), so the grant simply denies. The
+	// records themselves are immutable but for `revoked`, and the array only grows,
+	// so there is no other mutation the read phase could have been fooled by.
+	//
+	// authz_inherit_window moved ABOVE the journal append (it was below): it sets
+	// the parsed `until_secs`, never `rec.value`, so the journaled authz-issued
+	// event is byte-identical, and this now matches authz_replay_journal's own
+	// parse → inherit → append order.
+	authz_grants_rlock()
+	atten_ok := authz_attenuation_ok(s, rec, now_secs)
+	mut nrec := rec
+	if atten_ok {
+		authz_inherit_window(s, mut nrec)
+	}
+	authz_grants_runlock()
 	// attenuation — privilege escalation is structurally impossible (§4.2).
-	if !authz_attenuation_ok(s, rec, now_secs) {
+	if !atten_ok {
 		return mk_err(authz_err_escalation, 'E_AUTHZ_ESCALATION: the grant conveys more than the issuer holds (attenuation violation, §4.2)')
 	}
 	// Journal-FIRST (W3 R7, §2.6): the attributed issue-event lands in
@@ -1292,9 +1523,7 @@ fn authz_delegate_impl(args []cx.Node) cx.Node {
 	{
 		return fault
 	}
-	mut nrec := rec
-	authz_inherit_window(s, mut nrec)
-	s.delegations << rec
+	authz_grants_append(mut s, rec)
 	return authz_materialize_delegation(rec)
 }
 
@@ -1323,7 +1552,15 @@ fn authz_revoke_impl(args []cx.Node) cx.Node {
 	}
 	cfg := if args.len > 2 { authz_opts(args[2]) } else { map[string]cx.Node{} }
 	cascade := authz_opt_bool(cfg, 'cascade', false)
-	mut rec := authz_find_rec(s, id) or {
+	// #1024: the lookup is the basis read, bracketed; `rec` is carried out (stable
+	// heap record). The flip below then goes through authz_grants_mark_revoked's
+	// WRITE lock instead of the bare `rec.revoked = true` this used to do — the
+	// registry tier was the one caller still flipping in place, so it was the one
+	// tier where a revocation was not one act with everything else.
+	authz_grants_rlock()
+	target := authz_find_rec(s, id)
+	authz_grants_runlock()
+	rec := target or {
 		// Idempotent: revoking an absent id is a no-op → absence (§2.5/§3.2).
 		// No event either — nothing transitioned (§2.6 records transitions).
 		return authz_absence()
@@ -1339,7 +1576,7 @@ fn authz_revoke_impl(args []cx.Node) cx.Node {
 	if fault := authz_journal_append(s, authz_revoked_event(id), rec.from_id, authz_issue_basis(rec), '') {
 		return fault
 	}
-	rec.revoked = true
+	authz_grants_mark_revoked(mut s, id)
 	if cascade {
 		if fault := authz_revoke_cascade(mut s, id) {
 			return fault
@@ -1361,18 +1598,35 @@ fn authz_revoked_event(id string) cx.Node {
 	}
 }
 
+// #1024: the cascade journals per link and RECURSES, so it can hold no lock
+// across its body — #997 named it the one deliberate exception. It no longer has
+// to be: each LEVEL's live children are collected under one read bracket, and the
+// journal-then-apply of each child runs after the release. Order is unchanged
+// (basis order per level, depth-first per child) and so is the prefix guarantee —
+// on a mid-cascade fault the log and live state still hold the same prefix. The
+// flip goes through the write helper now, and its own `&& !d.revoked` guard makes
+// a child two concurrent cascades both collected idempotent.
 fn authz_revoke_cascade(mut s AuthzStore, parent_id string) ?cx.Node {
-	for mut d in s.delegations {
+	authz_grants_rlock()
+	mut kids := []&AuthzDelegation{}
+	for d in s.delegations {
 		if d.attenuates == parent_id && !d.revoked {
-			if fault := authz_journal_append(s, authz_revoked_event(d.id), d.from_id,
-				authz_issue_basis(d), '')
-			{
-				return fault
-			}
-			d.revoked = true
-			if fault := authz_revoke_cascade(mut s, d.id) {
-				return fault
-			}
+			kids << d
+		}
+	}
+	authz_grants_runlock()
+	for d in kids {
+		if d.revoked {
+			continue // a concurrent cascade reached this link first
+		}
+		if fault := authz_journal_append(s, authz_revoked_event(d.id), d.from_id,
+			authz_issue_basis(d), '')
+		{
+			return fault
+		}
+		authz_grants_mark_revoked(mut s, d.id)
+		if fault := authz_revoke_cascade(mut s, d.id) {
+			return fault
 		}
 	}
 	return none
@@ -1425,8 +1679,20 @@ fn authz_grant_guardian_impl(args []cx.Node) cx.Node {
 		return mk_err(authz_err_verify_failed, 'E_AUTHZ_VERIFY_FAILED: irreversible capability requires T2 co-signing (M-of-N), grant declares ${rec.assurance}')
 	}
 	// 3. attenuation — the pinned [action …] within the grantor's authority.
+	//
+	// #1024: the same read-then-write restructure as authz_delegate_impl — both
+	// basis reads in one bracket, journal unlocked, append under the write lock.
+	// Steps 1 and 2 above (gate well-formedness, assurance tier) read only the
+	// PRESENTED grant, never the basis, so they stay outside.
 	now_secs := authz_store_clock(args, 2)
-	if !authz_attenuation_ok(s, rec, now_secs) {
+	authz_grants_rlock()
+	atten_ok := authz_attenuation_ok(s, rec, now_secs)
+	mut nrec := rec
+	if atten_ok {
+		authz_inherit_window(s, mut nrec)
+	}
+	authz_grants_runlock()
+	if !atten_ok {
 		return mk_err(authz_err_escalation, 'E_AUTHZ_ESCALATION: the guardian action conveys more than the grantor holds (§4.2)')
 	}
 	// Journal-FIRST (W3 R7, §2.6) — guardian grants ride the same
@@ -1438,10 +1704,8 @@ fn authz_grant_guardian_impl(args []cx.Node) cx.Node {
 	{
 		return fault
 	}
-	mut nrec := rec
-	authz_inherit_window(s, mut nrec)
 	// store dormant-until-gate (§3.3).
-	s.delegations << rec
+	authz_grants_append(mut s, rec)
 	return authz_materialize_delegation(rec)
 }
 
@@ -1638,7 +1902,18 @@ fn authz_check_impl(args []cx.Node, strict bool) cx.Node {
 	cfg := if args.len > 2 { authz_opts(args[2]) } else { map[string]cx.Node{} }
 	// Stream 8 (bitemporal L121): the decision value carries both temporal
 	// coordinates when the caller supplies them — see authz_stamp_coordinates.
-	decision := authz_stamp_coordinates(authz_decide(s, req, cfg), cfg)
+	//
+	// #1024: the ENTIRE decision runs under one read bracket. authz_decide walks
+	// the basis twice (the individual capability union, then the grant scan) and
+	// chases [attenuates] chains between them, so a bracket per walk would be
+	// memory-safe but could still decide against two different bases. Nothing in
+	// authz_decide does I/O or re-enters a verb — it is the pure PEP — so the
+	// whole call is bracketable, and a decision that PERMITS is then a decision
+	// some single state of the basis actually authorized.
+	authz_grants_rlock()
+	verdict := authz_decide(s, req, cfg)
+	authz_grants_runlock()
+	decision := authz_stamp_coordinates(verdict, cfg)
 	if strict && authz_opt_bool(cfg, 'raise-on-deny', false) {
 		if decision is cx.Element && (decision as cx.Element).name == 'deny' {
 			// a budget-exhausted deny raises its own carried code (CXER4713,
@@ -2239,7 +2514,12 @@ fn authz_find_impl(args []cx.Node) cx.Node {
 		}
 	}
 	id := authz_arg_str(args[1]) or { return authz_absence() }
-	rec := authz_find_rec(s, id) or { return authz_absence() }
+	// #1024: the bracket covers the WALK. `rec` is a stable heap record — it does
+	// not move and cannot be removed — so reading it after the release is sound.
+	authz_grants_rlock()
+	found := authz_find_rec(s, id)
+	authz_grants_runlock()
+	rec := found or { return authz_absence() }
 	// revoked → absence (§2.5). Expired is also absence if a clock is known —
 	// but find has no clock arg; we surface revoked as absence and an active
 	// (possibly-expired-by-now) record as the value (the caller filters by
@@ -2266,6 +2546,9 @@ fn authz_grants_of_impl(args []cx.Node) cx.Node {
 		return authz_absence()
 	}
 	mut out := []cx.Node{}
+	// #1024: one bracket over the whole walk — a caller listing an actor's grants
+	// gets one basis, not a sample of two.
+	authz_grants_rlock()
 	for d in s.delegations {
 		if d.revoked {
 			continue
@@ -2274,6 +2557,7 @@ fn authz_grants_of_impl(args []cx.Node) cx.Node {
 			out << authz_materialize_delegation(d)
 		}
 	}
+	authz_grants_runlock()
 	return authz_seq(out)
 }
 
@@ -2497,7 +2781,13 @@ fn authz_effective_impl(args []cx.Node) cx.Node {
 	}
 	actor_kind, actor_id := authz_actor_arg(args[1])
 	cfg := if args.len > 2 { authz_opts(args[2]) } else { map[string]cx.Node{} }
+	// #1024: authz_effective_set walks the basis for the individual set and then
+	// authz_effective_intersect walks it again per envelope (the recorded-
+	// relationship check) — one bracket over both, so the envelope is intersected
+	// against the same basis the individual set came from.
+	authz_grants_rlock()
 	allowed := authz_effective_set(s, actor_kind, actor_id, cfg)
+	authz_grants_runlock()
 	mut cap_items := []cx.Node{}
 	for c in allowed {
 		cap_items << cx.Node(cx.Element{ name: c })
@@ -2677,6 +2967,11 @@ fn authz_trace_impl(args []cx.Node) cx.Node {
 	cfg := if args.len > 2 { authz_opts(args[2]) } else { map[string]cx.Node{} }
 	r := authz_read_request(req, cfg)
 	mut steps := []cx.Node{}
+	// #1024: trace is the diagnostic view of the same walk `check` decides on, and
+	// it chases a chain per step (authz_chain_to_principal) — so it gets the same
+	// whole-walk bracket. A trace stitched from two bases would explain a decision
+	// that never happened.
+	authz_grants_rlock()
 	for d in s.delegations {
 		if d.to_id != r.actor_id {
 			continue
@@ -2694,6 +2989,7 @@ fn authz_trace_impl(args []cx.Node) cx.Node {
 		}
 		steps << cx.Node(cx.Element{ name: 'step', items: notes })
 	}
+	authz_grants_runlock()
 	return authz_seq(steps)
 }
 
@@ -3192,6 +3488,14 @@ fn authz_meters_impl(args []cx.Node) cx.Node {
 			}
 		}
 	}
+	// #1024: `meters` is read-only ON THE BASIS but its input is a JOURNAL fold, so
+	// the bracket starts AFTER authz_collect_debits — a read lock held across
+	// jrn_* would put the authority basis behind journal I/O and give
+	// authz_grants_lock a lock-order edge it does not have today (it is a leaf).
+	// The fold and the emit walk are one bracket: authz_meter_fold indexes the
+	// basis by id and walks it again for the bounds-bearing rows, and the emit
+	// walk below reads `folded` against those same rows.
+	authz_grants_rlock()
 	folded := authz_meter_fold(s, events, now_secs)
 	mut items := []cx.Node{}
 	for d in s.delegations {
@@ -3234,6 +3538,7 @@ fn authz_meters_impl(args []cx.Node) cx.Node {
 			attrs: attrs
 		})
 	}
+	authz_grants_runlock()
 	return cx.Element{
 		name:  'meters'
 		items: items
@@ -3290,10 +3595,14 @@ fn authz_allocate_impl(args []cx.Node) cx.Node {
 	if _ := cfg['rate'] {
 		return mk_err(authz_err_arg_invalid, 'E_AUTHZ_ARG_INVALID: rate is a FLOW property — a cross-stream rate reservation is unused capacity or double-counted flow; a sub-delegation carrying rate meters it locally, un-escrowed (cross_stream_coordination §3)')
 	}
-	rec := authz_find_rec(s, from) or {
+	// #1024: the parent-exists check is a basis walk — bracketed on its own. The
+	// journal folds below must not run under it (see the note on `meters`).
+	authz_grants_rlock()
+	parent_known := authz_find_rec(s, from) != none
+	authz_grants_runlock()
+	if !parent_known {
 		return mk_err(authz_err_arg_invalid, 'E_AUTHZ_ARG_INVALID: allocate names an unknown parent delegation `${from}`')
 	}
-	_ = rec
 	mut count := i64(0)
 	if cn := cfg['count'] {
 		if cn is cx.ScalarNode {
@@ -3338,11 +3647,17 @@ fn authz_allocate_impl(args []cx.Node) cx.Node {
 			}
 		}
 	}
+	// #1024: fold + index, one bracket. Once `byid` holds the records the chain
+	// walk below touches no array — the records are stable heap objects — so the
+	// headroom walk (which returns from inside) runs OUTSIDE the bracket and
+	// cannot leak it.
+	authz_grants_rlock()
 	folded := authz_meter_fold(s, events, eff_secs)
 	mut byid := map[string]&AuthzDelegation{}
 	for d in s.delegations {
 		byid[d.id] = d
 	}
+	authz_grants_runlock()
 	mut cur := byid[from] or {
 		return mk_err(authz_err_arg_invalid, 'E_AUTHZ_ARG_INVALID: allocate names an unknown parent delegation `${from}`')
 	}
@@ -3487,7 +3802,12 @@ fn authz_debit_impl(args []cx.Node) cx.Node {
 	id := authz_arg_str(args[1]) or {
 		return mk_err(authz_err_arg_invalid, 'E_AUTHZ_ARG_INVALID: debit expects a delegation id string')
 	}
-	rec := authz_find_rec(s, id) or {
+	// #1024: the id lookup is the basis walk; `rec` is carried past the release
+	// (stable heap record) and the journal folds below stay outside the bracket.
+	authz_grants_rlock()
+	target := authz_find_rec(s, id)
+	authz_grants_runlock()
+	rec := target or {
 		return mk_err(authz_err_arg_invalid, 'E_AUTHZ_ARG_INVALID: debit names an unknown delegation `${id}`')
 	}
 	cfg := if args.len > 2 { authz_opts(args[2]) } else { map[string]cx.Node{} }
@@ -3600,11 +3920,15 @@ fn authz_debit_impl(args []cx.Node) cx.Node {
 			}
 		}
 	}
+	// #1024: fold + index under one bracket; the headroom chain walk below reads
+	// only `byid`/`folded` and returns from inside, so it runs after the release.
+	authz_grants_rlock()
 	folded := authz_meter_fold(s, events, eff_secs)
 	mut byid := map[string]&AuthzDelegation{}
 	for d in s.delegations {
 		byid[d.id] = d
 	}
+	authz_grants_runlock()
 	mut cur := rec
 	mut seen := map[string]bool{}
 	for {
@@ -3803,6 +4127,14 @@ fn authz_resolve_cap_impl(args []cx.Node) cx.Node {
 	}
 	want := refs[4..] // the tagged address after the domain separator
 	now_secs := authz_store_clock(args, 2)
+	// #1024: the walk is bracketed, and it MATCHES ONLY — every `return` that used
+	// to sit inside the loop moved out below it. A read bracket with returns inside
+	// leaks the lock on the way out, and a leaked read lock is worse than no lock:
+	// the next dial blocks forever instead of racing. The bracket therefore has
+	// exactly one exit, and the fail-closed dispositions are decided after it on
+	// the matched record (stable heap object — safe to read unbracketed).
+	mut hit := &AuthzDelegation(unsafe { nil })
+	authz_grants_rlock()
 	for d in s.delegations {
 		addr_n := code.value_tier1_address(d.value)
 		if is_err_value(addr_n) {
@@ -3811,15 +4143,20 @@ fn authz_resolve_cap_impl(args []cx.Node) cx.Node {
 		if authz_scalar_text(addr_n) != want {
 			continue
 		}
-		if d.revoked {
-			return mk_err(authz_err_cap_unresolved, 'E_AUTHZ_CAP_UNRESOLVED: `${refs}` names a REVOKED grant — fail-closed (cx-err:CXER4716)')
-		}
-		if d.until_secs > 0 && now_secs > 0 && now_secs > d.until_secs {
-			return mk_err(authz_err_cap_unresolved, 'E_AUTHZ_CAP_UNRESOLVED: `${refs}` names an EXPIRED grant — fail-closed (cx-err:CXER4716)')
-		}
-		return authz_materialize_delegation(d)
+		hit = d
+		break
 	}
-	return mk_err(authz_err_cap_unresolved, 'E_AUTHZ_CAP_UNRESOLVED: `${refs}` resolves to no live authority artifact in tenant `${s.tenant}` (cx-err:CXER4716)')
+	authz_grants_runlock()
+	if hit == unsafe { nil } {
+		return mk_err(authz_err_cap_unresolved, 'E_AUTHZ_CAP_UNRESOLVED: `${refs}` resolves to no live authority artifact in tenant `${s.tenant}` (cx-err:CXER4716)')
+	}
+	if hit.revoked {
+		return mk_err(authz_err_cap_unresolved, 'E_AUTHZ_CAP_UNRESOLVED: `${refs}` names a REVOKED grant — fail-closed (cx-err:CXER4716)')
+	}
+	if hit.until_secs > 0 && now_secs > 0 && now_secs > hit.until_secs {
+		return mk_err(authz_err_cap_unresolved, 'E_AUTHZ_CAP_UNRESOLVED: `${refs}` names an EXPIRED grant — fail-closed (cx-err:CXER4716)')
+	}
+	return authz_materialize_delegation(hit)
 }
 
 // authz_commit_impl — `[$authz:commit store proposal approval command
@@ -3898,8 +4235,23 @@ fn authz_commit_impl(args []cx.Node, mut env code.MatchEnv) cx.Node {
 	}
 	cfg := if args.len > 4 { authz_opts(args[4]) } else { map[string]cx.Node{} }
 	// (d) propose-only screening over the presented basis chain.
+	//
+	// #1024: this is commit's ONLY read of the delegation basis, and it is the only
+	// thing here that may be bracketed. Everything below re-enters: the [requires
+	// 'cap:…'] loop calls authz_resolve_cap_impl and the (h) debit calls
+	// authz_debit_impl — both verbs that take this same read lock — and
+	// code.command_commit_execute runs arbitrary CX, which can reach ANY authz
+	// verb including [$authz:delegate] and its WRITE lock. A whole-verb bracket
+	// here self-deadlocks on the first nested read (a pthread rwlock does not
+	// nest) and deadlocks outright on a nested write. So: one bracket, one call.
 	basis := authz_opt_str(cfg, 'basis', '')
-	if basis != '' && authz_chain_propose_only(s, basis) {
+	mut basis_propose_only := false
+	if basis != '' {
+		authz_grants_rlock()
+		basis_propose_only = authz_chain_propose_only(s, basis)
+		authz_grants_runlock()
+	}
+	if basis_propose_only {
 		return mk_err(authz_err_propose_only, 'E_AUTHZ_PROPOSE_ONLY: delegation `${basis}` (or an ancestor) is propose-only — it can ground a proposal but never a commit (L113) (cx-err:CXER4715)')
 	}
 	// [requires 'cap:…'] clauses re-resolve fail-closed at commit (L114).

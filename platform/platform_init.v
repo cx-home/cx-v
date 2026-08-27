@@ -24,6 +24,11 @@ fn init() {
 	// the wasm build (which excludes that file and its globals) compiles
 	// (#329; the wasm variant is a no-op).
 	services_listener_init_globals()
+	// #997: the authority-basis rwmutex (stdlib_authz.v). Reference-typed and
+	// allocated here, before any thread — a zeroed value-typed rwlock does not
+	// lock on Darwin (#303), and a PEP that decides under a non-locking lock is
+	// exactly the torn read this guards.
+	authz_init_globals()
 	// Wire every Ring-2 pack dispatcher into the Ring-1 registry
 	// (ring2_register.v, moved verbatim at the split).
 	ring2_register_all()

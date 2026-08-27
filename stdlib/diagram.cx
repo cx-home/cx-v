@@ -1277,6 +1277,18 @@
    (security.md §2's constraint field used as designed). The V pair
    shell_dot / import_os_execute is DELETED, not wrapped.
 
+   CAPTURE ARG (#956 → #972): the four `dot` calls below pass
+   `:stdout` — the module's actual intent, and now its behaviour.
+   `dot` writes the rendered image to stdout and its DIAGNOSTICS to
+   stderr; capturing only stdout means a graphviz warning reaches the
+   user's terminal instead of being swallowed into a result attribute
+   nothing here reads. Under #956 these sites had to say `:both`,
+   because per-stream capture had no backing in the runtime (V's
+   os.Process carried one all-or-nothing stdio flag) and `:stdout`
+   refused by name. #972 added `set_redirect_pipe` to the fork, so the
+   intent is expressible again. Only `$r@stdout` is consumed below, so
+   the absent `stderr` attribute is read by nothing.
+
    The primitive is called POSITIONALLY (no [?lib] — see the module
    header): the argument order is cx-stdlib/process §3.1's
    ($argv $env $env-clear $cwd $stdin $timeout-ms $kill-on-timeout
@@ -1830,9 +1842,11 @@
    "code" adds the DRW3-4 `[?def]` expansion.
 
    BIT-FOR-BIT (DR-8a): pinned against
-   vcx/tests/testdata/code_diagram_golden/ — 88 sources (46 graph-view
-   conformance fixtures + 42 synthetic pins) × 3 levels, captured from
-   the unmodified V emitter BEFORE the cutover. ]
+   vcx/tests/testdata/code_diagram_golden/ — 94 sources (46 graph-view
+   conformance fixtures + 48 synthetic pins) × 3 levels, captured from
+   the unmodified V emitter BEFORE the cutover. Pins have been ADDED
+   since (each under a named ledger ruling — #1032 / SEQ-4 is the
+   let-bound-spine pair); no captured golden has ever been rewritten. ]
 
 [; ── §9.0 the sealed WAVE-3 rule table (DR-4a, gated by DR-5) ─────────
    One artifact for the playground renderer's classification, exactly as
@@ -2233,8 +2247,16 @@
 
 [; cd-node-is-trigger — node_is_sequence_trigger: a trigger directive,
    a `[?let]` whose SLOT VALUES carry one, or a block containing one.
-   (A `[= $ch [?channel …]]` clause-child does NOT qualify — the V walk
-   does not descend into element items; the blind spot is preserved.) ]
+   A `[= $ch [?channel …]]` binding clause DOES qualify, through its
+   bound VALUE (RULED: SEQ-2, ledger/rulings_2026_08_26_seq_classification.md).
+   The V walk stopped at the clause element, so a spine whose triggers
+   are all let-bound and whose terminal is a non-trigger classified CFG
+   — which is what #1032 measured on examples 171/172. Both the sealed
+   §9.0 rule table ("the [?let] binding aliases it") and the SEQ
+   emitter's own flatten pass (`cd-flat-let`, which descends the clause
+   to register the `$bind → lane` alias) read a let-bound trigger as a
+   lane, so the DISPATCH now agrees with the emitter it dispatches to.
+   The trigger SET is untouched. ]
 [?def cd-node-is-trigger pure [returns bool] ($n::any)
   [?if [$cd-is-directive $n]
     [then
@@ -2243,7 +2265,7 @@
           [then true]
           [else [?if [= $l "let"]
             [then [$exists [$first [?for [in $v [$cd-slots $n]]
-              [where [$cd-node-is-trigger $v]] [yield 1]]]]]
+              [where [$cd-node-is-trigger [$cd-unbind $v]]] [yield 1]]]]]
             [else false]]]]]]
     [else [?if [= [$name $n] "cx:block"]
       [then [$exists [$first [?for [in $k $n/*]
@@ -2254,6 +2276,20 @@
   [?if [= [$name $k] "item"]
     [then [$first [?for [in $v $k/*] [yield $v]]]]
     [else $k]]]
+
+[; cd-unbind — the bound VALUE of a `[= $x V]` binding clause, or the
+   node unchanged when it is not one (RULED: SEQ-2). The clause is
+   spelled `cx:op name="eq"` in the §4 image and carries two items: the
+   `$name` on the left, the value on the right. This is the same
+   two-item read `cd-flat-let` performs when it registers channel lane
+   aliases — the classifier and the emitter now peer through the clause
+   the same way, so a shape that renders lanes also selects SEQ. ]
+[?def cd-unbind pure [returns any] ($v::any)
+  [?if [$cd-is-eq $v]
+    [then
+      [?let [= $its [$cd-sq-kids $v]]
+        [?if [>= [$count $its] 2] [then [$nth $its 2]] [else $v]]]]
+    [else $v]]]
 
 [?def cd-program-is-sequence pure [returns bool] ($img::any)
   [$exists [$first [?for [in $s [$cd-stmts $img]]
@@ -2331,6 +2367,11 @@
             [else [?if [= $l "var"] [then [$cd-var-label $n]]
             [else [?if [= $l "call"] [then [$cd-call-label $n]]
             [else [?if [= $l "op"] [then [$cd-element-label $n]]
+            [; #1038 — a COMPUTED-name element is an element, and labels
+               like one: head from `<cx:name>`, items after it. Before
+               the image lift this whole construct arrived as one
+               `cx:expr` source string and drew as that line. ]
+            [else [?if [= $l "element"] [then [$cd-computed-element-label $n]]
             [else [?if [= $l "pattern"] [then [$concat "[" [$string $n@value] "]"]]
             [else [?if [= $l "slice-access"]
               [then [$concat [$cd-label [$first [?for [in $k $n/*] [yield $k]]]] "[…]"]]
@@ -2339,7 +2380,7 @@
               [then [?if [$exists $n@deep] [then "**"] [else "*"]]]
             [else [?if [= $l "path"] [then [$cd-path-label $n]]
             [else [?if [= $l "expr"] [then [$string $n]]
-            [else "<lit>"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+            [else "<lit>"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
 
 [; cd-map-label — a map value's inline image: `{k: v, …}` capped at
    three entries (the graph is a summary, not the document; playground
@@ -2397,19 +2438,90 @@
    Everything else is its own tag. ]
 [?def cd-src-name pure [returns string] ($n::any)
   [?if [$is-cx $n]
-    [then [$op-symbol [$string $n@name]]]
+    [then [?if [= [$local-of $n] "element"]
+      [then [$cd-computed-name $n]]
+      [else [$op-symbol [$string $n@name]]]]]
     [else [?if [$exists $n@cx-renamed-from]
       [then [$string $n@cx-renamed-from]]
       [else [$name $n]]]]]]
 
-[; cd-element-label — `[NAME item …]`: attribute and slot wrappers are
-   NOT items (the V twin walks `lit.items` only). An operator element
-   recovers its symbol from the §4 `cx:op` name. ]
+[; cd-meta-child-p (#1038) — is this child NAME element METADATA rather
+   than content? Three wrappers are, and they are the same three
+   everywhere: `cx:attr` (an attribute's value), `cx:slot` (the retired
+   labeled-slot wrapper), and `cx:name` — the envelope a COMPUTED-name
+   element carries its NAME-EXPR in (code.md §6.4.2.2). The name is the
+   element's head, so it must never be walked as a body item or drawn as
+   a row; it is the label / the table header. One home for the question
+   so a content walk cannot forget one of the three. ]
+[?def cd-meta-child-p pure [returns bool] ($nm::string)
+  [$cd-in-list $nm ("cx:attr", "cx:slot", "cx:name")]]
+
+[; cd-computed-name (#1038) — the HEAD of a `<cx:element>` node: the
+   label of the expression inside its `<cx:name>` envelope. `[?element
+   $i/@name qty=…]` heads as `$i/@name` — the expression as written,
+   which is what a reader of the source recognises. The image ALWAYS
+   carries the envelope (`dgc_element_image` emits it unconditionally,
+   and `element_data_to_program` refuses a `<cx:element>` without one),
+   so the `?` fallbacks are shape guards, not supported readings.
+
+   COUNTED, NOT `[$exists]`. The name expression may be an EMPTY image
+   element — `[?element ()]` (the §6.4.2.1 absence channel) heads as
+   `<cx:seq>` with no children — and `[$exists]` on a bare empty element
+   reads FALSE, which is the same trap `lab` names in §2. Counting the
+   yield is the reliable found-test, so the absence channel labels as
+   `()` rather than silently degrading to `?`. ]
+[?def cd-computed-name pure [returns string] ($n::any)
+  [?let [= $ws [?for [in $k $n/*] [where [= [$name $k] "cx:name"]] [yield $k]]]
+    [?if [= [$count $ws] 0]
+      [then "?"]
+      [else
+        [?let [= $inner [?for [in $v [$nth $ws 1]/*] [yield $v]]]
+          [?if [= [$count $inner] 0]
+            [then "?"]
+            [else [$cd-head-label [$nth $inner 1]]]]]]]]]
+
+[; cd-head-label (#1038) — `cd-label`, with ONE arm of its own: an EMPTY
+   sequence in name position is the §6.4.2.1 ABSENCE channel (`[?element
+   ()]` → the element is omitted), not a value, so it spells `()`.
+   `cd-label` answers `<lit>` for every sequence — deliberately, and
+   #1031 declined to move that — but `<lit>` in a HEAD slot reads as "a
+   value too complex to summarise", which is the opposite of what an
+   empty name means. Only the empty case is special-cased; a non-empty
+   sequence in name position keeps `cd-label`'s answer. ]
+[?def cd-head-label pure [returns string] ($x::any)
+  [?if [not [$is-cx $x]]
+    [then [$cd-label $x]]
+    [else [?if [not [= [$local-of $x] "seq"]]
+      [then [$cd-label $x]]
+      [else [?if [> [$count [?for [in $y $x/*] [yield $y]]] 0]
+        [then [$cd-label $x]]
+        [else "()"]]]]]]]
+
+[; cd-computed-element-label (#1038) — the ONE-LINE label for a
+   computed-name element. It KEEPS the `[?element …]` head spelling,
+   which the flat `cx:expr` source label carried before the image lift
+   and which nothing else can supply: a bare `[$n …]` is the spelling of
+   a CALL, so dropping the head would make a constructed element
+   indistinguishable from an invocation in every summary position.
+
+   The TABLE header does not use this — there the head sits in a name
+   slot beside `$doc = post`, so `cd-computed-name` alone is right. ]
+[?def cd-computed-element-label pure [returns string] ($n::any)
+  [?let
+    [= $items [?for [in $k $n/*]
+      [where [not [$cd-meta-child-p [$name $k]]]] [yield $k]]]
+    [$concat "[?element " [$cd-computed-name $n]
+      [$cd-label-items $items 1 ""] "]"]]]
+
+[; cd-element-label — `[NAME item …]`: attribute, slot and name
+   wrappers are NOT items (the V twin walks `lit.items` only). An
+   operator element recovers its symbol from the §4 `cx:op` name; a
+   computed-name element (#1038) recovers its head from `<cx:name>`. ]
 [?def cd-element-label pure [returns string] ($n::any)
   [?let
     [= $nm [$cd-src-name $n]]
     [= $items [?for [in $k $n/*]
-      [where [not [$cd-in-list [$name $k] ("cx:attr", "cx:slot")]]] [yield $k]]]
+      [where [not [$cd-meta-child-p [$name $k]]]] [yield $k]]]
     [$concat "[" $nm [$cd-label-items $items 1 ""] "]"]]]
 
 [?def cd-label-items pure [returns string] ($items::any $i::int $acc::string)
@@ -2528,10 +2640,109 @@
           [?if [= $c "\""] [then "\\\""]
             [else [?if [= $c "\\"] [then "\\\\"] [else $c]]]]]]]]]]
 
+[; ── ATTRIBUTE_WORD + comment discipline (#992) ────────────────────────
+   Mermaid 10's erDiagram grammar is NARROWER than an ERD row looks, and
+   both halves of it have bitten this emitter:
+
+     attributeType attributeName [keyType] [comment]
+
+   * `attributeName` is an ATTRIBUTE_WORD — `[A-Za-z_][A-Za-z0-9_-]*`
+     (measured against mermaid 10.9.8, not read off the docs). `@`, `.`,
+     `:`, a space, a leading digit and every non-ASCII letter are all
+     PARSE ERRORS, and there is NO quoted spelling to fall back on: an
+     entity name may be quoted, an attribute name may not. The 0.13-era
+     emitter wrote the CX `@` sigil into this column (`string @size`) and
+     every ERD of an attribute-carrying document failed to render. The
+     sigil is gone from HEAD, but nothing STOPPED it coming back, and a
+     namespaced attribute (`cx:kind`) or a map key with a dot still
+     reached the column verbatim. `cd-erd-attrword` is that stop: every
+     name reaching the column goes through it, so an invalid spelling
+     cannot be emitted at all.
+
+   * a comment is a quoted run in which a double quote is UNESCAPABLE —
+     mermaid 10 accepts neither `\"` nor `""`, so the escape the module
+     used for entity names (`cd-erd-esc`) produces a parse error when it
+     is reused inside a comment. Values are folded to single quotes
+     instead, newlines flattened, and the run capped so one long value
+     cannot smear the whole box. ]
+
+[?def cd-erd-attrword pure [returns string] ($raw::string)
+  [?let [= $s [$cd-erd-attrword-map $raw 0 ""]]
+    [?if [= $s ""] [then "_"] [else $s]]]]
+
+[?def cd-erd-attrword-map pure [returns string] ($s::string $i::int $acc::string)
+  [?if [>= $i [$str-length $s]]
+    [then $acc]
+    [else
+      [?let
+        [= $c [$str-at $s $i]]
+        [= $head [= $acc ""]]
+        [= $ok [?if $head
+          [then [$str-contains "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_" $c]]
+          [else [$str-contains
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" $c]]]]
+        [$cd-erd-attrword-map $s [+ $i 1]
+          [?if $ok
+            [then [$concat $acc $c]]
+            [; a dropped leading character would silently rename `1st` to
+               `st`; an underscore keeps the name distinguishable. ]
+            [else [$concat $acc "_"]]]]]]]]
+
+[; cd-erd-cmt — one attribute VALUE rendered into the one comment slot a
+   row admits. Double quotes fold to single (unescapable, above),
+   newlines and tabs flatten to a space, and the result is capped at
+   `cd-erd-cmt-cap` characters with an ellipsis so a paragraph-valued
+   attribute cannot blow the entity box apart. ]
+[?def cd-erd-cmt-cap pure [returns int] () 40]
+
+[?def cd-erd-cmt pure [returns string] ($raw::string)
+  [?let
+    [= $flat [$cd-erd-cmt-map $raw 0 ""]]
+    [= $n [$str-length $flat]]
+    [= $cap [$cd-erd-cmt-cap]]
+    [?if [> $n $cap]
+      [then [$concat [$str-slice $flat 0 [- $cap 1]] "…"]]
+      [else $flat]]]]
+
+[?def cd-erd-cmt-map pure [returns string] ($s::string $i::int $acc::string)
+  [?if [>= $i [$str-length $s]]
+    [then $acc]
+    [else
+      [?let [= $c [$str-at $s $i]]
+        [$cd-erd-cmt-map $s [+ $i 1] [$concat $acc
+          [?if [= $c "\""] [then "'"]
+            [else [?if [$cd-in-list $c ("\n", "\r", "\t")] [then " "] [else $c]]]]]]]]]]
+
+[; cd-erd-value-cmt — the compact rung's comment for a VALUE-carrying
+   row: `e.g. <value>`. The `e.g. ` prefix is doing two jobs. It reads as
+   what it is — ONE observed example of the values this attribute takes,
+   which is the honest thing to say when the ERD collapses every
+   occurrence of an element name into one entity — and it is the marker
+   the full rung uses to find the rows it may enrich, replacing the bare
+   `"@"` sigil that used to sit there. That sigil was the defect in #992:
+   `[pizza size=large]` rendered `string size "@"`, a comment carrying no
+   information at all where the example value belongs. ]
+[; A string value's image arrives from `cd-label` in its CX spelling,
+   `'large'`. The COMPACT rung shows exactly one value and the row's type
+   column beside it already says `string`, so the quotes carry nothing
+   there and are stripped: `string size "e.g. large"`. The FULL rung
+   keeps them, because it comma-joins several values and the quotes are
+   what tells `'a, b'` (one value) from `'a', 'b'` (two). ]
+[?def cd-erd-value-cmt pure [returns string] ($val::string)
+  [?if [= [$str-trim $val] ""]
+    [then ""]
+    [else [$concat "e.g. " [$cd-erd-cmt [$cd-unquote1 $val]]]]]]
+
+[?def cd-unquote1 pure [returns string] ($s::string)
+  [?let [= $n [$str-length $s]]
+    [?if [and [>= $n 2] [and [$str-starts-with $s "'"] [$str-ends-with $s "'"]]]
+      [then [$str-slice $s 1 [- $n 1]]]
+      [else $s]]]]
+
 [; cd-erd-kids — an element's ITEM children (attribute and slot wraps
    excluded), which is what `lit.items` means in the V walk. ]
 [?def cd-erd-kids pure [returns any] ($n::any)
-  [?for [in $k $n/*] [where [not [$cd-in-list [$name $k] ("cx:attr", "cx:slot")]]] [yield $k]]]
+  [?for [in $k $n/*] [where [not [$cd-meta-child-p [$name $k]]]] [yield $k]]]
 
 [?def cd-erd-attrs pure [returns any] ($n::any)
   [?for [in $k $n/*] [where [= [$name $k] "cx:attr"]] [yield $k]]]
@@ -2590,8 +2801,11 @@
     [where [and [= [$string $e@name] $nm] [= [$string $r@k] $key]]]
     [yield 1]]]]]
 
+[; `v` carries the row's observed VALUE image (#992) — empty for the
+   rows that have no value to show (columns, scalar children, declared
+   map entries). It is what the compact rung's `e.g. …` comment renders. ]
 [?def cd-erd-add-row pure [returns element] ($st::element $nm::string $key::string
-                                             $t::string $n::string $a::bool)
+                                             $t::string $n::string $a::bool $v::string)
   [?if [$cd-erd-row-seen $st $nm $key]
     [then $st]
     [else
@@ -2599,7 +2813,7 @@
         [ents [?splice [?for [in $e $st/ents/*]
           [yield [?if [= [$string $e@name] $nm]
             [then [ent name=[$string $e@name]
-              [rows [?splice [?for [in $r $e/rows/*] [yield $r]]] [row k=$key t=$t n=$n a=$a]]
+              [rows [?splice [?for [in $r $e/rows/*] [yield $r]]] [row k=$key t=$t n=$n a=$a v=$v]]
               [mx [?splice [?for [in $c $e/mx/*] [yield $c]]]]]]
             [else $e]]]]]]
         [rels [?splice [?for [in $r $st/rels/*] [yield $r]]]]]]]]
@@ -2677,7 +2891,7 @@
         [= $c [$nth $cols $i]]
         [= $cn [$string $c@name]]
         [$cd-erd-walk-cols $cols [+ $i 1] $nm
-          [$cd-erd-add-row $st $nm $cn [$string $c@type] $cn false]]]]]]
+          [$cd-erd-add-row $st $nm $cn [$string $c@type] $cn false ""]]]]]]
 
 [?def cd-erd-walk-attrs pure [returns element] ($attrs::any $i::int $nm::string $st::element)
   [?if [> $i [$count $attrs]]
@@ -2688,7 +2902,12 @@
         [= $an [$string $a@name]]
         [= $av [$first [?for [in $v $a/*] [yield $v]]]]
         [$cd-erd-walk-attrs $attrs [+ $i 1] $nm
-          [$cd-erd-add-row $st $nm [$concat "@" $an] [$cd-erd-type $av] $an true]]]]]]
+          [; the row carries the observed VALUE image (#992) so the
+             compact rung can say `e.g. large` where it used to say `@`.
+             The value travels on the row rather than being recovered
+             from the rendered text, so the two rungs read one source. ]
+          [$cd-erd-add-row $st $nm [$concat "@" $an] [$cd-erd-type $av] $an true
+            [$cd-label $av]]]]]]]
 
 [?def cd-erd-walk-items pure [returns element] ($items::any $i::int $nm::string $st::element)
   [?if [> $i [$count $items]]
@@ -2711,7 +2930,13 @@
                 [= $cn [$cd-erd-name $it]]
                 [= $val [$first [$cd-erd-kids $it]]]
                 [$cd-erd-walk-items $items [+ $i 1] $nm
-                  [$cd-erd-add-row $st $nm $cn [$cd-erd-type $val] $cn false]]]]
+                  [; a scalar CHILD carries a value just as an attribute
+                     does — `[email "a@x.com"]` is every bit as concrete
+                     as `email="a@x.com"` — so it fills the same comment
+                     slot. Before #992 it left the slot empty, which read
+                     as a blank column beside the rows that had one. ]
+                  [$cd-erd-add-row $st $nm $cn [$cd-erd-type $val] $cn false
+                    [$cd-label $val]]]]]
             [else [$cd-erd-walk-items $items [+ $i 1] $nm [$cd-erd-walk $it $st]]]]]]]]]]]]
 
 [?def cd-erd-map-rows pure [returns element] ($es::any $i::int $nm::string $st::element)
@@ -2723,11 +2948,12 @@
         [= $k [$string $e@key]]
         [?if [$exists $e@decl]
           [then [$cd-erd-map-rows $es [+ $i 1] $nm
-            [$cd-erd-add-row $st $nm [$concat "." $k] [$string $e@decl] $k false]]]
+            [$cd-erd-add-row $st $nm [$concat "." $k] [$string $e@decl] $k false ""]]]
           [else
             [?let [= $v [$first [?for [in $x $e/*] [yield $x]]]]
               [$cd-erd-map-rows $es [+ $i 1] $nm
-                [$cd-erd-add-row $st $nm [$concat "." $k] [$cd-erd-type $v] $k true]]]]]]]]]
+                [$cd-erd-add-row $st $nm [$concat "." $k] [$cd-erd-type $v] $k true
+                  [$cd-label $v]]]]]]]]]]
 
 [; cd-erd-counts — per-instance child-name counts for the non-scalar
    children, in first-appearance order (V's insertion-ordered map). ]
@@ -2798,14 +3024,30 @@
         [$cd-erd-ent-lines $ents [+ $i 1]
           [$jn3 $acc [$jn [$concat "  " [$cd-erd-quote [$string $e@name]] " {"] $rows] "  }"]]]]]]
 
+[; cd-erd-row-lines — `attributeType attributeName [comment]`, with the
+   name forced through `cd-erd-attrword` (the #992 pin: the column has no
+   quoted spelling, so an invalid name is an unrenderable diagram) and
+   the comment carrying the observed example value instead of the bare
+   `@` sigil it used to carry.
+
+   The comment is driven by whether the row HAS a value, not by whether
+   it came from an attribute. That is the honest rule: an attribute, a
+   scalar child and an undeclared map entry all name a concrete value
+   and all deserve to show one, while a table COLUMN and a DECLARED map
+   entry name a type and have no value to show. A row with no value
+   emits no comment at all rather than an empty one — an empty comment
+   is the same information-free slot the sigil was. ]
 [?def cd-erd-row-lines pure [returns string] ($rows::any $i::int $acc::string)
   [?if [> $i [$count $rows]]
     [then $acc]
     [else
-      [?let [= $r [$nth $rows $i]]
+      [?let
+        [= $r [$nth $rows $i]]
+        [= $cmt [$cd-erd-value-cmt [$string $r@v]]]
         [$cd-erd-row-lines $rows [+ $i 1]
-          [$jn $acc [$concat "    " [$string $r@t] " " [$string $r@n]
-            [?if [= [$string $r@a] "true"] [then " \"@\""] [else ""]]]]]]]]]
+          [$jn $acc [$concat "    " [$cd-erd-attrword [$string $r@t]]
+            " " [$cd-erd-attrword [$string $r@n]]
+            [?if [= $cmt ""] [then ""] [else [$concat " \"" $cmt "\""]]]]]]]]]]
 
 [; cd-erd-min — code_diagram_erd_min: one empty box per top-level
    element name and per direct child element name, deduped. ]
@@ -2847,6 +3089,560 @@
     [then $acc]
     [else [$cd-erd-min-lines $names [+ $i 1]
       [$jn3 $acc [$concat "  " [$cd-erd-quote [$nth $names $i]] " {"] "  }"]]]]]
+[; ── §9.4b nested value tables (#1031) ────────────────────────────────
+   THE DEFECT. A CFG box carrying a nested element VALUE — a binding
+   right-hand side (`[= $doc [post [title …] [author …] …]]`), a yield
+   payload, an element body standing as a statement — rendered the whole
+   document as ONE flat line inside one box (owner-reported over
+   playground example [130] and "many similar"). `cd-label` is a
+   SUMMARY function: it is right for a diamond's condition and for a
+   loop header, and it is the wrong shape for a document, which has
+   structure that a line cannot carry.
+
+   THE FIX, AND WHY IT IS THIS ONE. #992 already established the
+   machinery: a flowchart node whose label is an HTML `<table>`,
+   rendered inside mermaid's `<foreignObject>`. That decision was
+   MEASURED, not argued (see playground.js's "Why this view draws an
+   HTML TABLE" note), and the measurement is not re-litigated here:
+
+     * erDiagram rows are DISQUALIFIED ON THE VALUES. Both unquoted ER
+       columns are ATTRIBUTE_WORDs, `[A-Za-z_][A-Za-z0-9_\-\[\]()]*`,
+       so `42`, `-5`, `99.5`, `:ok` and `can't` cannot be spelled in
+       either one — and an ERD has one entity per element NAME, which is
+       the wrong cardinality for a document that repeats a name.
+     * classDiagram members route any paren-carrying value into the
+       METHODS compartment, out of document order.
+     * flowchart + HTML label gives aligned columns, a header row, real
+       nesting, and CSS from playground.css — and every value is
+       HTML-escaped, so no value can break the diagram.
+
+   So this section is the same emitter, applied NESTED: the head is the
+   table header, element children are rows, and a child that has
+   structure of its own becomes an inner table in its value cell.
+
+   STRUCTURE IS ASKED FOR, NEVER PARSED. Every child role here comes
+   from the §4 program image — `cx:attr` children, value tags, the
+   `cx-node` mark — the same contract #999/#1000/#1020/#1025 were fixed
+   to report honestly. Nothing in this section splits a string.
+
+   WHAT IS DELIBERATELY LEFT ALONE. A diamond (`if`, `match`) and a
+   hexagon (a loop header) keep their one-line labels: those carry a
+   CONDITION, not a document, and a table inside a diamond is a shape
+   mermaid draws badly. `min` is untouched at every level — `cd-cfg-min`
+   emits one box per top-level def and never reaches a value label, so
+   the `min` rung is byte-for-byte what it was. And a value that has no
+   structure to show keeps `cd-label` EXACTLY, which is what bounds the
+   golden movement to the nodes #1031 is about. ]
+
+[; cd-vt-esc — the HTML-label escape. Named entities, not numeric: a
+   numeric `&#40;` carries a `#`, and `#` is mermaid's OWN entity
+   introducer, which would rewrite it before the browser saw it. Order
+   matters — `&` first (so it cannot double-escape the entities the
+   later rules introduce) and `#` last. ]
+[?def cd-vt-esc pure [returns string] ($s::string)
+  [$str-replace
+    [$str-replace
+      [$str-replace
+        [$str-replace
+          [$str-replace
+            [$str-replace [$str-replace $s "&" "&amp;"] "<" "&lt;"]
+            ">" "&gt;"]
+          "\"" "&quot;"]
+        "\n" " "]
+      "\t" " "]
+    "#" "#35;"]]
+
+[; ── the rung's cuts (#1031) ──
+   full    — nested tables, 4 levels deep, 12 rows per table, 60 DATA
+             rows per node (120 cells), 8 items per leaf cell
+   compact — ONE level of table; a structured child is SUMMARISED in
+             place (its attribute chips plus a withheld count — see
+             cd-vt-summary-html), 8 rows per table, 24 data rows per
+             node (48 cells), 4 items per leaf cell
+   min     — unreachable (see the section note): today's line.
+
+   The node budget counts DATA rows only. A header row and a
+   `(+N more)` note are never charged against it — a cap must not be
+   able to hide the notice that it fired. ]
+[?def cd-vt-depth-cap pure [returns int] ($detail::string)
+  [?if [= $detail "full"] [then 4] [else 1]]]
+
+[?def cd-vt-row-cap pure [returns int] ($detail::string)
+  [?if [= $detail "full"] [then 12] [else 8]]]
+
+[; cd-vt-node-budget — rows for the WHOLE node, spent across every
+   table in it, so a wide-and-deep document cannot balloon the box even
+   though each individual table is inside its own cap. Two cells a row. ]
+[?def cd-vt-node-budget pure [returns int] ($detail::string)
+  [?if [= $detail "full"] [then 60] [else 24]]]
+
+[?def cd-vt-item-cap pure [returns int] ($detail::string)
+  [?if [= $detail "full"] [then 8] [else 4]]]
+
+[; cd-vt-clip — the per-cell character clip (48, the same bound #992
+   set for the instance view's value column). ]
+[?def cd-vt-clip pure [returns string] ($s::string)
+  [?if [<= [$str-length $s] 48]
+    [then $s]
+    [else [$concat [$str-slice $s 0 47] "…"]]]]
+
+[; ── the child roles, asked of the image ── ]
+
+[; cd-vt-data-elem-p — a DATA element: a source element that is neither
+   a directive nor a for-comp. Control flow is the CFG's own subject and
+   already has its own boxes; only data nests into a value table.
+
+   `cd-synth-block` is excluded BY NAME for the same reason `cd-label`
+   singles it out: it is the multi-item clause wrapper §9.5 synthesises,
+   not something anyone wrote, and its tag must never reach a table
+   header. A multi-statement `[then …]` body therefore keeps today's
+   `<lit>` — it is not one of the three shapes #1031 names, and opening
+   it here would be scope this issue did not ask for.
+
+   #1038 — `<cx:element>` is the ONE `cx:`-tagged node that IS a data
+   element: it is element CONSTRUCTION with a computed head, the same
+   shape as a literal element in every respect except that its name is
+   an expression. Its attributes and body are ordinary structure, so it
+   tables exactly like one, headed by `cd-computed-name`. Every OTHER
+   `cx:` tag stays out: those are value tags and control forms, which
+   have their own boxes. ]
+[?def cd-vt-data-elem-p pure [returns bool] ($k::any)
+  [?if [$is-cx $k]
+    [then [= [$local-of $k] "element"]]
+    [else [?if [= [$name $k] "cd-synth-block"]
+      [then false]
+      [else [?if [$cd-is-directive $k]
+        [then false]
+        [else [not [$cd-is-forcomp $k]]]]]]]]]
+
+[?def cd-vt-seq-p pure [returns bool] ($n::any)
+  [?if [not [$is-cx $n]]
+    [then false]
+    [else [$cd-in-list [$local-of $n] ("seq", "arr")]]]]
+
+[?def cd-vt-attrs pure [returns any] ($n::any)
+  [?for [in $k $n/*] [where [= [$name $k] "cx:attr"]] [yield $k]]]
+
+[?def cd-vt-elems pure [returns any] ($n::any)
+  [?for [in $k $n/*] [where [$cd-vt-data-elem-p $k]] [yield $k]]]
+
+[; cd-vt-kids — a data element's rows, in DOCUMENT ORDER: attributes,
+   nested elements and value bodies interleaved exactly as written.
+   `cx:slot` wrappers are not content, and neither is the `cx:name`
+   head envelope (#1038) — the same exclusion `cd-element-label` makes.
+   `cx:attr` is NOT excluded here: an attribute IS a row. ]
+[?def cd-vt-kids pure [returns any] ($n::any)
+  [?for [in $k $n/*]
+    [where [not [$cd-in-list [$name $k] ("cx:slot", "cx:name")]]] [yield $k]]]
+
+[; cd-vt-structured — does this value warrant a TABLE at all? Two
+   shapes qualify, and nothing else does:
+     * a data element carrying at least one attribute or at least one
+       element child — precisely the shape whose one-line label was the
+       flat document line #1031 reports;
+     * a sequence / array with at least one structured ITEM, which is
+       the "items as rows" half of the issue. A sequence of plain
+       scalars stays inline: `(1, 2, 3)` needs no grid.
+   Everything flatter keeps `cd-label` unchanged. ]
+[?def cd-vt-structured pure [returns bool] ($n::any)
+  [?if [$cd-vt-seq-p $n]
+    [then [$cd-vt-any-structured-item [$items-of $n] 1]]
+    [else [?if [not [$cd-vt-data-elem-p $n]]
+      [then false]
+      [else [> [+ [$count [$cd-vt-attrs $n]] [$count [$cd-vt-elems $n]]] 0]]]]]]
+
+[?def cd-vt-any-structured-item pure [returns bool] ($its::any $i::int)
+  [?if [> $i [$count $its]]
+    [then false]
+    [else [?if [$cd-vt-structured [$nth $its $i]]
+      [then true]
+      [else [$cd-vt-any-structured-item $its [+ $i 1]]]]]]]
+
+[; cd-vt-bind-rhs — the `[= $target VALUE]` binding whose VALUE is a
+   document. The §4 image spells the clause `cx:op name="eq"`, so this
+   asks `cd-is-eq-clause` (§9.5's own test) rather than re-deriving it.
+   Answers the wrapped VALUE, or () when this is not that shape. ]
+[?def cd-vt-bind-rhs pure [returns any] ($n::any)
+  [?if [not [$cd-is-eq-clause $n]]
+    [then ()]
+    [else
+      [?let [= $ks [?for [in $k $n/*] [yield $k]]]
+        [?if [not [= [$count $ks] 2]]
+          [then ()]
+          [else [?if [$cd-vt-structured [$nth $ks 2]]
+            [then [hit [$nth $ks 2]]]
+            [else ()]]]]]]]]
+
+[; cd-vt-qualifies — the ONE question every label site asks: would this
+   value draw a table? `min` never does (see the section note). ]
+[?def cd-vt-qualifies pure [returns bool] ($n::any $detail::string)
+  [?if [= $detail "min"]
+    [then false]
+    [else [?if [$cd-vt-structured $n]
+      [then true]
+      [else [$exists [$cd-vt-bind-rhs $n]]]]]]]
+
+[; ── the budget-threading state ──
+   `out` is the HTML so far, `left` the node-wide rows still affordable.
+   Threaded, not global, for the reason §9.5's `cst` is threaded: these
+   emitters are pure. ]
+[?def cd-vtst pure [returns map] ($out::string $left::int)
+  {out: $out, left: $left}]
+
+[; cd-vt-tr — one row. `$vhtml` is ALREADY escaped-or-markup (it may be
+   a whole inner table); `$k` is raw and is escaped here. The classes
+   are #992's, so playground.css styles these tables for free. ]
+[?def cd-vt-tr pure [returns string] ($cls::string $k::string $vhtml::string)
+  [$concat "<tr"
+    [?if [= $cls ""] [then ""] [else [$concat " class='" $cls "'"]]]
+    "><td class='cxp-itbl-k'>" [$cd-vt-esc $k]
+    "</td><td class='cxp-itbl-v'>" $vhtml "</td></tr>"]]
+
+[; cd-vt-more-row — the elision row. LOUD by contract: it says how many
+   rows are withheld, and it is styled as a note rather than as data. ]
+[?def cd-vt-more-row pure [returns string] ($n::int)
+  [$concat "<tr class='cxp-itbl-more'><td class='cxp-itbl-k'>"
+    [$str-format "(+{} more)" ($n)]
+    "</td><td class='cxp-itbl-v'></td></tr>"]]
+
+[; cd-vt-inline — a value in a CELL, on one line. A sequence / array
+   spells its items rather than falling to `cd-label`'s `<lit>`, which
+   carried nothing; this is cell-local and does not move `cd-label`. ]
+[?def cd-vt-inline pure [returns string] ($v::any $detail::string)
+  [?if [$cd-vt-seq-p $v]
+    [then [$concat "(" [$cd-vt-join [$items-of $v] 1 [$cd-vt-item-cap $detail] ""] ")"]]
+    [else [$cd-vt-clip [$cd-label $v]]]]]
+
+[; cd-vt-join — `a, b, c` with the rung's item cap and a loud tail. ]
+[?def cd-vt-join pure [returns string] ($vs::any $i::int $cap::int $acc::string)
+  [?if [> $i [$count $vs]]
+    [then $acc]
+    [else [?if [> $i $cap]
+      [then [$concat $acc [$str-format ", (+{} more)" ([+ [- [$count $vs] $i] 1])]]]
+      [else
+        [?let [= $one [$cd-vt-clip [$cd-label [$nth $vs $i]]]]
+          [$cd-vt-join $vs [+ $i 1] $cap
+            [?if [= $acc ""] [then $one] [else [$concat $acc ", " $one]]]]]]]]]]
+
+[; cd-vt-leaf-cell — a LEAF element's own content: its value bodies,
+   joined. `[title "On X"]` fills one cell with `'On X'`;
+   `[tags "T1" "T2"]` with `'T1', 'T2'`. This is the compaction that
+   makes the outer table readable — a leaf child is a ROW, not a box. ]
+[?def cd-vt-leaf-cell pure [returns string] ($n::any $detail::string)
+  [?let
+    [= $vs [?for [in $k $n/*]
+      [where [not [$cd-meta-child-p [$name $k]]]] [yield $k]]]
+    [$cd-vt-join $vs 1 [$cd-vt-item-cap $detail] ""]]]
+
+[; cd-vt-elided — a structured child the rung will not open, when there
+   is nothing about it worth spelling: its name and the count of
+   children it is holding back. ]
+[?def cd-vt-elided pure [returns string] ($n::any)
+  [?let [= $n2 [?if [$cd-vt-seq-p $n]
+                 [then [$count [$items-of $n]]]
+                 [else [$count [$cd-vt-kids $n]]]]]
+    [$str-format "[{} (+{} more)]" ([$cd-src-name $n], $n2)]]]
+
+[; ── the summary cell (the `compact` rung's real content) ──
+   MEASURED, on the very examples #1031 was filed over. A one-level
+   `compact` that elides EVERY structured child renders
+   `[users [user id=1 …] [user id=2 …] …]` as four identical rows all
+   reading `[user (+3 more)]` — structurally honest and almost
+   informationless, which is the defect this issue is about wearing a
+   different hat.
+
+   So a child the rung will not open is SUMMARISED rather than merely
+   counted: its attributes and its leaf children become chips in the
+   value cell (`@id=1 @name='Alice' @banned=false`), and only what
+   genuinely cannot be flattened — a grandchild with structure of its
+   own — is counted into the trailing `(+N more)`. That keeps `compact`
+   at ONE LEVEL OF TABLE, which is the contract, while making the level
+   it does draw worth reading. The chip spelling is the one §2's
+   `chips-upto` already uses, so the two rungs read as one language.
+
+   This is also what the depth and budget caps fall back to at `full`,
+   so a capped cell is never less informative than a compact one. ]
+[?def cd-vt-chip-acc pure [returns map] ($out::string $hid::int)
+  {out: $out, hid: $hid}]
+
+[; cd-vt-chip — ONE chip, or "" for a child that cannot be flattened
+   (which the caller counts instead of spelling). ]
+[?def cd-vt-chip pure [returns string] ($k::any $detail::string)
+  [?if [= [$name $k] "cx:attr"]
+    [then [$concat "@" [$string $k@name] "=" [$cd-vt-attr-value $k $detail]]]
+    [else [?if [$cd-vt-structured $k]
+      [then ""]
+      [else [?if [$cd-vt-data-elem-p $k]
+        [then [$concat [$cd-src-name $k] "=" [$cd-vt-leaf-cell $k $detail]]]
+        [else [$cd-vt-inline $k $detail]]]]]]]]
+
+[?def cd-vt-chips pure [returns map] ($ks::any $i::int $cap::int $shown::int
+                                      $detail::string $acc::map)
+  [?if [> $i [$count $ks]]
+    [then $acc]
+    [else
+      [?let
+        [= $chip [$cd-vt-chip [$nth $ks $i] $detail]]
+        [= $take [?if [= $chip ""] [then false] [else [< $shown $cap]]]]
+        [= $nxt [?if $take
+          [then [$cd-vt-chip-acc
+            [?if [= $acc.out ""] [then $chip] [else [$concat $acc.out " " $chip]]]
+            $acc.hid]]
+          [else [$cd-vt-chip-acc $acc.out [+ $acc.hid 1]]]]]
+        [$cd-vt-chips $ks [+ $i 1] $cap
+          [?if $take [then [+ $shown 1]] [else $shown]] $detail $nxt]]]]]
+
+[; cd-vt-summary-html — the value cell for an unopened child. Returns
+   HTML (the caller must NOT re-escape): the chips as text, and every
+   withheld count inside a `cxp-vtbl-more` span, so the note half of the
+   cell is styled as a note and the data half is not. ]
+[?def cd-vt-summary-html pure [returns string] ($n::any $detail::string)
+  [?let [= $r [$cd-vt-chips [$cd-vt-kids $n] 1 [$cd-vt-item-cap $detail] 0 $detail
+                [$cd-vt-chip-acc "" 0]]]
+    [?if [= $r.out ""]
+      [then [$concat "<span class='cxp-vtbl-more'>"
+              [$cd-vt-esc [$cd-vt-elided $n]] "</span>"]]
+      [else [$concat [$cd-vt-esc $r.out]
+        [?if [> $r.hid 0]
+          [then [$concat " <span class='cxp-vtbl-more'>"
+                  [$cd-vt-esc [$str-format "(+{} more)" ($r.hid)]] "</span>"]]
+          [else ""]]]]]]]
+
+[; cd-vt-key — the left column for one child. An attribute keeps its
+   `@` sigil, a directive its `?`, an operator its symbol; a value body
+   is keyed by its KIND, which is what #992 settled for a body that has
+   no name of its own. A computed-name element (#1038) is keyed by its
+   NAME, not by the `element` tag — it HAS a name, it is just written as
+   an expression, and keying it `element` would make every nested
+   `[?element]` row read identically. ]
+[?def cd-vt-key pure [returns string] ($k::any)
+  [?if [= [$name $k] "cx:attr"]
+    [then [$concat "@" [$string $k@name]]]
+    [else [?if [$cd-is-forcomp $k]
+      [then "?for"]
+      [else [?if [$cd-is-directive $k]
+        [then [$concat "?" [$local-of $k]]]
+        [else [?if [$is-cx $k]
+          [then [?if [= [$local-of $k] "op"]
+            [then [$op-symbol [$string $k@name]]]
+            [else [?if [= [$local-of $k] "element"]
+              [then [$cd-computed-name $k]]
+              [else [$local-of $k]]]]]]
+          [else [$cd-src-name $k]]]]]]]]]]
+
+[; cd-vt-attr-value — the `cx:attr` wrapper's single child. ]
+[?def cd-vt-attr-value pure [returns string] ($a::any $detail::string)
+  [?let [= $v [$first [?for [in $x $a/*] [yield $x]]]]
+    [?if [$exists $v] [then [$cd-vt-inline $v $detail]] [else ""]]]]
+
+[; ── the single-child chain is a PATH, not nesting ──
+   MEASURED IN THE PANE, example [127] at `full`.
+   `[root [a [b [c [d marker=hit]]]] [x [y marker=miss]]]` nested one
+   table per level renders as a HORIZONTAL CASCADE of one-row tables —
+   `a │ b │ c │ d │ @marker='hit'` — which reads as four SIBLINGS. That
+   is worse than the flat line this issue is fixing, because it does not
+   merely under-inform, it actively misinforms about the shape.
+
+   A level that carries nothing of its own — no attributes, no value
+   bodies, exactly one element child — is not a level worth a table. It
+   folds into its child, and the row is keyed by the CX path `a/b/c/d`:
+   the spelling the rest of the diagram already uses for this exact
+   shape, so the reader learns nothing new to read it. Folding also
+   spends no depth and no budget on levels that say nothing, which is
+   why `compact` gains from it too — `a/b/c/d │ @marker='hit'` where it
+   used to say `[a (+1 more)]`. ]
+[?def cd-vt-chain-p pure [returns bool] ($n::any)
+  [?if [not [$cd-vt-data-elem-p $n]]
+    [then false]
+    [else [?if [> [$count [$cd-vt-attrs $n]] 0]
+      [then false]
+      [else [?if [not [= [$count [$cd-vt-elems $n]] 1]]
+        [then false]
+        [; kids counts EVERY non-slot child, so this is the test that
+           there is no value body riding alongside the one element. ]
+        [else [= [$count [$cd-vt-kids $n]] 1]]]]]]]]
+
+[?def cd-vt-fold pure [returns map] ($n::any $key::string)
+  [?if [not [$cd-vt-chain-p $n]]
+    [then {k: $key, nd: $n}]
+    [else
+      [?let [= $c [$first [$cd-vt-elems $n]]]
+        [$cd-vt-fold $c [$concat $key "/" [$cd-src-name $c]]]]]]]
+
+[; cd-vt-row — ONE row, dispatched on the child's role. A structured
+   child recurses into an inner table when the rung's depth allows and
+   the node budget is not spent; otherwise it summarises in place. The
+   inner table carries NO header: the row's own key already names it.
+   Every element child folds first (above), which is a no-op for
+   anything that is not a single-child chain. ]
+[?def cd-vt-row pure [returns map] ($k::any $depth::int $detail::string $st::map)
+  [?if [= [$name $k] "cx:attr"]
+    [then [$cd-vtst
+      [$cd-vt-tr "" [$cd-vt-key $k] [$cd-vt-esc [$cd-vt-attr-value $k $detail]]]
+      $st.left]]
+    [else
+      [?let [= $f [$cd-vt-fold $k [$cd-vt-key $k]]]
+        [?if [not [$cd-vt-structured $f.nd]]
+          [then [$cd-vtst
+            [$cd-vt-tr [?if [$cd-vt-data-elem-p $f.nd] [then ""] [else "cxp-itbl-syn"]]
+              $f.k
+              [$cd-vt-esc [?if [$cd-vt-data-elem-p $f.nd]
+                [then [$cd-vt-leaf-cell $f.nd $detail]]
+                [else [$cd-vt-inline $f.nd $detail]]]]]
+            $st.left]]
+          [else [?if [or [>= $depth [$cd-vt-depth-cap $detail]] [<= $st.left 0]]
+            [then [$cd-vtst
+              [$cd-vt-tr "cxp-vtbl-sum" $f.k [$cd-vt-summary-html $f.nd $detail]]
+              $st.left]]
+            [else
+              [?let [= $r [$cd-vt-table $f.nd [+ $depth 1] $detail $st ""]]
+                [$cd-vtst [$cd-vt-tr "cxp-vtbl-nest" $f.k $r.out] $r.left]]]]]]]]]]
+
+[; cd-vt-rows — one table's row run, under BOTH the per-table row cap
+   and the node-wide budget. Whichever bites first, the remainder
+   becomes one loud `(+N more)` row: a table that quietly stopped is the
+   defect this issue is fixing, one level down. ]
+[?def cd-vt-rows pure [returns map] ($ks::any $i::int $shown::int
+                                     $depth::int $detail::string $st::map)
+  [?if [> $i [$count $ks]]
+    [then $st]
+    [else [?if [or [>= $shown [$cd-vt-row-cap $detail]] [<= $st.left 0]]
+      [then [$cd-vtst
+        [$concat $st.out [$cd-vt-more-row [+ [- [$count $ks] $i] 1]]]
+        $st.left]]
+      [else
+        [?let [= $r [$cd-vt-row [$nth $ks $i] $depth $detail
+                      [$cd-vtst "" [- $st.left 1]]]]
+          [$cd-vt-rows $ks [+ $i 1] [+ $shown 1] $depth $detail
+            [$cd-vtst [$concat $st.out $r.out] $r.left]]]]]]]]
+
+[; cd-vt-item-rows — a sequence's / array's items as rows, keyed by
+   ORDINAL: an item list has an order, not names. Same two caps. ]
+[?def cd-vt-item-rows pure [returns map] ($its::any $i::int $shown::int
+                                          $depth::int $detail::string $st::map)
+  [?if [> $i [$count $its]]
+    [then $st]
+    [else [?if [or [>= $shown [$cd-vt-row-cap $detail]] [<= $st.left 0]]
+      [then [$cd-vtst
+        [$concat $st.out [$cd-vt-more-row [+ [- [$count $its] $i] 1]]]
+        $st.left]]
+      [else
+        [?let
+          [= $it [$nth $its $i]]
+          [= $key [$str-format "{}" ($i)]]
+          [= $r [?if [and [$cd-vt-structured $it]
+                          [and [< $depth [$cd-vt-depth-cap $detail]] [> $st.left 1]]]
+            [then
+              [?let [= $t [$cd-vt-table $it [+ $depth 1] $detail
+                            [$cd-vtst "" [- $st.left 1]] ""]]
+                [$cd-vtst [$cd-vt-tr "cxp-vtbl-nest" $key $t.out] $t.left]]]
+            [else [$cd-vtst
+              [?if [$cd-vt-structured $it]
+                [then [$cd-vt-tr "cxp-vtbl-sum" $key [$cd-vt-summary-html $it $detail]]]
+                [else [$cd-vt-tr "" $key
+                  [$cd-vt-esc [?if [$cd-vt-data-elem-p $it]
+                    [then [$cd-vt-leaf-cell $it $detail]]
+                    [else [$cd-vt-inline $it $detail]]]]]]]
+              [- $st.left 1]]]]]
+          [$cd-vt-item-rows $its [+ $i 1] [+ $shown 1] $depth $detail
+            [$cd-vtst [$concat $st.out $r.out] $r.left]]]]]]]]
+
+[; cd-vt-table — one table. `$header` empty means "no header row",
+   which is what an INNER table wants: its parent row's key names it,
+   and repeating the name would be noise. ]
+[?def cd-vt-table pure [returns map] ($n::any $depth::int $detail::string
+                                      $st::map $header::string)
+  [?let
+    [= $body [?if [$cd-vt-seq-p $n]
+      [then [$cd-vt-item-rows [$items-of $n] 1 0 $depth $detail [$cd-vtst "" $st.left]]]
+      [else [$cd-vt-rows [$cd-vt-kids $n] 1 0 $depth $detail [$cd-vtst "" $st.left]]]]]
+    [$cd-vtst
+      [$concat "<table class='cxp-itbl cxp-vtbl'>"
+        [?if [= $header ""]
+          [then ""]
+          [else [$concat "<tr><th colspan='2'>" [$cd-vt-esc $header] "</th></tr>"]]]
+        $body.out "</table>"]
+      $body.left]]]
+
+[; cd-nl — THE NODE LABEL for one value in a CFG box, and the only
+   entry point §9.5 uses. A qualifying value draws a table; everything
+   else is `cd-label` under the mermaid escape, byte-for-byte what it
+   was before #1031.
+
+   A BINDING keeps its target in the header — `$doc = post` names both
+   the binding the reader is looking for and the head of the document
+   under it, which one line could only do by spending its width on
+   punctuation. ]
+[?def cd-nl pure [returns string] ($n::any $detail::string)
+  [?let [= $rhs [$cd-vt-bind-rhs $n]]
+    [?if [$cd-and-not-min $detail [$exists $rhs]]
+      [then
+        [?let
+          [= $ks [?for [in $k $n/*] [yield $k]]]
+          [= $v [$lab-val $rhs]]
+          [= $hd [$concat [$cd-label [$nth $ks 1]] " = " [$cd-src-name $v]]]
+          [$cd-vt-emit $v $detail $hd]]]
+      [else [?if [$cd-vt-qualifies $n $detail]
+        [then [$cd-vt-emit $n $detail [$cd-src-name $n]]]
+        [else [$cd-vt-esc [$cd-label $n]]]]]]]]
+
+[?def cd-and-not-min pure [returns bool] ($detail::string $b::bool)
+  [?if [= $detail "min"] [then false] [else $b]]]
+
+[?def cd-vt-emit pure [returns string] ($n::any $detail::string $header::string)
+  [?let [= $r [$cd-vt-table $n 1 $detail
+                [$cd-vtst "" [$cd-vt-node-budget $detail]] $header]]
+    $r.out]]
+
+[; cd-nl-group-p — does ANY value in items[$from..$to] draw a table? A
+   box's label is one label: if one statement in a basic block is a
+   document, the whole box goes to HTML (its plain siblings escaped and
+   joined by `<br/>`). If none does, the box takes the plain path and
+   its bytes do not move. That is what keeps #1031's golden movement to
+   the nodes #1031 is about. ]
+[?def cd-nl-group-p pure [returns bool] ($items::any $from::int $to::int $detail::string)
+  [?if [> $from $to]
+    [then false]
+    [else [?if [> $from [$count $items]]
+      [then false]
+      [else [?if [$cd-vt-qualifies [$nth $items $from] $detail]
+        [then true]
+        [else [$cd-nl-group-p $items [+ $from 1] $to $detail]]]]]]]]
+
+[; cd-nl-group — the HTML label for items[$from..$to], with §D4's
+   ten-line block cap kept exactly where it was. ]
+[?def cd-nl-group pure [returns string] ($items::any $from::int $to::int $i::int
+                                         $detail::string $acc::string)
+  [?if [> $i $to]
+    [then $acc]
+    [else [?if [>= [- $i $from] 10]
+      [then [$cd-nl-br $acc
+        [$cd-vt-esc [$str-format "(+{} more)" ([+ [- $to $i] 1])]]]]
+      [else [$cd-nl-group $items $from $to [+ $i 1] $detail
+        [$cd-nl-br $acc [$cd-nl [$nth $items $i] $detail]]]]]]]]
+
+[?def cd-nl-br pure [returns string] ($a::string $b::string)
+  [?if [= $a ""] [then $b]
+    [else [?if [= $b ""] [then $a] [else [$concat $a "<br/>" $b]]]]]]
+
+[; cd-nl-one — the SINGLE-value label site (an if arm, a match arm, a
+   def body): the §9.4b table when the value qualifies, and otherwise
+   the caller's own plain spelling, ESCAPED.
+
+   #1037 closed the asymmetry this def was written around. Until then
+   `cd-match-emit` and `cd-def-block` ran `cd-esc` over the plain label
+   and `cd-if-arm-emit` never did, so an if arm carrying a `"` emitted
+   `t["'he said "hi"'"]` — a label mermaid cannot parse. diagram.md §4
+   is normative and unconditional on this: the escape set `\` → `\\`,
+   `"` → `\"`, newline → `\n` applies to LABELS AND EDGE LABELS, with no
+   exemption for one emitter. The match side was right and the if side
+   was wrong; the `$esc` parameter is gone rather than defaulted, so the
+   two arms cannot drift apart again. ]
+[?def cd-nl-one pure [returns string] ($n::any $detail::string)
+  [?if [$cd-vt-qualifies $n $detail]
+    [then [$cd-nl $n $detail]]
+    [else [$cd-esc [$cd-label $n]]]]]
+
 [; ── §9.5 CFG (flowchart TD) ──────────────────────────────────────────
    §D4 basic blocks: a run of sequential non-branching statements
    composes into one block node (10-line cap with a `(+K more)` row);
@@ -2856,25 +3652,47 @@
    same fields as a record — out (the joined lines), exit (the current
    scope exit id), pfx (the sub-graph id prefix), arms (the match-arm
    counter), dname / dentry (the enclosing def, for self-recursion
-   back-edges) — plus e / x, the entry and exit ids an emitter returns. ]
+   back-edges) — plus e / x, the entry and exit ids an emitter returns.
+
+   lets (#1036) is the `[?let]` SETUP-NODE counter, threaded for exactly
+   the reason arms is: a scope can hold several binding sites — nested
+   (`[?let A [?let B …]]`) or sibling — and each needs its OWN node id.
+   Before #1036 every one of them minted the same `<pfx>lt`, so mermaid
+   kept the last definition and the outer binding was drawn with the
+   inner one's label, under a `lt --> lt` self-edge. Ids are
+   `<pfx>lt1`, `<pfx>lt2`, … in emitter order, the same spelling the
+   match-arm counter uses; the counter resets per def subgraph, as arms
+   does, because the pfx already separates those scopes.
+
+   dt (#1031) is the DETAIL RUNG, threaded as a seventh field for the
+   same reason the other six are threaded: §9.5c's value tables are cut
+   to depth and size by rung, and the label sites that need it are the
+   leaves of this walk. It rides the state rather than becoming a
+   parameter on twenty emitters — `cd-cfg-full` layers over compact's
+   TEXT, so the rung cannot be recovered downstream from the lines. ]
 
 [?def cst pure [returns map] ($out::string $exit::string $pfx::string $arms::int
-                              $dname::string $dentry::string)
+                              $dname::string $dentry::string $dt::string $lets::int)
   {out: $out, exit: $exit, pfx: $pfx, arms: $arms, dname: $dname, dentry: $dentry,
-   e: "", x: ""}]
+   dt: $dt, lets: $lets, e: "", x: ""}]
 
 [?def cst-out pure [returns map] ($s::map $out::string)
-  [$cst $out $s.exit $s.pfx $s.arms $s.dname $s.dentry]]
+  [$cst $out $s.exit $s.pfx $s.arms $s.dname $s.dentry $s.dt $s.lets]]
+
+[; cst-lets — advance the §9.5 binding-site counter (#1036) without
+   touching any other field. ]
+[?def cst-lets pure [returns map] ($s::map $lets::int)
+  [$cst $s.out $s.exit $s.pfx $s.arms $s.dname $s.dentry $s.dt $lets]]
 
 [?def cres pure [returns map] ($s::map $e::string $x::string)
   {out: $s.out, exit: $s.exit, pfx: $s.pfx, arms: $s.arms, dname: $s.dname,
-   dentry: $s.dentry, e: $e, x: $x}]
+   dentry: $s.dentry, dt: $s.dt, lets: $s.lets, e: $e, x: $x}]
 
 [?def cd-edge pure [returns string] ($from::string $to::string)
   [$concat "  " $from " --> " $to]]
 
 [?def cd-items pure [returns any] ($n::any)
-  [?for [in $k $n/*] [where [not [$cd-in-list [$name $k] ("cx:attr", "cx:slot")]]] [yield $k]]]
+  [?for [in $k $n/*] [where [not [$cd-meta-child-p [$name $k]]]] [yield $k]]]
 
 [?def cd-is-def pure [returns bool] ($n::any)
   [?if [$cd-is-directive $n] [then [= [$local-of $n] "def"]] [else false]]]
@@ -2885,12 +3703,17 @@
     [then [not [$code-breaks-block [$local-of $n]]]]
     [else [not [$cd-is-forcomp $n]]]]]
 
-[; cd-block-node — emit_block_node over items[$from..$to]. ]
+[; cd-block-node — emit_block_node over items[$from..$to]. Since #1031
+   the label takes the §9.4b HTML path when any statement in the block
+   is a nested document, and the plain path — byte-for-byte — when none
+   is. ]
 [?def cd-block-node pure [returns map] ($items::any $from::int $to::int $s::map)
   [?let
     [= $role [?if [$str-ends-with $s.exit "lh"] [then "lb"] [else "b"]]]
     [= $id [$concat $s.pfx $role]]
-    [= $label [$cd-esc [$cd-block-label $items $from $to $from ""]]]
+    [= $label [?if [$cd-nl-group-p $items $from $to $s.dt]
+      [then [$cd-nl-group $items $from $to $from $s.dt ""]]
+      [else [$cd-esc [$cd-block-label $items $from $to $from ""]]]]]
     [$cres [$cst-out $s [$jn $s.out [$concat "  " $id "[\"" $label "\"]"]]] $id $id]]]
 
 [?def cd-block-label pure [returns string] ($items::any $from::int $to::int $i::int $acc::string)
@@ -2929,17 +3752,29 @@
 
 [; cd-emit-let — emit_let: a `[= $x V]` clause-child (which the §4
    image spells `cx:op name="eq"`, exactly as the V AST spelled it a
-   cx-element named `=`) is a binding label; every other slot is body. ]
+   cx-element named `=`) is a binding label; every other slot is body.
+
+   The setup node's id is minted from the threaded binding-site counter
+   (#1036), so nested and sibling `[?let]`s in one scope get DISTINCT
+   ids. The counter advances only when a setup node is actually emitted
+   — a `[?let]` with no `[= …]` clause draws none, and must not spend a
+   number it never used. ]
 [?def cd-emit-let pure [returns map] ($d::any $s::map)
   [?let
     [= $slots [$cd-slots $d]]
     [= $binds [?for [in $v $slots] [where [$cd-is-eq-clause $v]] [yield $v]]]
     [= $body [?for [in $v $slots] [where [not [$cd-is-eq-clause $v]]] [yield $v]]]
-    [= $setup [?if [> [$count $binds] 0] [then [$concat $s.pfx "lt"]] [else ""]]]
+    [= $ln [?if [> [$count $binds] 0] [then [+ $s.lets 1]] [else $s.lets]]]
+    [= $setup [?if [> [$count $binds] 0]
+      [then [$str-format "{}lt{}" ($s.pfx, $ln)]] [else ""]]]
     [= $s1 [?if [= $setup ""]
       [then $s]
-      [else [$cst-out $s [$jn $s.out
-        [$concat "  " $setup "[\"" [$cd-esc [$cd-bind-labels $binds 1 ""]] "\"]"]]]]]]
+      [else [$cst-lets [$cst-out $s [$jn $s.out
+        [$concat "  " $setup "[\""
+          [?if [$cd-nl-group-p $binds 1 [$count $binds] $s.dt]
+            [then [$cd-nl-group $binds 1 [$count $binds] 1 $s.dt ""]]
+            [else [$cd-esc [$cd-bind-labels $binds 1 ""]]]]
+          "\"]"]]] $ln]]]]
     [?if [and [= [$count $body] 1] [not [$cd-block-candidate [$first $body]]]]
       [then
         [?let [= $r [$cd-branching [$first $body] $s1]]
@@ -3017,7 +3852,8 @@
                                          $role::string $edge::string)
   [?let
     [= $aid [$concat $s.pfx $role]]
-    [= $s1 [$cst-out $s [$jn $s.out [$concat "  " $aid "[\"" [$cd-label $body] "\"]"]]]]
+    [= $s1 [$cst-out $s [$jn $s.out
+      [$concat "  " $aid "[\"" [$cd-nl-one $body $s.dt] "\"]"]]]]
     [= $s2 [$cst-out $s1 [$jn $s1.out
       [$concat "  " $id " -- \"" $edge "\" --> " $aid]]]]
     [$cst-out $s2 [$jn $s2.out [$cd-edge $aid [$cd-arm-tail $body $s2]]]]]]
@@ -3125,11 +3961,11 @@
         [= $aid [$concat $s.pfx $role]]
         [= $body [$first [?for [in $b $arm/*] [yield $b]]]]
         [= $out [$jn4 $s.out
-          [$concat "  " $aid "[\"" [$cd-esc [$cd-label $body]] "\"]"]
+          [$concat "  " $aid "[\"" [$cd-nl-one $body $s.dt] "\"]"]
           [$concat "  " $id " -- \"" [$cd-esc [$string $arm@label]] "\" --> " $aid]
           [$cd-edge $aid $s.exit]]]
         [$cd-match-emit $arms [+ $i 1] $id
-          [$cst $out $s.exit $s.pfx $n $s.dname $s.dentry]]]]]]
+          [$cst $out $s.exit $s.pfx $n $s.dname $s.dentry $s.dt $s.lets]]]]]]
 
 [; cd-emit-for — emit_for: the loop box, its `binds $x` edge, and the
    body emitted with the loop header standing in as the scope exit. ]
@@ -3155,9 +3991,9 @@
     [= $s1 [$cst-out $s [$jn $s.out [$concat "  " $lh "{{\"" [$cd-esc $header] "\"}}"]]]]
     [= $yield [$first [?for [in $k $f/*] [where [= [$name $k] "cx:yield"]]
       [yield [hit [$first [?for [in $v $k/*] [yield $v]]]]]]]]
-    [= $inner [$cst $s1.out $lh $s1.pfx $s1.arms $s1.dname $s1.dentry]]
+    [= $inner [$cst $s1.out $lh $s1.pfx $s1.arms $s1.dname $s1.dentry $s1.dt $s1.lets]]
     [= $rb [$cd-emit-body [$lab-val $yield] $inner]]
-    [= $s2 [$cst $rb.out $s.exit $s.pfx $rb.arms $s.dname $s.dentry]]
+    [= $s2 [$cst $rb.out $s.exit $s.pfx $rb.arms $s.dname $s.dentry $s.dt $rb.lets]]
     [$cres [$cst-out $s2 [$jn $s2.out
       [?if [= $bind ""]
         [then [$cd-edge $lh $rb.e]]
@@ -3223,7 +4059,7 @@
           [= $s1 [$cst [$jn3 $s.out
                     [$concat "  subgraph " $nm]
                     [$concat "    " $entry "[/\"def " $nm "\"/]"]]
-                  $exit $pfx 0 $nm $entry]]
+                  $exit $pfx 0 $nm $entry $s.dt 0]]
           [= $s2 [$cst-out $s1 [$jn $s1.out [$concat "    " $exit "([exit])"]]]]
           [= $s3 [?if [$cd-block-candidate $body]
             [then [$cd-def-block $body $entry $exit $pfx $s2]]
@@ -3232,13 +4068,13 @@
                 [?if [$cd-nobranch-p $r]
                   [then [$cd-def-block $body $entry $exit $pfx $s2]]
                   [else [$cst-out $r [$jn $r.out [$cd-edge $entry $r.e]]]]]]]]]
-          [$cst [$jn $s3.out "  end"] $s.exit $s.pfx $s.arms $s.dname $s.dentry]]]]]]
+          [$cst [$jn $s3.out "  end"] $s.exit $s.pfx $s.arms $s.dname $s.dentry $s.dt $s.lets]]]]]]
 
 [?def cd-def-block pure [returns map] ($body::any $entry::string $exit::string
                                        $pfx::string $s::map)
   [?let [= $gid [$concat $pfx "b"]]
     [$cst-out $s [$jn4 $s.out
-      [$concat "    " $gid "[\"" [$cd-esc [$cd-label $body]] "\"]"]
+      [$concat "    " $gid "[\"" [$cd-nl-one $body $s.dt] "\"]"]
       [$cd-edge $entry $gid]
       [$cd-edge $gid $exit]]]]]
 
@@ -3297,11 +4133,14 @@
           [then [hit [$nth $items [$count $items]]]]
           [else ()]]]]]]
 
-[; cd-cfg — code_diagram_cfg (compact). ]
-[?def cd-cfg pure [returns any] ($img::any)
+[; cd-cfg — code_diagram_cfg. `$detail` is the rung the §9.5c value
+   tables are cut to; the ENVELOPE (nodes, edges, subgraphs) is
+   rung-independent, exactly as it was before #1031, so `full` still
+   layers over this text rather than re-walking the image. ]
+[?def cd-cfg pure [returns any] ($img::any $detail::string)
   [?let
     [= $stmts [$cd-stmts $img]]
-    [= $s1 [$cd-cfg-defs $stmts 1 [$cst "flowchart TD" "" "" 0 "" ""]]]
+    [= $s1 [$cd-cfg-defs $stmts 1 [$cst "flowchart TD" "" "" 0 "" "" $detail 0]]]
     [= $main [?for [in $x $stmts]
       [where [?if [$cd-is-def $x] [then false] [else [not [$cd-is-data-stmt $x]]]]]
       [yield $x]]]
@@ -3309,7 +4148,7 @@
       [then $s1.out]
       [else
         [?let
-          [= $s2 [$cst [$jn3 $s1.out "  start([entry])" "  done([exit])"] "done" "" $s1.arms "" ""]]
+          [= $s2 [$cst [$jn3 $s1.out "  start([entry])" "  done([exit])"] "done" "" $s1.arms "" "" $detail $s1.lets]]
           [= $s3 [$cd-cfg-main $main 1 "start" $s2]]
           [?if [= $s3.e $s3.exit]
             [then $s3.out]
@@ -3439,7 +4278,7 @@
 
 [?def cd-cfg-full pure [returns any] ($img::any)
   [?let
-    [= $compact [$cd-cfg $img]]
+    [= $compact [$cd-cfg $img "full"]]
     [= $lines [$str-split-lines $compact]]
     [= $stmts [$cd-stmts $img]]
     [= $names [?for [in $n [$cd-min-def-names $stmts 1 [names]]/*] [yield [$string $n@v]]]]
@@ -3630,10 +4469,12 @@
 
 [; cd-resolve-target — the heuristic anchor for `resolves` edges:
    the `[?let]` setup node, else the loop body, else the main block,
-   else the first def's entry. ]
+   else the first def's entry. Since #1036 the main scope's FIRST setup
+   node is `lt1` (it was `lt`, the id every binding site shared); the
+   anchor is that same first node, spelled the way it is now minted. ]
 [?def cd-resolve-target pure [returns string] ($out::string $names::any)
-  [?if [or [$str-contains $out "  lt["] [$str-contains $out "  lt{"]]
-    [then "lt"]
+  [?if [or [$str-contains $out "  lt1["] [$str-contains $out "  lt1{"]]
+    [then "lt1"]
     [else [?if [or [$str-contains $out "lb["] [$str-contains $out "lb{"]]
       [then "lb"]
       [else [?if [or [$str-contains $out "  b["] [$str-contains $out "  b{"]]
@@ -3797,7 +4638,7 @@
    dangerous as a call operand or a dynamic child. ]
 [?def cd-sq-kids pure [returns any] ($n::any)
   [?for [in $k $n/*]
-    [where [not [$cd-in-list [?else [$name $k] "err"] ("cx:attr", "cx:slot")]]]
+    [where [not [$cd-meta-child-p [?else [$name $k] "err"]]]]
     [yield $k]]]
 
 [?def cd-sq-slots pure [returns any] ($n::any)
@@ -4596,7 +5437,28 @@
         [= $st1 [$cd-occ-bump $st $nm $depth]]
         [= $st2 [$cd-erd-stats-attrs [$cd-erd-attrs $n] 1 $nm $st1]]
         [= $st2b [$cd-erd-stats-mapkids [$cd-erd-kids $n] 1 $nm $st2]]
-        [$cd-erd-stats-items [$cd-erd-kids $n] 1 [+ $depth 1] $st2b]]]]]]]
+        [; scalar CHILDREN feed the value slots too (#992). The compact
+           rung shows one example value for every value-carrying row —
+           attribute, scalar child, map entry alike — so the full rung
+           has to be able to enrich every one of them. Without this the
+           full ERD showed two different comment styles side by side:
+           an enumeration on the attribute rows, a leftover `e.g. …` on
+           the scalar-child rows. ]
+        [= $st2c [$cd-erd-stats-scalarkids [$cd-erd-kids $n] 1 $nm $st2b]]
+        [$cd-erd-stats-items [$cd-erd-kids $n] 1 [+ $depth 1] $st2c]]]]]]]
+
+[?def cd-erd-stats-scalarkids pure [returns element] ($items::any $i::int $nm::string $st::element)
+  [?if [> $i [$count $items]]
+    [then $st]
+    [else
+      [?let [= $it [$nth $items $i]]
+        [$cd-erd-stats-scalarkids $items [+ $i 1] $nm
+          [?if [not [$cd-erd-entity $it]]
+            [then $st]
+            [else [?if [not [$cd-erd-scalar $it]]
+              [then $st]
+              [else [$cd-av-add $st [$concat $nm "@" [$cd-erd-name $it]]
+                [$cd-label [$first [$cd-erd-kids $it]]]]]]]]]]]]]
 
 [?def cd-erd-stats-mapkids pure [returns element] ($items::any $i::int $nm::string $st::element)
   [?if [> $i [$count $items]]
@@ -4751,14 +5613,18 @@
       [then [$str-slice $s 1 [- $n 1]]]
       [else $s]]]]
 
+[; A comment's double quotes fold to SINGLE quotes rather than being
+   backslash-escaped: mermaid 10 accepts neither `\"` nor `""` inside a
+   quoted comment, so the `\\\"` this used to write was itself a parse
+   error on every document with a quote-carrying value (#992). ]
 [?def cd-value-enum pure [returns string] ($vals::any)
   [?let [= $d [?for [in $x [$cd-distinct-vals $vals 1 [names]]/*] [yield [$string $x@v]]]]
     [?if [<= [$count $d] 10]
-      [then [$str-replace [$cd-join-comma $d 1 ""] "\"" "\\\""]]
+      [then [$str-replace [$cd-join-comma $d 1 ""] "\"" "'"]]
       [else [$str-replace
         [$concat [$cd-join-comma [$cd-take3 $d] 1 ""]
                  ", …, (" [?str '{[$count $d]}'] " unique)"]
-        "\"" "\\\""]]]]]
+        "\"" "'"]]]]]
 
 [?def cd-take3 pure [returns any] ($xs::any)
   [?for [in $i (1, 2, 3)] [yield [$nth $xs $i]]]]
@@ -4918,24 +5784,61 @@
             [$cd-erd-full-rows $lines [+ $i 1] $stats $tbl $ent
               [$jn $acc [$cd-erd-enrich-row $ln $t $stats $ent]]]]]]]]]
 
+[; cd-erd-enrich-row — the full rung upgrades a compact row's ONE example
+   value to the enumeration of every DISTINCT value that attribute takes
+   across the document's occurrences. That is the one thing `full` can
+   say here that `compact` cannot: an ERD entity is one box per element
+   NAME, so `[item qty=1] [item qty=7]` is a single `item` box whose
+   `qty` really does range over two values.
+
+   Recognition is by the `"e.g. ` comment prefix that `cd-erd-value-cmt`
+   writes — the marker the bare `"@"` sigil used to be, except that this
+   one is legible to a reader as well as to this pass (#992). The stats
+   lookup keys on the RAW attribute name, so the sanitised name that the
+   row carries in the text cannot be used; the row's `k` key is not in
+   the text either, so the raw name is recovered by matching the
+   sanitised token back against the stat keys for this entity. ]
 [?def cd-erd-enrich-row pure [returns string] ($ln::string $t::string $stats::element $ent::string)
-  [?if [not [$str-ends-with $t " \"@\""]]
-    [then $ln]
-    [else
-      [?let
-        [= $bare-t [$str-slice $t 0 [- [$str-length $t] 4]]]
-        [= $parts [$str-split $bare-t " "]]
-        [?if [not [= [$count $parts] 2]]
-          [then $ln]
-          [else
-            [?let
-              [= $key [$concat $ent "@" [$nth $parts 2]]]
-              [= $w [$cd-av-vals $stats $key]]
-              [?if [not [$exists $w]]
-                [then $ln]
-                [else
-                  [?let [= $bare [$str-slice $ln 0 [- [$str-length $ln] 4]]]
-                    [$concat $bare " \"@ " [$cd-value-enum [?for [in $v $w/*] [yield $v]]] "\""]]]]]]]]]]]
+  [?let [= $cut [$str-find $t " \"e.g. "]]
+    [?if [< $cut 0]
+      [then $ln]
+      [else
+        [?let
+          [= $bare-t [$str-slice $t 0 $cut]]
+          [= $parts [$str-split $bare-t " "]]
+          [?if [not [= [$count $parts] 2]]
+            [then $ln]
+            [else
+              [?let [= $raw [$cd-erd-raw-attr $stats $ent [$nth $parts 2]]]
+                [?if [= $raw ""]
+                  [then $ln]
+                  [else
+                    [?let [= $w [$cd-av-vals $stats [$concat $ent "@" $raw]]]
+                      [?if [not [$exists $w]]
+                        [then $ln]
+                        [else
+                          [?let
+                            [= $enum [$cd-erd-cmt
+                              [$cd-value-enum [?for [in $v $w/*] [yield $v]]]]]
+                            [= $lead [$str-slice $ln 0 [$str-find $ln " \"e.g. "]]]
+                            [?if [= [$str-trim $enum] ""]
+                              [then $lead]
+                              [else [$concat $lead " \"" $enum "\""]]]]]]]]]]]]]]]]]
+
+[; cd-erd-raw-attr — recover the RAW attribute name behind a rendered
+   ATTRIBUTE_WORD. The stats side keys on the source spelling (`cx:kind`,
+   `1st`), the text side carries the sanitised one (`cx_kind`, `_st`), so
+   the two only meet by re-sanitising the stat keys and comparing. The
+   first match wins, which is the same first-occurrence rule
+   `cd-erd-add-row` applies when it dedupes rows. ]
+[?def cd-erd-raw-attr pure [returns string] ($stats::element $ent::string $shown::string)
+  [?let
+    [= $pfx [$concat $ent "@"]]
+    [= $hits [?for [in $a $stats/av/*]
+      [where [$str-starts-with [$string $a@k] $pfx]]
+      [yield [$str-slice [$string $a@k] [$str-length $pfx] [$str-length [$string $a@k]]]]]]
+    [= $m [$first [?for [in $h $hits] [where [= [$cd-erd-attrword $h] $shown]] [yield $h]]]]
+    [?if [$exists $m] [then $m] [else ""]]]]
 
 [; ── §9.7 of-source — the caller-facing entry (#889, owner "a") ───────
    The module's twelve wave-1/2 functions all expect the engine-injected
@@ -5060,7 +5963,7 @@
 [?def cd-cfg-level pure [returns any] ($img::any $level::string)
   [?if [= $level "min"]
     [then [$cd-cfg-min $img]]
-    [else [?if [= $level "full"] [then [$cd-cfg-full $img]] [else [$cd-cfg $img]]]]]]
+    [else [?if [= $level "full"] [then [$cd-cfg-full $img]] [else [$cd-cfg $img "compact"]]]]]]
 
 [?def code-diagram scope=public pure [returns any] ($src::string $level::string)
   [?let [= $stripped [$str-trim [$cd-strip-pis $src]]]

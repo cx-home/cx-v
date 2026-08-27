@@ -574,8 +574,10 @@ pub enum ProgramLiteralKind {
 	// atom literal — surface `:NAME`. Carries the
 	// atom name in `str_val` (without the leading colon). At eval
 	// time produces a ScalarNode with data_type=.atom_type and
-	// value=ScalarValue(name). Equality is name-equality, type-
-	// strict (atom never equals string of same characters).
+	// value=ScalarValue(name). IDENTITY (canonical/hash/structural)
+	// is type-strict — an atom never shares an address with the
+	// same-named string; the [$eq] builtin's VALUE equality atomizes
+	// and compares them equal (RULED: CO-11).
 	atom_lit
 	// DATA↔PROGRAM SEAM: an embedded pure-DATA construct the program
 	// surface carries verbatim — raw text `[#…#]`, an entity / character

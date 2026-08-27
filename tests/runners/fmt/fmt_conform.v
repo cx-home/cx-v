@@ -9,7 +9,19 @@ module main
 //   2. §1 purity:           cx_text_canonical(fmt(in_cx)) ==
 //                           cx_text_canonical(in_cx) — same tree in,
 //                           same tree out (presentation only);
-//   3. §7 idempotence:      fmt(fmt(in_cx)) == fmt(in_cx).
+//   3. §7 idempotence:      fmt(fmt(in_cx)) == fmt(in_cx);
+//   4. §7 idempotence at the BYTE level (#980): fmt_source returns
+//      UNTERMINATED text and the caller supplies the final newline
+//      (`cx fmt`'s println, the LSP whole-document edit), so the SECOND
+//      pass of `cx fmt FILE` is handed fmt(x) + '\n' — not fmt(x). The
+//      real fixed-point obligation is therefore
+//      fmt(fmt(x) + '\n') == fmt(x), compared BYTE-EXACTLY.
+//
+// Check 4 exists because checks 1–3 structurally cannot see a trailing
+// newline: `strip_blank_edges` normalizes both sides of every comparison
+// above (and the fixture loader strips the raw section's own edges), which
+// is exactly how #980 — `cx fmt` appending one newline per pass, unbounded,
+// on corpus/rosetta/21-fetch-csv-validate.cx — lived under a green lane.
 //
 // A case with out-err pins the fail-closed lane instead: fmt_source must
 // refuse the input with an error containing the given code. Purity and
@@ -88,6 +100,22 @@ fn main() {
 		}
 		if strip_blank_edges(twice) != strip_blank_edges(out) {
 			eprintln('FAIL ${c.name} (idempotence): fmt(fmt(x)) != fmt(x)')
+			local_fail = true
+		}
+		// §7 idempotence at the BYTE level (#980) — the entry point's
+		// termination contract, then the CLI/LSP round trip it implies.
+		// Compared byte-exactly: strip_blank_edges is what hid the defect.
+		if out.ends_with('\n') {
+			eprintln('FAIL ${c.name} (termination): fmt_source returned TERMINATED text; the caller supplies the final newline, so a terminated return grows the file one line per pass (#980)')
+			local_fail = true
+		}
+		cycled := code.fmt_source(out + '\n') or {
+			eprintln('FAIL ${c.name} (cli-cycle): fmt of the written-back text errored: ${err.msg()}')
+			failed++
+			continue
+		}
+		if cycled != out {
+			eprintln('FAIL ${c.name} (cli-cycle): fmt(fmt(x) + newline) != fmt(x)\n once:   |${out.replace('\n', '\\n')}|\n cycled: |${cycled.replace('\n', '\\n')}|')
 			local_fail = true
 		}
 		if local_fail {

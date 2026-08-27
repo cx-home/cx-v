@@ -510,6 +510,269 @@ fn test_decimal_unary_negate() {
 	assert out.contains('-1.50'), 'negate keeps scale: ${out}'
 }
 
+// ── L44: `%` joins the exact lane (#1016) ─────────────────────────────────────
+// `+ − × ÷` were routed to exact_fold_op at I1; `%` was skipped and kept #38's
+// pre-exact-lane refusal, so decimals were rejected by the one arithmetic head
+// that had no exact path. These pin the four L44 cells for `%`.
+
+fn test_decimal_mod_exact() {
+	// 7.5 % 2 = 1.5 exactly, scale max(1,0) = 1. Pre-#1016 this refused with
+	// 'mod: argument 1 is not numeric'.
+	out := run("[?let [= \$d [row [a::decimal 7.5]]] [% \$d/a 2]]")
+	assert out.trim_space() == '1.5', 'exact mod: ${out}'
+}
+
+fn test_decimal_mod_keeps_max_scale() {
+	// Scale is max(s₁,s₂), so a scale-2 divisor lifts a scale-1 dividend:
+	// 7.5 % 2.50 = 0.00, and the trailing zeros are data (scale is identity).
+	out := run("[?let [= \$d [row [a::decimal 7.5] [b::decimal 2.50]]] [% \$d/a \$d/b]]")
+	assert out.trim_space() == '0.00', 'mod scale max: ${out}'
+}
+
+fn test_decimal_mod_sign_of_dividend() {
+	// XPath 3.1 §3.5 sign-of-dividend holds in the exact lane too.
+	out := run("[?let [= \$d [row [a::decimal -7.5]]] [% \$d/a 2]]")
+	assert out.trim_space() == '-1.5', 'sign of dividend: ${out}'
+}
+
+fn test_decimal_mod_float_errors() {
+	// decimal ⊕ float stays unbridged — the one `%` refusal L44 DOES rule.
+	out := run("[?let [= \$d [row [a::decimal 7.5]]] [% \$d/a 2.0e0]]")
+	assert out.contains('CXER0100'), 'decimal%float must error: ${out}'
+	assert out.contains('L44'), 'must cite the bridge rule: ${out}'
+}
+
+fn test_decimal_mod_by_zero() {
+	// CXER0101, not the operand-kind refusal the pre-fix path reported.
+	out := run("[?let [= \$d [row [a::decimal 7.5]]] [% \$d/a 0]]")
+	assert out.contains('CXER0101'), 'mod by zero: ${out}'
+}
+
+fn test_bigint_mod_exact() {
+	// An over-i64 dividend: i64 would overflow and f64 would round, so the
+	// remainder is only reachable through the exact lane.
+	out := run('[?let [= $d [row [g 99999999999999999999]]] [% $d/g 1000]]')
+	assert out.trim_space() == '999', 'bigint mod: ${out}'
+}
+
+fn test_decimal_mod_builtin_matches_operator() {
+	// #598 requires one implementation behind `%` and `[$mod]`; the #1016 fix
+	// landed in the builtin so both spellings move together.
+	out := run("[?let [= \$d [row [a::decimal 7.5]]] [= [% \$d/a 2] [\$mod \$d/a 2]]]")
+	assert out.contains('true'), 'spellings must agree: ${out}'
+}
+
+// ── CO-14: the aggregates adopt the heads' discipline (#1046) ─────────────────
+// `+ − × ÷ %` all refuse a decimal↔float mix; `$sum` / `$min` / `$max` / `$avg`
+// bridged it silently, because §6.5's "any float promotes the result to float"
+// row predates decimal's promotion to a semantic kind. Same rules now, and the
+// SAME code and message — the aggregates are a different operand shape, never a
+// different numeric semantics.
+
+fn test_agg_sum_decimal_float_unbridged() {
+	out := run('[$sum (39.98, 1.5e0)]')
+	assert out.contains('CXER0100'), 'sum decimal+float must refuse: ${out}'
+	assert out.contains('L44'), 'must cite the bridge rule: ${out}'
+}
+
+fn test_agg_refusal_is_order_independent() {
+	// The float arrives first, so the f64 lane is already running when the
+	// decimal lands. Pre-fix it simply absorbed it.
+	out := run('[$sum (1.5e0, 39.98)]')
+	assert out.contains('CXER0100'), 'float-first must refuse too: ${out}'
+}
+
+fn test_agg_min_max_avg_refuse_alike() {
+	for head in ['\$min', '\$max', '\$avg'] {
+		out := run('[${head} (39.98, 1.5e0)]')
+		assert out.contains('CXER0100'), '${head} must refuse: ${out}'
+	}
+}
+
+fn test_agg_bigint_float_mix_refuses_rather_than_saturating() {
+	// Pre-fix: 9.223372036854776e18 — the f64 lane SATURATED an over-i64
+	// value, destroying the operand bigint exists for.
+	out := run('[$sum (9223372036854775808, 1.5e0)]')
+	assert out.contains('CXER0100'), 'bigint+float must refuse: ${out}'
+}
+
+fn test_agg_sum_decimal_exact_matches_operator() {
+	// `[$sum (a, b)]` agrees with `[+ a b]` on the answer, not just the error.
+	out := run('[= [$sum (19.99, 19.99)] [+ 19.99 19.99]]')
+	assert out.contains('true'), 'sum must agree with +: ${out}'
+}
+
+fn test_agg_int_float_promotion_unchanged() {
+	// The promotion CO-14 did NOT touch: int↔float is a lossless widening.
+	out := run('[$sum (1, 2, 3.0e0)]')
+	assert out.trim_space() == '6.0e0', 'int/float promotion: ${out}'
+}
+
+fn test_agg_max_returns_winner_in_own_kind() {
+	// Scale is data, so a decimal that merely passes through keeps it.
+	out := run('[$max (19.99, 2.50)]')
+	assert out.trim_space() == '19.99', 'winner kind + scale: ${out}'
+}
+
+fn test_agg_avg_exact_agrees_with_division() {
+	// The mean is the exact sum over the count through the very cx_exact_div
+	// `/` folds with, so these agree by construction — kind AND scale.
+	out := run('[= [$avg (1.00, 2.00)] [/ [+ 1.00 2.00] 2]]')
+	assert out.contains('true'), 'avg must agree with /: ${out}'
+	scaled := run('[$avg (1.00, 2.00)]')
+	assert scaled.trim_space() == '1.500', 'avg scale: ${scaled}'
+}
+
+fn test_agg_avg_bigint_does_not_saturate() {
+	// Two over-i64 values two apart — the mean is the value between them.
+	out := run('[$avg (9223372036854775808, 9223372036854775810)]')
+	assert out.contains('9223372036854775809'), 'avg bigint exact: ${out}'
+}
+
+fn test_agg_avg_non_terminating_refuses_by_name() {
+	// CO-14 RESERVED this cell (5.00 ÷ 3 does not terminate) and kept the
+	// float promotion `avg` had always had, because a 1-argument aggregate
+	// has nowhere to carry a precision + mode. #1044 ruled it (CO-17): the
+	// core lane REFUSES BY NAME rather than defaulting, so `avg` and `/` now
+	// AGREE — this is the assertion CO-14 said would have to change, changed.
+	div := run('[/ [+ 1.00 2.00 2.00] 3]')
+	assert div.contains('CXER3002'), 'the operator refuses: ${div}'
+	avg := run('[$avg (1.00, 2.00, 2.00)]')
+	assert avg.contains('CXER3002'), 'the reserved cell now refuses too: ${avg}'
+	assert avg.contains('\$math:div-decimal'), 'the refusal must name the context: ${avg}'
+	// The float promotion is GONE from this cell — it was the last place an
+	// exact fold silently produced a binary float (#1017's defect).
+	assert !avg.contains('1.6666666666666667e0'), 'no float may survive here: ${avg}'
+}
+
+// ── CO-17: $div / $idiv join the exact lane (#1044) ───────────────────────────
+// The last two arithmetic builtins still refusing the exact family with #38's
+// "argument 1 is not numeric" placeholder, which existed only because there was
+// no exact path to send decimal/bigint down. `%`/`[$mod]` retired its copy in
+// #1016 and the aggregates theirs in #1046.
+
+fn test_div_is_a_spelling_of_the_exact_operator_not_a_second_lane() {
+	// The #598 discipline: one implementation, all spellings. Pin the equality
+	// itself so a divergence in EITHER direction is caught.
+	out := run('[= [$div 1.00 8] [/ 1.00 8]]')
+	assert out.contains('true'), '\$div must agree with /: ${out}'
+	scaled := run('[$div 1.00 8]')
+	assert scaled.trim_space() == '0.12500', 'cx_exact_div scale convention: ${scaled}'
+}
+
+fn test_div_non_terminating_refuses_naming_the_context() {
+	out := run('[$div 1.00 3]')
+	assert out.contains('CXER3002'), 'non-terminating must refuse: ${out}'
+	assert out.contains('\$math:div-decimal'), 'must name the ruled context: ${out}'
+	assert out.contains('\$div'), 'must name the head that refused: ${out}'
+}
+
+// (That the named context actually ANSWERS the refused division — the other
+// half of the ruling — is pinned through the real binary by the conformance
+// row program-num-div-co17-004; `[?lib]` is not this evaluator's surface.)
+
+fn test_div_bigint_does_not_saturate() {
+	// Pre-fix this refused outright; the one thing it must never do is come
+	// back as a rounded f64.
+	out := run('[$div 10000000000000000000 4]')
+	assert out.trim_space() == '2500000000000000000.00', 'exact bigint quotient: ${out}'
+}
+
+fn test_div_decimal_float_mix_refuses_like_the_heads() {
+	out := run('[$div 1.00 1.5e0]')
+	assert out.contains('CXER0100'), 'unbridged mix must refuse: ${out}'
+	assert out.contains('L44'), 'must cite the bridge rule: ${out}'
+}
+
+fn test_div_int_rows_unchanged() {
+	// CO-17 rules the exact family only — §6.5's int/int truncation stays.
+	assert run('[$div 7 2]').trim_space() == '3', 'int/int truncates'
+	assert run('[$div 7 2.0e0]').trim_space() == '3.5e0', 'int/float promotes'
+}
+
+fn test_idiv_exact_integral_quotient_truncates_toward_zero() {
+	assert run('[$idiv 10.00 3]').trim_space() == '3', 'decimal idiv'
+	assert run('[$idiv -10.00 3]').trim_space() == '-3', 'truncation toward zero, not floor'
+	assert run('[$idiv 39.98 2.00]').trim_space() == '19', 'decimal ÷ decimal'
+}
+
+fn test_idiv_answers_where_div_refuses() {
+	// Not an inconsistency: `idiv` asks for the INTEGRAL quotient, which
+	// always terminates, so the rounding-context question never arises.
+	refused := run('[$div 10.00 3]')
+	assert refused.contains('CXER3002'), '\$div refuses: ${refused}'
+	answered := run('[$idiv 10.00 3]')
+	assert answered.trim_space() == '3', '\$idiv answers: ${answered}'
+	assert !answered.contains('CXER3002'), 'idiv never raises CXER3002: ${answered}'
+}
+
+fn test_idiv_and_mod_agree_on_the_divmod_identity() {
+	// `a = b × idiv(a,b) + mod(a,b)`, both truncating toward zero. `%` got
+	// its exact lane in #1016 and idiv is its complement, so this holds by
+	// construction — it checks the two lanes truncate the SAME way.
+	for row in ['10.00', '-10.00'] {
+		out := run('[= ${row} [+ [* [\$idiv ${row} 3] 3] [% ${row} 3]]]')
+		assert out.contains('true'), 'divmod identity for ${row}: ${out}'
+	}
+}
+
+fn test_idiv_over_i64_quotient_is_bigint_not_saturated() {
+	out := run('[$idiv 100000000000000000000 2]')
+	assert out.trim_space() == '50000000000000000000', 'bigint quotient: ${out}'
+}
+
+fn test_idiv_exact_divide_by_zero_is_the_arithmetic_trap() {
+	// CXER0101, never absorbed into the CXER3002 rounding refusal.
+	for expr in ['[\$div 1.00 0]', '[\$idiv 1.00 0]'] {
+		out := run(expr)
+		assert out.contains('CXER0101'), '${expr} must trap: ${out}'
+		assert !out.contains('CXER3002'), '${expr} is not a rounding question: ${out}'
+	}
+}
+
+fn test_agg_string_leniency_splits_on_what_fn_number_produces() {
+	// An integer-valued string is an int and embeds losslessly; a fractional
+	// one is a double, and a double is the refused mix.
+	embeds := run('[$sum (19.99, "5")]')
+	assert embeds.trim_space() == '24.99', 'int string embeds: ${embeds}'
+	refused := run('[$sum (19.99, "1.5")]')
+	assert refused.contains('CXER0100'), 'fractional string refuses: ${refused}'
+}
+
+fn test_agg_streamed_and_materialized_agree() {
+	// The refusal short-circuits at the operand completing the mix, which is
+	// an optimisation and never a semantic.
+	exact := run('[= [$sum [?for [in $x (19.99, 19.99)] [yield $x]]] [$sum (19.99, 19.99)]]')
+	assert exact.contains('true'), 'streamed exact must match: ${exact}'
+	refused := run('[$sum [?for [in $x (39.98, 1.5e0)] [yield $x]]]')
+	assert refused.contains('CXER0100'), 'streamed refusal must match: ${refused}'
+}
+
+fn test_agg_avg_multiarg_surface() {
+	// §6.5 gives all four aggregates the positional-scalar spelling, but
+	// `avg` alone rejected it — the one aggregate not sharing the argument
+	// shape. Sharing the classifier fixed it.
+	out := run('[$avg 10 20 30]')
+	assert out.trim_space() == '2.0e1', 'avg multi-arg: ${out}'
+}
+
+fn test_math_module_aggregates_refuse_exact_items() {
+	// The $math: kin. Every $math: verb has refused a SCALAR decimal since
+	// I1, but the guard read only top-level arguments — so the statistical
+	// verbs, whose argument IS a sequence, never fired it, and each decimal
+	// item was silently SKIPPED instead (math_arg_f64 matches on the V
+	// payload, and a decimal's payload is a string). `$math:sum` of two money
+	// values answered 0.0e0; `$math:stddev` reached `nan`, which code.md's
+	// finite-only rule forbids outright.
+	sum := run("[?lib 'cx-stdlib/math'] [\$math:sum (19.99, 19.99)]")
+	assert sum.contains('CXER3002'), 'math:sum must refuse decimal items: ${sum}'
+	sd := run("[?lib 'cx-stdlib/math'] [\$math:stddev (19.99, 2.0e0)]")
+	assert sd.contains('CXER3002'), 'math:stddev must refuse: ${sd}'
+	assert !sd.contains('nan'), 'no NaN may survive: ${sd}'
+	ok := run("[?lib 'cx-stdlib/math'] [\$math:sum (1, 2, 3)]")
+	assert ok.trim_space() == '6', 'ordinary numeric sequences untouched: ${ok}'
+}
+
 // ── L44: casts ────────────────────────────────────────────────────────────────
 
 fn test_cast_string_to_decimal_strict() {

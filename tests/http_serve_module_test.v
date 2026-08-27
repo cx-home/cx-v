@@ -152,3 +152,104 @@ fn test_module_serve_handler_env_regressions() {
 	// #537(b) cont. — [where] carrying a FUNCTION CALL matched too.
 	assert body.contains("[wc [webhook path='/a']]"), '#537(b) [where] with fn-call predicate missed: ${body}'
 }
+
+// ── CO-2 (#975): the err-at-boundary rule on response emission ───────────────
+//
+// commands_effects.md §7.5 — a handler result containing an [err] at ANY
+// depth (root included: a bare [err] previously left as a 200 with the err
+// serialized into the body) refuses as a loud 500 naming CXER0275, unless
+// the [response] carries errs=:permit.
+
+fn test_handler_result_containing_err_refuses_500() {
+	if !curl_available() {
+		eprintln('SKIP: curl not available')
+		return
+	}
+	tmp := os.temp_dir()
+	port := pick_port()
+	prog := os.join_path(tmp, 'serve-co2a-${time.now().unix_milli()}.cx')
+	os.write_file(prog, '
+[?lib \'cx-stdlib/http\']
+[?def h (\$req::element) [report [ok 1] [err code=cx-err:CXER0100 message="a refusal at rest"]]]
+[\$http:serve "tcp://127.0.0.1:${port}" \$h {block: true}]
+') or { panic(err) }
+	defer {
+		os.rm(prog) or {}
+	}
+	pid := spawn_eval(prog, port)
+	defer {
+		if pid > 0 {
+			os.execute('kill -9 ${pid} 2>/dev/null')
+		}
+	}
+	res := os.execute('curl -s --max-time 3 -w "\n%{http_code}" http://127.0.0.1:${port}/x')
+	assert res.exit_code == 0, 'curl failed: ${res.output}'
+	lines := res.output.split('\n')
+	status := lines.last()
+	body := lines[..lines.len - 1].join('\n')
+	assert status == '500', 'a nested [err] must refuse 500 (CO-2), got ${status}: ${res.output}'
+	assert body.contains('CXER0275'), 'the refusal must name CXER0275: ${body}'
+	assert body.contains('cx-err:CXER0100'), 'the refusal must name the contained err: ${body}'
+}
+
+fn test_bare_err_result_is_a_loud_500_not_a_200() {
+	if !curl_available() {
+		eprintln('SKIP: curl not available')
+		return
+	}
+	tmp := os.temp_dir()
+	port := pick_port()
+	prog := os.join_path(tmp, 'serve-co2b-${time.now().unix_milli()}.cx')
+	os.write_file(prog, '
+[?lib \'cx-stdlib/http\']
+[?def h (\$req::element) [err code=cx-err:CXER0100 message="handler-computed refusal"]]
+[\$http:serve "tcp://127.0.0.1:${port}" \$h {block: true}]
+') or { panic(err) }
+	defer {
+		os.rm(prog) or {}
+	}
+	pid := spawn_eval(prog, port)
+	defer {
+		if pid > 0 {
+			os.execute('kill -9 ${pid} 2>/dev/null')
+		}
+	}
+	res := os.execute('curl -s --max-time 3 -w "\n%{http_code}" http://127.0.0.1:${port}/x')
+	assert res.exit_code == 0, 'curl failed: ${res.output}'
+	lines := res.output.split('\n')
+	status := lines.last()
+	assert status == '500', 'a bare [err] result must be a LOUD 500, not a 200 (CO-2), got ${status}: ${res.output}'
+	assert res.output.contains('CXER0275'), 'the refusal must name CXER0275: ${res.output}'
+}
+
+fn test_response_errs_permit_externalizes_deliberately() {
+	if !curl_available() {
+		eprintln('SKIP: curl not available')
+		return
+	}
+	tmp := os.temp_dir()
+	port := pick_port()
+	prog := os.join_path(tmp, 'serve-co2c-${time.now().unix_milli()}.cx')
+	os.write_file(prog, '
+[?lib \'cx-stdlib/http\']
+[?def h (\$req::element) [response status=200 errs=:permit [body [report [err code=cx-err:CXER0100 message="externalized deliberately"]]]]]
+[\$http:serve "tcp://127.0.0.1:${port}" \$h {block: true}]
+') or { panic(err) }
+	defer {
+		os.rm(prog) or {}
+	}
+	pid := spawn_eval(prog, port)
+	defer {
+		if pid > 0 {
+			os.execute('kill -9 ${pid} 2>/dev/null')
+		}
+	}
+	res := os.execute('curl -s --max-time 3 -w "\n%{http_code}" http://127.0.0.1:${port}/x')
+	assert res.exit_code == 0, 'curl failed: ${res.output}'
+	lines := res.output.split('\n')
+	status := lines.last()
+	body := lines[..lines.len - 1].join('\n')
+	assert status == '200', 'errs=:permit must externalize (CO-2), got ${status}: ${res.output}'
+	assert body.contains('CXER0100'), 'the permitted body must carry the err: ${body}'
+	assert !body.contains('CXER0275'), 'no boundary refusal under errs=:permit: ${body}'
+}

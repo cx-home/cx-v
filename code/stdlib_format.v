@@ -243,8 +243,29 @@ fn fmt_quote_string(s string, quote string) string {
 	return '"${s}"'
 }
 
-// fmt_scalar renders a scalar node (string/int/float/bool/null) honoring
-// the quote style. Atoms render `:name`; bytes render canonical `0x…`.
+// fmt_string_carried_non_string names the scalar kinds whose ScalarValue
+// payload is a `string` even though the kind is NOT `string`: each parks
+// its verbatim CX image there and rides its type on `data_type` (see
+// cx.ScalarType). That image IS the kind's bare canonical form and
+// re-types to the same kind on re-parse, so it must be emitted BARE —
+// quoting it re-parses as a string and breaks the round trip (#978,
+// RULED: CO-3). `bytes` is string-carried too but re-images through
+// fmt_bytes_scalar, and `atom` needs its `:` sigil, so both are handled
+// ahead of this list rather than in it.
+const fmt_string_carried_non_string = [cx.ScalarType.decimal_type, .bigint_type,
+	.date_type, .datetime_type, .duration_type, .period_type]
+
+// fmt_scalar renders a scalar node honoring the quote style. Only a
+// STRING scalar is quoted; every other kind emits its bare canonical
+// image (#978, RULED: CO-3). Atoms render `:name`; bytes render
+// canonical `0x…` / b"…".
+//
+// The int / bool / null images match the canonical renderer byte-for-byte
+// (render.v): pretty must diverge from canonical on string quoting and
+// NOTHING else. #991 (RULED: CO-12) made that true of `float` as well —
+// both renderers now image an f64 through the CX-owned Ryū renderer
+// (`1.5e0`), the only image that re-parses as a float; V's `.str()`
+// image (`1.5`) re-parsed as a DECIMAL and collided with decimal 1.5.
 fn fmt_scalar(n cx.ScalarNode, opts FormatOpts) string {
 	if n.data_type == .atom_type {
 		if n.value is string {
@@ -257,10 +278,13 @@ fn fmt_scalar(n cx.ScalarNode, opts FormatOpts) string {
 			if n.data_type == .bytes_type {
 				return fmt_bytes_scalar(v.bytes())
 			}
+			if n.data_type in fmt_string_carried_non_string {
+				return v
+			}
 			return fmt_quote_string(v, opts.string_quote)
 		}
 		i64  { return v.str() }
-		f64  { return v.str() }
+		f64  { return cx.cx_format_float(v) }
 		bool { return v.str() }
 		cx.NullValue { return 'null' }
 	}
@@ -322,15 +346,49 @@ fn sorted_attrs(attrs []cx.Attribute, sort bool) []cx.Attribute {
 	return out
 }
 
-// fmt_attr_value renders an attribute scalar value.
-fn fmt_attr_value(v cx.ScalarValue, opts FormatOpts) string {
-	match v {
-		string       { return fmt_quote_string(v, opts.string_quote) }
-		i64          { return v.str() }
-		f64          { return v.str() }
-		bool         { return v.str() }
-		cx.NullValue { return 'null' }
+// fmt_attr_is_string reports whether an attribute's EFFECTIVE scalar kind
+// is `string` — the one kind pretty quotes. A bare `@id` reference is
+// never a string; an ascribed type names the kind outright; an untyped
+// attribute's kind is whatever its ScalarValue variant says.
+fn fmt_attr_is_string(a cx.Attribute) bool {
+	if a.is_ref {
+		return false
 	}
+	if dt := a.data_type() {
+		return dt == 'string'
+	}
+	return a.value is string
+}
+
+// fmt_attr_parts renders an attribute's two sides: the name (carrying any
+// glued `::T` annotation) and the value.
+//
+// #978 (RULED: CO-3): the value decision is DELEGATED to the canonical
+// emitter's cx_attr_scalar_parts, so every non-string attribute emits the
+// bare canonical image that re-types to the same kind on re-parse —
+// decimals stay `1.5`, atoms keep their `:` sigil, sized numerics and
+// durations keep their `::T` annotation. This function's only departure
+// from canonical is the STRING case, which takes pretty's always-quote
+// path honoring the :string-quote opt (canonical is bare-when-safe) —
+// the one deliberate pretty↔canonical divergence, documented in
+// stdlib/format.cx and spec/std-lib/format.md.
+//
+// #991 (RULED: CO-12): the float carve-out CO-3 left here is GONE. It
+// existed because CX's two canonical attribute paths disagreed on an f64
+// — render.v imaged it with V's `.str()` (`1.5`), cx_attr_scalar_parts
+// with the CX-owned Ryū renderer (`1.5e0`) — and pretty followed the
+// lossy one so that string quoting stayed its only divergence. The
+// disagreement is now settled in Ryū's favour, which [L18] had already
+// ruled ("the float surface is Tier-1 identity — the CX-owned Ryū
+// renderer owns the bytes"): `1.5` re-parses as a DECIMAL and collides
+// with decimal 1.5's image, `1.5e0` re-parses as the float it is. All
+// four forms take `val_part` for every non-string kind, float included.
+fn fmt_attr_parts(a cx.Attribute, opts FormatOpts) (string, string) {
+	name_part, val_part := cx.cx_attr_scalar_parts(a)
+	if fmt_attr_is_string(a) {
+		return name_part, fmt_quote_string(cx.scalar_value_str_public(a.value), opts.string_quote)
+	}
+	return name_part, val_part
 }
 
 // is_marker reports whether an element is a collection-literal envelope.
@@ -443,20 +501,12 @@ fn fmt_pretty_map_node(m cx.MapNode, cur string, depth int, mut st PrettyState) 
 	return sb.str()
 }
 
-// fmt_map_key renders a MapNode entry key honoring its scalar type.
+// fmt_map_key renders a MapNode entry key honoring its scalar type. It
+// routes through fmt_scalar so a key obeys exactly the same typing rules
+// as a value (#978): only a string key is quoted, an atom key keeps its
+// `:` sigil, and every other kind emits its bare canonical image.
 fn fmt_map_key(v cx.ScalarValue, t cx.ScalarType, opts FormatOpts) string {
-	match v {
-		string {
-			if t == .string_type {
-				return fmt_quote_string(v, opts.string_quote)
-			}
-			return v
-		}
-		i64          { return v.str() }
-		f64          { return v.str() }
-		bool         { return v.str() }
-		cx.NullValue { return 'null' }
-	}
+	return fmt_scalar(cx.ScalarNode{ value: v, data_type: t }, opts)
 }
 
 // fmt_pretty_element emits a named element (or marker envelope) in
@@ -517,22 +567,32 @@ fn fmt_pretty_element(el cx.Element, cur string, depth int, mut st PrettyState) 
 	if id := el.id()        { head.write_string(' #${id}') }
 	if dt := el.data_type() { head.write_string(' :${dt}') }
 	attrs := sorted_attrs(el.attrs, st.opts.sort_attributes)
+	// Render each attribute to its (name, value) sides up front: the name
+	// side may carry a glued `::T` annotation (#978), so the alignment
+	// column has to be measured over the RENDERED name, not `a.name`.
+	mut names := []string{cap: attrs.len}
+	mut values := []string{cap: attrs.len}
+	for a in attrs {
+		n, v := fmt_attr_parts(a, st.opts)
+		names << n
+		values << v
+	}
 	// attribute-alignment "colon"/"value": pad attr names so the columns
 	// line up. "none" (default) leaves single-space separation.
 	mut max_name := 0
 	if st.opts.attr_alignment != 'none' {
-		for a in attrs {
-			if a.name.len > max_name { max_name = a.name.len }
+		for n in names {
+			if n.len > max_name { max_name = n.len }
 		}
 	}
-	for a in attrs {
+	for i, n in names {
 		head.write_string(' ')
-		head.write_string(a.name)
+		head.write_string(n)
 		head.write_string('=')
-		if st.opts.attr_alignment == 'value' && a.name.len < max_name {
-			head.write_string(' '.repeat(max_name - a.name.len))
+		if st.opts.attr_alignment == 'value' && n.len < max_name {
+			head.write_string(' '.repeat(max_name - n.len))
 		}
-		head.write_string(fmt_attr_value(a.value, st.opts))
+		head.write_string(values[i])
 	}
 	head_str := head.str()
 

@@ -340,6 +340,7 @@ fn random_arg_int(n cx.Node) ?i64 {
 			else {}
 		}
 	}
+	note_operand_fault('random', 'random-', 'int', n)
 	return none
 }
 
@@ -352,6 +353,7 @@ fn random_arg_float(n cx.Node) ?f64 {
 			else {}
 		}
 	}
+	note_operand_fault('random', 'random-', 'float', n)
 	return none
 }
 

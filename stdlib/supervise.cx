@@ -167,7 +167,9 @@
 [?def sup--snapshot scope=private pure [returns element] ($children $decisions::int)
   [?let [= $rows [?for [in $c $children]
       [yield [child name=$c/name state=$c/state attempts=$c/attempt]]]]
-    [supervisor-status restarts-in-window=$decisions $rows]]]
+    # R-A1 (2026-08-25): a bound sequence is spliced into element content,
+    # never embedded — the child rows are direct children of the status.
+    [supervisor-status restarts-in-window=$decisions [?splice $rows]]]]
 
 [?def sup--publish scope=private impure [returns null] ($statusch $children $decisions::int)
   [?let [= $snap [sup--snapshot $children $decisions]]
@@ -790,9 +792,8 @@ $e]"""] [expect """([child-started name=a attempt=0])"""]]
 [= $kid [child name="b" [fn [?fn () [?receive from=$c2]]]]]
 [= $r [$sup:start-child $s $kid]]
 [= $st [$sup:status $s]]
-[= $rows [$first $st/*]]
 [= $_ [$sup:stop $s]]
-($r, [$count $rows])]"""] [expect """([ok], 2)"""]]
+($r, [$count $st/*])]"""] [expect """([ok], 2)"""]]
 ]
 [fn-doc name=stop-child scope=public purity=impure
   [sig """-> bool"""]
@@ -815,7 +816,7 @@ $e]"""] [expect """([child-started name=a attempt=0])"""]]
         ([child name="a" [fn [?fn () [?receive from=$c]]]])]]
 [= $st [$sup:status $s]]
 [= $_ [$sup:stop $s]]
-$st]"""] [expect """[supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0])]"""]]
+$st]"""] [expect """[supervisor-status restarts-in-window=0 [child name=a state=running attempts=0]]"""]]
 ]
 [fn-doc name=events scope=public purity=impure
   [sig """-> element"""]

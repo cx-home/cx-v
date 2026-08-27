@@ -2765,6 +2765,7 @@ cx-err:CXER4610
 
   [case id=journal-126-lineage-path-load level=core gate=enforced
    [tags journal lineage schema-lineage unique-path ambiguous stream-21 693 L149]
+   [; R-A1 migration: envelope → spliced children (2026-08-25) ]
    [; the lineage load: schema-lineage claims are Lane-2 VALUES relating
       schema content addresses (never version strings) with a closed
       relation set and an upcaster slot. lineage-path validates the
@@ -2791,10 +2792,10 @@ cx-err:CXER4610
 [= $hops [$count $path]]
 [= $ambig [?fallback [$journal:lineage-path ($c12, $c23, $c13) $v1 $v3] [recover-with [context] [code $err@code]]]]
 [= $gap [?fallback [$journal:lineage-path ($c12,) $v2 $v1] [recover-with [context] [code $err@code]]]]
-  [probe hops=$hops [rels $path/relation] [ambig $ambig] [gap $gap]]]
+  [probe hops=$hops [rels [?splice $path/relation]] [ambig $ambig] [gap $gap]]]
 #]]
    [out-text [#
-[probe hops=2 [rels ([relation :additive], [relation :split])] [ambig [code 'cx-err:CXER4643']] [gap [code 'cx-err:CXER4644']]]
+[probe hops=2 [rels [relation :additive] [relation :split]] [ambig [code 'cx-err:CXER4643']] [gap [code 'cx-err:CXER4644']]]
 #]]
   ]
 
@@ -3376,6 +3377,7 @@ cx-err:CXER4619
 
   [case id=journal-142-saga-replay-isolation-anti-2pc level=core gate=enforced
    [tags journal coordination saga replay-isolation anti-2pc CXER4611 stream-10 682 L155 L157]
+   [; R-A1 migration: envelope → spliced children (2026-08-25) ]
    [; ── the replay rule + the anti-2PC negative (cross_stream_coordination
       §1/§2/§6): after a saga touching three aggregates, EVERY stream's
       chain verifies in isolation and per-stream folds see only their own
@@ -3415,10 +3417,10 @@ cx-err:CXER4619
 [= $f1 [$journal:fold $j [?fn ($a $e) [+ $a 1]] 0 "sku:88"]]
 [= $f2 [$journal:fold $j [?fn ($a $e) [+ $a 1]] 0 "pay:acme"]]
 [= $bad [?fallback [$journal:fold $j [?fn ($acc $e) [?let [= $peek [$journal:read $j 1 "sku:88"]] [+ $acc 1]]] 0 "order:o-5521"] [recover-with [context] [code $err@code]]]]
-  [probe [saga $r/@status] [chains ($v1/@valid, $v2/@valid, $v3/@valid)] [isolated-folds ($f1, $f2)] [fold-reads-another-stream $bad]]]
+  [probe [saga $r/@status] [chains [?splice ($v1/@valid, $v2/@valid, $v3/@valid)]] [isolated-folds [?splice ($f1, $f2)]] [fold-reads-another-stream $bad]]]
 #]]
    [out-text [#
-[probe [saga :done] [chains (true, true, true)] [isolated-folds (1, 1)] [fold-reads-another-stream [code 'cx-err:CXER4611']]]
+[probe [saga :done] [chains true true true] [isolated-folds 1 1] [fold-reads-another-stream [code 'cx-err:CXER4611']]]
 #]]
   ]
 
@@ -3821,4 +3823,31 @@ cx-err:CXER4641
 [resnap-identity fast=7 full=7 equal=true stamped=computes-as:sha2-256:current idempotent=true [no-fold-id [code 'cx-err:CXER4610']]]
 #]]
   ]
+
+ [; RULED: CO-8 — the journal is NOT an err-at-boundary refusal point: an
+    error event is a first-class record ("the journal is exactly where errors
+    belong as events"), so an event carrying an [err] at rest appends green
+    where a store put-doc of the same document refuses CXER0275 (CO-2). The
+    err rides a resting position (a map value as element content) — a BARE
+    err in argument position propagates per the frozen position table and
+    never reaches append at all, which is the general rule, not this
+    exemption. Pinned because the exemption was once defeated by its own
+    plumbing: append's internal store write hit the CO-2 guard. ]
+ [case id=journal-160-err-event-appends-green level=core gate=enforced
+  [tags journal append err boundary exemption CO-2 CO-8 CXER0275]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/journal']
+[?let [= $j [$journal:open "mem://co8-journal" "acme"]]
+  [= $e [err code=cx-err:CXER9999 message='the failure being recorded']]
+  [= $evt [failure-seen {cause: $e}]]
+  [= $r [$journal:append $j $evt {actor: "sup" authority: "g" stream: "cx:errors"}]]
+  [ok seq=$r/@seq]]
+#]]
+  [out-text [#
+[ok seq=1]
+#]]
+ ]
 ]

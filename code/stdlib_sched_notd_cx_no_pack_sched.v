@@ -176,6 +176,7 @@ fn sch_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('sched', 'sched-', 'string', n)
 	return none
 }
 
@@ -193,6 +194,7 @@ fn sch_arg_int(n cx.Node) ?i64 {
 			else {}
 		}
 	}
+	note_operand_fault('sched', 'sched-', 'int or duration', n)
 	return none
 }
 

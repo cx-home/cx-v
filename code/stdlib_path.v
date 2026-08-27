@@ -61,6 +61,7 @@ fn path_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('path', 'path-', 'string', n)
 	return none
 }
 

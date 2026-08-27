@@ -165,6 +165,7 @@ pub fn io_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('io', 'io-', 'string', n)
 	return none
 }
 
@@ -177,6 +178,7 @@ pub fn io_arg_int(n cx.Node) ?i64 {
 			else {}
 		}
 	}
+	note_operand_fault('io', 'io-', 'int', n)
 	return none
 }
 
@@ -189,6 +191,7 @@ fn io_arg_bytes(n cx.Node) ?[]u8 {
 			return v.bytes()
 		}
 	}
+	note_operand_fault('io', 'io-', 'bytes', n)
 	return none
 }
 
@@ -202,6 +205,7 @@ fn io_arg_atom(n cx.Node) ?string {
 			}
 		}
 	}
+	note_operand_fault('io', 'io-', 'atom', n)
 	return none
 }
 

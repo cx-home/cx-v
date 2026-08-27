@@ -279,3 +279,151 @@ fn test_store_sqlite_delete_heavy_manifest_compacts() {
 		assert ms2.doc_order.len == 1, 'exactly the live doc replays, got ${ms2.doc_order.len}'
 	}
 }
+
+// ── #891: shared-open protection for the sqlite substrate ───────────────────
+//
+// Two writable opens of one sqlite file were two independent connections whose
+// in-memory views diverge the moment either writes, with the later flush
+// winning over rows the other believes it owns — and before #891 sqlite
+// registered with neither store_open_shared_or_conflict nor any lock, so that
+// divergence was silent. These pin the #628 shape for this substrate.
+
+fn sq_handle_id(n cx.Node) string {
+	return (n as cx.Element).attr('handle')
+}
+
+fn sq_err_code(n cx.Node) string {
+	return (n as cx.Element).attr('code')
+}
+
+// A second WRITABLE open of one sqlite file is a live view of the SAME store.
+fn test_store_sqlite_second_writable_open_shares_the_live_store() {
+	$if cxstore_sqlite ? {
+		path := os.join_path(os.temp_dir(), 'cxstore_sqlite_share_${os.getpid()}.db')
+		os.rm(path) or {}
+		defer {
+			os.rm(path) or {}
+		}
+		h1 := sq_open(path)
+		key := sq_put(h1, '[event [level "error"] [ts 1]]')
+
+		caps_set_all()
+		h2 := store_sqlite_open('sqlite://${path}', '', '', false, '', '')
+		assert !is_err_value(h2), 'second open err: ${h2}'
+		assert sq_handle_id(h1) != sq_handle_id(h2), 'sharing returns a distinct HANDLE over the same store'
+
+		got := store_stdlib_builtin_inner('store-get-doc-text', [h2, store_str(key)]) or {
+			panic('get: ${err.msg()}')
+		}
+		assert !is_err_value(got), 'second handle cannot see the first handle write — the opens did not share (#891): ${got}'
+		assert render_canonical(got).contains('error'), 'shared view returned the wrong doc: ${got}'
+	}
+}
+
+// Divergent at-rest options on a LIVE writable file refuse loudly
+// (CXER1143 E_STORE_OPEN_CONFLICT) instead of applying one opener's options to
+// the other's writes.
+fn test_store_sqlite_conflicting_at_rest_options_refuse() {
+	$if cxstore_sqlite ? {
+		path := os.join_path(os.temp_dir(), 'cxstore_sqlite_conflict_${os.getpid()}.db')
+		os.rm(path) or {}
+		defer {
+			os.rm(path) or {}
+		}
+		h1 := sq_open(path)
+		assert !is_err_value(h1), 'first open err: ${h1}'
+		// Same file, different at-rest compression.
+		caps_set_all()
+		h2 := store_sqlite_open('sqlite://${path}', 'zstd', '', false, '', '')
+		assert is_err_value(h2), 'a live sqlite file reopened with different compression must REFUSE (#891), got: ${h2}'
+		assert sq_err_code(h2) == 'cx-err:CXER1143', 'wrong refusal code: ${h2}'
+	}
+}
+
+// READ-ONLY opens keep their private snapshot view — they never write, so a
+// private MemStore is both safe and cheaper.
+fn test_store_sqlite_read_only_opens_stay_private() {
+	$if cxstore_sqlite ? {
+		path := os.join_path(os.temp_dir(), 'cxstore_sqlite_ro_${os.getpid()}.db')
+		os.rm(path) or {}
+		defer {
+			os.rm(path) or {}
+		}
+		h := sq_open(path)
+		sq_put(h, '[event [level "info"] [ts 1]]')
+		store_stdlib_builtin_inner('store-close', [h]) or { panic('close: ${err.msg()}') }
+
+		caps_set_all()
+		r1 := store_sqlite_open('sqlite://${path}', '', '', true, '', '')
+		assert !is_err_value(r1), 'first read-only open err: ${r1}'
+		r2 := store_sqlite_open('sqlite://${path}', '', '', true, '', '')
+		assert !is_err_value(r2), 'second read-only open err: ${r2}'
+		assert sq_handle_id(r1) != sq_handle_id(r2), 'read-only opens must stay private (distinct handles), got the same id'
+	}
+}
+
+// ── #1005: the same protection ACROSS processes ─────────────────────────────
+//
+// #891 (above) shares one live MemStore through a process-global registry, so
+// it cannot span processes at all. Two sqlite writers in two processes were
+// therefore still admitted in silence — two connections whose views diverge on
+// the first write, the later flush winning over rows the other believes it
+// owns. `store_root_lock_take` now guards the writable open with an flock on a
+// sentinel beside the db file.
+//
+// The holder here is an INDEPENDENT open file description rather than a second
+// `cx` process, and that is the mechanism and not a stand-in for it: flock's
+// conflict domain IS the description, so the open under test meets exactly the
+// condition a second process creates. (A `cx` holder is not available for this
+// substrate — the dev binary is built without `-d cxstore_sqlite`, which is why
+// this file is flag-gated in the first place.)
+fn sq_hold_foreign_lock(path string, fake_pid int) os.File {
+	mut f := os.open_file(path, 'a+', 0o644) or { panic('sentinel: ${err.msg()}') }
+	assert C.flock(f.fd, C.LOCK_EX | C.LOCK_NB) == 0, 'could not take the sentinel lock at ${path}'
+	C.ftruncate(f.fd, 0)
+	f.write_string('cxstore-lock v1 pid=${fake_pid} host=elsewhere.test url=sqlite://${path} since=2026-08-26T00:00:00.000Z\n') or {
+	}
+	f.flush()
+	return f
+}
+
+fn test_store_sqlite_cross_process_writable_open_refuses_1005() {
+	$if cxstore_sqlite ? {
+		path := os.join_path(os.temp_dir(), 'cxstore_sqlite_xproc_${os.getpid()}.db')
+		os.rm(path) or {}
+		defer {
+			os.rm(path) or {}
+		}
+		lockp := store_root_lock_path('sqlite', path)
+		assert lockp == path + '.cxstore-lock', 'a FILE root takes a SIBLING sentinel, never a directory: ${lockp}'
+		defer {
+			os.rm(lockp) or {}
+		}
+		// Create the db and release our own lock, so the only holder below is
+		// the foreign one.
+		h0 := sq_open(path)
+		store_stdlib_builtin_inner('store-close', [h0]) or { panic('close: ${err.msg()}') }
+		mut held := sq_hold_foreign_lock(lockp, 424242)
+
+		caps_set_all()
+		h := store_sqlite_open('sqlite://${path}', '', '', false, '', '')
+		assert is_err_value(h), '#1005: a sqlite file held WRITABLE elsewhere was opened writable anyway: ${h}'
+		assert sq_err_code(h) == 'cx-err:CXER1143', 'wrong refusal code: ${h}'
+		assert render_canonical(h).contains('pid=424242'), 'the refusal does not NAME the holder: ${h}'
+		assert render_canonical(h).contains('RECOVERY:'), 'the refusal names no recovery path: ${h}'
+
+		// The read-only exemption reaches this substrate too: N readers
+		// alongside the one writer is the supported shape.
+		r := store_sqlite_open('sqlite://${path}', '', '', true, '', '')
+		assert !is_err_value(r), '#1005: the read-only exemption was lost for sqlite: ${r}'
+
+		// Release: the root is immediately available again. A crashed holder
+		// releases the same way — the kernel drops the lock when the last
+		// descriptor on it closes, which is the whole reason flock and not an
+		// O_EXCL sentinel.
+		C.flock(held.fd, C.LOCK_UN)
+		held.close()
+		w := store_sqlite_open('sqlite://${path}', '', '', false, '', '')
+		assert !is_err_value(w), '#1005: the sqlite root stayed refused after its holder released: ${w}'
+	}
+}

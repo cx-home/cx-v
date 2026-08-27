@@ -73,7 +73,7 @@ null
 [$json:parse "3.14"]
 #]]
   [out-text [#
-3.14
+3.14e0
 #]]
  ]
 

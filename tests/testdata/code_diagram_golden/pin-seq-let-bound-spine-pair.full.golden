@@ -1,0 +1,21 @@
+sequenceDiagram
+  participant INPUT
+  participant jobs
+  participant producer
+  participant consumer
+  participant OUTPUT
+  activate producer
+  producer ->>+ jobs : $i
+  Note over producer : [?close]
+  deactivate producer
+  activate consumer
+  jobs -->>- consumer : msg
+  deactivate consumer
+  participant main
+  Note over main : [?wait-for]
+  Note over main : [?wait-for]
+  Note over INPUT : bind $ch
+  Note over INPUT : bind $prod
+  Note over INPUT : bind $_
+  Note over INPUT : bind $i
+  Note over INPUT : bind $cons

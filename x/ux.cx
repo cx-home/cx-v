@@ -344,9 +344,9 @@
     [then [ux-refusals [?for [in $m $el] [yield [$binding-tree $m $rctx]]]]]
     [else
       [ux-refusals
-        [?if [and [$exists $el@live] [not [$exists [$feed-binding $rctx [$string $el@live]]]]]
+        [?splice [?if [and [$exists $el@live] [not [$exists [$feed-binding $rctx [$string $el@live]]]]]
           [then ([ux-refusal code=ux-unbound-feed feed=[$string $el@live]])]
-          [else ()]]
+          [else ()]]]
         [?for [in $k $el/*] [yield [$binding-tree $k $rctx]]]]]]]
 
 # ── §4 Semantic-tree validation (pre-lowering, fail-loud) ───────────────────
@@ -403,13 +403,13 @@
 
 [?def private-attr-refusals pure [returns any] ($el::any $n::string)
   [ux-refusals
-    [?if [$exists $el@oob]       [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=oob])]       [else ()]]
-    [?if [$exists $el@target]    [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=target])]    [else ()]]
-    [?if [$exists $el@swap]      [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=swap])]      [else ()]]
-    [?if [$exists $el@ext]       [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=ext])]       [else ()]]
-    [?if [$exists $el@subscribe] [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=subscribe])] [else ()]]
-    [?if [$exists $el@on]        [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=on])]        [else ()]]
-    [?if [$exists $el@include]   [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=include])]   [else ()]]]]
+    [?splice [?if [$exists $el@oob]       [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=oob])]       [else ()]]]
+    [?splice [?if [$exists $el@target]    [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=target])]    [else ()]]]
+    [?splice [?if [$exists $el@swap]      [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=swap])]      [else ()]]]
+    [?splice [?if [$exists $el@ext]       [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=ext])]       [else ()]]]
+    [?splice [?if [$exists $el@subscribe] [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=subscribe])] [else ()]]]
+    [?splice [?if [$exists $el@on]        [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=on])]        [else ()]]]
+    [?splice [?if [$exists $el@include]   [then ([ux-refusal code=ux-renderer-private-attr element=$n attr=include])]   [else ()]]]]]
 
 # ── P0-98: the vocabulary is closed over ATTRIBUTES, not only over members ──
 # (RULED — owner, 2026-08-18, audit letter 3a.)
@@ -554,12 +554,12 @@
            [?if [and [$exists $el/*] [$exists $el/text()]]
              [then ([ux-refusal code=ux-mixed-content element=$n])]
              [else [$member-refusals $el $n]]]]]]
-    [ux-refusals $self
-      [?let [= $p [$private-attr-refusals $el $n]] $p//ux-refusal]
+    [ux-refusals [?splice $self]
+      [?splice [?let [= $p [$private-attr-refusals $el $n]] $p//ux-refusal]]
       [; P0-98 — attribute closure, guarded on membership: an unknown MEMBER
          already refused above, and refusing its attributes too would bury
          the one refusal that names the actual mistake. ]
-      [?if [$in-vocabulary $n] [then [$attr-closure-refusals $el $n]] [else ()]]
+      [?splice [?if [$in-vocabulary $n] [then [$attr-closure-refusals $el $n]] [else ()]]]
       [?for [in $k $el/*] [yield [$refusal-tree $k]]]]]]
 
 # refusals-of — every refusal in one semantic subtree, flat; empty means
@@ -814,7 +814,7 @@
 # joined — read two refusal sequences back as one flat node-set, via the same
 # carrier discipline.
 [?def joined scope=public pure [returns any] ($a::any $b::any)
-  [?let [= $c [ux-refusals $a $b]] $c//ux-refusal]]
+  [?let [= $c [ux-refusals [?splice $a] [?splice $b]]] $c//ux-refusal]]
 
 # ── §4.7 Verb coverage — the completeness instrument (audit H6, W16) ────────
 #
@@ -1535,7 +1535,7 @@
           [= $miss ([ux-refusal code=ux-no-such-command verb=$verb])]
           [?if [$exists $ds]
             [then [$form-of-def [$first $ds] [$first [$fn-doc-of [$fn-docs-of $ast] $verb]] $opts]]
-            [else [err code=ux-refused $miss]]]]]]]]
+            [else [err code=ux-refused [?splice $miss]]]]]]]]]
 
 # form-error — a command refusal rendered as a form error. Takes the refusal's
 # OWN message, verbatim: the UX layer never restates a rule, never re-derives a
@@ -1813,7 +1813,7 @@
     [= $miss ([ux-refusal code=ux-no-such-verb verb=$verb])]
     [?if [$exists $vs]
       [then [$feature-form-of [$first $vs] $feature $verb $opts]]
-      [else [err code=ux-refused $miss]]]]]
+      [else [err code=ux-refused [?splice $miss]]]]]]
 
 # intent-params — the verb's OWN parameter list, when the grammar states one:
 #
@@ -1849,7 +1849,7 @@
   [?let
     [= $decl [?for [in $n $ns] [yield [?for [in $f [$child-elements $n "field"]]
                                         [where [= [$string $f@name] $p]] [yield $f]]]]]
-    [= $c [ux-fs [?splice [?for [in $d $decl] [yield [ux-f $d]]]]]]
+    [= $c [ux-fs [?splice [?for [in $d $decl] [yield [ux-f [?splice $d]]]]]]]
     [= $hits [$child-elements $c "ux-f"]]
     [?if [$absent $hits]
       [then [ux:input [?attr "name" $p] [?attr "kind" "text"]]]
@@ -2586,7 +2586,7 @@
   [?let [= $bad [$joined [$duplicate-instances $surface]
                   [$joined [$service-refusals $surface $served]
                            [$surface-verb-refusals $surface $features]]]]
-    [?if [$exists $bad] [then [err code=ux-refused $bad]] [else true]]]]
+    [?if [$exists $bad] [then [err code=ux-refused [?splice $bad]]] [else true]]]]
 
 # ── §13 Layout commands: the studio's emission surface (P0-105…P0-108, W26) ──
 #
@@ -3050,7 +3050,7 @@
 [?def layout-apply scope=public pure [returns any] ($layout::any $cmd::any $components::any)
   [?let [= $bad [$layout-refusals $layout $cmd $components]]
     [?if [$exists $bad]
-      [then [err code=ux-refused $bad]]
+      [then [err code=ux-refused [?splice $bad]]]
       [else [$layout-apply-ok $layout $cmd]]]]]
 
 [?def apply-move pure [returns any] ($layout::any $cmd::any $id::string)

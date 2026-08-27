@@ -1,9 +1,9 @@
 erDiagram
   user ||--o{ order : has
   user {
-    int id "@"
+    int id "e.g. 1"
   }
   order {
-    int id "@"
-    decimal total "@"
+    int id "e.g. 100"
+    decimal total "e.g. 42.0"
   }

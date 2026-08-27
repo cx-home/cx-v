@@ -77,6 +77,9 @@ fn run_eval(args []string) {
 			rest := arg['--allow-'.len..]
 			cap_name := rest.all_before('=')
 			if cap_name != '' {
+				// #1059: an unenforceable scope suffix refuses here rather
+				// than granting the blanket capability behind it.
+				refuse_unenforced_grant_scope('cx eval', arg, cap_name, rest)
 				allow_caps << cap_name
 				if cap_name == 'net' && rest.contains('=') {
 					net_specs << rest.all_after('=')

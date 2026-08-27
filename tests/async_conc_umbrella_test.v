@@ -40,7 +40,7 @@ fn test_fire_and_forget_side_effect_fires() {
 		os.rm(prog) or {}
 		os.rm(marker) or {}
 	}
-	res := os.execute('${testenv.cx_bin()} --allow-write=${tmp} ${prog}')
+	res := os.execute('${testenv.cx_bin()} --allow-write ${prog}')
 	assert res.exit_code == 0, 'program failed: ${res.output}'
 	assert res.output.contains('main-done'), 'unexpected output: ${res.output}'
 	assert os.exists(marker), '#541: the un-awaited [?async] body never ran (marker missing)'
@@ -65,7 +65,7 @@ fn test_worker_threads_env_is_sizing_only() {
 		os.rm(prog) or {}
 		os.rm(marker) or {}
 	}
-	res := os.execute('CX_WORKER_THREADS=0 ${testenv.cx_bin()} --allow-write=${tmp} ${prog}')
+	res := os.execute('CX_WORKER_THREADS=0 ${testenv.cx_bin()} --allow-write ${prog}')
 	assert res.exit_code == 0, 'program failed: ${res.output}'
 	assert os.exists(marker), 'EV-ASYNC-SPAWN: the un-awaited body must run under CX_WORKER_THREADS=0 too (the lazy hatch is retired)'
 }
@@ -585,7 +585,7 @@ fn test_worker_exit_cancel_and_drain() {
 		os.rm(marker) or {}
 	}
 	sw := time.new_stopwatch()
-	res := os.execute('${testenv.cx_bin()} --allow-write=${tmp} ${prog}')
+	res := os.execute('${testenv.cx_bin()} --allow-write ${prog}')
 	elapsed_ms := sw.elapsed().milliseconds()
 	assert res.exit_code == 0, 'program failed: ${res.output}'
 	assert res.output.contains('main-done'), res.output
@@ -610,7 +610,7 @@ fn test_worker_exit_drain_completes_uncancellable_body() {
 		os.rm(prog) or {}
 		os.rm(marker) or {}
 	}
-	res := os.execute('${testenv.cx_bin()} --allow-write=${tmp} ${prog}')
+	res := os.execute('${testenv.cx_bin()} --allow-write ${prog}')
 	assert res.exit_code == 0, 'program failed: ${res.output}'
 	assert os.exists(marker), 'EV-WORKER-EXIT: a no-cancellation-point body drains to COMPLETION, never orphaned'
 }
@@ -658,6 +658,20 @@ fn test_try_send_without_timeout_is_still_a_zero_wait_poll() {
 	// The default MUST NOT change: no timeout= means answer immediately.
 	// This is the other half of the fix — a deadline that always applies
 	// would be its own defect.
+	//
+	// The budget is CALIBRATED, not fixed (the #988 discipline): the
+	// measured wall includes process spawn + interpreter boot, which
+	// scheduler starvation stretches arbitrarily — a fixed `< 300`
+	// red the v0.17.0 tag take 8 at 392ms while a sibling lane's compile
+	// took 609s on the same box. The defect this test pins is a
+	// DELIBERATE wait sneaking into the no-timeout path (the sibling
+	// test's timeout= is 400ms), so the honest assertion is "no slower
+	// than a trivial program in the SAME environment, plus a margin
+	// well under that deliberate wait".
+	baseline_src := '[?let [= \$x 1] \$x]'
+	sw0 := time.new_stopwatch()
+	run_pf(baseline_src, false)
+	baseline_ms := sw0.elapsed().milliseconds()
 	src := '[?let [= \$ch [?channel name="t816n" buffer=1]] ' +
 		'[= \$_ [?send "first" to=\$ch]] ' +
 		'[?try-send "second" to=\$ch]]'
@@ -667,7 +681,8 @@ fn test_try_send_without_timeout_is_still_a_zero_wait_poll() {
 	// R5.13 — a top-level refusal exits 1 (see the note above).
 	assert r.exit_code == 1, 'a top-level timeout refusal must exit 1 (R5.13): ${r.exit_code} ${r.output}'
 	assert r.output.contains('CXER0201'), 'expected SEND_TIMEOUT, got: ${r.output}'
-	assert ms < 300, 'a try-send with NO timeout= waited ${ms}ms — it must poll once'
+	budget := if baseline_ms + 250 > 300 { baseline_ms + 250 } else { i64(300) }
+	assert ms < budget, 'a try-send with NO timeout= waited ${ms}ms against a ${baseline_ms}ms trivial-run baseline (budget ${budget}ms) — it must poll once, never wait'
 }
 
 fn test_try_receive_timeout_actually_waits() {
@@ -694,4 +709,73 @@ fn test_try_receive_with_a_ready_message_does_not_wait() {
 	assert r.exit_code == 0, 'errored: ${r.output}'
 	assert r.output.contains('hi'), 'expected the queued message, got: ${r.output}'
 	assert ms < 1000, 'a ready message waited ${ms}ms — the deadline is a bound, not a delay'
+}
+
+// ── #1050: the [?bulkhead] permit counter is atomic ──────────────────────────
+//
+// The permit path was bh_get → in_flight-- → bh_set: a read-modify-write
+// with no atomicity. Concurrent completions lost decrements, so in_flight
+// only ever drifted UP and later arrivals shed CXER0152 while the bulkhead
+// sat under capacity — wrong in both directions, and permanent.
+//
+// The measurement is admission ARITHMETIC, not timing (#1043's lesson from
+// example 57). After the parallel phase quiesces, a sequential ladder walks
+// max-concurrent = 1, 2, 3, …: rung m admits iff in_flight < m, an admitted
+// rung releases what it took, and a shed rung mutates nothing — so the
+// ladder is non-destructive and monotone, and THE NUMBER OF SHED RUNGS IS
+// EXACTLY the residual in_flight. A correct permit counter returns to 0, so
+// every rung admits and the shed count is 0 no matter how the threads
+// interleaved. That makes the assertion deterministic over a genuinely
+// racy phase.
+//
+// Measured on the pre-fix binary: 9 of 10 runs lost decrements, up to 106
+// of 2048 permits — enough to wedge the name against any later
+// max-concurrent <= 106, forever.
+
+fn bulkhead_residual_in_flight(out string) int {
+	return out.count('CXER0152')
+}
+
+fn test_bulkhead_permit_counter_survives_parallel_completions() {
+	// 16 real threads x 32 rounds = 512 arrivals at one max-concurrent=64
+	// bulkhead: every arrival is admitted, so every arrival owes exactly
+	// one release and the counter MUST come back to 0.
+	items := []string{len: 16, init: '${index + 1}'}.join(',')
+	rounds := []string{len: 32, init: '${index + 1}'}.join(',')
+	src := '[?let [= \$stress [?map (${items}) [using [?fn \$x ' +
+		'[?for [in \$i (${rounds})] [yield ' +
+		'[?bulkhead max-concurrent=64 queue=0 name="bh1050" ok]]]]] [par]]] ' +
+		'[?for [in \$m [\$range 1 128]] [yield ' +
+		'[?bulkhead max-concurrent=\$m queue=0 name="bh1050" ok]]]]'
+	r := run_pf(src, false)
+	assert r.exit_code == 0, 'probe errored: ${r.output}'
+	residual := bulkhead_residual_in_flight(r.output)
+	assert residual == 0, '#1050: ${residual} permit decrement(s) were lost — ' +
+		'in_flight stayed at ${residual} after every task completed, so this ' +
+		'bulkhead now sheds any arrival with max-concurrent <= ${residual}'
+}
+
+fn test_bulkhead_shed_boundary_is_exact_after_parallel_load() {
+	// The other direction: having proved the counter returns to 0, the
+	// admission boundary must be EXACT. With in_flight == 0 a rung-1
+	// bulkhead admits; a bulkhead already holding its single permit sheds.
+	// Both halves are pinned in one deterministic program.
+	items := []string{len: 16, init: '${index + 1}'}.join(',')
+	rounds := []string{len: 8, init: '${index + 1}'}.join(',')
+	src := '[?let [= \$stress [?map (${items}) [using [?fn \$x ' +
+		'[?for [in \$i (${rounds})] [yield ' +
+		'[?bulkhead max-concurrent=32 queue=0 name="bh1050b" ok]]]]] [par]]] ' +
+		'([?bulkhead max-concurrent=1 queue=0 name="bh1050b" free], ' +
+		'[?bulkhead max-concurrent=1 queue=0 name="bh1050b" ' +
+		'[?bulkhead max-concurrent=1 queue=0 name="bh1050b" nested]])]'
+	r := run_pf(src, false)
+	assert r.exit_code == 0, 'probe errored: ${r.output}'
+	// First: the quiesced bulkhead has a free permit.
+	assert r.output.contains('free'), '#1050: a quiesced max-concurrent=1 bulkhead ' +
+		'refused an arrival — in_flight never came back to 0: ${r.output}'
+	// Second: the nested arrival, with the outer permit genuinely held,
+	// sheds — so admission is not merely permissive.
+	assert r.output.contains('CXER0152'), '#1050: a bulkhead holding its only ' +
+		'permit admitted a second arrival — the counter is not being taken: ${r.output}'
+	assert !r.output.contains('nested'), '#1050: the nested body ran over capacity: ${r.output}'
 }

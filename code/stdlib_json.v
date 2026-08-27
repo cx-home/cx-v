@@ -158,6 +158,7 @@ fn json_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('json', 'json-', 'string', n)
 	return none
 }
 

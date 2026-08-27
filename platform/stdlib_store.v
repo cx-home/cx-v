@@ -9,7 +9,10 @@ import code {
 	Value,
 	cap_guard,
 	cap_thread_id,
+	err_boundary_refusal,
+	errs_permitted_node,
 	eval_predicate_filter,
+	find_err_at_rest,
 	http_attr,
 	invoke_closure,
 	is_err_value,
@@ -30,6 +33,15 @@ import crypto.ed25519
 // errno/ESRCH for the stale-tmp sweep's kill(pid, 0) liveness probe (#292);
 // C.kill itself is declared in stdlib_process.v (same module).
 #include <errno.h>
+
+// flock(2) + LOCK_EX/LOCK_NB/LOCK_UN for the #1005 cross-process
+// writable-open guard (store_root_lock). ftruncate(2) re-stamps the holder
+// record in place once the lock is ours.
+#include <sys/file.h>
+
+fn C.flock(fd int, operation int) int
+
+fn C.ftruncate(fd int, length i64) int
 
 // stdlib_store.v — native primitives + mem:// backend for the
 // `cx-stdlib/store` content-addressed object store (spec/std-lib/store.md).
@@ -116,6 +128,13 @@ mut:
 	open_count int = 1
 	lock_owner u64
 	lock_depth int
+	// #1005: the cross-process writable-open guard's sentinel path, when this
+	// store took it (a WRITABLE open of a substrate with a local root). Empty
+	// for a read-only open — exempt by the one-writer + N-read-only-readers
+	// discipline — and for a store with no local root (mem://,
+	// columnar-over-s3). store-close releases it when the LAST handle on this
+	// store goes; every open-time error path after the take releases it too.
+	lock_key string
 	// declared_consistency is the stream-7 handle floor (L123,
 	// consistency_vocabulary.md): the `consistency` open-opts tokens,
 	// validated ONCE at declaration against store_guarantee_advert. Empty =
@@ -309,6 +328,14 @@ mut:
 	// (bytes land at ms.root). The s3 object IS a standard Parquet/Arrow file.
 	columnar_s3     ?S3Transport
 	columnar_s3_key string
+	// #891 sharing identity for the s3 case. The transport is an opaque seam
+	// (an S3Transport interface, deliberately stubbable), so the addressing
+	// parts are recorded here rather than reached for through it: endpoint +
+	// bucket + columnar_s3_key IS "the same store" for same-root sharing. The
+	// endpoint is part of it because one bucket name on two endpoints is two
+	// different stores. Empty for the file:// case, which keys on ms.root.
+	columnar_s3_endpoint string
+	columnar_s3_bucket   string
 	// #129 D5 (G3-Q3=a) declared schema: when a columnar store is opened with
 	// `?schema=<path>`, this holds the schema TEXT (a cx-stdlib/validate `[schema …]`
 	// shape). Every put is then validated against it and a non-conforming doc is
@@ -975,7 +1002,7 @@ fn store_find_shared(backend string, root string, key_fp string) ?&MemStore {
 	l.@lock()
 	mut reg := store_reg()
 	for _, ms in reg.stores {
-		if ms.is_open && !ms.read_only && ms.backend == backend && ms.root == root {
+		if ms.is_open && !ms.read_only && ms.backend == backend && store_share_root(ms) == root {
 			if store_share_fp(ms) == key_fp {
 				mut m := unsafe { ms }
 				m.open_count++
@@ -992,8 +1019,36 @@ fn store_find_shared(backend string, root string, key_fp string) ?&MemStore {
 
 // store_share_fp fingerprints the open options that shape a store's at-rest
 // bytes — two writable opens may share the live MemStore only when they agree.
+//
+// #891: the columnar schema joins the fingerprint. It shapes the at-rest file
+// layout exactly as encoding and compression do, so two writers declaring
+// different schemas over one path are NOT sharing-compatible. The component is
+// '' for every other backend, so their fingerprints are unchanged in meaning.
 fn store_share_fp(ms &MemStore) string {
-	return '${ms.enc_key_id}|${ms.model}|${ms.encoding}|${ms.compression}'
+	return '${ms.enc_key_id}|${ms.model}|${ms.encoding}|${ms.compression}|${ms.columnar_schema}'
+}
+
+// store_share_root is the sharing IDENTITY of a store — what "the same store"
+// means for #628 dedupe.
+//
+// For every local substrate that is `ms.root`, a filesystem path. #891 extends
+// sharing to the columnar-over-s3 case, which has no local path at all: its
+// identity is endpoint + bucket + object key. The endpoint belongs in it
+// because one bucket name on two endpoints is two different stores, and using
+// `ms.root` for this would be wrong — `root` is a filesystem path everywhere
+// else and code that treats it as one must keep working.
+fn store_share_root(ms &MemStore) string {
+	if ms.backend == 'columnar' && ms.columnar_s3 != none {
+		return store_share_root_s3(ms.columnar_s3_endpoint, ms.columnar_s3_bucket,
+			ms.columnar_s3_key)
+	}
+	return ms.root
+}
+
+// store_share_root_s3 builds that identity from its parts, so the open site and
+// the registry derive it the same way instead of spelling it twice.
+fn store_share_root_s3(endpoint string, bucket string, key string) string {
+	return 's3://${endpoint}/${bucket}/${key}'
 }
 
 // store_share_conflict reports whether root is open WRITABLE with different
@@ -1003,7 +1058,7 @@ fn store_share_conflict(backend string, root string, key_fp string) bool {
 	l.@lock()
 	reg := store_reg()
 	for _, ms in reg.stores {
-		if ms.is_open && !ms.read_only && ms.backend == backend && ms.root == root {
+		if ms.is_open && !ms.read_only && ms.backend == backend && store_share_root(ms) == root {
 			hit := store_share_fp(ms) != key_fp
 			l.unlock()
 			return hit
@@ -1011,6 +1066,243 @@ fn store_share_conflict(backend string, root string, key_fp string) bool {
 	}
 	l.unlock()
 	return false
+}
+
+// ── #1005 cross-process writable-open guard ─────────────────────────────
+//
+// #628 (file/cxobj/cxpack) and #891 (columnar/sqlite) make a SECOND WRITABLE
+// open of one root sound IN-PROCESS: it returns a second handle over the same
+// live MemStore. That remedy is a process-global registry and cannot span
+// processes by construction, so a second PROCESS opening the same root
+// writable proceeded in silence and destroyed the root — two writers collide
+// on segment numbering, the later flush clobbers the earlier's segment file,
+// and the damage surfaces only at the NEXT open as `CXER1120
+// E_STORE_INTEGRITY_MISMATCH` with a segment missing from the pack sequence
+// (#993 measured it, 5 runs of 5). The supported cross-process shape on a
+// local root is ONE writer + N READ-ONLY readers (journal.md §3.3); it was
+// stated and unenforced, and is now enforced at open.
+//
+// MECHANISM: advisory `flock(2)` `LOCK_EX|LOCK_NB` on a sentinel file at the
+// root. flock rather than an `O_EXCL` sentinel because of the staleness story:
+//
+//   THERE IS NONE. An flock lives on the open file DESCRIPTION, so the kernel
+//   releases it when the holder's last descriptor closes — normal exit,
+//   `_exit`, an unhandled signal, SIGKILL, an OOM kill, a V panic. A crashed
+//   writer therefore CANNOT brick the root: the very next open takes the lock.
+//   An O_EXCL sentinel would have to tell a crashed holder from a live one by
+//   pid liveness plus a boot/start-time identity, and a pid recycled across a
+//   reboot would then refuse a root that nothing holds — a brick, which is a
+//   worse failure than the corruption being fixed. So the guard is built on the
+//   one primitive whose release is the kernel's job, not a heuristic's.
+//
+// The sentinel's BYTES are only the holder's NAME (pid / host / url / since),
+// for the refusal text. They are never the authority on whether the lock is
+// held, so a record left behind by a crash cannot mislead anyone: whoever
+// acquires the lock next truncates and re-stamps it, and a refusal is issued
+// only when flock itself says the lock is taken — i.e. by a LIVE holder.
+//
+// The sentinel is never unlinked at close. Unlinking races a peer that already
+// holds the file open (it would lock an unlinked inode while a third process
+// creates a fresh one), and an idle sentinel costs one inode and one line.
+//
+// SCOPE. Writable opens of a substrate with a local root: `file` (all three
+// framings — the flat document index, `cxobj`, `cxpack`), `sqlite`, and
+// local-file `columnar`. Read-only opens are EXEMPT by the discipline itself.
+// `mem://` has no at-rest bytes; columnar-over-s3 has no local root to key on
+// (its sharing identity is endpoint+bucket+key, #891) and no filesystem to
+// lock — the object-store tier's own concurrency story, not this guard's.
+
+const store_root_lock_name = '.cxstore-lock'
+
+// RootLock is one held sentinel: the descriptor carrying the flock, plus an
+// in-process refcount. The refcount exists because flock is per-DESCRIPTION —
+// a second `flock` on a second descriptor conflicts even inside one process —
+// so an in-process second writable open must refcount this lock rather than
+// take it again. Which is also the correct semantics: an in-process second
+// writable open is #628/#891 territory (a shared live view, or a loud
+// option-mismatch refusal upstream of here), never this guard's business.
+@[heap]
+struct RootLock {
+mut:
+	f     os.File
+	count int
+}
+
+@[heap]
+struct RootLockReg {
+mut:
+	held map[string]&RootLock
+	// roots already announced as unguarded (degrade-with-visibility, once
+	// per root per process — never a per-open reprint).
+	announced map[string]bool
+}
+
+__global (
+	g_store_rootlocks voidptr
+)
+
+// g_store_rootlock_mu is held across the WHOLE acquire, file I/O included.
+// Two threads racing the same root would otherwise both reach flock, and the
+// loser would refuse against ITSELF (flock is per-description). Opens are not
+// a hot path, so serializing them is free.
+const g_store_rootlock_mu = &sync.Mutex(sync.new_mutex())
+
+fn store_rootlock_reg() &RootLockReg {
+	if g_store_rootlocks == unsafe { nil } {
+		r := &RootLockReg{
+			held:      map[string]&RootLock{}
+			announced: map[string]bool{}
+		}
+		g_store_rootlocks = voidptr(r)
+	}
+	return unsafe { &RootLockReg(g_store_rootlocks) }
+}
+
+// store_root_lock_path derives the sentinel path. `file`/`cxobj`/`cxpack` open
+// a DIRECTORY root, so the sentinel is a child of it; `sqlite` and `columnar`
+// open a FILE root, so it is a sibling — one sentinel per store either way,
+// and never a stray directory next to a user's database.
+fn store_root_lock_path(backend string, root string) string {
+	if backend in ['file', 'cxobj', 'cxpack'] {
+		return os.join_path(root, store_root_lock_name)
+	}
+	return root + store_root_lock_name
+}
+
+// store_root_lock_holder reads the holder record for the refusal text. Empty
+// when there is none, when it is unreadable, or when it is not ours to read —
+// the refusal then says so instead of guessing.
+fn store_root_lock_holder(path string) string {
+	txt := os.read_file(path) or { return '' }
+	line := txt.all_before('\n').trim_space()
+	if !line.starts_with('cxstore-lock v1 ') {
+		return ''
+	}
+	return line['cxstore-lock v1 '.len..]
+}
+
+// store_root_lock_refusal names the holder AND the way out. Both halves are
+// load-bearing: a refusal that only says "conflict" turns a mis-wired
+// deployment into a mystery, and #1005 exists because the failure was silent.
+fn store_root_lock_refusal(root string, url string, holder string) string {
+	who := if holder == '' { 'no holder record — the sentinel was empty' } else { holder }
+	return 'E_STORE_OPEN_CONFLICT: ${root} is already open WRITABLE by another process (${who}) — ' +
+		'the supported cross-process shape on a local root is ONE writer + N READ-ONLY readers ' +
+		'(journal.md §3.3): two writers collide on segment numbering and leave the root structurally dead. ' +
+		'RECOVERY: close that handle or end that process and reopen, or open this one READ-ONLY ' +
+		'(`[\$store:open-opts URL [map read-only="true"]]`) — read-only opens are never gated. ' +
+		'The lock is released by the kernel when its holder dies, so a crashed writer never keeps ' +
+		'it: this refusal always names a LIVE holder. (${url})'
+}
+
+// store_root_lock_unsupported announces, once per root, that the guard is
+// inactive here. Called with g_store_rootlock_mu held. Not a refusal: a
+// filesystem that cannot honor advisory locks (some network mounts) would
+// otherwise be unopenable, which is a worse outcome than the unguarded open it
+// already had. Silent, though, it would be a security control failing open
+// without saying so.
+fn store_root_lock_unsupported(path string, why string) {
+	mut reg := store_rootlock_reg()
+	if path in reg.announced {
+		return
+	}
+	reg.announced[path] = true
+	eprintln('cx: note: the cross-process writable-open guard is INACTIVE for ${path} (${why}) — ' +
+		'this substrate cannot honor advisory locks, so a second writer on this root is unguarded (#1005)')
+}
+
+// store_root_lock takes the guard. Returns the refusal node, or none on
+// success (lock taken, or refcounted because this process already holds it).
+fn store_root_lock(backend string, root string, url string) ?cx.Node {
+	path := store_root_lock_path(backend, root)
+	mut mu := unsafe { g_store_rootlock_mu }
+	mu.@lock()
+	defer {
+		mu.unlock()
+	}
+	mut reg := store_rootlock_reg()
+	if existing := reg.held[path] {
+		mut e := unsafe { existing }
+		e.count++
+		return none
+	}
+	// The writable open arms create their root only AFTER this point, so the
+	// sentinel's directory has to exist here.
+	dir := if backend in ['file', 'cxobj', 'cxpack'] { root } else { os.dir(root) }
+	if dir != '' && dir != '.' {
+		os.mkdir_all(dir) or {
+			return mk_err('cx-err:CXER1100',
+				'E_STORE_UNRESOLVED_BACKEND: cannot create ${dir}: ${err.msg()}')
+		}
+	}
+	// 'a+' = O_CREAT|O_APPEND|O_RDWR: creates when absent, and NEVER truncates
+	// — merely opening the sentinel must not erase a live holder's record.
+	mut f := os.open_file(path, 'a+', 0o644) or {
+		store_root_lock_unsupported(path, 'cannot open the lock sentinel: ${err.msg()}')
+		return none
+	}
+	if C.flock(f.fd, C.LOCK_EX | C.LOCK_NB) != 0 {
+		en := C.errno
+		holder := store_root_lock_holder(path)
+		f.close()
+		if en == C.EWOULDBLOCK || en == C.EAGAIN {
+			return mk_err(store_err_open_conflict, store_root_lock_refusal(root, url, holder))
+		}
+		store_root_lock_unsupported(path, 'flock errno=${en}')
+		return none
+	}
+	// Ours. Re-stamp the record so any later refusal names the CURRENT holder
+	// and not whoever last crashed here.
+	C.ftruncate(f.fd, 0)
+	host := os.hostname() or { '?' }
+	f.write_string('cxstore-lock v1 pid=${os.getpid()} host=${host} url=${url} since=${time.utc().format_rfc3339()}\n') or {}
+	f.flush()
+	reg.held[path] = &RootLock{
+		f:     f
+		count: 1
+	}
+	return none
+}
+
+// store_root_lock_take is the call-site form: takes the guard for a writable
+// open and hands back the key to record on the MemStore (`lock_key`), released
+// at close. READ-ONLY opens are EXEMPT — they never write, so N of them
+// alongside the one writer IS the supported shape; and an empty root means
+// there is no local filesystem identity to lock (mem://, columnar-over-s3).
+fn store_root_lock_take(backend string, root string, read_only bool, url string) (string, cx.Node, bool) {
+	if read_only || root == '' {
+		return '', store_null(), true
+	}
+	if e := store_root_lock(backend, root, url) {
+		return '', e, false
+	}
+	return store_root_lock_path(backend, root), store_null(), true
+}
+
+// store_root_unlock releases the guard for one key: the in-process refcount
+// drops, and the last holder unlocks and closes the descriptor. Called from
+// store-close when the last handle on a store goes, and from every open-time
+// error path AFTER the lock was taken — a failed open must not leave the root
+// locked for the life of the process.
+fn store_root_unlock(key string) {
+	if key == '' {
+		return
+	}
+	mut mu := unsafe { g_store_rootlock_mu }
+	mu.@lock()
+	defer {
+		mu.unlock()
+	}
+	mut reg := store_rootlock_reg()
+	rl := reg.held[key] or { return }
+	mut l := unsafe { rl }
+	l.count--
+	if l.count > 0 {
+		return
+	}
+	C.flock(l.f.fd, C.LOCK_UN)
+	l.f.close()
+	reg.held.delete(key)
 }
 
 // ── #628 reentrant op-lock (shared-store serialization) ─────────────────
@@ -1762,9 +2054,17 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 				}
 				// document model on `file` = the flat index store.
 				if r := store_open_shared_or_conflict('file', root, read_only,
-					'|document|${enc}|${comp}')
+					'|document|${enc}|${comp}|')
 				{
 					return r
+				}
+				// #1005: no in-process share to join, so this is a FRESH writable
+				// view of the root — the point where a second PROCESS has to be
+				// refused. Before the load, so a conflicting open never even reads
+				// a state the other writer is mutating.
+				flk, flerr, flok := store_root_lock_take('file', root, read_only, url)
+				if !flok {
+					return flerr
 				}
 				mut ms := &MemStore{
 					url:         url
@@ -1776,14 +2076,17 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 					is_open:     true
 					model:       'document'
 					op_lock:     sync.new_mutex()
+					lock_key:    flk
 				}
 				idx := os.join_path(root, store_index_name)
 				if os.exists(idx) {
 					store_read_index(idx, mut ms) or {
+						store_root_unlock(flk)
 						return mk_err('cx-err:CXER1120', err.msg())
 					}
 				} else if !read_only {
 					os.mkdir_all(root) or {
+						store_root_unlock(flk)
 						return mk_err('cx-err:CXER1100',
 							'E_STORE_UNRESOLVED_BACKEND: cannot create ${root}: ${err.msg()}')
 					}
@@ -1794,9 +2097,14 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 			// subtree model — object-per-key on request, pack by default.
 			if want_framing == 'object-per-key' {
 				if r := store_open_shared_or_conflict('cxobj', root, read_only,
-					'${auth['encrypt-key-id']}||${enc}|${comp}')
+					'${auth['encrypt-key-id']}||${enc}|${comp}|')
 				{
 					return r
+				}
+				// #1005 cross-process guard, as for the flat index arm.
+				olk, olerr, olok := store_root_lock_take('cxobj', root, read_only, url)
+				if !olok {
+					return olerr
 				}
 				mut ms := &MemStore{
 					url:         url
@@ -1808,14 +2116,17 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 					is_open:     true
 					op_lock:     sync.new_mutex()
 					enc_key_id:  auth['encrypt-key-id']
+					lock_key:    olk
 				}
 				if !read_only {
 					os.mkdir_all(root) or {
+						store_root_unlock(olk)
 						return mk_err('cx-err:CXER1100',
 							'E_STORE_UNRESOLVED_BACKEND: cannot create ${root}: ${err.msg()}')
 					}
 				}
 				store_cxobj_load(mut ms) or {
+					store_root_unlock(olk)
 					return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
 				}
 				id := store_register(ms)
@@ -1824,7 +2135,7 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 			// obj_pack attaches lazily in store_cxpack_load (store_cxpack_backend
 			// picks keyed vs plain mode from enc_key_id, #229).
 			if r := store_open_shared_or_conflict('cxpack', root, read_only,
-				'${auth['encrypt-key-id']}||${enc}|${comp}')
+				'${auth['encrypt-key-id']}||${enc}|${comp}|')
 			{
 				return r
 			}
@@ -1833,6 +2144,16 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 			// — its segment renames/removals would interleave with this open's
 			// discovery/load under a different lock identity. Shared opens
 			// (above) never wait: their worker is legitimately theirs.
+			// #1005 cross-process guard. THIS is the arm #993 measured dying:
+			// two writing processes on one pack root collide on segment
+			// numbering, the loser's segment file is clobbered, and the hole in
+			// the sequence surfaces only at the NEXT open as CXER1120. Taken
+			// before the quiesce and the load, so a refused open touches nothing.
+			plk, plerr, plok := store_root_lock_take('cxpack', root, read_only,
+				url)
+			if !plok {
+				return plerr
+			}
 			store_fold_quiesce_root(root)
 			mut ms := &MemStore{
 				url:         url
@@ -1850,14 +2171,17 @@ fn store_open_impl(url string, compression string, encoding string, read_only bo
 				// reconstruction for a caller that wants that check inline
 				// (the same check the explicit `verify` op runs on demand).
 				lazy_objects: auth['eager'] != 'true'
+				lock_key:     plk
 			}
 			if !read_only {
 				os.mkdir_all(root) or {
+					store_root_unlock(plk)
 					return mk_err('cx-err:CXER1100',
 						'E_STORE_UNRESOLVED_BACKEND: cannot create ${root}: ${err.msg()}')
 				}
 			}
 			store_cxpack_load(mut ms) or {
+				store_root_unlock(plk)
 				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
 			}
 			id := store_register(ms)
@@ -2471,6 +2795,15 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			if ms.read_only {
 				return mk_err('cx-err:CXER1110', 'E_STORE_READ_ONLY: ${ms.url}')
 			}
+			// RULED: CO-2 (#975): a store document write is an externalizing
+			// effect — a document containing an [err] at any depth refuses
+			// (CXER0275) unless the optional opts arg carries errs=:permit.
+			// Blob writes stay exempt by construction (opaque bytes).
+			if !(args.len > 2 && errs_permitted_node(args[2])) {
+				if hit := find_err_at_rest(args[1]) {
+					return err_boundary_refusal('store document write', hit)
+				}
+			}
 			if ms.backend == 'columnar' && ms.columnar_schema != '' {
 				if v := store_columnar_schema_violation(ms, cx.Document{
 					elements: [
@@ -2543,6 +2876,16 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			parsed := cx.parse(text) or {
 				return mk_err('cx-err:CXER1120',
 					'E_STORE_INTEGRITY_MISMATCH: undecodable doc text: ${err.msg()}')
+			}
+			// RULED: CO-2 (#975): put-doc-text stores a PARSED document (the
+			// canonicalization below proves it), so the effect boundary applies
+			// exactly as for put-doc — this is not an opaque byte write.
+			if !(args.len > 2 && errs_permitted_node(args[2])) {
+				for pel in parsed.elements {
+					if hit := find_err_at_rest(pel) {
+						return err_boundary_refusal('store document write', hit)
+					}
+				}
 			}
 			if parsed.elements.len == 0 {
 				return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: empty doc text')
@@ -3000,6 +3343,12 @@ fn store_stdlib_builtin_inner(name string, args []cx.Node) ?cx.Node {
 			}
 			if ms.open_count <= 0 {
 				ms.is_open = false
+				// #1005: the LAST handle on this store releases the
+				// cross-process writable-open guard, so the next process — or
+				// the next open here — can have the root. Empty key for a
+				// read-only or rootless open, which never took it.
+				store_root_unlock(ms.lock_key)
+				ms.lock_key = ''
 			}
 			return store_null()
 		}
@@ -3351,6 +3700,14 @@ fn store_modify_doc(args []cx.Node) ?cx.Node {
 		if raction !is cx.Element {
 			return mk_err('cx-err:CXER0100', 'E_OPERAND_KIND: modify action must be an element')
 		}
+		// RULED: CO-2 (#975): the action's payload is the only vehicle by
+		// which a modify can inject an [err] into a stored document — guard
+		// it at the effect form, remote and local alike (opts = args[3]).
+		if !(args.len > 3 && errs_permitted_node(args[3])) {
+			if hit := find_err_at_rest(raction) {
+				return err_boundary_refusal('store document write', hit)
+			}
+		}
 		return store_remote_modify(ms.remote, rhash, render_canonical(raction))
 	}
 	if ms.read_only {
@@ -3383,6 +3740,12 @@ fn store_modify_doc(args []cx.Node) ?cx.Node {
 	action := args[2]
 	if action !is cx.Element {
 		return mk_err('cx-err:CXER0100', 'E_OPERAND_KIND: modify action must be an element')
+	}
+	// RULED: CO-2 (#975): see the remote branch above — same guard, local path.
+	if !(args.len > 3 && errs_permitted_node(args[3])) {
+		if hit := find_err_at_rest(action) {
+			return err_boundary_refusal('store document write', hit)
+		}
 	}
 	act := action as cx.Element
 	// #134-1: an action MAY carry select="<cxpath>" to target nested child node(s)

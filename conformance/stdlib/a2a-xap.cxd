@@ -122,6 +122,7 @@ true
 
   [case id=a2a-xap-008-propose-task-durable-pending-approval level=core
    [tags a2a-xap propose-task input-required journal proposal tier1 stream-18 690 L140]
+   [; R-A1 migration: envelope → spliced children (2026-08-25) ]
    [meta [#
 note: input-required IS the durable pending-approval slot (stream 18):
 note: propose-task journals the transition CARRYING the proposal's
@@ -140,11 +141,11 @@ note: durable, tamper-evident, never a bespoke pending-store.
   [= $e1 [$ax:propose-task $jr "t-1" $p]]
   [= $e2 [$ax:record $jr "t-1" "completed"]]
   [= $entries [$ax:history $jr 1 2]]
-  [flow [path [$ax:lifecycle $entries]]
+  [flow [path [?splice [$ax:lifecycle $entries]]]
         [addr-carried [$eq [?let [= $ev [$first $entries]] [?let [= $t $ev/event] $t/@address]] $addr]]]]
 #]]
    [out-text [#
-[flow [path (input-required, completed)] [addr-carried true]]
+[flow [path 'input-required' 'completed'] [addr-carried true]]
 #]]
   ]
 

@@ -31,3 +31,12 @@ fn xap_ckpt_persist_dispatch(snap XapCkptSnap) {
 fn xap_start_source_pumps(rt_id int, sources []cx.Node, tenant string, mut env MatchEnv) ?cx.Node {
 	return mk_err(xap_err_arg_invalid, 'E_XAP: run {sources: …} needs the native engine (threads/sockets are not linked under -d wasm32_emcc); run cx natively')
 }
+
+// #994 boot ordering: no pump can be held on this target — a `sources:`
+// binding refused above and run assembly returned before either of these is
+// reachable with anything to do.
+fn xap_arm_source_pumps(rt_id int) {
+}
+
+fn xap_abandon_source_pumps(rt_id int, why string) {
+}

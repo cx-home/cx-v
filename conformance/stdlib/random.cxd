@@ -54,7 +54,7 @@ conformance fixtures for cx-stdlib/random (spec/std-lib/random.md §6).
 [?let [= $r [$random:next-float-with [$random:from-seed 42]]] $r/value]
 #]]
   [out-text [#
-0.8143051451229099
+8.143051451229099e-1
 #]]
  ]
 
@@ -152,7 +152,7 @@ cx-err:CXER1901
 [$random:float-range 2.5e0 2.5e0]
 #]]
   [out-text [#
-2.5
+2.5e0
 #]]
  ]
 
@@ -362,7 +362,7 @@ cx-err:CXER0271
 [$random:gaussian 5.0e0 0.0e0]
 #]]
   [out-text [#
-5.0
+5.0e0
 #]]
  ]
 
@@ -376,7 +376,7 @@ cx-err:CXER0271
 [?let [= $r [$random:gaussian-with [$random:from-seed 11] 3.0e0 0.0e0]] $r/value]
 #]]
   [out-text [#
-3.0
+3.0e0
 #]]
  ]
 
@@ -432,7 +432,7 @@ cx-err:CXER1905
 [?let [= $r [$random:exponential-with [$random:from-seed 42] 1.0e0]] $r/value]
 #]]
   [out-text [#
-1.683650517646569
+1.683650517646569e0
 #]]
  ]
 
@@ -600,7 +600,7 @@ cx-err:CXER1905
 [?let [= $r [$random:next-floats-with [$random:from-seed 42] 3]] $r/value]
 #]]
   [out-text [#
-(0.8143051451229099, 0.3188210400616611, 0.9838941681774888)
+(8.143051451229099e-1, 3.188210400616611e-1, 9.838941681774888e-1)
 #]]
  ]
 
@@ -684,7 +684,7 @@ cx-err:CXER0271
 [?let [= $r [$random:float-range-with [$random:from-seed 7] 2.5e0 2.5e0]] $r/value]
 #]]
   [out-text [#
-2.5
+2.5e0
 #]]
  ]
 
@@ -707,6 +707,17 @@ cx-err:CXER1901
 #]]
  ]
 
+ # random-050 pins the STRICTNESS rule and is correct: `0.0` is a decimal
+ # literal, and ordered comparison refuses to mix it with the float
+ # next-float returns. Keeping it — that refusal is worth a fixture.
+ #
+ # What was wrong (#998's sweep) is that stdlib/random.cx's fn-doc for
+ # next-float showed THIS code and advertised `true`. It does not print `true`;
+ # it raises. The doc-backing gate passed it anyway, because that gate only
+ # requires the [expect] text to appear VERBATIM somewhere in this file — and
+ # `true` appears all over it. So the example was backed by a row that pins the
+ # OPPOSITE outcome. The range property the doc means to show is random-050a
+ # below, with float literals on both sides, and the fn-doc points there now.
  [case id=random-050-next-float-range level=core
   [tags random prng next-float range property seeded]
   [in-cx [#
@@ -718,6 +729,20 @@ cx-err:CXER1901
 #]]
   [out-text [#
 [err code=cx-err:CXER0100 message='[>=] operand is not a single numeric scalar (got a decimal-typed scalar); ordered comparison is strict — convert with [cast $s :int] / [cast $s :float]']
+#]]
+ ]
+
+ [case id=random-050a-next-float-range-float-literals level=core
+  [tags random prng next-float range property seeded fn-doc-backing]
+  [in-cx [#
+[empty]
+#]]
+  [in-code [#
+[?lib 'cx-stdlib/random']
+[?let [= $a [$random:seed 42]] [= $f [$random:next-float]] [and [>= $f 0.0e0] [< $f 1.0e0]]]
+#]]
+  [out-text [#
+true
 #]]
  ]
 
@@ -869,7 +894,7 @@ true
 [$random:gen-float [$random:new 42]]
 #]]
   [out-text [#
-0.8143051451229099
+8.143051451229099e-1
 #]]
  ]
 
@@ -911,7 +936,7 @@ true
 [$random:gen-float-range [$random:new 7] 2.5e0 2.5e0]
 #]]
   [out-text [#
-2.5
+2.5e0
 #]]
  ]
 
@@ -967,7 +992,7 @@ true
 [$random:gen-gaussian [$random:new 1] 5.0e0 0.0e0]
 #]]
   [out-text [#
-5.0
+5.0e0
 #]]
  ]
 
@@ -981,7 +1006,7 @@ true
 [$random:gen-exponential [$random:new 42] 1.0e0]
 #]]
   [out-text [#
-1.683650517646569
+1.683650517646569e0
 #]]
  ]
 

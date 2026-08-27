@@ -63,9 +63,13 @@ fn run_diagram(args []string) {
 				eprintln('accepted capability grants: ${grant_flags.join(' ')}')
 				exit(2)
 			}
+			// A scope must NARROW, never be dropped on the floor (#1059):
+			// the grants whose scope the engine cannot enforce refuse the
+			// suffix outright, before the program is read.
+			refuse_unenforced_grant_scope('cx diagram', a, cap_name, rest_cap)
 			allow_caps << cap_name
-			// A scope must NARROW, never be dropped on the floor — same
-			// handling as `cx` / `cx eval` (main.v).
+			// The net scope IS enforced — same handling as `cx` /
+			// `cx eval` (main.v).
 			if cap_name == 'net' && rest_cap.contains('=') {
 				net_specs << rest_cap.all_after('=')
 			}

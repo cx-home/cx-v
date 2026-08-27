@@ -16,7 +16,7 @@ flowchart TD
   start([entry])
   done([exit])
   i{"if [= 1 1]"}
-  t["[err]"]
+  t["<table class='cxp-itbl cxp-vtbl'><tr><th colspan='2'>err</th></tr><tr><td class='cxp-itbl-k'>@code</td><td class='cxp-itbl-v'>'x'</td></tr></table>"]
   i -- "true" --> t
   t --> done
   e["[ping]"]

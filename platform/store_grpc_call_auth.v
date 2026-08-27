@@ -249,7 +249,12 @@ fn sw_err_text_of(n cx.Node) string {
 // discovery like Capabilities — read-class, open in both postures).
 fn grpc_call_gate(authz string, path string, body []u8, op string, mount string, ctx ServeContext, mut nc GrpcNonceCache) ?GrpcReply {
 	cap_name := sx_verb_capability(op)
-	enforcing := ctx.xsp_cfg.grants.len > 0
+	// #986: the LIVE grant table, resolved once per call — the posture test and
+	// the basis below must agree, and both must see an applied reload. This edge
+	// compiles its basis per call, so folding the reload here is the whole fix:
+	// there is no session state to re-seat.
+	xcfg := svc_ctx_xsp_cfg(ctx)
+	enforcing := xcfg.grants.len > 0
 	if !enforcing {
 		// open/dev posture (profile §6.1 W3): data verbs open; admin verbs
 		// behind the mutual gate — a VALID call credential is the per-call
@@ -262,7 +267,7 @@ fn grpc_call_gate(authz string, path string, body []u8, op string, mount string,
 				status: GrpcStatus{grpc_unauthenticated, 'grpc: admin op requires a CxCall credential (open posture mutual gate; cxstore-grpc.md §4)', 'cx-err:CXER5018'}
 			}
 		}
-		grpc_call_auth_verify(authz, path, body, ctx.xsp_cfg, grpc_ctx_revoked(ctx),
+		grpc_call_auth_verify(authz, path, body, xcfg, grpc_ctx_revoked(ctx),
 			mount, mut nc) or {
 			return GrpcReply{
 				status: GrpcStatus{grpc_unauthenticated, 'grpc: ${err.msg()}', 'cx-err:CXER5021'}
@@ -276,7 +281,7 @@ fn grpc_call_gate(authz string, path string, body []u8, op string, mount string,
 			status: GrpcStatus{grpc_unauthenticated, 'grpc: a CxCall credential is required (grants configured; cxstore-grpc.md §4)', 'cx-err:CXER5021'}
 		}
 	}
-	mut c := grpc_call_auth_verify(authz, path, body, ctx.xsp_cfg, grpc_ctx_revoked(ctx),
+	mut c := grpc_call_auth_verify(authz, path, body, xcfg, grpc_ctx_revoked(ctx),
 		mount, mut nc) or {
 		return GrpcReply{
 			status: GrpcStatus{grpc_unauthenticated, 'grpc: ${err.msg()}', 'cx-err:CXER5021'}

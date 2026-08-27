@@ -1895,6 +1895,49 @@ fn test_fmt_source_attr_after_comment_child_no_quote_flip() {
 	assert out == twice, 'fmt must be idempotent on the fixed doc'
 }
 
+// ── #980: `cx fmt` is a fixed point across the CLI/LSP ROUND TRIP ────────────
+// fmt_source returns UNTERMINATED text and the caller writes fmt(x) + '\n'
+// back to the file, so the next pass is handed the TERMINATED text. The
+// obligation is therefore fmt(fmt(x) + '\n') == fmt(x), byte-exactly.
+//
+// The fail-closed lanes used to return the source verbatim — trailing newline
+// included — so `cx fmt` appended one newline per pass without bound.
+// conformance/fmt.cxd's runner compares `strip_blank_edges` on both sides of
+// its §7 check and could not see it; these assertions compare raw bytes.
+
+fn assert_fmt_cli_cycle_stable(src string, label string) string {
+	once := code.fmt_source(src) or { panic('fmt ${label}: ${err}') }
+	assert !once.ends_with('\n'), 'fmt_source must return UNTERMINATED text (the caller supplies the newline); ${label} returned |${once}|'
+	cycled := code.fmt_source(once + '\n') or { panic('fmt ${label} (cycle): ${err}') }
+	assert cycled == once, 'fmt(fmt(x) + newline) != fmt(x) on ${label}:\n  once:   |${once}|\n  cycled: |${cycled}|'
+	return once
+}
+
+// The minimal #980 repro, reduced mechanically from the corpus program below.
+// `[?def …]` renders through the program emitter as a `:raw-source` carrier,
+// which is not a re-parse fixed point, so faithful_program_fmt fails closed
+// and hands back the source — the shape whose bytes used to grow.
+fn test_fmt_cli_cycle_stable_on_fail_closed_def() {
+	out := assert_fmt_cli_cycle_stable('[?def [f] 1]\n', 'minimal-980')
+	assert out == '[?def [f] 1]', 'the fail-closed lane must return the source unchanged: |${out}|'
+}
+
+// The original #980 report: corpus/rosetta/21-fetch-csv-validate.cx grew
+// 57 → 58 → 59 lines, one line per `cx fmt` pass. Pinned against the real
+// file so a future lane change cannot reintroduce the growth on the exact
+// input that found it.
+fn test_fmt_cli_cycle_stable_on_the_reporting_corpus_program() {
+	path := os.join_path(@VMODROOT, '..', 'corpus', 'rosetta', '21-fetch-csv-validate.cx')
+	if !os.is_file(path) {
+		return // corpus/ is not shipped in every checkout profile
+	}
+	src := os.read_file(path) or { panic('read ${path}: ${err}') }
+	out := assert_fmt_cli_cycle_stable(src, '21-fetch-csv-validate.cx')
+	// fmt is a NO-OP on this file (the fail-closed lane returns the source),
+	// so the bytes `cx fmt` would write back are the bytes already on disk.
+	assert out + '\n' == src, 'fmt must leave the corpus program byte-identical; got ${out.len + 1} bytes vs ${src.len}'
+}
+
 // ── source: vcx/tests/logfmt_test.v ──
 // Tests for v3.4 logfmt mode. Spec: spec/grammar.ebnf [2].
 // A document consisting entirely of top-level Name=Value attributes

@@ -66,5 +66,45 @@ fn platform_subcommands() []SubcommandSpec {
 			]
 			run:     run_store_rotate_kek
 		},
+		SubcommandSpec{
+			name:    'store-mint-principal'
+			summary: 'Mint an XSP-AUTH principal offline (seed file + [grant …] stanza).'
+			help:    [
+				'Usage: cx store-mint-principal --id NAME --seed-file PATH --caps "read write"',
+				'                               [--for grant|identity] [--force]',
+				'',
+				'Mints one XSP-AUTH principal entirely OFFLINE — the clean-state bootstrap',
+				'for a deny-by-default daemon. Generates an Ed25519 seed, derives its',
+				'did:key, writes the seed to PATH (mode 0600; never printed), and prints',
+				'the daemon-config row for the service config\'s [xsp ...] section plus',
+				'the client\'s xsp-did / xsp-seed-env open-opts.',
+				'',
+				'Nothing transits a wire and no store is opened. Config remains the SOLE',
+				'authority: the minted principal is inert until an operator splices the',
+				'printed grant into the daemon config.',
+				'  --id NAME         principal name; derives the seed env var CX_XSP_SEED_<NAME>',
+				'  --seed-file PATH  where the 32-byte seed lands, as hex, mode 0600',
+				'  --caps CLASSES    REQUIRED for --for grant: space-separated capabilities',
+				'                    for the printed row (read write delete admin peer).',
+				'                    There is no default — the authority a grant carries is',
+				'                    an explicit choice at mint time. Refused with',
+				'                    --for identity, whose row carries no caps.',
+				'  --for ROW         which daemon row to print: `grant` (default) = the',
+				'                    [xsp [grants [grant ...]]] row authorizing this',
+				'                    principal; `identity` = the daemon\'s OWN',
+				'                    [xsp [identity did= seed-env=]] responder row',
+				'  --force           replace an existing seed file (invalidates its DID)',
+				'',
+				'--id must be the CANONICAL spelling of its env var: lowercase, `-` for',
+				'word breaks. CX_XSP_SEED_<NAME> upper-cases the id and folds `-` to `_`,',
+				'so `fleet-ops`, `fleet_ops`, `Fleet-Ops` and `FLEET_OPS` would all derive',
+				'CX_XSP_SEED_FLEET_OPS — two principals minted under two of those spellings',
+				'would silently share ONE seed variable, and only the last one exported',
+				'would work. Accepting the canonical spelling alone makes the derivation',
+				'collision-free by construction; the others are refused, naming both the',
+				'canonical id and the env var they would have shared.',
+			]
+			run:     run_store_mint_principal
+		},
 	]
 }

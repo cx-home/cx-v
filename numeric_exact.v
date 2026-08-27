@@ -484,6 +484,80 @@ pub fn cx_exact_int_divmod(a string, b string) !(string, string) {
 	return qs, rs
 }
 
+// cx_exact_mod computes the EXACT remainder `a − b × trunc(a/b)` over two
+// decimal/bigint images, with the SIGN OF THE DIVIDEND (XPath 3.1 §3.5, the
+// same rule the int and float lanes already follow) and scale max(s₁,s₂).
+//
+// The scale is not a free choice — L44 forces it by composition. The
+// remainder IS a subtraction (`a − b×q`), `q` is integral so `b×q` carries
+// scale s₂ (L44's `×` rule: s₁+s₂ with s(q)=0), and L44's `−` rule is
+// max(s₁,s₂). Hence max(s₁,s₂), which is exactly the common scale the two
+// operands align to below.
+//
+// Unlike `÷`, this ALWAYS terminates and is ALWAYS exact — the quotient is
+// truncated to an integer, so no rounding context is ever needed and
+// CXER3002 cannot arise. Aligning both operands to the common scale makes
+// their digit strings integers, so one integer divmod yields the remainder.
+pub fn cx_exact_mod(a string, b string) !string {
+	aa := cx_exact_parse(a)
+	bb := cx_exact_parse(b)
+	if bb.digits == '0' {
+		return error('division by zero')
+	}
+	sc := if aa.scale > bb.scale { aa.scale } else { bb.scale }
+	mut ad := aa.digits
+	mut bd := bb.digits
+	for _ in 0 .. sc - aa.scale {
+		ad += '0'
+	}
+	for _ in 0 .. sc - bb.scale {
+		bd += '0'
+	}
+	_, r := dg_divmod(dg_trim(ad), dg_trim(bd))
+	return CxExact{
+		neg:    aa.neg && r != '0'
+		digits: r
+		scale:  sc
+	}.render()
+}
+
+// cx_exact_idiv computes the EXACT integral quotient `trunc(a/b)` over two
+// decimal/bigint images — `[$idiv]`'s exact-family lane (#1044) and the
+// complement of cx_exact_mod above: `a = b × idiv(a,b) + mod(a,b)` holds by
+// construction, both truncating toward zero (code.md §6.5 / XPath 3.1 §3.5).
+//
+// Like `%` and UNLIKE `÷`, this ALWAYS terminates and is ALWAYS exact, so no
+// rounding context is ever needed and CXER3002 cannot arise here: `idiv` does
+// not ASK for the quotient's fractional part, and truncation toward zero is
+// §6.5's own already-normative rounding, not an invented one. L44 leaves the
+// scale/mode question open only for `÷`, which is a different question.
+//
+// Aligning both operands to the common scale makes their digit strings
+// integers whose shared 10^k factor cancels in the quotient, so a single
+// integer divmod yields it — and the quotient is integral, hence scale 0.
+pub fn cx_exact_idiv(a string, b string) !string {
+	aa := cx_exact_parse(a)
+	bb := cx_exact_parse(b)
+	if bb.digits == '0' {
+		return error('division by zero')
+	}
+	sc := if aa.scale > bb.scale { aa.scale } else { bb.scale }
+	mut ad := aa.digits
+	mut bd := bb.digits
+	for _ in 0 .. sc - aa.scale {
+		ad += '0'
+	}
+	for _ in 0 .. sc - bb.scale {
+		bd += '0'
+	}
+	q, _ := dg_divmod(dg_trim(ad), dg_trim(bd))
+	return CxExact{
+		neg:    aa.neg != bb.neg && q != '0'
+		digits: q
+		scale:  0
+	}.render()
+}
+
 // cx_decimal_image_from_float renders a finite double as a FIXED-POINT
 // decimal image (L44 float→decimal cast: shortest-round-trip digits per
 // Ryū/L18, expanded — the decimal surface has no exponent form). none for

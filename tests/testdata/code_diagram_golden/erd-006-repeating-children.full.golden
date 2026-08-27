@@ -6,10 +6,10 @@ erDiagram
   }
   user ||--o{ order : has
   user {
-    int id "@ 1"
+    int id "1"
   }
   order {
-    int id "@ 100, 101"
-    decimal total "@ 42.0, 13.5"
+    int id "100, 101"
+    decimal total "42.0, 13.5"
     string note "appears 2× depth 1"
   }

@@ -591,6 +591,25 @@ fn store_sqlite_open(url string, compression string, encoding string, read_only 
 	}
 	comp := if compression == '' { 'none' } else { compression }
 	enc := if encoding == '' { 'cxbin' } else { encoding }
+	// #891 same-root sharing, as for file/cxobj/cxpack (#628). Two writable
+	// opens of one sqlite file are two independent connections whose in-memory
+	// views drift the moment either writes, and the later flush wins over rows
+	// the other believes it owns. A shared live view is the sound multi-handle
+	// shape; divergent at-rest options are a loud refusal.
+	if r := store_open_shared_or_conflict('sqlite', path, read_only,
+		'${enc_key_id}|${model}|${enc}|${comp}|')
+	{
+		return r
+	}
+	// #1005: the same argument reaches ACROSS processes, where the in-process
+	// registry cannot. Two writable opens of one sqlite file in two processes
+	// are two connections whose views diverge on the first write and whose
+	// later flush wins over rows the other believes it owns — with nothing
+	// in-process to dedupe them. The sentinel is a sibling of the db file.
+	slk, slerr, slok := store_root_lock_take('sqlite', path, read_only, url)
+	if !slok {
+		return slerr
+	}
 	mut ms := &MemStore{
 		url:         url
 		backend:     'sqlite'
@@ -602,10 +621,12 @@ fn store_sqlite_open(url string, compression string, encoding string, read_only 
 		op_lock:     sync.new_mutex()
 		model:       model
 		enc_key_id:  enc_key_id
+		lock_key:    slk
 	}
 	// Eager integrity: a corrupt object row makes the affected doc fail HARD at open
 	// (#129-C / spec §4), never a silent partial store.
 	store_sqlite_load(mut ms) or {
+		store_root_unlock(slk)
 		return mk_err('cx-err:CXER1120', 'E_STORE_INTEGRITY_MISMATCH: ${err.msg()}')
 	}
 	id := store_register(ms)

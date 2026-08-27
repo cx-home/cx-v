@@ -719,8 +719,12 @@ pub enum ScalarType {
 	// XML image is ISO 8601 (PT1H30M / P10D ; P1Y2M).
 	duration_type
 	period_type
-	// atom — tag-shaped scalar, surface `:NAME`,
-	// type-strict (atom never equals string of same characters). The
+	// atom — tag-shaped scalar, surface `:NAME`. Type-strict at the
+	// IDENTITY layer (strict-canonical form, hash, structural node
+	// equality: an atom and the same-named string are distinct values
+	// with distinct addresses). The [$eq] builtin is the OTHER notion —
+	// VALUE equality under the atomization policy (compare atomizes), so
+	// there `:ops` and 'ops' compare equal (RULED: CO-11). The
 	// ScalarValue payload is a `string` carrying the atom's name
 	// (without the leading `:`). See spec/cxdm.md §2.2 / §4.1.
 	atom_type

@@ -16,9 +16,12 @@ module code
 // What remains here is the level vocabulary and three thin entry
 // points; nothing in this file produces a byte of diagram text.
 //
-// Bit-for-bit: vcx/tests/code_diagram_golden_test.v pins 264 goldens
-// (88 sources × 3 levels) captured from the V emitter before the
-// cutover; the CX renderer matches every one byte-for-byte.
+// Bit-for-bit: vcx/tests/code_diagram_golden_test.v pins 282 goldens
+// (94 sources × 3 levels) captured from the V emitter before the
+// cutover; the CX renderer matches every one byte-for-byte. The pin
+// corpus has grown since the cutover — every addition under a named
+// ledger ruling, the goldens themselves never rewritten (#1032 /
+// RULED: SEQ-3/SEQ-4 added the let-bound-spine SEQ pair).
 
 // DiagramLevel controls the verbosity of `cx_code_diagram` output.
 // Three rungs: `min` strips to shape-only; `compact` is the default

@@ -88,6 +88,14 @@ __global (
 	// xap_sse_lock with the subscriber set.
 	xap_sse_delta map[int]bool
 	xap_sse_fdseq map[int]u64
+	// #994 host-boot ordering: pumps whose §3.1.2 subscription is OPEN (so a
+	// bad binding still refuses at run assembly) but which have not been
+	// ARMED — they must not consume until the composing layer has finished
+	// wiring the runtime's authority. rt_id → the held pumps; the entry is
+	// removed by xap_arm_source_pumps (spawn them) or by
+	// xap_abandon_source_pumps (never spawn them).
+	xap_pending_pumps map[int][]XapSourcePump
+	xap_pump_lock     &sync.Mutex
 	// SSE-1 (xsp.md §4.1): fds that negotiated the XSP-envelope carriage
 	// (GET /events?envelope=xsp, GET /stream?envelope=xsp) — each frame's
 	// data: field is base64(XSP event frame) carrying byte-for-byte the text
@@ -439,9 +447,13 @@ mut:
 	scope    &Scope        = unsafe { nil }
 }
 
-// xap_start_source_pumps resolves each §3.1.2 source-binding map, opens its
-// subscription NOW (a bad binding refuses at run, never at first delivery),
-// and spawns its pump. Returns the refusal err VALUE, or none when running.
+// xap_start_source_pumps resolves each §3.1.2 source-binding map and opens its
+// subscription NOW (a bad binding refuses at run, never at first delivery).
+// Returns the refusal err VALUE, or none when every binding opened.
+//
+// #994: opening is NOT consuming. The pump is HELD here and starts at
+// xap_arm_source_pumps — the direct `[$xap:run]` lane arms before it returns
+// (unchanged behavior), a composing caller arms once it has wired authority.
 fn xap_start_source_pumps(rt_id int, sources []cx.Node, tenant string, mut env MatchEnv) ?cx.Node {
 	for s in sources {
 		if s !is cx.Element || (s as cx.Element).name != '__cx_map__' {
@@ -527,9 +539,55 @@ fn xap_start_source_pumps(rt_id int, sources []cx.Node, tenant string, mut env M
 			state:    unsafe { env.state }
 			scope:    env.scope
 		}
-		spawn xap_source_pump_loop(p)
+		xap_pump_lock.lock()
+		// read-modify-write, not `map[k] << v`: appending through a map value
+		// that contains pointers refuses under -prod's stricter check (the
+		// break hid wherever a worktree without third_party/v/v silently
+		// dropped PROD_FLAGS — found by #993's pinned-V build).
+		mut held := xap_pending_pumps[rt_id] or { []XapSourcePump{} }
+		held << p
+		xap_pending_pumps[rt_id] = held
+		xap_pump_lock.unlock()
 	}
 	return none
+}
+
+// xap_arm_source_pumps starts every pump held for this runtime (#994). The
+// caller is asserting that the runtime's authority is wired: from here on a
+// PEP denial on an ingested entry is a real authority decision, not a boot
+// race, and §3.1.2's skip-and-ack applies to it.
+//
+// Idempotent: a second call finds nothing held and spawns nothing.
+fn xap_arm_source_pumps(rt_id int) {
+	xap_pump_lock.lock()
+	held := xap_pending_pumps[rt_id] or { []XapSourcePump{} }
+	xap_pending_pumps.delete(rt_id)
+	xap_pump_lock.unlock()
+	for p in held {
+		spawn xap_source_pump_loop(p)
+	}
+}
+
+// xap_abandon_source_pumps discards the pumps held for a runtime whose boot
+// FAILED after run assembly (#994) — the composing layer never reached the
+// point where it could honestly say the PEP was wired.
+//
+// The policy for the boot window is NOT skip-and-ack and NOT an in-pump retry:
+// it is "never consumed, and said out loud". Nothing was received, so nothing
+// was acked, so the group's committed offset is exactly where the failed boot
+// found it and every entry stays redeliverable to the next boot of the same
+// group — redelivery by construction, with no way to wedge a live group on a
+// permanent denial. The refusal is loud because a binding a deployment
+// declared and this process will not serve must never look like a quiet
+// no-op (distribution spec §6.3.1).
+fn xap_abandon_source_pumps(rt_id int, why string) {
+	xap_pump_lock.lock()
+	held := xap_pending_pumps[rt_id] or { []XapSourcePump{} }
+	xap_pending_pumps.delete(rt_id)
+	xap_pump_lock.unlock()
+	for p in held {
+		eprintln('cx-xap: source binding "${p.stream}" (verb ${p.verb}) never consumed: ${why} — the subscription opened but the runtime\'s authority was never wired, so NOTHING was received and NOTHING was acked; the group\'s entries stay redeliverable to the next boot (#994)')
+	}
 }
 
 // xap_entry_seq reads an [entry]'s seq attribute as an int (-1 when absent).
@@ -628,6 +686,13 @@ fn xap_source_pump_loop(pp XapSourcePump) {
 			results := xap_emit_batch_into(mut rt, b_intents, b_optss, mut env)
 			for i, res in results {
 				if res is cx.Element && is_err_value(res) {
+					// #994: a pump only ever runs ARMED, so this denial is a
+					// real authority decision over a wired PEP, never the
+					// boot race. Skip-and-ack stays — deny-by-default must
+					// not wedge the group on a permanent refusal — but it is
+					// said OUT LOUD as well as journaled into rt.log: an
+					// entry the runtime drops is never silent (§3.1.2).
+					eprintln('cx-xap: source pump "${p.stream}" seq ${b_seqs[i]} DENIED, skipped and acked: ${xap_err_message(res)}')
 					rt.log << cx.Node(xap_elem('source-denied', [
 						xap_attr('stream', p.stream),
 						xap_attr('seq', b_seqs[i].str()),

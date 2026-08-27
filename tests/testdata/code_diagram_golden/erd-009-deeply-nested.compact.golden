@@ -9,5 +9,5 @@ erDiagram
   para {
   }
   span {
-    int id "@"
+    int id "e.g. 1"
   }

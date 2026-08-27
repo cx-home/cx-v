@@ -132,7 +132,7 @@ $e1]
 ($e1, [$count $none], $st)]
 #]]
    [out-text [#
-(([child-exited name=t reason=:done]), 0, [supervisor-status restarts-in-window=0 ([child name=t state=stopped attempts=0])])
+(([child-exited name=t reason=:done]), 0, [supervisor-status restarts-in-window=0 [child name=t state=stopped attempts=0]])
 #]]
   ]
 
@@ -337,8 +337,11 @@ $e1]
 [= $e2 [?receive from=$ev max=2 deadline=8000]]
 [= $term [?receive from=$mon max=1 deadline=8000]]
 [= $t [$first $term]]
-[= $cause [$first $t/err/cause/*]]
-($e2, [escalates code=$cause@code])]
+[= $causes $t/err/cause/*]
+[= $cause [$first $causes]]
+[= $code [?if [= [$count $term] 0] [then :no-terminal-within-deadline]
+  [else [?if [= [$count $causes] 0] [then :terminal-without-cause] [else $cause@code]]]]]
+($e2, [escalates code=$code])]
 #]]
    [out-text [#
 (([child-exited name=a reason=:panicked err-code=cx-err:CXER0100], [gave-up restarts=1 window-ms=5000]), [escalates code=cx-err:CXER5094])
@@ -366,8 +369,7 @@ $e1]
 [= $_k2 [?send [die] to=$cs]]
 [= $e1 [?receive from=$evP max=3 deadline=12000]]
 [= $st [$sup:status $sP]]
-[= $rows [$first $st/*]]
-[= $r1 [$first $rows]]
+[= $r1 [$first $st/*]]
 [= $_ [$sup:stop $sP]]
 ($e1, [subtree state=$r1@state])]
 #]]
@@ -444,7 +446,7 @@ $e1]
 ($r, $e1, $st)]
 #]]
    [out-text [#
-([ok], ([child-started name=b attempt=0]), [supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0], [child name=b state=running attempts=0])])
+([ok], ([child-started name=b attempt=0]), [supervisor-status restarts-in-window=0 [child name=a state=running attempts=0] [child name=b state=running attempts=0]])
 #]]
   ]
 
@@ -468,7 +470,7 @@ $e1]
 ($r1, $r2, $e1, $st)]
 #]]
    [out-text [#
-(true, false, ([child-exited name=b reason=:cancelled]), [supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0])])
+(true, false, ([child-exited name=b reason=:cancelled]), [supervisor-status restarts-in-window=0 [child name=a state=running attempts=0]])
 #]]
   ]
 
@@ -485,7 +487,7 @@ $e1]
 $st]
 #]]
    [out-text [#
-[supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0])]
+[supervisor-status restarts-in-window=0 [child name=a state=running attempts=0]]
 #]]
   ]
 
@@ -592,7 +594,7 @@ $r]
 ($r1, $r2, $r3, $st)]
 #]]
    [out-text [#
-([refused code=cx-err:CXER5093], [refused code=cx-err:CXER5093], [refused code=cx-err:CXER5093], [supervisor-status restarts-in-window=0 ([child name=a state=stopped attempts=0])])
+([refused code=cx-err:CXER5093], [refused code=cx-err:CXER5093], [refused code=cx-err:CXER5093], [supervisor-status restarts-in-window=0 [child name=a state=stopped attempts=0]])
 #]]
   ]
 
@@ -647,9 +649,8 @@ $e]
 [= $kid [child name="b" [fn [?fn () [?receive from=$c2]]]]]
 [= $r [$sup:start-child $s $kid]]
 [= $st [$sup:status $s]]
-[= $rows [$first $st/*]]
 [= $_ [$sup:stop $s]]
-($r, [$count $rows])]
+($r, [$count $st/*])]
 #]]
    [out-text [#
 ([ok], 2)
@@ -687,7 +688,7 @@ $e]
 $st]
 #]]
    [out-text [#
-[supervisor-status restarts-in-window=0 ([child name=a state=running attempts=0])]
+[supervisor-status restarts-in-window=0 [child name=a state=running attempts=0]]
 #]]
   ]
 

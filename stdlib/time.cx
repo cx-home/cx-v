@@ -415,7 +415,7 @@
   [sig """-> float"""]
   [summary """Return the duration as a fractional count of hours."""]
   [example [code """[?lib 'cx-stdlib/time']
-[$time:duration-total-h [$time:duration-h 2]]"""] [expect """2.0"""]]
+[$time:duration-total-h [$time:duration-h 2]]"""] [expect """2.0e0"""]]
 ]
 [fn-doc name=duration-add scope=public purity=pure
   [sig """-> duration"""]

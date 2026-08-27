@@ -1463,6 +1463,7 @@ cx-err:CXER5075
 
  [case id=live-067-m5-commerce-end-to-end level=core grant='eval read write'
   [tags live m5 commerce end-to-end query changes-since materialize observe adapter stream-3]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [in-cx [#
 [empty]
 #]]
@@ -1494,10 +1495,10 @@ cx-err:CXER5075
 [= $r [$live:read $m]]
 [= $fresh [?for [in $o [$store:source $db "//order"]] [= $amt $o@amt] [group-by $o@region] [yield [rev region=$key total=[$sum $group/amt] n=$count]]]]
 [= $rows [?for [in $x $r/rev] [yield $x]]]
-  ([query $rev1], [dashboard $c2], [agent rung=$sub@rung new=$agent-sees], [maintained $adv1 $adv2 eq=[$cx:equal $rows $fresh]], $r)]
+  ([query [?splice $rev1]], [dashboard $c2], [agent rung=$sub@rung new=$agent-sees], [maintained $adv1 $adv2 eq=[$cx:equal $rows $fresh]], $r)]
 #]]
   [out-text [#
-([query ([rev region=east total=10 n=1], [rev region=west total=5 n=1])], [dashboard [changes [head-set [s source=orders pos=3]] [regroup pos=0 [rev region=east total=17 n=2]]]], [agent rung=':snapshot-diff' new=1], [maintained eq=true [advanced applied=2 recomputed=false [head-set [s source=orders pos=4]]] [advanced applied=0 recomputed=false [head-set [s source=orders pos=4]]]], [snapshot [head-set [s source=orders pos=4]] [rev region=west total=5 n=1] [rev region=east total=7 n=1]])
+([query [rev region=east total=10 n=1] [rev region=west total=5 n=1]], [dashboard [changes [head-set [s source=orders pos=3]] [regroup pos=0 [rev region=east total=17 n=2]]]], [agent rung=':snapshot-diff' new=1], [maintained eq=true [advanced applied=2 recomputed=false [head-set [s source=orders pos=4]]] [advanced applied=0 recomputed=false [head-set [s source=orders pos=4]]]], [snapshot [head-set [s source=orders pos=4]] [rev region=west total=5 n=1] [rev region=east total=7 n=1]])
 #]]
  ]
 ]

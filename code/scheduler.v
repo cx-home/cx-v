@@ -161,18 +161,15 @@ fn settle(mut tasks []&TaskRecord, mut env MatchEnv) {
 			t.state = 'ready'
 		}
 	}
-	// Snapshot the bulkhead map under the read lock; we mutate via the
-	// per-entry write helper so concurrent worker `bh_set` calls don't
-	// race with the iteration.
+	// Snapshot the bulkhead map under the read lock so the iteration
+	// doesn't race with worker writes. Each grant is then one atomic
+	// pop-and-promote (#1050): the former shape re-read the record,
+	// mutated the local copy and wrote it back, so a worker releasing a
+	// slot between the read and the write had its decrement clobbered.
 	snapshot := env.state.bh_snapshot_all()
 	for name, _ in snapshot {
-		mut rec := env.state.bh_get(name)
-		for rec.in_flight < rec.max_concurrent && rec.wait_queue.len > 0 {
-			granted_id := rec.wait_queue[0]
-			rec.wait_queue.delete(0)
-			rec.queued--
-			rec.in_flight++
-			env.state.bh_set(name, rec)
+		for {
+			granted_id := env.state.bh_grant_next(name) or { break }
 			for mut t in tasks {
 				if t.id == granted_id && t.state == 'bulkhead_queued'
 				   && t.queued_bulkhead == name {
@@ -181,7 +178,6 @@ fn settle(mut tasks []&TaskRecord, mut env MatchEnv) {
 					break
 				}
 			}
-			rec = env.state.bh_get(name)
 		}
 	}
 }

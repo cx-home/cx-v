@@ -11,6 +11,7 @@ import code
 import cx
 import os
 import platform as _
+import strings
 import x.json2
 
 // ── source: vcx/tests/code_api_test.v ──
@@ -319,10 +320,15 @@ fn test_erd_attributes_become_attr_rows() {
 	out := code.code_diagram("[user id=1 name='alice']") or {
 		panic('emit: ${err}')
 	}
-	// The @ sigil rides the Mermaid row comment (`int id "@"`) — a name
-	// prefix violates erDiagram's ATTRIBUTE_WORD grammar (example 165).
-	assert has_line(out, 'int id "@"')
-	assert has_line(out, 'string name "@"')
+	// The row comment carries the OBSERVED VALUE (#992). It used to carry
+	// the bare `@` sigil — the CX marker sitting where a value belongs,
+	// saying nothing. A name PREFIX is still impossible: both erDiagram
+	// columns are ATTRIBUTE_WORDs (example 165), so the value has to ride
+	// the comment. These two assertions are the pair #992 missed when it
+	// moved 44 goldens and 14 conformance blocks into the new shape; they
+	// were red at d31607323 (measured) until this line.
+	assert has_line(out, 'int id "e.g. 1"'), out
+	assert has_line(out, 'string name "e.g. alice"'), out
 }
 
 fn test_erd_repeating_children_yield_one_to_many() {
@@ -348,8 +354,12 @@ fn test_erd_scalar_children_inline_as_rows() {
   [phone '555-0100']
 ]"
 	out := code.code_diagram(src) or { panic('emit: ${err}') }
-	assert has_line(out, 'string email')
-	assert has_line(out, 'string phone')
+	// A scalar child fills the value column too (#992) — the slot is driven
+	// by whether a row HAS a value, not by whether it came from an
+	// attribute, so these rows no longer sit blank beside the ones that
+	// fill it. Second half of the pair #992 missed; red at d31607323.
+	assert has_line(out, 'string email "e.g. a@x.test"'), out
+	assert has_line(out, 'string phone "e.g. 555-0100"'), out
 }
 
 // ── CFG — for-loop ────────────────────────────────────
@@ -2968,9 +2978,13 @@ fn test_directive_colon_surface_decomposes_as_atoms() {
 
 fn test_directive_with_nested_element_body() {
 	// Directive bodies recurse through nested clause elements. The
-	// `[then …]`/`[else …]` clauses surface as element children; the
-	// operator-headed condition `[> …]` has no valid element name and
-	// surfaces as an anonymous `_` element (pre-existing walker trait).
+	// `[then …]`/`[else …]` clauses surface as element children, and the
+	// operator-headed condition `[> …]` carries its GLYPH head as its
+	// element name — `>` is one of the ruled 18 (#976) and reaches the
+	// walker through `operator_head_len`, the alphabet's single home
+	// (#992). The comment here used to record the pre-#992 `_` reading and
+	// the assertion never checked the name, so nothing in this lane held
+	// the fixed behavior down.
 	source := '[?if [> \$x 0] [then T] [else E]]'
 	out := cx.code_tree(source) or { panic('${err}') }
 	n := get_obj(parse_json(out))
@@ -2978,7 +2992,10 @@ fn test_directive_with_nested_element_body() {
 	assert n['name']!.str() == 'if'
 	children := n['children']!.as_array()
 	assert children.len == 3
-	assert kind_of(children[0].as_map()) == 'element'
+	c_cond := children[0].as_map()
+	assert kind_of(c_cond) == 'element'
+	assert c_cond['name']!.str() == '>', 'operator head lost from the directive body: ${out}'
+	assert c_cond['children']!.as_array().len == 2, 'operator operands lost: ${out}'
 	c_then := children[1].as_map()
 	c_else := children[2].as_map()
 	assert kind_of(c_then) == 'element' && c_then['name']!.str() == 'then'
@@ -3055,21 +3072,29 @@ fn test_element_eq_attr_then_atom() {
 	assert t['value']!.str() == 'alice'
 }
 
-fn test_bare_ident_without_eq_stays_scalar() {
-	// A bare identifier with no `=` must NOT be reclassified as an
-	// attribute — it stays a scalar child (covers `true`, keywords,
-	// bare function names, etc.).
+fn test_bare_ident_without_eq_joins_the_prose_run() {
+	// FLIPPED at #1029 (was test_bare_ident_without_eq_stays_scalar, which
+	// pinned three scalar children). The original claim still holds and is
+	// asserted below — a bare identifier with no `=` is NEVER reclassified as
+	// an attribute — but the arity it pinned was the walker's, not the
+	// parser's: `hello` does not auto-type, so ONE bareword makes the WHOLE
+	// body prose (G-BODY-1), and `[doc true false hello]` is a single Text item
+	// `"true false hello"` to the data parser (verified `--from=cx --ast`).
+	// `true` and `false` are not two typed children here — the typed-list
+	// production refuses this body precisely because `hello` is in it.
 	source := '[doc true false hello]'
 	out := cx.code_tree(source) or { panic('${err}') }
 	n := get_obj(parse_json(out))
 	children := n['children']!.as_array()
-	assert children.len == 3
-	for c in children {
-		assert kind_of(c.as_map()) == 'scalar'
-	}
-	assert children[0].as_map()['value']!.bool() == true
-	assert children[1].as_map()['value']!.bool() == false
-	assert children[2].as_map()['value']!.str() == 'hello'
+	assert children.len == 1, 'the prose run is ONE item, got ${children.len}: ${out}'
+	c := children[0].as_map()
+	assert kind_of(c) == 'text', 'a prose run is a text node: ${out}'
+	assert c['value']!.str() == 'true false hello', out
+	assert !out.contains('"kind":"attribute"'), 'no bareword became an attribute: ${out}'
+	s := loc_start(c)
+	e := loc_end(c)
+	assert source[s..e] == 'true false hello', 'loc must span the run, got ${source[s..e]}'
+	validate_loc_recursive(n, source)
 }
 
 fn test_scalar_int_top_level() {
@@ -3254,6 +3279,1351 @@ fn test_deeply_nested_elements() {
 		} else { break }
 	}
 	assert depth == 5
+}
+
+// ── Triple-quoted strings (#999) ───────────────────────────────────────
+//
+// The walker knew only the single-delimiter string form, so `'''body'''`
+// read as an EMPTY string followed by a fresh opener. Two symptoms, both
+// pinned below: an attribute took `''` as its value while the real body
+// re-appeared as sibling `text` nodes (the value DETACHED from the
+// attribute it belongs to, plus a spurious empty `text`), and a body
+// carrying an odd number of delimiter bytes left the bracket walker inside
+// a phantom string, which swallowed the closing `]` and reported the whole
+// element `unbalanced`.
+
+fn test_triple_quoted_attribute_value_stays_with_its_attribute() {
+	// The #999 repro, verbatim. ONE child: the attribute, carrying its own
+	// value. No sibling `text` nodes are synthesised for it.
+	source := "[doc body='''line 1\nline 2\nline 3''']"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'element'
+	assert n['name']!.str() == 'doc'
+	children := n['children']!.as_array()
+	assert children.len == 1, 'expected exactly the attribute, got ${children.len} children: ${out}'
+	a := children[0].as_map()
+	assert kind_of(a) == 'attribute'
+	assert a['name']!.str() == 'body'
+	assert a['value']!.str() == 'line 1\nline 2\nline 3'
+	// loc spans the whole authored literal, delimiters included, so the
+	// source↔tree bridge selects `body='''…'''` and not just its interior.
+	s := loc_start(a)
+	e := loc_end(a)
+	assert source[s..e] == "body='''line 1\nline 2\nline 3'''", 'attribute loc must span the authored form, got ${source[s..e]}'
+}
+
+fn test_triple_quoted_double_delimiter_attribute_value() {
+	source := '[doc body="""a\nb"""]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 1, 'expected exactly the attribute, got ${children.len}'
+	a := children[0].as_map()
+	assert kind_of(a) == 'attribute'
+	assert a['value']!.str() == 'a\nb'
+}
+
+fn test_triple_quoted_attribute_value_is_dedented() {
+	// The value is what the DATA parser binds: strip_common_indent applied
+	// (grammar [10b]) — one shared rule, not a second copy in the walker.
+	source := "[doc body='''\n    alpha\n    beta\n    ''']"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	a := n['children']!.as_array()[0].as_map()
+	assert a['value']!.str() == 'alpha\nbeta', 'expected the dedented body, got ${a['value']!.str()}'
+}
+
+fn test_raw_triple_quoted_attribute_value_is_verbatim() {
+	// The RAW `r'''…'''` form (I1 L58) SKIPS the dedent, and its `r` is part
+	// of the literal — not a one-letter bareword scalar.
+	source := "[doc body=r'''\n    alpha\n    beta\n    ''']"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 1, 'expected exactly the attribute, got ${children.len}'
+	a := children[0].as_map()
+	assert kind_of(a) == 'attribute'
+	assert a['value']!.str() == '\n    alpha\n    beta\n    ', 'raw form must not dedent, got ${a['value']!.str()}'
+}
+
+fn test_triple_quoted_body_is_one_text_node() {
+	// Body position had the same defect: three `text` children, two empty.
+	source := "[doc '''line 1\nline 2''']"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 1, 'expected one text node, got ${children.len}: ${out}'
+	t := children[0].as_map()
+	assert kind_of(t) == 'text'
+	assert t['value']!.str() == 'line 1\nline 2'
+}
+
+fn test_triple_quoted_top_level_is_one_text_node() {
+	source := "'''hello'''"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	// A single top-level statement returns its own node verbatim — so a
+	// LONE triple-quoted string is the text node itself, not a wrapping root.
+	assert kind_of(n) == 'text', 'expected a lone text node, got ${out}'
+	assert n['value']!.str() == 'hello'
+	assert loc_start(n) == 0 && loc_end(n) == source.len
+}
+
+fn test_triple_quoted_value_with_odd_delimiter_byte_keeps_element_balanced() {
+	// `it's` carries a lone `'`. The single-delimiter scanner desynced on it
+	// and the whole element came back as `{"kind":"element","name":"unbalanced"}`,
+	// losing the element name and every sibling attribute with it.
+	source := "[doc body='''it's here''' tail=1]"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'element'
+	assert n['name']!.str() == 'doc', 'element name lost — got ${out}'
+	children := n['children']!.as_array()
+	assert children.len == 2, 'expected both attributes, got ${children.len}: ${out}'
+	a0 := children[0].as_map()
+	a1 := children[1].as_map()
+	assert a0['name']!.str() == 'body' && a0['value']!.str() == "it's here"
+	assert a1['name']!.str() == 'tail' && a1['value']!.int() == 1
+}
+
+fn test_triple_quoted_value_carrying_a_close_bracket() {
+	// A `]` inside the literal is content. The bracket matcher must skip the
+	// literal whole to find the element's real closer.
+	source := "[doc body='''a]b''' tail=2]"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert n['name']!.str() == 'doc'
+	children := n['children']!.as_array()
+	assert children.len == 2, 'expected both attributes, got ${children.len}: ${out}'
+	assert children[0].as_map()['value']!.str() == 'a]b'
+	assert children[1].as_map()['value']!.int() == 2
+}
+
+fn test_triple_quoted_loc_resolves_to_the_authored_literal() {
+	source := "[doc '''body''']"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	validate_loc_recursive(n, source)
+	t := n['children']!.as_array()[0].as_map()
+	s := loc_start(t)
+	e := loc_end(t)
+	assert source[s..e] == "'''body'''", 'text loc must span the delimiters, got ${source[s..e]}'
+}
+
+fn test_unterminated_triple_quote_recovers_without_raising() {
+	// Malformed sources degrade; they never raise (the walker's contract).
+	source := "[doc body='''oops"
+	out := cx.code_tree(source) or { panic('${err}') }
+	_ := json2.decode[json2.Any](out) or {
+		panic('emitter produced invalid JSON: ${err.msg()}')
+	}
+}
+
+// ── Sequence literals (#1000) ──────────────────────────────────────────
+//
+// `(1, 2, 3)` reached the walker's unrecognized-byte recovery one byte at
+// a time, so the literal arrived as SEVEN scalar children — `(`, 1, `,`,
+// 2, `,`, 3, `)` — and the delimiters were indistinguishable from a string
+// item that genuinely is `","`, so no consumer could filter them out
+// either. The items now land in the enclosing children list (CXDM §1
+// sequence-flat) and the punctuation is not emitted at all.
+
+fn test_sequence_literal_emits_items_not_punctuation() {
+	// The #1000 repro, verbatim: three item children, not 2n+1 nodes.
+	source := '(1, 2, 3)'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'element'
+	assert n['name']!.str() == 'root'
+	children := n['children']!.as_array()
+	assert children.len == 3, 'expected 3 items, got ${children.len}: ${out}'
+	for i, want in [i64(1), 2, 3] {
+		c := children[i].as_map()
+		assert kind_of(c) == 'scalar'
+		assert c['value']!.int() == want
+	}
+	// And no node anywhere carries a delimiter as its value.
+	for c in children {
+		v := c.as_map()['value']!.str()
+		assert v != '(' && v != ')' && v != ',', 'punctuation leaked as a value: ${out}'
+	}
+	validate_loc_recursive(n, source)
+}
+
+fn test_sequence_literal_in_element_body_flattens_beside_siblings() {
+	// A sequence in element-body position flattens into the enclosing
+	// sequence (CXDM §1), so `doc` has four children, not two plus syntax.
+	source := '[doc (1, 2, 3) x]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert n['name']!.str() == 'doc'
+	children := n['children']!.as_array()
+	assert children.len == 4, 'expected 3 items + 1 sibling, got ${children.len}: ${out}'
+	assert children[0].as_map()['value']!.int() == 1
+	assert children[1].as_map()['value']!.int() == 2
+	assert children[2].as_map()['value']!.int() == 3
+	// AMENDED at #1029: the trailing sibling is the prose run ` x`, and the
+	// LEADING SPACE is the parser's own — a run following a non-text sibling
+	// opens with the separator space (`{"type":"Text","value":" x"}` in
+	// `--from=cx --ast`), which the walker now reproduces instead of trimming.
+	assert children[3].as_map()['value']!.str() == ' x'
+}
+
+fn test_nested_sequence_literal_flattens() {
+	// `((1, 2), 3)` is a THREE-item sequence — the same splice
+	// `parse_sequence_literal` performs at the SequenceNode boundary
+	// (CXDM §1.2), so the walker and the data parser agree on the arity.
+	source := '((1, 2), 3)'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 3, 'nested sequence must flatten to 3 items, got ${children.len}: ${out}'
+	assert children[0].as_map()['value']!.int() == 1
+	assert children[1].as_map()['value']!.int() == 2
+	assert children[2].as_map()['value']!.int() == 3
+}
+
+fn test_empty_sequence_literal_has_no_children() {
+	source := '()'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'element' && n['name']!.str() == 'root'
+	children := n['children']!.as_array()
+	assert children.len == 0, 'the empty sequence carries no items, got ${out}'
+}
+
+fn test_sequence_literal_item_string_containing_a_comma() {
+	// The `,` inside a quoted item is CONTENT. Before, an item that genuinely
+	// is `","` was indistinguishable from the separator; now only real items
+	// are emitted, and the comma-carrying string survives whole.
+	source := "(a, 'b, c', :ok, true)"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 4, 'expected 4 items, got ${children.len}: ${out}'
+	assert children[0].as_map()['value']!.str() == 'a'
+	assert kind_of(children[1].as_map()) == 'text'
+	assert children[1].as_map()['value']!.str() == 'b, c'
+	assert children[2].as_map()['value']!.str() == ':ok'
+	assert children[3].as_map()['value']!.bool() == true
+}
+
+fn test_sequence_literal_item_can_be_an_element() {
+	source := '(1, [el a=1], 3)'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 3, 'expected 3 items, got ${children.len}: ${out}'
+	el := children[1].as_map()
+	assert kind_of(el) == 'element' && el['name']!.str() == 'el'
+	assert el['children']!.as_array().len == 1
+}
+
+fn test_comma_less_paren_group_is_not_a_sequence_literal() {
+	// ASP-1: a comma-less `(x)` is a parenthesised TEXT run, not a sequence.
+	// The walker asks the same delimitation question the data parser asks
+	// (`sequence_literal_at_paren`), so the SEQUENCE reading is deliberately
+	// unchanged — the #1000 fix is scoped to real sequence literals.
+	//
+	// AMENDED at #1040: the claim above still holds and is still asserted, but
+	// the ARITY it pinned was the walker's, not the parser's. `(x)` is a
+	// top-level TEXT RUN and the parser yields ONE Text `"(x)"`; the walker
+	// walked it one item at a time and returned three nodes, two of them the
+	// punctuation standing where a value belongs.
+	for source in ['(x)', '(see note)'] {
+		out := cx.code_tree(source) or { panic('${source}: ${err}') }
+		n := get_obj(parse_json(out))
+		assert kind_of(n) == 'text',
+			'a comma-less paren group is a text RUN, not a sequence: ${out}'
+		assert n['value']!.str() == source, out
+		assert loc_start(n) == 0 && loc_end(n) == source.len, out
+	}
+}
+
+fn test_unbalanced_open_paren_recovers_without_raising() {
+	source := '(1, 2'
+	out := cx.code_tree(source) or { panic('${err}') }
+	_ := json2.decode[json2.Any](out) or {
+		panic('emitter produced invalid JSON: ${err.msg()}')
+	}
+	n := get_obj(parse_json(out))
+	validate_loc_recursive(n, source)
+}
+
+// ── Array and map literals (#1020) ─────────────────────────────────────
+//
+// The walker had no array-literal and no map-literal case. `[1, 2, 3]`
+// therefore fell into the ELEMENT lane and came back as an element NAMED
+// `1` whose children were the commas and the remaining items; shapes
+// whose first byte cannot start a Name lost everything instead —
+// `['x', 'y']`, `[[1,2],[3,4]]` and the §D8 sentinel `[*, default]` all
+// arrived as the childless anonymous `_`. `{a: 1}` reached the
+// unrecognized-byte recovery one byte at a time and arrived as FIVE
+// scalars: `{`, `a`, `:`, 1, `}`.
+//
+// Each literal is now ONE node whose value is the literal's IMAGE. It is
+// NOT the #1000 flatten: an Array and a Map are CONTAINER Items that
+// preserve structure (CXDM §2.5 / §2.6) — `(arr)` is a one-item Sequence
+// holding one Array, distinct from that Array's items — so each literal
+// contributes exactly one item to the enclosing sequence. Flattening
+// would misreport the arity and collapse the nesting; the arity pins
+// below are what hold that down.
+
+fn test_array_literal_is_one_node_not_an_element_named_by_its_first_item() {
+	// The #1020 repro, verbatim.
+	source := '[1, 2, 3]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', 'an array literal is one value node, got ${out}'
+	assert n['value']!.str() == '[1, 2, 3]', 'the value is the literal image: ${out}'
+	assert 'children' !in n, 'a value node carries no children: ${out}'
+	// loc spans the whole authored literal, so the source↔tree bridge
+	// selects `[1, 2, 3]` and not one item inside it.
+	s := loc_start(n)
+	e := loc_end(n)
+	assert source[s..e] == '[1, 2, 3]', 'loc must span the authored literal, got ${source[s..e]}'
+	validate_loc_recursive(n, source)
+}
+
+fn test_array_literal_in_element_body_is_one_item_beside_its_sibling() {
+	// ARITY. An Array does not flatten (CXDM §2.5), so `doc` has TWO
+	// items — the array and `x` — not the four a #1000-style flatten
+	// would report, and not the element-named-`1` the walker used to
+	// build here.
+	source := '[doc [1, 2, 3] x]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert n['name']!.str() == 'doc'
+	children := n['children']!.as_array()
+	assert children.len == 2, 'expected the array + 1 sibling, got ${children.len}: ${out}'
+	a := children[0].as_map()
+	assert kind_of(a) == 'scalar'
+	assert a['value']!.str() == '[1, 2, 3]', out
+	// AMENDED at #1029 — the sibling's leading separator space is the parser's
+	// (see the sequence-flatten pin above).
+	assert children[1].as_map()['value']!.str() == ' x'
+}
+
+fn test_two_array_literals_in_one_body_stay_two_items() {
+	source := '[doc [1, 2] [3, 4]]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 2, 'two arrays are two items, got ${children.len}: ${out}'
+	assert children[0].as_map()['value']!.str() == '[1, 2]'
+	assert children[1].as_map()['value']!.str() == '[3, 4]'
+}
+
+fn test_nested_array_literals_do_not_collapse() {
+	// `[[1,2],[3,4]]` is a 2-item Array of 2-item Arrays (CXDM §2.5
+	// nesting row). It used to come back as `{"kind":"element",
+	// "name":"_"}` — element name gone, both inner arrays gone, every
+	// item gone — because the name reader found no Name at the inner `[`
+	// and the `_` arm skips to `end + 1`.
+	source := '[[1,2],[3,4]]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', out
+	assert n['value']!.str() == '[[1,2],[3,4]]', 'the nesting must survive whole: ${out}'
+	validate_loc_recursive(n, source)
+}
+
+fn test_quoted_item_array_literal_is_not_lost() {
+	// Another total-loss shape: a leading `'` is not a Name start, so the
+	// whole literal used to arrive as the childless `_`.
+	source := "['x', 'y']"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', out
+	assert n['value']!.str() == "['x', 'y']", out
+}
+
+fn test_array_sentinel_form_is_an_array_literal() {
+	// §D8 `[*, default]`: the dual-role `*` block in the shared
+	// predicate rules a following comma the array form. Was `_`.
+	source := '[*, default]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', out
+	assert n['value']!.str() == '[*, default]', out
+}
+
+fn test_empty_array_literal_is_one_node() {
+	// `[]` is the empty Array — a present, EBV-false VALUE (CXDM §1),
+	// not an anonymous element.
+	source := '[]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', out
+	assert n['value']!.str() == '[]', out
+}
+
+fn test_array_literal_span_is_string_aware() {
+	// A `]` inside a quoted item, and an item carrying an odd delimiter
+	// byte — the span comes from the same string-aware scanner the
+	// element arm uses (#999's `skip_string_literal_tree`), so neither
+	// truncates the literal.
+	src_a := "['a]b', 'c']"
+	out_a := cx.code_tree(src_a) or { panic('${err}') }
+	na := get_obj(parse_json(out_a))
+	assert na['value']!.str() == "['a]b', 'c']", out_a
+	src_b := '["it\'s", 2]'
+	out_b := cx.code_tree(src_b) or { panic('${err}') }
+	nb := get_obj(parse_json(out_b))
+	assert nb['value']!.str() == '["it\'s", 2]', out_b
+}
+
+fn test_whitespace_array_the_first_item_rule_already_sees() {
+	// `[80 443]` is an ArrayNode to the parser. Its first byte cannot
+	// start a Name, so the shared first-item rule rules it an array and
+	// the walker agrees — it used to be the element `80` with one child.
+	// (#1020 reached this shape through the [D1] rule alone; #1025 ported
+	// the typed-list production too, and now rules it FIRST — same answer
+	// from either, which is the point of the two agreeing.)
+	source := '[80 443]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', out
+	assert n['value']!.str() == '[80 443]', out
+}
+
+fn test_bare_bareword_array_stays_on_the_element_dispatch() {
+	// `[a, b]` is a PARSE ERROR to the data parser (lexicon §collections
+	// [L83]: a Name head immediately followed by `,` is ambiguous with an
+	// element head, CXER0100), and the shared predicate says so by
+	// returning false. The walker asks the same question and therefore
+	// keeps its best-effort element reading — deliberately unmoved.
+	source := '[a, b]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'element', out
+	assert n['name']!.str() == 'a', out
+}
+
+fn test_reserved_sigil_brackets_are_not_array_literals() {
+	// The reserved-sigil guard, which is why `bracket_head_is_reserved`
+	// had to move onto the shelf with the rule: without it a comma inside
+	// an opaque span (`[; comment, with, commas]`) reads as an array whose
+	// first item is `;`, and `[?for a, b]` stops being a directive.
+	d := get_obj(parse_json(cx.code_tree('[?if [> $x 0] [then T]]') or { panic('${err}') }))
+	assert kind_of(d) == 'directive' && d['name']!.str() == 'if'
+	for src in ['[; comment, with, commas]', '[!ENTITY a, b]', '[| block, content]',
+		'[# raw, text]'] {
+		n := get_obj(parse_json(cx.code_tree(src) or { panic('${err}') }))
+		assert kind_of(n) == 'element', '${src} must not read as an array: ${n}'
+		assert n['name']!.str() == '_', '${src}: ${n}'
+	}
+	// `[table[` is the reserved ElementMeta opener (#484): the parser
+	// refuses it before the array test, so the predicate must too — else
+	// the whole TableBlock arrives as an array image.
+	t := get_obj(parse_json(cx.code_tree('[table[ a, b ]]') or { panic('${err}') }))
+	assert kind_of(t) == 'element' && t['name']!.str() == 'table', '${t}'
+}
+
+fn test_operator_head_bracket_is_not_an_array_literal() {
+	// The `operator_head_len` arm of the shared predicate — a delimited
+	// operator head is an element NAME, never an array item (#976).
+	for pair in [['[!= 5 3]', '!='], ['[<= 5 3]', '<=']] {
+		n := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${err}') }))
+		assert kind_of(n) == 'element', '${pair[0]}: ${n}'
+		assert n['name']!.str() == pair[1], '${pair[0]}: ${n}'
+	}
+	// A GLUED continuation falls through to the array lane exactly as
+	// before: `[-1, 2]` is a negative number in an array.
+	a := get_obj(parse_json(cx.code_tree('[-1, 2]') or { panic('${err}') }))
+	assert kind_of(a) == 'scalar' && a['value']!.str() == '[-1, 2]', '${a}'
+}
+
+fn test_quoted_string_of_an_array_image_stays_a_text_node() {
+	// The image projection stays DISTINGUISHABLE from a string that
+	// happens to spell the same bytes: a quoted literal is kind `text`
+	// (#999's arm), an array literal is kind `scalar`. Without this the
+	// image would reintroduce the #1000 ambiguity one layer up.
+	source := "'[1, 2, 3]'"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'text', out
+	assert n['value']!.str() == '[1, 2, 3]', out
+}
+
+fn test_map_literal_is_one_node_not_five_punctuation_scalars() {
+	// The #1020 repro, verbatim: `{`, `a`, `:`, 1, `}` — three of the
+	// five standing where values belong.
+	source := '{a: 1}'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', 'a map literal is one value node, got ${out}'
+	assert n['value']!.str() == '{a: 1}', out
+	assert 'children' !in n, 'a value node carries no children: ${out}'
+	s := loc_start(n)
+	e := loc_end(n)
+	assert source[s..e] == '{a: 1}', 'loc must span the authored literal, got ${source[s..e]}'
+	// One node, and its value is the literal — so there is nowhere left
+	// for a `{`, `:` or `}` to arrive as a value of its own.
+	assert !out.contains('"value":"{"') && !out.contains('"value":":"')
+		&& !out.contains('"value":"}"'), 'punctuation leaked as a value: ${out}'
+}
+
+fn test_map_literal_in_element_body_is_one_item_beside_its_sibling() {
+	// ARITY, the map half: two items, not the six the punctuation run
+	// produced.
+	source := '[doc {a: 1} tail]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 2, 'expected the map + 1 sibling, got ${children.len}: ${out}'
+	assert children[0].as_map()['value']!.str() == '{a: 1}', out
+	// AMENDED at #1029 — the sibling's leading separator space is the parser's.
+	assert children[1].as_map()['value']!.str() == ' tail', out
+}
+
+fn test_map_literal_with_nested_collections_keeps_its_whole_image() {
+	// A nested array and a Sequence-as-Item map value (CXDM §2.7) — the
+	// mixed-delimiter depth model means neither inner `]`/`)` closes the
+	// map early, and the whole literal is one node.
+	source := '{a: [1, 2], b: (3, 4)}'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', out
+	assert n['value']!.str() == '{a: [1, 2], b: (3, 4)}', out
+	validate_loc_recursive(n, source)
+}
+
+fn test_empty_map_literal_is_one_node() {
+	source := '{}'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', out
+	assert n['value']!.str() == '{}', out
+}
+
+fn test_brace_text_run_is_not_a_map_literal() {
+	// `{text}` has no depth-0 `:`, so the shared rule says it is not a
+	// map — the MAP reading is scoped to real map literals, exactly as #1000
+	// scoped itself to real sequence literals with `(x)`.
+	//
+	// AMENDED at #1040, the same amendment its `(x)` sibling takes: the claim
+	// still holds and is still asserted, but a brace TEXT run at top level is
+	// ONE Text to the parser (`{text}`), where the walker returned three nodes
+	// led by a bare `{`.
+	for source in ['{text}', '{a}'] {
+		out := cx.code_tree(source) or { panic('${source}: ${err}') }
+		n := get_obj(parse_json(out))
+		assert kind_of(n) == 'text',
+			'a `:`-less brace run is a text RUN, not a map: ${out}'
+		assert n['value']!.str() == source, out
+		assert loc_start(n) == 0 && loc_end(n) == source.len, out
+	}
+}
+
+fn test_unbalanced_open_brace_recovers_without_raising() {
+	source := '{a: 1'
+	out := cx.code_tree(source) or { panic('${err}') }
+	_ := json2.decode[json2.Any](out) or {
+		panic('emitter produced invalid JSON: ${err.msg()}')
+	}
+	n := get_obj(parse_json(out))
+	validate_loc_recursive(n, source)
+}
+
+// ── The whitespace typed list — the SECOND array production (#1025) ─────
+//
+// #1020 ported the [D1] first-item rule and named what it did not reach:
+// the dispatch has TWO array-yielding productions, and the @CHOICE-1 /
+// G-ARRAY-1 whitespace typed list (§9 [L25a/b]) is tested FIRST — where
+// the two disagree, the typed list wins in the parser. It was a `&Parser`
+// method reading its own `pos`, so the cursor-free walker could not ask it
+// and fell into the element lane, reading the literal's FIRST TOKEN as an
+// element NAME: `[true false]` is an ArrayNode to the parser and was the
+// element `true` with one child here (pinned at #1020 as measured
+// behavior; that pin FLIPS below, and this block is the movement).
+//
+// `typed_list_body_at` (cx/lexical.v) is the classifier's cursor-free
+// single home; `Parser.body_is_typed_list` delegates to it, so the two
+// sides cannot drift. The projection is #1020's settled container rule
+// unchanged — ONE `scalar` carrying the authored image — because it is a
+// property of the VALUE (an Array is one container Item, CXDM §2.5) and
+// not of which production recognized it.
+
+fn test_name_shaped_whitespace_typed_list_is_an_array_image() {
+	// THE FLIP, and the #1025 repro verbatim. `[true false]` has a
+	// name-shaped first token and no comma, so the [D1] rule alone says
+	// "element" — only the typed list sees the array, and the walker can
+	// now ask it. Was `{"kind":"element","name":"true"}` with one child.
+	source := '[true false]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar', 'the typed list is one value node, got ${out}'
+	assert n['value']!.str() == '[true false]', 'the value is the literal image: ${out}'
+	assert 'children' !in n, 'a value node carries no children: ${out}'
+	assert 'name' !in n, 'the first item must never be read as an element name: ${out}'
+	s := loc_start(n)
+	e := loc_end(n)
+	assert source[s..e] == '[true false]', 'loc must span the authored literal, got ${source[s..e]}'
+	validate_loc_recursive(n, source)
+}
+
+fn test_typed_list_classes_that_only_the_second_production_sees() {
+	// The class is wider than the filed repro: EVERY typed-list shape whose
+	// first token is name-shaped (or otherwise loses the [D1] test) went to
+	// the element lane and lost its first item to the name slot. Each of
+	// these is an `Array` to the data parser (measured with `--from=cx
+	// --ast`) — bool, null, atom, date and hole items, and a name-shaped
+	// bool head followed by more bools.
+	for source in ['[true false]', '[true false null]', '[null true]', '[:a :b]',
+		'[2024-01-15 2024-02-16]', r'[$x 2]', '[false 1 2]'] {
+		out := cx.code_tree(source) or { panic('${err}') }
+		n := get_obj(parse_json(out))
+		assert kind_of(n) == 'scalar', '${source} must be one value node: ${out}'
+		assert n['value']!.str() == source, '${source}: the image must be verbatim: ${out}'
+	}
+}
+
+fn test_typed_list_in_element_body_is_one_item_beside_its_sibling() {
+	// ARITY, the typed-list half of the #1020 arity pins. `doc` has TWO
+	// items — the array and `x`. The inner literal used to arrive as the
+	// element `true` with one child, so the enclosing arity was right by
+	// accident while the item itself was wrong.
+	source := '[doc [true false] x]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert n['name']!.str() == 'doc'
+	children := n['children']!.as_array()
+	assert children.len == 2, 'expected the array + 1 sibling, got ${children.len}: ${out}'
+	a := children[0].as_map()
+	assert kind_of(a) == 'scalar', out
+	assert a['value']!.str() == '[true false]', out
+	// AMENDED at #1029 — the sibling's leading separator space is the parser's
+	// (`{"type":"Text","value":" x"}` in `--from=cx --ast`).
+	assert children[1].as_map()['value']!.str() == ' x', out
+}
+
+fn test_asp2_headless_carve_out_keeps_the_element_reading() {
+	// The one HEADLESS-ONLY rule inside the classifier, and the reason the
+	// walker must pass `headless: true` rather than a constant: ASP-2
+	// (#903) preserves the element reading when a name-shaped FIRST token
+	// is followed by a `(…)`/`{…}` structure. `[true (2, 3)]` is the
+	// ELEMENT `true` to the parser — so the walker must not read an array
+	// here, even though `[true false]` next door is one.
+	e := get_obj(parse_json(cx.code_tree('[true (2, 3)]') or { panic('${err}') }))
+	assert kind_of(e) == 'element', 'ASP-2 must keep the element reading: ${e}'
+	assert e['name']!.str() == 'true', '${e}'
+	// The twin without a name-shaped head IS an array (`[1 (2, 3)]` was
+	// already right at #1020 via the [D1] rule; it must stay right).
+	a := get_obj(parse_json(cx.code_tree('[1 (2, 3)]') or { panic('${err}') }))
+	assert kind_of(a) == 'scalar' && a['value']!.str() == '[1 (2, 3)]', '${a}'
+}
+
+fn test_prose_body_is_not_a_typed_list() {
+	// The classifier's bareword rule (G-BODY-1, conformance 009/014): ONE
+	// token that does not auto-type makes the whole body PROSE, and the
+	// parser builds an Element, not an Array. Porting the classifier must
+	// not turn ordinary prose brackets into array images — this is the
+	// boundary that keeps the fix scoped.
+	for pair in [['[the quick brown]', 'the'], ['[Version 2]', 'Version'],
+		['[draft ready]', 'draft']] {
+		n := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${err}') }))
+		assert kind_of(n) == 'element', '${pair[0]} must stay prose: ${n}'
+		assert n['name']!.str() == pair[1], '${pair[0]}: ${n}'
+	}
+}
+
+fn test_single_token_bracket_is_not_a_typed_list() {
+	// `tokens >= 2` is the production's own arity floor: a one-token
+	// bracket is an element with an empty body, never an array. Without
+	// this, `[true]` would become the image `[true]` and the element
+	// dispatch below would go unreached for every single-token form.
+	n := get_obj(parse_json(cx.code_tree('[true]') or { panic('${err}') }))
+	assert kind_of(n) == 'element', '${n}'
+	assert n['name']!.str() == 'true', '${n}'
+}
+
+fn test_typed_list_port_does_not_move_the_1020_boundaries() {
+	// #1020's boundary set is the regression floor for this change: the
+	// typed-list test runs BEFORE the [D1] rule, so a classifier that said
+	// "array" too eagerly would silently capture these first. Every one is
+	// refused by `typed_list_body_at` for a NAMED reason — a top-level
+	// comma (the [L25c] path), the reserved-sigil guard, or a bareword
+	// operator head that does not auto-type.
+	//
+	// `[a, b]` and `[!= 5 3]` / `[<= 5 3]` stay ELEMENTS.
+	for pair in [['[a, b]', 'a'], ['[!= 5 3]', '!='], ['[<= 5 3]', '<=']] {
+		n := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${err}') }))
+		assert kind_of(n) == 'element', '${pair[0]}: ${n}'
+		assert n['name']!.str() == pair[1], '${pair[0]}: ${n}'
+	}
+	// The reserved sigils keep absolute priority — the guard the walker
+	// spells before the typed-list test, standing in for the dispatch's
+	// own sigil precedence and the `[table[` refusal (#484).
+	d := get_obj(parse_json(cx.code_tree('[?if [> $x 0] [then T]]') or { panic('${err}') }))
+	assert kind_of(d) == 'directive' && d['name']!.str() == 'if', '${d}'
+	for src in ['[; comment, with, commas]', '[!ENTITY a, b]', '[| block, content]',
+		'[# raw, text]'] {
+		n := get_obj(parse_json(cx.code_tree(src) or { panic('${err}') }))
+		assert kind_of(n) == 'element' && n['name']!.str() == '_',
+			'${src} must not read as an array: ${n}'
+	}
+	t := get_obj(parse_json(cx.code_tree('[table[ a, b ]]') or { panic('${err}') }))
+	assert kind_of(t) == 'element' && t['name']!.str() == 'table', '${t}'
+	// The [D1] arms stay on the image projection, unchanged.
+	for src in ['[1, 2, 3]', '[]', "['x', 'y']", '[[1,2],[3,4]]', '[*, default]',
+		'[-1, 2]', '[80 443]', '{a: 1}'] {
+		n := get_obj(parse_json(cx.code_tree(src) or { panic('${err}') }))
+		assert kind_of(n) == 'scalar' && n['value']!.str() == src, '${src}: ${n}'
+	}
+	// And the image stays distinguishable from a string spelling the bytes.
+	q := get_obj(parse_json(cx.code_tree("'[true false]'") or { panic('${err}') }))
+	assert kind_of(q) == 'text' && q['value']!.str() == '[true false]', '${q}'
+}
+
+fn test_unbalanced_typed_list_bracket_recovers_without_raising() {
+	// The classifier returns false on an unbalanced structure span
+	// (`skip_bracket_region` hitting src.len) so the comma path refuses
+	// loudly; the walker's own unbalanced-`[` arm must still recover.
+	for source in ['[true false', '[true (2, 3'] {
+		out := cx.code_tree(source) or { panic('${err}') }
+		_ := json2.decode[json2.Any](out) or {
+			panic('${source}: emitter produced invalid JSON: ${err.msg()}')
+		}
+		n := get_obj(parse_json(out))
+		validate_loc_recursive(n, source)
+	}
+}
+
+// ── The element-body PROSE RUN — the THIRD lane (#1029) ────────────────
+//
+// #1025 closed the two array-yielding productions and named what stayed:
+// `[the quick brown]`, `[Version 2]` and `[draft ready]` are PROSE
+// elements, because one bareword that does not auto-type makes the whole
+// body prose (G-BODY-1, conformance 009/014). It pinned the element
+// READING and stopped there — and inside that reading the walker was
+// still walking the body one ITEM at a time, so the parser's single Text
+// item `"quick brown"` arrived as TWO scalar children. An arity lie, in
+// the tree pane and in the source↔tree bridge that reads the `loc`s.
+//
+// The dispatch has THREE lanes, not two: the [L25c] comma array, the §9
+// typed list, and `parse_body` — and in the third a maximal run of bare
+// value-run tokens is ONE Text. Every question that lane asks was a
+// `&Parser` method reading its own `pos` (`body_is_flat_comma_array`,
+// `lex_value_run`, `tok_peek_kind`, `peek_hole_len`); all four are now
+// cursor-free on the `cx/lexical.v` shelf with the parser delegating, and
+// `prose_run_break_at` reads parse_body's branch table over them.
+//
+// The data parser is the ORACLE for every shape below (`--from=cx --ast`).
+
+fn test_prose_run_is_one_text_item_not_two_scalars() {
+	// THE #1029 REPRO VERBATIM. `[the quick brown]` is the element `the`
+	// with ONE Text item "quick brown"; it was the element `the` with two
+	// scalar children `quick` / `brown`.
+	source := '[the quick brown]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'element', out
+	assert n['name']!.str() == 'the', out
+	children := n['children']!.as_array()
+	assert children.len == 1,
+		'the prose run is ONE item — the filed lie was two scalars, got ${children.len}: ${out}'
+	c := children[0].as_map()
+	assert kind_of(c) == 'text', 'a prose run is a text node, not a scalar: ${out}'
+	assert c['value']!.str() == 'quick brown', out
+	s := loc_start(c)
+	e := loc_end(c)
+	assert source[s..e] == 'quick brown', 'loc must span the run, got `${source[s..e]}`'
+	validate_loc_recursive(n, source)
+}
+
+fn test_prose_run_class_the_walker_split() {
+	// The class is far wider than whitespace-separated barewords. Each pair
+	// is `source` → the parser's SINGLE Text value, measured with
+	// `--from=cx --ast` on the binary at 71c31f461; the walker reported 2-5
+	// children for every one of them, and for three of them it invented a
+	// node KIND the source does not contain (an array image, a spurious
+	// attribute, an int-and-negative-int pair out of a date).
+	cases := [
+		['[the 42 brown]', '42 brown'],                                 // mixed: int + bareword
+		['[doc true false hello]', 'true false hello'],                  // bools + bareword
+		['[doc a:b c]', 'a:b c'],                                        // a `:` is not an atom here
+		['[doc a::int]', 'a::int'],                                      // a `::` in the body is text
+		['[doc :a b]', ':a b'],                                          // an atom + a bareword
+		['[doc :enum=[v1 v2] rest here]', ':enum=[v1 v2] rest here'],    // mid-token `[…]` (5 → 1)
+		['[doc hello world x=1]', 'hello world x=1'],                    // `x=1` AFTER text is prose
+		['[doc a  b]', 'a b'],                                           // ws collapses to one space
+		['[doc (x) y]', '(x) y'],                                        // a comma-less `(x)` is text
+		['[doc {text} y]', '{text} y'],                                  // a `:`-less brace run is text
+		['[doc \$x.y a]', '\$x.y a'],                                    // `\$x.y` is a path, not a hole
+		['[doc a *ref b]', 'a *ref b'],                                  // `*ref` is meta only in front
+		['[doc @id a b]', '@id a b'],                                    // `@id` is NEVER meta in a body
+		['[doc a&amp;b]', 'a&amp;b'],                                    // a mid-token `&` is one token
+		['[doc the quick brown fox]', 'the quick brown fox'],
+	]
+	for pair in cases {
+		source := pair[0]
+		out := cx.code_tree(source) or { panic('${source}: ${err}') }
+		n := get_obj(parse_json(out))
+		children := n['children']!.as_array()
+		assert children.len == 1, '${source} is ONE prose item, got ${children.len}: ${out}'
+		c := children[0].as_map()
+		assert kind_of(c) == 'text', '${source}: ${out}'
+		assert c['value']!.str() == pair[1], '${source}: ${out}'
+		validate_loc_recursive(n, source)
+	}
+}
+
+fn test_prose_run_carries_the_parsers_join_spaces() {
+	// The SEPARATOR space beside a child node stays IN the run's value —
+	// load-bearing for the XML projection of mixed prose (`[p text [b bold]]`
+	// must project `text <b>`), which is why the parser's own items are
+	// `"quick brown "`, `" y z "` and `" w"`, spaces included. A walker that
+	// trimmed its runs would report the right arity and the wrong text.
+	source := '[doc quick brown [b x] y z [c] w]'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 5, 'expected 3 runs + 2 children, got ${children.len}: ${out}'
+	assert children[0].as_map()['value']!.str() == 'quick brown ', out
+	assert children[1].as_map()['name']!.str() == 'b', out
+	assert children[2].as_map()['value']!.str() == ' y z ', out
+	assert children[3].as_map()['name']!.str() == 'c', out
+	assert children[4].as_map()['value']!.str() == ' w', out
+	// The `loc`s span the AUTHORED tokens, so the bridge highlights the prose
+	// and not the join space: run 2 is `y z`, four bytes shorter than its value.
+	m := children[2].as_map()
+	assert source[loc_start(m)..loc_end(m)] == 'y z', out
+	validate_loc_recursive(n, source)
+}
+
+fn test_attributes_are_a_head_prefix_not_interleaved() {
+	// The parser's attribute run ENDS at the first body item and never
+	// resumes, so the SAME `x=1` is an attribute in front of the prose and
+	// prose behind it. The walker took it as an attribute in both.
+	pre := get_obj(parse_json(cx.code_tree('[doc x=1 hello world]') or { panic('${err}') }))
+	pk := pre['children']!.as_array()
+	assert pk.len == 2, '${pre}'
+	assert kind_of(pk[0].as_map()) == 'attribute' && pk[0].as_map()['name']!.str() == 'x', '${pre}'
+	assert pk[1].as_map()['value']!.str() == 'hello world', '${pre}'
+	post := get_obj(parse_json(cx.code_tree('[doc hello world x=1]') or { panic('${err}') }))
+	qk := post['children']!.as_array()
+	assert qk.len == 1, 'an `x=1` behind prose is PROSE, got ${qk.len}: ${post}'
+	assert kind_of(qk[0].as_map()) == 'text', '${post}'
+	assert qk[0].as_map()['value']!.str() == 'hello world x=1', '${post}'
+	// A body that is nothing BUT attributes keeps them and has no items.
+	only := get_obj(parse_json(cx.code_tree('[doc a=1 b=2]') or { panic('${err}') }))
+	ok := only['children']!.as_array()
+	assert ok.len == 2 && kind_of(ok[1].as_map()) == 'attribute', '${only}'
+}
+
+fn test_element_meta_prefix_is_consumed_not_projected() {
+	// `*name` (merge), `#name` (ID) and `&name` (anchor) are ElementMeta and
+	// have NO kind in the closed D2 vocabulary (`core/abi.md` §2.16.3), so the
+	// walker consumes them. It has to: the body dispatch is asked where the
+	// meta run ENDS, and each of these used to arrive as a one-byte junk
+	// scalar plus a stray bareword INSIDE the body.
+	for source in ['[doc *ref a b]', '[doc #rid a b]', '[doc &anc a b]'] {
+		n := get_obj(parse_json(cx.code_tree(source) or { panic('${source}: ${err}') }))
+		children := n['children']!.as_array()
+		assert children.len == 1, '${source}: expected the prose run alone, got ${children.len}: ${n}'
+		assert children[0].as_map()['value']!.str() == 'a b', '${source}: ${n}'
+	}
+	// A meta-only body has NO children at all (the parser has no items).
+	bare := get_obj(parse_json(cx.code_tree('[doc *ref]') or { panic('${err}') }))
+	assert 'children' !in bare, 'a meta-only body has no items: ${bare}'
+	// And the dispatch really is asked AFTER the meta run: `1 2` behind the
+	// merge marker is a TYPED LIST — two discrete children, not one prose run.
+	tl := get_obj(parse_json(cx.code_tree('[doc *ref 1 2]') or { panic('${err}') }))
+	tk := tl['children']!.as_array()
+	assert tk.len == 2, 'the typed-list lane must be reached past the meta, got ${tk.len}: ${tl}'
+	assert tk[0].as_map()['value']!.int() == 1 && tk[1].as_map()['value']!.int() == 2, '${tl}'
+}
+
+fn test_sole_item_prose_run_auto_types_exactly_like_the_parser() {
+	// parse_body's end-of-body flush: a body whose ONLY item is a bare run is
+	// auto-typed IN PLACE, and stays Text when it does not auto-type. The gate
+	// is `try_autotype_bytes` — the parser's own test on the same bytes — so
+	// the two cannot disagree about where the scalar/text line falls.
+	typed := [['[Version 2]', '2'], ['[doc 42]', '42'], ['[doc :ok]', ':ok'],
+		['[doc 2024-01-15]', '2024-01-15'], ['[doc true]', 'true'], ['[doc null]', 'null']]
+	for pair in typed {
+		n := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${pair[0]}: ${err}') }))
+		c := n['children']!.as_array()[0].as_map()
+		assert kind_of(c) == 'scalar', '${pair[0]} auto-types to a scalar: ${n}'
+	}
+	// The other side of the same line: a run that does NOT auto-type is Text —
+	// including a SINGLE bareword, which the walker used to call a scalar.
+	for source in ['[doc hello]', '[doc a]', '[draft ready]', '[the quick brown]'] {
+		n := get_obj(parse_json(cx.code_tree(source) or { panic('${source}: ${err}') }))
+		c := n['children']!.as_array()[0].as_map()
+		assert kind_of(c) == 'text', '${source} stays Text: ${n}'
+	}
+	// (A run beside a structural sibling is never promoted either — the
+	// parser's flush condition is `items.len == 0`. It is hard to reach on
+	// purpose: nearly every prose body carrying one autotyping token plus a
+	// sibling is captured by the typed-list lane first, which is why the
+	// reachable witness is the comment case in
+	// `test_prose_run_erases_comment_trivia_without_splitting`.)
+}
+
+fn test_prose_run_breaks_at_every_structural_item() {
+	// parse_body's branch table, read back through `prose_run_break_at`: a
+	// quoted string, a triple-quoted string (plain and raw), a sequence
+	// literal, a map literal, a `$name` hole and a child node each END the run
+	// — the run must not swallow them, and the runs on either side must not
+	// merge across them.
+	q := get_obj(parse_json(cx.code_tree("[doc 'q' a b]") or { panic('${err}') }))
+	qk := q['children']!.as_array()
+	assert qk.len == 2 && qk[0].as_map()['value']!.str() == 'q'
+		&& qk[1].as_map()['value']!.str() == 'a b', '${q}'
+	t := get_obj(parse_json(cx.code_tree('[doc a """t""" b]') or { panic('${err}') }))
+	tk := t['children']!.as_array()
+	assert tk.len == 3, 'a triple-quoted string splits the run: ${t}'
+	assert tk[0].as_map()['value']!.str() == 'a' && tk[1].as_map()['value']!.str() == 't'
+		&& tk[2].as_map()['value']!.str() == 'b', '${t}'
+	r := get_obj(parse_json(cx.code_tree("[doc r'''raw''' a b]") or { panic('${err}') }))
+	assert r['children']!.as_array().len == 2, 'the RAW triple form too: ${r}'
+	// A hole is a discrete node and takes no join space on either side —
+	// `$x.y`, which is NOT a hole, stays inside the run (asserted above).
+	h := get_obj(parse_json(cx.code_tree('[doc a \$x b]') or { panic('${err}') }))
+	hk := h['children']!.as_array()
+	assert hk.len == 3 && hk[0].as_map()['value']!.str() == 'a'
+		&& hk[2].as_map()['value']!.str() == 'b', '${h}'
+	// A map literal keeps its image and owns the space to its right.
+	mp := get_obj(parse_json(cx.code_tree('[doc a b {k: 1}]') or { panic('${err}') }))
+	mk := mp['children']!.as_array()
+	assert mk.len == 2 && mk[0].as_map()['value']!.str() == 'a b'
+		&& mk[1].as_map()['value']!.str() == '{k: 1}', '${mp}'
+	// A child node in FRONT of a run gives that run its leading space.
+	cd := get_obj(parse_json(cx.code_tree('[doc [b] a]') or { panic('${err}') }))
+	ck := cd['children']!.as_array()
+	assert ck.len == 2 && ck[1].as_map()['value']!.str() == ' a', '${cd}'
+}
+
+fn test_prose_run_erases_comment_trivia_without_splitting() {
+	// #469 in those words: a comment inside a bare text run is lexical trivia
+	// and must NOT split the run — `a [; c ] b` ≡ `a b`, with exactly ONE join
+	// space and none trailing. The CommentNode itself has no `kind` in the D2
+	// vocabulary, so the walker records only that trivia was erased; what it
+	// must not do is emit the comment as an element and cut the run in three.
+	b := get_obj(parse_json(cx.code_tree('[doc hello [; c ] world]') or { panic('${err}') }))
+	bk := b['children']!.as_array()
+	assert bk.len == 1, 'a block comment must not split the run, got ${bk.len}: ${b}'
+	assert bk[0].as_map()['value']!.str() == 'hello world', '${b}'
+	l := get_obj(parse_json(cx.code_tree('[doc a # c\n b]') or { panic('${err}') }))
+	lk := l['children']!.as_array()
+	assert lk.len == 1, 'a line comment must not split the run, got ${lk.len}: ${l}'
+	assert lk[0].as_map()['value']!.str() == 'a b', '${l}'
+	// Erased BODY trivia occupies `items` in the parser, so the body is no
+	// longer SOLE-item and the auto-type is withheld: `[doc 42 # c]` is the
+	// Text "42" there, not the int 42. (A comment in the HEAD zone is a
+	// different position and does NOT withhold it — the parser prepends
+	// head_comments AFTER parse_body has already auto-typed, so `[doc # c\n 42]`
+	// really is the int; the walker's head zone consumes that one, so its
+	// `saw_comment` correctly stays false.)
+	w := get_obj(parse_json(cx.code_tree('[doc 42 # c\n]') or { panic('${err}') }))
+	wk := w['children']!.as_array()
+	assert wk.len == 1, '${w}'
+	assert kind_of(wk[0].as_map()) == 'text', 'body trivia withholds the auto-type: ${w}'
+	assert wk[0].as_map()['value']!.str() == '42', '${w}'
+	head := get_obj(parse_json(cx.code_tree('[doc # c\n 42]') or { panic('${err}') }))
+	hk := head['children']!.as_array()
+	assert hk.len == 1 && kind_of(hk[0].as_map()) == 'scalar',
+		'a HEAD-zone comment does not withhold it: ${head}'
+}
+
+fn test_discrete_body_lanes_are_not_coalesced() {
+	// The prose lane must be entered ONLY where the parser enters it. The two
+	// discrete lanes are asked first, with the parser's own predicates, and a
+	// prose reading of either would report one item where the document has n.
+	tl := get_obj(parse_json(cx.code_tree('[doc 42 43]') or { panic('${err}') }))
+	tk := tl['children']!.as_array()
+	assert tk.len == 2, 'the §9 typed list stays TWO children, got ${tk.len}: ${tl}'
+	assert tk[0].as_map()['value']!.int() == 42 && tk[1].as_map()['value']!.int() == 43, '${tl}'
+	// The [L25c] comma lane keeps its own reading (a top-level comma is the
+	// array signal, so the body is discrete and NOT one prose run).
+	ca := get_obj(parse_json(cx.code_tree('[doc a, b]') or { panic('${err}') }))
+	assert ca['children']!.as_array().len > 1, 'the comma lane is not prose: ${ca}'
+	// A comma the comma lane REFUSES (a child element disqualifies it) does
+	// join the prose run, comma byte and all — the parser's `"a, "`.
+	mx := get_obj(parse_json(cx.code_tree('[doc a, [b]]') or { panic('${err}') }))
+	mk := mx['children']!.as_array()
+	assert mk.len == 2 && mk[0].as_map()['value']!.str() == 'a, ', '${mx}'
+	// And an `x=3` INSIDE a typed-list-refusing body is prose, not a lane.
+	pr := get_obj(parse_json(cx.code_tree('[doc 1 2 x=3]') or { panic('${err}') }))
+	pk := pr['children']!.as_array()
+	assert pk.len == 1 && pk[0].as_map()['value']!.str() == '1 2 x=3', '${pr}'
+}
+
+fn test_path_kind_survives_in_element_body() {
+	// The ONE named exception to parse_body's branch table. `path` is a kind of
+	// the D2 vocabulary that the data AST has no node for at all — `/a` is
+	// ordinary Text to the parser in EVERY position, top level included — and
+	// the walker projects it because it serves CODE sources too (pinned at top
+	// level by the tree-006 fixture, in bodies by the clause-child surface).
+	// Coalescing it into a run would retire a contract kind from body position.
+	c := get_obj(parse_json(cx.code_tree('[in \$x /a]') or { panic('${err}') }))
+	ck := c['children']!.as_array()
+	assert ck.len == 2, '${c}'
+	assert kind_of(ck[1].as_map()) == 'path', 'the path kind must survive: ${c}'
+	assert ck[1].as_map()['value']!.str() == '/a', '${c}'
+	// A `/` MID-token is not a path opener and stays in the run.
+	m := get_obj(parse_json(cx.code_tree('[doc a/b c]') or { panic('${err}') }))
+	mk := m['children']!.as_array()
+	assert mk.len == 1 && mk[0].as_map()['value']!.str() == 'a/b c', '${m}'
+}
+
+fn test_prose_port_does_not_move_the_1020_1025_boundaries() {
+	// Every #1020 / #1025 boundary is this change's regression floor, and the
+	// prose lane runs where BOTH array productions have already declined — so
+	// a lane test that said "prose" too eagerly would capture all of these.
+	// The [D1] and typed-list image arms, unchanged:
+	for src in ['[1, 2, 3]', '[]', "['x', 'y']", '[[1,2],[3,4]]', '[*, default]',
+		'[-1, 2]', '[80 443]', '{a: 1}', '[true false]', '[true false null]',
+		'[null true]', '[:a :b]', '[2024-01-15 2024-02-16]', r'[$x 2]', '[false 1 2]',
+		'[1 (2, 3)]'] {
+		n := get_obj(parse_json(cx.code_tree(src) or { panic('${src}: ${err}') }))
+		assert kind_of(n) == 'scalar' && n['value']!.str() == src, '${src}: ${n}'
+	}
+	// The element readings the classifiers protect, unchanged:
+	for pair in [['[true (2, 3)]', 'true'], ['[true]', 'true'], ['[a, b]', 'a'],
+		['[!= 5 3]', '!='], ['[<= 5 3]', '<='], ['[= \$score 87]', '='],
+		['[table[ a, b ]]', 'table'], ['[the quick brown]', 'the'],
+		['[Version 2]', 'Version'], ['[draft ready]', 'draft']] {
+		n := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${pair[0]}: ${err}') }))
+		assert kind_of(n) == 'element', '${pair[0]}: ${n}'
+		assert n['name']!.str() == pair[1], '${pair[0]}: ${n}'
+	}
+	// The reserved sigils keep absolute priority, and the directive arm is
+	// reached before any body lane.
+	d := get_obj(parse_json(cx.code_tree('[?if [> \$x 0] [then T]]') or { panic('${err}') }))
+	assert kind_of(d) == 'directive' && d['name']!.str() == 'if', '${d}'
+	for src in ['[; comment, with, commas]', '[!ENTITY a, b]', '[| block, content]',
+		'[# raw, text]'] {
+		n := get_obj(parse_json(cx.code_tree(src) or { panic('${src}: ${err}') }))
+		assert kind_of(n) == 'element' && n['name']!.str() == '_', '${src}: ${n}'
+	}
+	// A quoted string spelling prose bytes stays a text node, not a run.
+	q := get_obj(parse_json(cx.code_tree("'the quick brown'") or { panic('${err}') }))
+	assert kind_of(q) == 'text' && q['value']!.str() == 'the quick brown', '${q}'
+	// And the unbalanced recovery still recovers, with valid JSON and locs.
+	for source in ['[the quick brown', '[doc a [b'] {
+		out := cx.code_tree(source) or { panic('${source}: ${err}') }
+		_ := json2.decode[json2.Any](out) or {
+			panic('${source}: emitter produced invalid JSON: ${err.msg()}')
+		}
+		validate_loc_recursive(get_obj(parse_json(out)), source)
+	}
+}
+
+// ── The at-token-start QUOTE RULE in the balanced-span matchers (#1039) ──
+//
+// A `'` is two different bytes in CX. At a token start it opens a quoted
+// region; MID-token it is a literal apostrophe in bare prose — `it's`,
+// `Bob's`, `don't` — which the data parser reads as ordinary Text.
+// `skip_bracket_region` (parser.v) has always known that; the walker's
+// three balanced-span matchers did not, so each opened a "string" on the
+// contraction, ran it past its own closing delimiter, miscounted depth and
+// reported the span UNBALANCED. `[doc it's here]` was a nameless
+// `{"kind":"element","name":"unbalanced"}` stub — it never reached the
+// prose lane #1029 built, which is why this gated that fix for real prose.
+//
+// The rule now has ONE home, `span_token_start_at` in `cx/lexical.v`, and
+// all four scanners ask it. One pin set per matcher below, then the
+// regression floor: a quote AT a token start must still shield the
+// delimiters inside it, or the fix would trade one span bug for another.
+//
+// The data parser is the ORACLE (`--from=cx --ast`).
+
+fn test_bracket_matcher_apostrophe_is_not_a_quote_opener() {
+	// THE #1039 REPRO VERBATIM.
+	source := "[doc it's here]"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'element', out
+	assert n['name']!.str() == 'doc',
+		'the filed lie was the nameless `unbalanced` stub, got `${n['name']!.str()}`: ${out}'
+	children := n['children']!.as_array()
+	assert children.len == 1, out
+	c := children[0].as_map()
+	assert kind_of(c) == 'text' && c['value']!.str() == "it's here", out
+	assert source[loc_start(c)..loc_end(c)] == "it's here", out
+	validate_loc_recursive(n, source)
+
+	// The class. Each pair is `source` → the element name the parser reads
+	// (`--from=cx --ast`); the walker answered `unbalanced` for every one of
+	// them, because each has an ODD number of mid-token apostrophes.
+	for pair in [["[p Bob's dog]", 'p'], ["[doc don't won't can't]", 'doc'],
+		["[doc x=1 it's here]", 'doc'], ["[wrap [doc it's here] tail]", 'wrap'],
+		["[doc it's [b x] more]", 'doc'], ["[doc (a it's b)]", 'doc'],
+		["[doc [a it's b] tail]", 'doc']] {
+		m := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${pair[0]}: ${err}') }))
+		assert kind_of(m) == 'element' && m['name']!.str() == pair[1],
+			'${pair[0]} recovered as ${m}'
+	}
+	// An EVEN count already balanced by accident and must not move.
+	e := get_obj(parse_json(cx.code_tree("[doc a'b c'd]") or { panic('${err}') }))
+	assert e['name']!.str() == 'doc' && e['children']!.as_array().len == 1, '${e}'
+}
+
+fn test_paren_matcher_apostrophe_is_not_a_quote_opener() {
+	// A sequence literal that `sequence_literal_at_paren` HAS ruled a literal
+	// (it finds its depth-0 comma before the apostrophe) but whose closing `)`
+	// the matcher could not find: the walker fell back to the one-byte
+	// recovery and emitted the bare `(` as a scalar CHILD — exactly the
+	// punctuation-as-a-value defect #1000 closed for every other sequence.
+	source := "(1, [doc it's], 2)"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 3,
+		'the parser reads a 3-item Sequence; the filed lie was 4 nodes led by a bare `(`: ${out}'
+	for c in children {
+		assert kind_of(c.as_map()) != 'scalar' || c.as_map()['value']!.str() != '(',
+			'`(` is syntax, never a child (#1000): ${out}'
+	}
+	assert children[0].as_map()['value']!.int() == 1, out
+	assert kind_of(children[1].as_map()) == 'element'
+		&& children[1].as_map()['name']!.str() == 'doc', out
+	assert children[2].as_map()['value']!.int() == 2, out
+	validate_loc_recursive(n, source)
+
+	// The matcher IN ISOLATION — no `[` anywhere, so only find_matching_paren
+	// can be under test. The apostrophe body is one the data parser itself
+	// refuses ("unterminated quoted text"), so this pins the SPAN only: the
+	// literal closes, and no `(`/`,`/`)` reaches the children.
+	iso := "(1, 2, don't)"
+	io := cx.code_tree(iso) or { panic('${err}') }
+	inode := get_obj(parse_json(io))
+	for c in inode['children']!.as_array() {
+		v := c.as_map()['value']!.str()
+		assert v != '(' && v != ',' && v != ')',
+			'the unbalanced recovery leaked sequence punctuation: ${io}'
+	}
+	validate_loc_recursive(inode, iso)
+}
+
+fn test_brace_matcher_apostrophe_is_not_a_quote_opener() {
+	// PURE find_matching_brace: a map literal is projected as ONE node
+	// carrying its IMAGE (#1020), byte-copied from the span — no inner
+	// matcher runs. Without the rule the span came back unbalanced and the
+	// map decayed into `{`, the key, `:`, the value … as separate scalar
+	// children, three of them punctuation standing where values belong.
+	source := "{k: 1, j: [p Bob's dog]}"
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'scalar',
+		'the filed lie was 8 children led by a bare `{`: ${out}'
+	assert n['value']!.str() == source, out
+	assert loc_start(n) == 0 && loc_end(n) == source.len, out
+	validate_loc_recursive(n, source)
+
+	// Same span question with the apostrophe in the map VALUE itself.
+	v := get_obj(parse_json(cx.code_tree("{k: don't, j: 2}") or { panic('${err}') }))
+	assert kind_of(v) == 'scalar' && v['value']!.str() == "{k: don't, j: 2}", '${v}'
+}
+
+fn test_span_matchers_keep_the_shield_for_quotes_at_a_token_start() {
+	// THE REGRESSION FLOOR. The rule narrows WHERE a quote opens, and a
+	// narrowing that went too far would stop shielding the delimiters inside
+	// a real string — the opposite span bug. A quote after the opening
+	// bracket, after whitespace, after a `,` and after an `=` all still open,
+	// triples and `r'''` included, and the `]`/`,` they contain stay inert.
+	for pair in [['[doc "quoted ] bracket" x]', 'quoted ] bracket'],
+		["[doc 'sq ] br' x]", 'sq ] br'], ["[doc r'''it's''' x]", "it's"],
+		["[doc it's \"a ] b\" more]", "it's"]] {
+		n := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${pair[0]}: ${err}') }))
+		assert kind_of(n) == 'element' && n['name']!.str() == 'doc', '${pair[0]}: ${n}'
+		assert n['children']!.as_array()[0].as_map()['value']!.str() == pair[1],
+			'${pair[0]}: ${n}'
+	}
+	// After `=` (an attribute value) and after `,` (a sequence / map item).
+	a := get_obj(parse_json(cx.code_tree("[doc a=\"x'y\" b]") or { panic('${err}') }))
+	ac := a['children']!.as_array()
+	assert kind_of(ac[0].as_map()) == 'attribute' && ac[0].as_map()['value']!.str() == "x'y", '${a}'
+	s := get_obj(parse_json(cx.code_tree("(1, 'q, x', 2)") or { panic('${err}') }))
+	assert s['children']!.as_array().len == 3,
+		'the quoted comma must not split the sequence: ${s}'
+	m := get_obj(parse_json(cx.code_tree("{k: 'v, w'}") or { panic('${err}') }))
+	assert kind_of(m) == 'scalar' && m['value']!.str() == "{k: 'v, w'}", '${m}'
+	// And a genuinely unterminated string still recovers, with valid JSON.
+	for source in ['[doc "no end', "[doc 'no end"] {
+		o := cx.code_tree(source) or { panic('${source}: ${err}') }
+		_ := json2.decode[json2.Any](o) or {
+			panic('${source}: emitter produced invalid JSON: ${err.msg()}')
+		}
+		validate_loc_recursive(get_obj(parse_json(o)), source)
+	}
+}
+
+// ── The TOP-LEVEL text run — the same arity contract, the other
+//    position (#1040) ───────────────────────────────────────────────────
+//
+// #1029 fixed the element-body prose lane and named this one as left
+// behind: `the quick brown` at top level is ONE Text to the parser and
+// arrived here as THREE scalar children. Same defect class, DIFFERENT
+// RULE — `read_top_text_run`'s run is VERBATIM. It swallows quotes, `(`,
+// `{`, `,`, `=`, `#` and every internal whitespace byte exactly as
+// authored, and stops only at `[`, `&`, a depth-0 `]`, a line-start
+// `---` and EOF. So `a  b` keeps BOTH spaces where the body lane
+// collapses them, and `hello world # note` keeps the `#` as content.
+//
+// The scan is now `top_text_run_end` on the `cx/lexical.v` shelf, with
+// `Parser.read_top_text_run` delegating — the fourteenth entry, and the
+// same move #1029 made for `value_run_end` / `token_kind_at` /
+// `hole_token_len` / `flat_comma_array_body_at`.
+//
+// The data parser is the ORACLE for every shape below (`--from=cx --ast`).
+
+fn test_top_level_prose_run_is_one_text_not_three_scalars() {
+	// THE #1040 REPRO VERBATIM.
+	source := 'the quick brown'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	assert kind_of(n) == 'text',
+		'the filed lie was three scalar children, got ${out}'
+	assert n['value']!.str() == 'the quick brown', out
+	assert loc_start(n) == 0 && loc_end(n) == source.len, out
+	validate_loc_recursive(n, source)
+
+	// The class. Each pair is `source` → the parser's SINGLE Text value.
+	// The run is VERBATIM, so the last four are the rows that separate this
+	// rule from the body lane: internal whitespace is NOT collapsed, and a
+	// `,` / `=` / `#` / `:` inside a run is content, not structure.
+	for pair in [['hello world', 'hello world'], ['1 2 3', '1 2 3'],
+		['a b', 'a b'], ['true false', 'true false'],
+		[':atom here', ':atom here'], ['2024-01-15 and more', '2024-01-15 and more'],
+		['(x)', '(x)'], ['{text}', '{text}'],
+		['a  b', 'a  b'], ['a, b, c', 'a, b, c'],
+		['hello world # note', 'hello world # note'], ['key=value', 'key=value']] {
+		m := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${pair[0]}: ${err}') }))
+		assert kind_of(m) == 'text', '${pair[0]} is ONE text node: ${m}'
+		assert m['value']!.str() == pair[1], '${pair[0]}: ${m}'
+	}
+	// Newlines are ordinary run bytes — `1\n2\n3` is one Text, not three ints.
+	nl := get_obj(parse_json(cx.code_tree('1\n2\n3\n') or { panic('${err}') }))
+	assert kind_of(nl) == 'text' && nl['value']!.str() == '1\n2\n3', '${nl}'
+}
+
+fn test_top_level_run_carries_the_parsers_separator_whitespace() {
+	// In mixed-text mode the parser's run STARTS at the byte after the
+	// previous node, so the separator space is IN the Text value — the same
+	// thing #1029's body join spaces are, and load-bearing for the same
+	// reason (the XML projection of mixed prose). A walker that trimmed its
+	// runs would report the right arity and the wrong text.
+	source := 'prose [b x] more prose'
+	out := cx.code_tree(source) or { panic('${err}') }
+	n := get_obj(parse_json(out))
+	children := n['children']!.as_array()
+	assert children.len == 3, out
+	assert children[0].as_map()['value']!.str() == 'prose ', out
+	assert children[1].as_map()['name']!.str() == 'b', out
+	assert children[2].as_map()['value']!.str() == ' more prose', out
+	// The `loc`s span the AUTHORED tokens, so the bridge highlights the prose
+	// and not the separator: run 2 is `more prose`, one byte shorter.
+	m := children[2].as_map()
+	assert source[loc_start(m)..loc_end(m)] == 'more prose', out
+	validate_loc_recursive(n, source)
+
+	// Newline separators are kept just as faithfully, and an interpolation
+	// root switches the parser into the same mixed mode.
+	nl := get_obj(parse_json(cx.code_tree('prose\n[b x]\nmore') or { panic('${err}') }))
+	nc := nl['children']!.as_array()
+	assert nc[0].as_map()['value']!.str() == 'prose\n', '${nl}'
+	assert nc[2].as_map()['value']!.str() == '\nmore', '${nl}'
+	ip := get_obj(parse_json(cx.code_tree('[?= 1] trailing prose') or { panic('${err}') }))
+	ic := ip['children']!.as_array()
+	assert ic.len == 2 && ic[1].as_map()['value']!.str() == ' trailing prose', '${ip}'
+	// One trailing newline is stripped at EOF (read_top_text_run's editor
+	// convention) — and ONLY at EOF: a `[` terminator strips nothing.
+	eof := get_obj(parse_json(cx.code_tree('  hello world  \n') or { panic('${err}') }))
+	assert eof['value']!.str() == 'hello world  ', '${eof}'
+	pre := get_obj(parse_json(cx.code_tree('the quick brown [a 1]') or { panic('${err}') }))
+	assert pre['children']!.as_array()[0].as_map()['value']!.str() == 'the quick brown ', '${pre}'
+}
+
+fn test_doc_top_sole_token_auto_types_exactly_like_the_parser() {
+	// parse_document's doc-top @CHOICE-1 (M-DOC-2 / G-NODE-3): a run whose
+	// trimmed form is a SINGLE whitespace-free token that auto-types is that
+	// typed scalar — the rule the tree-005 conformance fixture pins — and
+	// anything else is TEXT.
+	for pair in [['42', 'scalar'], [':ok', 'scalar'], ['true', 'scalar'],
+		['3.14', 'scalar'], ['null', 'scalar'], ['2024-01-15', 'scalar'],
+		['hello', 'text'], ['a', 'text'], ['-', 'text'], ['key=value', 'text']] {
+		n := get_obj(parse_json(cx.code_tree(pair[0]) or { panic('${pair[0]}: ${err}') }))
+		assert kind_of(n) == pair[1], '${pair[0]}: expected ${pair[1]}, got ${n}'
+	}
+	// tree-005 verbatim, and the auto-type still fires when a node FOLLOWS
+	// the doc-top run (the parser applies it to the first run either way).
+	t5 := get_obj(parse_json(cx.code_tree('42') or { panic('${err}') }))
+	assert t5['value']!.int() == 42 && loc_end(t5) == 2, '${t5}'
+	fwd := get_obj(parse_json(cx.code_tree('42 [a 1]') or { panic('${err}') }))
+	assert fwd['children']!.as_array()[0].as_map()['value']!.int() == 42, '${fwd}'
+	// It fires at DOC-TOP only — the parser does not auto-type a mixed-mode
+	// run, so `[?= 1] 42` is the Text " 42" on both sides.
+	mix := get_obj(parse_json(cx.code_tree('[?= 1] 42') or { panic('${err}') }))
+	mc := mix['children']!.as_array()
+	assert kind_of(mc[1].as_map()) == 'text' && mc[1].as_map()['value']!.str() == ' 42', '${mix}'
+	// TWO emissions that were not merely wrong but INVALID JSON: the per-token
+	// walk read `2024-01-15` as `2024`, `-01`, `-15` and a bare `-` as an empty
+	// number, so the projection carried `"value":-01` and `"value":-`.
+	for source in ['2024-01-15', '-', 'the quick brown\n---\nmore'] {
+		o := cx.code_tree(source) or { panic('${source}: ${err}') }
+		_ := json2.decode[json2.Any](o) or {
+			panic('${source}: emitter produced invalid JSON: ${err.msg()}')
+		}
+	}
+}
+
+fn test_top_level_run_stops_where_the_parser_stops() {
+	// `top_text_run_end`'s four terminators, each asserted by the shape it
+	// splits. A `---` at line start ENDS the parser's document and starts
+	// another; this walker projects ONE tree, so it consumes the separator and
+	// the two runs land as siblings with the two Documents' Text values.
+	sep := get_obj(parse_json(cx.code_tree('the quick brown\n---\nmore') or { panic('${err}') }))
+	sc := sep['children']!.as_array()
+	assert sc.len == 2, 'the `---` separator must not become nodes: ${sep}'
+	assert sc[0].as_map()['value']!.str() == 'the quick brown', '${sep}'
+	assert sc[1].as_map()['value']!.str() == 'more', '${sep}'
+	// `&` stops the run (the parser reads an EntityRef there). The arity is
+	// right on both sides; the middle node's KIND is the residual #1029 named
+	// and left — `parse_amp_node` is still cursor-bound.
+	amp := get_obj(parse_json(cx.code_tree('a &amp; b') or { panic('${err}') }))
+	ac := amp['children']!.as_array()
+	assert ac.len == 3, 'the run must stop at `&`: ${amp}'
+	assert ac[0].as_map()['value']!.str() == 'a ', '${amp}'
+	// A `#` line comment is trivia BEFORE a run starts and content INSIDE one.
+	cm := get_obj(parse_json(cx.code_tree('# note\nhello world') or { panic('${err}') }))
+	assert kind_of(cm) == 'text' && cm['value']!.str() == 'hello world', '${cm}'
+	assert loc_start(cm) == 7, 'the loc must skip the erased comment: ${cm}'
+}
+
+fn test_top_level_run_does_not_move_the_named_contract_kinds() {
+	// The walker's doc-top dispatch keeps every kind #999 / #1000 / #1020 and
+	// the tree-006 fixture put in this position — a run that swallowed them
+	// would retire a contract kind, which is a contract change and not a bug
+	// fix (the line #1020 / #1025 / #1029 drew).
+	p := get_obj(parse_json(cx.code_tree('/users/user') or { panic('${err}') }))
+	assert kind_of(p) == 'path' && p['value']!.str() == '/users/user', '${p}'
+	h := get_obj(parse_json(cx.code_tree('\$x') or { panic('${err}') }))
+	assert kind_of(h) == 'scalar' && h['value']!.str() == '\$x', '${h}'
+	q := get_obj(parse_json(cx.code_tree("'the quick brown'") or { panic('${err}') }))
+	assert kind_of(q) == 'text' && q['value']!.str() == 'the quick brown', '${q}'
+	m := get_obj(parse_json(cx.code_tree('{a: 1}') or { panic('${err}') }))
+	assert kind_of(m) == 'scalar' && m['value']!.str() == '{a: 1}', '${m}'
+	s := get_obj(parse_json(cx.code_tree('(1, 2, 3)') or { panic('${err}') }))
+	assert s['children']!.as_array().len == 3, '${s}'
+	a := get_obj(parse_json(cx.code_tree('[1, 2, 3]') or { panic('${err}') }))
+	assert kind_of(a) == 'scalar' && a['value']!.str() == '[1, 2, 3]', '${a}'
+	e := get_obj(parse_json(cx.code_tree('[doc a] [doc b]') or { panic('${err}') }))
+	assert e['children']!.as_array().len == 2, '${e}'
+	d := get_obj(parse_json(cx.code_tree('[?if [> \$x 0] [then T]]') or { panic('${err}') }))
+	assert kind_of(d) == 'directive' && d['name']!.str() == 'if', '${d}'
+	// And the recoveries still recover, with valid JSON and valid locs.
+	for source in ['(1, 2', '{a: 1', '[the quick brown', ']', '---'] {
+		o := cx.code_tree(source) or { panic('${source}: ${err}') }
+		_ := json2.decode[json2.Any](o) or {
+			panic('${source}: emitter produced invalid JSON: ${err.msg()}')
+		}
+		validate_loc_recursive(get_obj(parse_json(o)), source)
+	}
 }
 
 // ── The streamed-input fast path (§11.6 gate-15; stream 17 W5, L91 —
@@ -3568,7 +4938,8 @@ fn test_streamed_input_doc_reference_elsewhere_falls_back() {
 	// `$doc` appears beyond the source → the conservative source scan
 	// declines; output parity holds through the materializing path.
 	input := '[data [user [id 1]] [user [id 2]]]'
-	prog := '[?for [in \$u \$doc/user] [yield [pair \$u \$doc/user]]]'
+	// R-A1 migration: the multi-match node-set splices into content.
+	prog := '[?for [in \$u \$doc/user] [yield [pair \$u [?splice \$doc/user]]]]'
 	before := code.streamed_input_commits()
 	got, want := streamed_vs_buffered(input, prog)
 	assert got == want, 'extra-\$doc-reference streamed != buffered'
@@ -4004,7 +5375,8 @@ fn test_streamed_input_rooted_yield_body_declines() {
 	// commit-then-CXER0001 past the fallback point.
 	input := '[data [user [id 1]] [user [id 2]] [meta [src "x"]]]'
 	for body_path in ['/meta', '//src'] {
-		prog := '[?for [in \$u \$doc/user] [yield [pair \$u ${body_path}]]]'
+		// R-A1 migration: a rooted-path node-set splices into content.
+		prog := '[?for [in \$u \$doc/user] [yield [pair \$u [?splice ${body_path}]]]]'
 		before := code.streamed_input_commits()
 		got, want := streamed_vs_buffered(input, prog)
 		assert got == want, 'rooted `${body_path}` streamed != buffered:\nstream: ${got}\nbuffer: ${want}'
@@ -4114,4 +5486,185 @@ fn test_program_parser_kind_test_round_trips_through_emit() {
 		out := code.program_node_to_source(prog.body)
 		assert out == src, 'kind-test round trip lost the spelling: `${src}` -> `${out}`'
 	}
+}
+
+// ── source: #962 — program-result render of comment nodes ──────────────────
+//
+// A parsed-document value carrying CommentNode children (a `--data=` document
+// reaching `$doc`, a `[$cx:parse]` subtree) must render as canonical CX
+// comment syntax — `# …` line form, `[;…]` block form (ast.md's ONE Comment
+// spelling) — never as the V struct image `<cx.Node(cx.CommentNode{…})>` the
+// renderer's debug-print else-arm produced. Covers the one-shot renderer
+// (render_canonical), the streaming renderer (render_node_to), a standalone
+// comment result, the block form, the DocumentNode carrier, the end-to-end
+// eval path, and the compact data emit.
+//
+// THE SUBTLETY these tests exist for: in element-body position a LINE comment
+// must keep its terminating newline. The form runs to end-of-line, so an
+// inline emit swallows every following sibling AND the closing bracket on
+// re-parse — silent truncation, a worse defect than the struct dump. Every
+// render assertion below therefore RE-PARSES the rendered text and counts
+// what survived.
+
+fn comment_bearing_element_962() cx.Element {
+	return cx.Element{
+		name:  'xap'
+		items: [
+			cx.Node(cx.CommentNode{
+				value:   'inner comment'
+				is_line: true
+			}),
+			cx.Node(cx.Element{
+				name:  'name'
+				items: [cx.Node(cx.TextNode{
+					value: 'demo'
+				})]
+			}),
+		]
+	}
+}
+
+fn test_962_line_comment_in_element_body_renders_comment_syntax() {
+	out := code.render_canonical(cx.Node(comment_bearing_element_962()))
+	assert !out.contains('CommentNode'), 'struct dump leaked into program output: ${out}'
+	assert !out.contains('Option(none)'), 'struct dump leaked into program output: ${out}'
+	assert out.contains('# inner comment\n'), 'line comment must render newline-terminated: ${out}'
+	// ROUND TRIP: the rendered text re-parses with the comment AND the
+	// following sibling intact — an unterminated line comment would swallow
+	// `[name …]` and the closing bracket.
+	doc := cx.parse(out) or {
+		assert false, 'rendered output does not re-parse: ${err}; out=${out}'
+		return
+	}
+	assert doc.elements.len == 1, 'root count drifted on re-parse: ${out}'
+	root := doc.elements[0]
+	assert root is cx.Element, 'root lost: ${out}'
+	el := root as cx.Element
+	assert el.items.len == 2, 'sibling count drifted on re-parse (want 2): ${el.items.len} in ${out}'
+	mut saw_comment := false
+	mut saw_name := false
+	for it in el.items {
+		if it is cx.CommentNode {
+			assert it.value == 'inner comment', 'comment value drifted: ${out}'
+			assert it.is_line, 'line form must survive body-position round-trip: ${out}'
+			saw_comment = true
+		}
+		if it is cx.Element {
+			assert it.name == 'name'
+			saw_name = true
+		}
+	}
+	assert saw_comment, 'comment lost on round-trip: ${out}'
+	assert saw_name, 'sibling swallowed by comment on round-trip: ${out}'
+}
+
+fn test_962_streaming_renderer_matches_one_shot_for_comments() {
+	n := cx.Node(comment_bearing_element_962())
+	mut b := strings.new_builder(64)
+	code.render_node_to(mut b, n)
+	assert b.str() == code.render_canonical(n), 'streaming / one-shot render divergence'
+}
+
+fn test_962_block_comment_renders_inline_self_delimiting() {
+	el := cx.Element{
+		name:  'wrap'
+		items: [
+			cx.Node(cx.CommentNode{
+				value:   'block note'
+				is_line: false
+			}),
+			cx.Node(cx.Element{
+				name: 'x'
+			}),
+		]
+	}
+	out := code.render_canonical(cx.Node(el))
+	assert !out.contains('CommentNode'), 'struct dump leaked: ${out}'
+	assert out.contains('[;block note]'), 'block comment must keep its [;…] form: ${out}'
+	assert !out.contains('\n'), 'block comments are self-delimiting — no newline needed: ${out}'
+	doc := cx.parse(out) or {
+		assert false, 'rendered output does not re-parse: ${err}; out=${out}'
+		return
+	}
+	assert doc.elements.len == 1, 'root count drifted: ${out}'
+	wrap := doc.elements[0] as cx.Element
+	assert wrap.items.len == 2, 'block comment ate a sibling: ${out}'
+}
+
+fn test_962_standalone_comment_result_renders_bare() {
+	out := code.render_canonical(cx.Node(cx.CommentNode{
+		value:   'standalone'
+		is_line: true
+	}))
+	assert out == '# standalone', 'standalone line comment renders bare (no trailing newline): ${out}'
+}
+
+fn test_962_document_node_top_comment_does_not_swallow_root() {
+	// The `[$cx:parse]` result shape: a multi-root source (top-level comment +
+	// root element) parses to the transparent DocumentNode carrier (D7).
+	n := cx.codec_parse_node('cx', '# top comment\n[xap [name demo]]') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	out := code.render_canonical(n)
+	assert !out.contains('CommentNode'), 'struct dump leaked: ${out}'
+	assert out.contains('# top comment'), 'top-level comment lost: ${out}'
+	// The root element must survive a re-parse of the printed output — an
+	// unterminated line comment would eat it.
+	doc2 := cx.parse(out) or {
+		assert false, 're-parse failed: ${err}; out=${out}'
+		return
+	}
+	mut found := false
+	for e in doc2.elements {
+		if e is cx.Element {
+			if e.name == 'xap' {
+				found = true
+			}
+		}
+	}
+	assert found, 'root element swallowed by top-level comment: ${out}'
+}
+
+fn test_962_eval_code_end_to_end_comment_bearing_doc() {
+	// Full print path: `cx --data=d.cx p.cx` with a comment-bearing `$doc` —
+	// the exact reported repro shape.
+	input := '[xap\n# inner comment\n[name "demo"]\n]'
+	out := code.eval_code(input, '\$doc', 'text') or {
+		assert false, 'eval failed: ${err}'
+		return
+	}
+	assert !out.contains('CommentNode'), 'struct dump leaked into eval output: ${out}'
+	assert !out.contains('Option(none)'), 'struct dump leaked into eval output: ${out}'
+	assert out.contains('# inner comment'), 'line comment lost in eval output: ${out}'
+	assert out.contains("[name 'demo']"), 'sibling lost in eval output: ${out}'
+	// The DATA↔PROGRAM seam: what the program lane printed re-parses, with
+	// both children intact.
+	doc := cx.parse(out) or {
+		assert false, 'program-lane output does not re-parse: ${err}; out=${out}'
+		return
+	}
+	assert doc.elements.len == 1, 'root count drifted: ${out}'
+	xap := doc.elements[0] as cx.Element
+	assert xap.items.len == 2, 'program-lane output lost a child on re-parse: ${out}'
+}
+
+fn test_962_compact_data_emit_keeps_the_line_comment_newline() {
+	// The compact data emit (`cx_emit_node_str(n, true)`) is the lane the
+	// program renderer calls for an embedded DATA node. It has no multiline
+	// escape hatch, so the line comment's terminating newline has to be
+	// written there or the inline body swallows the rest of the element.
+	n := cx.codec_parse_node('cx', '[xap\n# c\n[a 1]\n[b 2]\n]') or {
+		assert false, 'parse failed: ${err}'
+		return
+	}
+	out := code.render_canonical(n)
+	assert !out.contains('CommentNode'), 'struct dump leaked: ${out}'
+	doc := cx.parse(out) or {
+		assert false, 'compact emit does not re-parse: ${err}; out=${out}'
+		return
+	}
+	assert doc.elements.len == 1, 'root count drifted: ${out}'
+	xap := doc.elements[0] as cx.Element
+	assert xap.items.len == 3, 'comment swallowed a sibling in compact emit (want 3): ${xap.items.len} in ${out}'
 }

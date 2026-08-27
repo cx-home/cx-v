@@ -1,0 +1,4 @@
+sequenceDiagram
+  participant jobs
+  participant producer
+  participant consumer

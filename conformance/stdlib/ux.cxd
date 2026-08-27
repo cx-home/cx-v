@@ -91,6 +91,7 @@ shipped binary (cx <file> — the single oracle).
     positional index. Absence-in, absence-out. #]
  [case id=ux-003-row-and-path-steps level=core
   [tags ux path row-key keying P0-10]
+  [; R-A1 migration: absence contributes nothing (2026-08-25) ]
   [title 'element-path steps, and absence for an unkeyed collection']
   [in-cx [#
 [empty]
@@ -100,7 +101,7 @@ shipped binary (cx <file> — the single oracle).
 [list [$ux:row-step "/open" "o-1041"] [$ux:row-step "/open" ()] [$ux:path-step "/" "grid"] [$ux:path-step "/open" "grid"]]
 #]]
   [out-text [#
-[list '/open/row[o-1041]' () '/grid' '/open/grid']
+[list '/open/row[o-1041]' '/grid' '/open/grid']
 #]]
  ]
 
@@ -138,10 +139,11 @@ shipped binary (cx <file> — the single oracle).
 #]]
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
-[list [$ux:vocabulary] [$ux:renderer-private-attrs] [$ux:tones]]
+[; R-A1 migration: envelope → spliced children (2026-08-25) ]
+[list [?splice [$ux:vocabulary]] [?splice [$ux:renderer-private-attrs]] [?splice [$ux:tones]]]
 #]]
   [out-text [#
-[list ('ux:region', 'ux:card', 'ux:heading', 'ux:text', 'ux:field', 'ux:badge', 'ux:list', 'ux:item', 'ux:table', 'ux:columns', 'ux:column', 'ux:rows', 'ux:row', 'ux:cell', 'ux:nav', 'ux:nav-item', 'ux:link', 'ux:action', 'ux:form', 'ux:input', 'ux:hidden', 'ux:submit', 'ux:error', 'ux:notice', 'ux:filter', 'ux:select', 'ux:option', 'ux:group', 'ux:media', 'ux:grid', 'ux:param', 'ux:steps', 'ux:step', 'ux:quantity', 'ux:breadcrumb', 'ux:crumb', 'ux:pager', 'ux:page-link', 'ux:facet', 'ux:facet-value', 'ux:sort', 'ux:sort-option', 'ux:aside', 'ux:status', 'ux:panel') (oob, target, swap, ext, subscribe, on, include) (ok, warn, danger, info, neutral)]
+[list 'ux:region' 'ux:card' 'ux:heading' 'ux:text' 'ux:field' 'ux:badge' 'ux:list' 'ux:item' 'ux:table' 'ux:columns' 'ux:column' 'ux:rows' 'ux:row' 'ux:cell' 'ux:nav' 'ux:nav-item' 'ux:link' 'ux:action' 'ux:form' 'ux:input' 'ux:hidden' 'ux:submit' 'ux:error' 'ux:notice' 'ux:filter' 'ux:select' 'ux:option' 'ux:group' 'ux:media' 'ux:grid' 'ux:param' 'ux:steps' 'ux:step' 'ux:quantity' 'ux:breadcrumb' 'ux:crumb' 'ux:pager' 'ux:page-link' 'ux:facet' 'ux:facet-value' 'ux:sort' 'ux:sort-option' 'ux:aside' 'ux:status' 'ux:panel' 'oob' 'target' 'swap' 'ext' 'subscribe' 'on' 'include' 'ok' 'warn' 'danger' 'info' 'neutral']
 #]]
  ]
 
@@ -309,11 +311,12 @@ shipped binary (cx <file> — the single oracle).
               [ux:input name=qty kind=int help="How many"]]
             [ux:quantity name=qty label=Quantity verb=set-quantity value=2 min=1 max=9 step=1]
             [ux:aside label="Your basket" open=true dismiss-href="/x"]]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [list [$exists [$ux:refusals-of $t]]
-        [$ux:allowed-attrs "ux:action"] [$ux:allowed-attrs "ux:aside"] [$ux:allowed-attrs "ux:row"]]]
+        [?splice [$ux:allowed-attrs "ux:action"]] [?splice [$ux:allowed-attrs "ux:aside"]] [?splice [$ux:allowed-attrs "ux:row"]]]]
 #]]
   [out-text [#
-[list false (verb, label, affects, confirm, confirm-href, prominence, available, reason) (label, open, dismiss-href, id, live) (key)]
+[list false 'verb' 'label' 'affects' 'confirm' 'confirm-href' 'prominence' 'available' 'reason' 'label' 'open' 'dismiss-href' 'id' 'live' 'key']
 #]]
  ]
 
@@ -349,11 +352,12 @@ shipped binary (cx <file> — the single oracle).
 #]]
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
-[list [$ux:refusals-of [ux:notice tone=sparkly "hi"]]
-      [$ux:refusals-of [ux:notice tone=ok "saved"]]]
+[; R-A1 migration: envelope → spliced children (2026-08-25) ]
+[list [?splice [$ux:refusals-of [ux:notice tone=sparkly "hi"]]]
+      [?splice [$ux:refusals-of [ux:notice tone=ok "saved"]]]]
 #]]
   [out-text [#
-[list ([ux-refusal code=ux-bad-tone element=ux:notice tone=sparkly]) ()]
+[list [ux-refusal code=ux-bad-tone element=ux:notice tone=sparkly]]
 #]]
  ]
 
@@ -415,14 +419,15 @@ shipped binary (cx <file> — the single oracle).
           [ux:action verb=buy label=B2 available=false reason="Out of stock"
             [ux:param name=sku value=Y]]
           [ux:form verb=cancel [ux:input name=id] [ux:submit "Go"]]]]
-  [list [$ux:act-verbs $f] [$ux:control-verbs $t]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
+  [list [?splice [$ux:act-verbs $f]] [?splice [$ux:control-verbs $t]]
         [?splice [$ux:verbs-uncovered ("buy", "cancel") $t]]
         [?splice [$ux:verbs-uncovered ("buy", "return") $t]]
         [?splice [$ux:verbs-unaccounted $f ("buy", "cancel") ("return")]]
         [?splice [$ux:verbs-unaccounted $f ("buy") ()]]]]
 #]]
   [out-text [#
-[list ('buy', 'cancel', 'return') (buy, cancel) [ux-refusal code=ux-verb-uncovered verb=return] [ux-refusal code=ux-verb-unaccounted verb=cancel] [ux-refusal code=ux-verb-unaccounted verb=return]]
+[list 'buy' 'cancel' 'return' 'buy' 'cancel' [ux-refusal code=ux-verb-uncovered verb=return] [ux-refusal code=ux-verb-unaccounted verb=cancel] [ux-refusal code=ux-verb-unaccounted verb=return]]
 #]]
  ]
 
@@ -442,11 +447,12 @@ shipped binary (cx <file> — the single oracle).
   [= $rctx [ux:render-ctx [feed name=orders endpoint="/stream" event="orders-changed"]]]
   [= $ok  [ux:region feature=orders path="/live" live=orders]]
   [= $bad [ux:region feature=orders path="/live" live=invoices]]
-  [list [$ux:binding-refusals $ok $rctx] [$ux:binding-refusals $bad $rctx]
-        [$ux:feed-binding $rctx "orders"]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
+  [list [?splice [$ux:binding-refusals $ok $rctx]] [?splice [$ux:binding-refusals $bad $rctx]]
+        [?splice [$ux:feed-binding $rctx "orders"]]]]
 #]]
   [out-text [#
-[list () ([ux-refusal code=ux-unbound-feed feed=invoices]) ([feed name=orders endpoint='/stream' event=orders-changed])]
+[list [ux-refusal code=ux-unbound-feed feed=invoices] [feed name=orders endpoint='/stream' event=orders-changed]]
 #]]
  ]
 
@@ -565,10 +571,11 @@ shipped binary (cx <file> — the single oracle).
   [= $ctx {route: "/o", feature: "f", path: "/"}]
   [= $dup [ux:region feature=f path="/r" [ux:card id=same [ux:text "a"]] [ux:card id=same [ux:text "b"]]]]
   [= $ok  [ux:region feature=f path="/r" [ux:card id=one [ux:text "a"]] [ux:card id=two [ux:text "b"]]]]
-  [list [$ux:address-collisions $dup $ctx] [$ux:address-collisions $ok $ctx]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
+  [list [?splice [$ux:address-collisions $dup $ctx]] [?splice [$ux:address-collisions $ok $ctx]]]]
 #]]
   [out-text [#
-[list ([ux-refusal code=ux-address-reused id=cx-bfb773fba6d60c77]) ()]
+[list [ux-refusal code=ux-address-reused id=cx-bfb773fba6d60c77]]
 #]]
  ]
 
@@ -650,6 +657,7 @@ shipped binary (cx <file> — the single oracle).
     human-facing defaults are presentational. #]
  [case id=ux-060-form-projection-from-a-command-def level=core
   [tags ux form projection P0-17 P0-18]
+  [; R-A1 migration: absence contributes nothing (2026-08-25) ]
   [title 'a [?def] with an [effects] clause projects onto a semantic form']
   [in-cx [#
 [empty]
@@ -668,7 +676,7 @@ shipped binary (cx <file> — the single oracle).
   [$ux:form $src "place-order" {affects: "/live/new"}]]
 #]]
   [out-text [#
-[ux:form verb=place-order affects='/live/new' [ux:heading level=2 'Place a customer order.'] () [ux:input name=customer kind=string required='true' help='Who the order is for.'] [ux:input name=qty kind=int required='true'] [ux:input name=note kind=string required='false'] [ux:submit label='Place order']]
+[ux:form verb=place-order affects='/live/new' [ux:heading level=2 'Place a customer order.'] [ux:input name=customer kind=string required='true' help='Who the order is for.'] [ux:input name=qty kind=int required='true'] [ux:input name=note kind=string required='false'] [ux:submit label='Place order']]
 #]]
  ]
 
@@ -701,10 +709,11 @@ shipped binary (cx <file> — the single oracle).
 #]]
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
+[; R-A1 migration: envelope → spliced children (2026-08-25) ]
 [$ux:form "[?def other pure [returns int] () 1]" "place-order" {}]
 #]]
   [out-text [#
-[err code=ux-refused ([ux-refusal code=ux-no-such-command verb=place-order])]
+[err code=ux-refused [ux-refusal code=ux-no-such-command verb=place-order]]
 #]]
  ]
 
@@ -754,6 +763,7 @@ shipped binary (cx <file> — the single oracle).
     third identity. Absence is a normal answer: cosmetics fail open (P0-7). #]
  [case id=ux-071-hint-resolution-and-the-claim-key level=core
   [tags ux hints claims P0-4 P0-6]
+  [; R-A1 migration: absence contributes nothing (2026-08-25) ]
   [title 'hints resolve by (schema address, CXPath); the composite key is a derived spelling']
   [in-cx [#
 [empty]
@@ -769,7 +779,7 @@ shipped binary (cx <file> — the single oracle).
         [$ux:hint-for $hints "sha2-256:zzz" "/items" "view"]]]
 #]]
   [out-text [#
-[list 'sha2-256:abc/items' 'sha2-256:abc/' 'cards' () ()]
+[list 'sha2-256:abc/items' 'sha2-256:abc/' 'cards']
 #]]
  ]
 
@@ -861,12 +871,13 @@ shipped binary (cx <file> — the single oracle).
              [verbs
                [verb name=place-order effect=act [summary "Place an order"] [writes order]]
                [verb name=quote effect=observe [reads price]]]]]
-  [list [$ux:feature-columns $f "order"]
-        [$ux:feature-columns $f "price"]
-        [$ux:feature-columns $f "nonesuch"]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
+  [list [?splice [$ux:feature-columns $f "order"]]
+        [?splice [$ux:feature-columns $f "price"]]
+        [?splice [$ux:feature-columns $f "nonesuch"]]]]
 #]]
   [out-text [#
-[list ('id', 'package', 'buyer') ('amount') ()]
+[list 'id' 'package' 'buyer' 'amount']
 #]]
  ]
 
@@ -889,10 +900,11 @@ shipped binary (cx <file> — the single oracle).
              [verbs
                [verb name=place-order effect=act [summary "Place an order"] [writes order]]
                [verb name=quote effect=observe [reads price]]]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [$ux:feature-form $f "cancel-order" {}]]
 #]]
   [out-text [#
-[err code=ux-refused ([ux-refusal code=ux-no-such-verb verb=cancel-order])]
+[err code=ux-refused [ux-refusal code=ux-no-such-verb verb=cancel-order]]
 #]]
  ]
 
@@ -987,10 +999,11 @@ shipped binary (cx <file> — the single oracle).
   [= $s [surface admin
           [route path="/products" [feature xap=catalog as=catalog]]
           [route path="/orders" [feature xap=orders as=orders] [fragment path="/orders/rows"]]]]
-  [list [$ux:routes-of $s] [$ux:fragment-paths $s]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
+  [list [?splice [$ux:routes-of $s]] [?splice [$ux:fragment-paths $s]]]]
 #]]
   [out-text [#
-[list ([ux:route [path '/products'] [feature 'catalog'] [instance 'catalog'] [template 'default']], [ux:route [path '/orders'] [feature 'orders'] [instance 'orders'] [template 'default']]) ('/orders/rows')]
+[list [ux:route [path '/products'] [feature 'catalog'] [instance 'catalog'] [template 'default']] [ux:route [path '/orders'] [feature 'orders'] [instance 'orders'] [template 'default']] '/orders/rows']
 #]]
  ]
 
@@ -1007,10 +1020,11 @@ shipped binary (cx <file> — the single oracle).
 [?let
   [= $dup [surface a [route path="/o" [feature xap=orders]] [route path="/o" [feature xap=orders]]]]
   [= $ok  [surface a [route path="/o" [feature xap=orders]] [route path="/o" [feature xap=orders as=second]]]]
-  [list [$ux:duplicate-instances $dup] [$ux:duplicate-instances $ok]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
+  [list [?splice [$ux:duplicate-instances $dup]] [?splice [$ux:duplicate-instances $ok]]]]
 #]]
   [out-text [#
-[list ([ux-refusal code=ux-duplicate-instance path='/o' instance=orders]) ()]
+[list [ux-refusal code=ux-duplicate-instance path='/o' instance=orders]]
 #]]
  ]
 
@@ -1028,13 +1042,14 @@ shipped binary (cx <file> — the single oracle).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $s [surface a [route path="/o" [feature xap=orders] [fragment path="/o/rows"]]]]
   ([$ux:check-surface $s ("/o", "/o/rows") ()],
    [$ux:check-surface $s ("/o") ()],
    [$ux:check-surface $s ("/o", "/o/rows", "/stray") ()])]
 #]]
   [out-text [#
-(true, [err code=ux-refused ([ux-refusal code=ux-route-unserved path='/o/rows'])], [err code=ux-refused ([ux-refusal code=ux-resource-unrouted path='/stray'])])
+(true, [err code=ux-refused [ux-refusal code=ux-route-unserved path='/o/rows']], [err code=ux-refused [ux-refusal code=ux-resource-unrouted path='/stray']])
 #]]
  ]
 
@@ -1074,7 +1089,7 @@ shipped binary (cx <file> — the single oracle).
    [$ux:check-surface $bare ("/o") ($f)])]
 #]]
   [out-text [#
-(true, [err code=ux-refused ([ux-refusal code=ux-verb-unaccounted verb=audit])], [err code=ux-refused ([ux-refusal code=ux-verb-unaccounted verb=audit note='declared not-offered without a why'])])
+(true, [err code=ux-refused [ux-refusal code=ux-verb-unaccounted verb=audit]], [err code=ux-refused [ux-refusal code=ux-verb-unaccounted verb=audit note='declared not-offered without a why']])
 #]]
  ]
 
@@ -1096,6 +1111,7 @@ shipped binary (cx <file> — the single oracle).
 [?lib 'cx-x/ux-web' :as web]
 [?lib 'cx-stdlib/strings' :as strings]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $t [ux:region feature=f path="/probe"
           [ux:heading id=h1 level=1 "Probe"]
           [ux:text id=t1 "prose"]
@@ -1136,7 +1152,7 @@ shipped binary (cx <file> — the single oracle).
   [list [$count $minted] [$count $missing] $missing]]
 #]]
   [out-text [#
-[list 34 0 ()]
+[list 34 0]
 #]]
  ]
 
@@ -1164,10 +1180,11 @@ shipped binary (cx <file> — the single oracle).
   [= $bad [ux:region feature=orders path="/live"
             [ux:filter name=q affects="/live/typo/rows"]
             [ux:table id=open [ux:rows id=rows [ux:row key=r1 [ux:cell "a"]]]]]]
-  [list [$ux:dangling-affects $ok $ctx] [$ux:dangling-affects $bad $ctx]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
+  [list [?splice [$ux:dangling-affects $ok $ctx]] [?splice [$ux:dangling-affects $bad $ctx]]]]
 #]]
   [out-text [#
-[list () ([ux-refusal code=ux-dangling-affects element=ux:filter affects='/live/typo/rows'])]
+[list [ux-refusal code=ux-dangling-affects element=ux:filter affects='/live/typo/rows']]
 #]]
  ]
 
@@ -1735,13 +1752,14 @@ shipped binary (cx <file> — the single oracle).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $comps ([component name=hero])]
   [= $l0 [ux:layout [placed id=hero component=hero]]]
   [= $r [$ux:layout-apply $l0 [ux:move id=ghost parent="" before=""] $comps]]
   [$cx:canonical ($r)]]
 #]]
   [out-text [#
-"([err code=ux-refused '([ux-refusal code=ux-layout-address-miss id=ghost])']\n)\n"
+'([err code=ux-refused\n  [ux-refusal code=ux-layout-address-miss id=ghost]\n]\n)\n'
 #]]
  ]
 
@@ -1757,6 +1775,7 @@ shipped binary (cx <file> — the single oracle).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $comps ([component name=hero], [component name=promo])]
   [= $l0 [ux:layout [placed id=hero component=hero]]]
   [= $l1 [$ux:layout-apply $l0 [ux:place id=promo component=promo parent="" before=hero] $comps]]
@@ -1765,7 +1784,7 @@ shipped binary (cx <file> — the single oracle).
   [list [$cx:canonical $l1] [$cx:canonical ($r1)] [$cx:canonical ($r2)]]]
 #]]
   [out-text [#
-[list '[ux:layout\n  [placed id=promo component=promo]\n  [placed id=hero component=hero]\n]\n' "([err code=ux-refused '([ux-refusal code=ux-layout-id-collision id=promo])']\n)\n" "([err code=ux-refused '([ux-refusal code=ux-layout-unknown-component component=nonesuch])']\n)\n"]
+[list '[ux:layout\n  [placed id=promo component=promo]\n  [placed id=hero component=hero]\n]\n' '([err code=ux-refused\n  [ux-refusal code=ux-layout-id-collision id=promo]\n]\n)\n' '([err code=ux-refused\n  [ux-refusal code=ux-layout-unknown-component component=nonesuch]\n]\n)\n']
 #]]
  ]
 
@@ -1833,6 +1852,7 @@ shipped binary (cx <file> — the single oracle).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $comps ([component name=hero], [component name=promo], [component name=group container=true])]
   [= $l0 [ux:layout [placed id=hero component=hero] [placed id=promo component=promo]]]
   [= $l1 [$ux:layout-apply $l0 [ux:wrap id=hero wrapper=g1 component=group] $comps]]
@@ -1842,7 +1862,7 @@ shipped binary (cx <file> — the single oracle).
   [list [$cx:canonical $l1] [$cx:canonical ($r1)] [$cx:canonical ($r2)] [$cx:canonical ($r3)]]]
 #]]
   [out-text [#
-[list '[ux:layout\n  [placed id=g1 component=group\n    [placed id=hero component=hero]\n  ]\n  [placed id=promo component=promo]\n]\n' "([err code=ux-refused '([ux-refusal code=ux-layout-cycle id=g1 parent=g1])']\n)\n" "([err code=ux-refused '([ux-refusal code=ux-layout-not-container component=promo])']\n)\n" "([err code=ux-refused '([ux-refusal code=ux-layout-not-container id=promo])']\n)\n"]
+[list '[ux:layout\n  [placed id=g1 component=group\n    [placed id=hero component=hero]\n  ]\n  [placed id=promo component=promo]\n]\n' '([err code=ux-refused\n  [ux-refusal code=ux-layout-cycle id=g1 parent=g1]\n]\n)\n' '([err code=ux-refused\n  [ux-refusal code=ux-layout-not-container component=promo]\n]\n)\n' '([err code=ux-refused\n  [ux-refusal code=ux-layout-not-container id=promo]\n]\n)\n']
 #]]
  ]
 
@@ -1914,11 +1934,12 @@ shipped binary (cx <file> — the single oracle).
 [?let
   [= $comps ([component name=hero])]
   [= $l0 [ux:layout [placed id=hero component=hero]]]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $r [$ux:layout-apply-batch $l0 ([ux:set-hint id=hero hint=tone value=info], [ux:remove id=ghost]) $comps]]
   [$cx:canonical ($r)]]
 #]]
   [out-text [#
-"([err code=ux-refused '([ux-refusal code=ux-layout-address-miss id=ghost])']\n)\n"
+'([err code=ux-refused\n  [ux-refusal code=ux-layout-address-miss id=ghost]\n]\n)\n'
 #]]
  ]
 
@@ -1936,6 +1957,7 @@ shipped binary (cx <file> — the single oracle).
   [in-code [#
 [?lib 'cx-x/ux' :as ux]
 [?let
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [= $comps ([component name=hero [param name=heading default="Everyday things." carrier=ux-heading]],
              [component name=promo [param name=text default="A note." carrier=ux-text]])]
   [= $l0 [ux:layout [placed id=hero component=hero] [placed id=promo component=promo]]]
@@ -1951,7 +1973,7 @@ shipped binary (cx <file> — the single oracle).
         [$cx:canonical [x [?splice [$ux:layout-inverse $l1 [ux:remove id=hero]]]]]]]
 #]]
   [out-text [#
-[list "[ux:layout\n  [placed id=hero component=hero\n    [param name=heading value='Made properly.']\n  ]\n  [placed id=promo component=promo]\n]\n" 'Made properly.' "([err code=ux-refused '([ux-refusal code=ux-layout-unknown-param id=hero param=nonesuch])']\n)\n" true "[x\n  [ux:place id=hero component=hero parent='' before=promo]\n  [ux:set-param id=hero param=heading value='Made properly.']\n]\n"]
+[list "[ux:layout\n  [placed id=hero component=hero\n    [param name=heading value='Made properly.']\n  ]\n  [placed id=promo component=promo]\n]\n" 'Made properly.' '([err code=ux-refused\n  [ux-refusal code=ux-layout-unknown-param id=hero param=nonesuch]\n]\n)\n' true "[x\n  [ux:place id=hero component=hero parent='' before=promo]\n  [ux:set-param id=hero param=heading value='Made properly.']\n]\n"]
 #]]
  ]
 ]

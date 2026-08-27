@@ -1,5 +1,5 @@
 erDiagram
   user {
-    string email
-    string phone
+    string email "e.g. a@x.test"
+    string phone "e.g. 555-0100"
   }

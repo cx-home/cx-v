@@ -197,6 +197,16 @@ pub fn caps_apply_spec(spec string) ! {
 		if cap_name !in capability_names() {
 			return error(cap_unknown_msg(cap_name))
 		}
+		// #1059's fail-open, on the ABI grant surface (the CLI's five parse
+		// sites got the refusal; this is the sixth sibling): read/write/env
+		// scoping is NOT IMPLEMENTED, so a `cap=resource` suffix on those
+		// three refuses instead of silently installing BLANKET authority —
+		// the caller asked for narrower and would have received wider, with
+		// nothing to say so. Real path/name scoping is cx-home/cx-private#1061;
+		// `net=host[:port]` is the one scope enforced today.
+		if t.contains('=') && cap_name in ['read', 'write', 'env'] {
+			return error('E_CAP_SCOPE_UNENFORCED: grant token `${t}` — ${cap_name} scoping is NOT IMPLEMENTED; the resource would be IGNORED and the grant would be BLANKET ${cap_name} authority, not the narrowing this spells. Grant the bare `${cap_name}` explicitly; real scoping is tracked at cx-home/cx-private#1061 (cx-err:CXER0274)')
+		}
 		caps << cap_name
 		// A `net=<host>[:<port>]` token additionally records a host scope, so
 		// the net grant is least-privilege (only the named host is dialable)

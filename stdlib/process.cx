@@ -13,7 +13,12 @@
    (vcx/code/stdlib_process.v) since process effects are not expressible
    in pure CX. ]
 
-[; §3.1 one-shot run ]
+[; §3.1 one-shot run.
+   $capture carries §3.2's FULL per-stream disposition vocabulary (#1023,
+   RULED: CO-16): :pipe (capture), :inherit, :discard, or a file path, per
+   stream via {stdout: …, stderr: …}. The four shipped atoms :both / :stdout /
+   :stderr / :none are abbreviations for pairs of those. Only a captured
+   (:pipe) stream reaches the [proc-result …] or is decoded by $encoding. ]
 [?def run scope=public impure [returns element]
   ($argv::[sequence string]
    $env=null $env-clear=false $cwd=null $stdin=null
@@ -22,12 +27,23 @@
    $check=false)
   [$process-run $argv $env $env-clear $cwd $stdin $timeout-ms $kill-on-timeout $capture $encoding $search-path $new-process-group $check]]
 
-[; §3.2 streaming spawn + handle lifecycle ]
+[; §3.2 streaming spawn + handle lifecycle.
+
+   $stdin / $stdout / $stderr are the PER-STREAM stdio disposition (§3.2,
+   §4.3): :pipe (a pipe of ours — the only one with a stdio handle, and the
+   default, so this is byte-for-byte the old all-pipes behavior), :inherit
+   (the child writes to OUR descriptor), :discard (the null device), or a
+   string file path. `:discard` is NOT spelled `:null` because `:null` is a
+   reserved atom literal in CX. A :pipe nobody drains fills at the OS pipe
+   capacity (64 KiB, bisected) and stops the child dead, so a stream the
+   caller will not read must be given one of the other three. ]
 [?def spawn scope=public impure [returns element]
   ($argv::[sequence string]
    $env=null $env-clear=false $cwd=null
-   $encoding="utf-8" $search-path=true $new-process-group=false)
-  [$process-spawn $argv $env $env-clear $cwd $encoding $search-path $new-process-group]]
+   $encoding="utf-8" $search-path=true $new-process-group=false
+   $stdin=:pipe $stdout=:pipe $stderr=:pipe)
+  [$process-spawn $argv $env $env-clear $cwd $encoding $search-path $new-process-group
+                  $stdin $stdout $stderr]]
 
 [?def stdin        scope=public impure [returns element]       ($handle::element) [$process-stdin $handle]]
 [?def stdout       scope=public impure [returns element]       ($handle::element) [$process-stdout $handle]]
@@ -38,7 +54,32 @@
 [?def poll         scope=public impure [returns [or int [sequence int]]] ($handle::element) [$process-poll $handle]]
 [?def close        scope=public impure [returns null]          ($handle::element) [$process-close $handle]]
 
-[; §3.3 pipelines ]
+[; §3.3 pipelines.
+
+   The pipeline OWNS all three of every stage's streams — $stdin and
+   $capture are not per-stage keys — so §4.3's drain obligation is the
+   pipeline's, not the caller's, and it is met on every stage: stdout
+   chains into the next stage, stderr is captured and reported on that
+   stage's [proc-result …] row. $timeout-ms bounds the WHOLE pipeline
+   (one deadline, not one per stage); whichever stage is alive when it
+   passes is killed per §4.5 and carries timed-out=true, and no later
+   stage starts.
+
+   $env / $env-clear / $cwd shape each exec and are applied to EVERY
+   stage (§4.2); a missing $cwd is CXER4001 before any stage spawns.
+   $encoding shapes what comes back — the returned stdout and every
+   stage's stderr row — so it is resolved once (§4.7), and only
+   "utf-8" / :bytes are accepted.
+
+   A stage may carry [opts cwd=… env-clear=… search-path=… [env {…}]],
+   each overriding its pipeline-level counterpart for that stage alone
+   and per KEY. env is a CHILD ELEMENT carrying a map, not an attribute
+   (an attribute is scalar-only), and it OVERLAYS the pipeline's $env
+   rather than replacing it: env-clear picks the base, $env lands on
+   every stage, the stage's own [env {…}] lands last — POSIX's
+   FOO=1 cmd1 | BAR=2 cmd2. Every other run key inside [opts …] is
+   REFUSED by name (CXER0100), because a per-stage form would
+   contradict a rule stated elsewhere in the spec — see §3.3's table. ]
 [?def pipeline scope=public impure [returns element]
   ($stages::[sequence element]
    $stdin=null $timeout-ms=null $kill-on-timeout=true
@@ -77,9 +118,9 @@
 ]
 [fn-doc name=spawn scope=public purity=impure
   [sig """-> element"""]
-  [summary """Start an argv command and return a proc handle for streaming its stdio and managing its lifecycle."""]
+  [summary """Start an argv command and return a proc handle for streaming its stdio and managing its lifecycle. Each of stdin/stdout/stderr is independently :pipe (default), :inherit, :discard, or a file path — a piped stream nobody drains fills at the OS pipe capacity and stops the child."""]
   [example [code """[?lib 'cx-stdlib/process']
-[$process:spawn ("tail", "-f", "/var/log/app.log")]"""] [expect """cx-err:CXER0271"""]]
+[$process:spawn ("tail", "-f", "/var/log/app.log") stderr=:inherit]"""] [expect """cx-err:CXER0271"""]]
 ]
 [fn-doc name=stdin scope=public purity=impure
   [sig """-> element"""]

@@ -16,7 +16,13 @@ import code
 // source of truth); commit/date/gc/vfork come from git + the build. Defaults
 // apply only outside the Makefile (e.g. a bare `v run cmd/`) — a non-stamped
 // dev build, hence the obviously-unreleased `0.0.0-dev`.
+//
+// `cx_release` (#979, RULED: CO-4) is the derived answer to "is this build the
+// release VERSION names": `release` when the Makefile found HEAD at the
+// annotated tag matching VERSION with a clean tree, `dev` otherwise. It shapes
+// the headline only (cli.version_headline); the default is the honest one.
 const version = $d('cx_version', '0.0.0-dev')
+const cx_release = $d('cx_release', 'dev')
 const cx_commit = $d('cx_commit', 'unknown')
 const cx_build_date = $d('cx_build_date', 'unknown')
 const cx_gc = $d('cx_gc', 'unknown')
@@ -141,7 +147,7 @@ fn print_version() {
 		'boehm' { 'boehm — conservative tracing collector' }
 		else { cx_gc }
 	}
-	println('cx v${version}')
+	println(cli.version_headline(version, cx_release, cx_commit))
 	println('  profile  ${profile_desc()}')
 	println('  commit   ${cx_commit}')
 	println('  built    ${cx_build_date}')
@@ -194,6 +200,32 @@ fn main() {
 			if args[0] in absent_platform_verbs {
 				profile_refusal('`cx ${args[0]}`')
 			}
+		}
+		// A verb-shaped argv[0] that is neither a registered subcommand nor
+		// an existing file is a MISTYPED VERB, not a program path — name it
+		// and point at the catalog (#970). Before this, `cx store-token`
+		// fell through to the run surface and reported `error reading file
+		// store-token: failed to open file "store-token"`, which reads as a
+		// broken install rather than as "no such subcommand".
+		//
+		// The discriminator is FILE EXISTENCE, never name shape: the run
+		// surface is `cx RESOURCE` and a resource needs no extension, so an
+		// extensionless file that EXISTS still runs. Only a token that
+		// resolves to nothing gets the verb reading.
+		if !args[0].starts_with('-') && is_verb_shaped(args[0]) && !os.exists(args[0]) {
+			// RULED: CO-6 — a RETIRED verb word names its own retirement,
+			// never "unknown" (the #426 lesson applied to retirement): the
+			// reader typing a verb every older document taught deserves the
+			// what-replaced-it answer, not a shrug. File existence still
+			// decides first — an existing file by the same name runs.
+			if args[0] in retired_verbs {
+				eprintln('cx: `${args[0]}` is retired — ${retired_verbs[args[0]]}')
+				eprintln('run `cx --help` for the current subcommand catalog')
+				exit(2)
+			}
+			eprintln('cx: unknown subcommand `${args[0]}` (and no file by that name)')
+			eprintln('run `cx --help` for the subcommand catalog')
+			exit(2)
 		}
 		// No subcommand matched: fall through to the default program /
 		// convert readings below (legacy --flag form).
@@ -322,6 +354,10 @@ fn main() {
 				eprintln('run `cx --help` for the full flag set')
 				exit(2)
 			}
+			// A scope suffix the engine cannot ENFORCE refuses here, before
+			// the resource is read (#1059) — accepting it would grant the
+			// BLANKET capability while looking like a narrowing.
+			refuse_unenforced_grant_scope('cx', arg, cap_name, rest_cap)
 			allow_caps << cap_name
 			if cap_name == 'net' && rest_cap.contains('=') { net_specs << rest_cap.all_after('=') }
 		}
@@ -1170,7 +1206,27 @@ fn build_subcommands() []SubcommandSpec {
 // corpus gate (a verb word must never fall through to the run surface and
 // evaluate a same-named FILE — the #426 lesson, extended to profiles).
 const absent_platform_verbs = ['store-serve', 'fabric-serve', 'store-health',
-	'store-rotate-kek']
+	'store-rotate-kek', 'store-mint-principal']
+
+// retired_verbs — verb words that once shipped and were deliberately removed
+// (RULED: CO-6). Each maps to the one-line what-replaced-it answer; the guard
+// above surfaces it instead of "unknown subcommand". Keep entries FOREVER —
+// the cost is a map entry, the benefit is every stale document and habit
+// getting the truthful answer.
+const retired_verbs = {
+	'store-token': 'the bearer/RBAC plane is gone; store credentials are XSP-AUTH principals granted in the daemon config ([xsp [grants ...]]). Mint one offline with `cx store-mint-principal` (#969).'
+}
+
+// is_verb_shaped reports whether a bare argv[0] token could have been MEANT
+// as a subcommand word rather than as a program path (#970). Every registered
+// subcommand name is a plain word with optional hyphens — `lint`, `version`,
+// `code-diagram`, `store-rotate-kek` — never a path and never dotted. A token
+// carrying a path separator or a dot (`./tool`, `lib/tool.cx`, `tool.cx`) was
+// unambiguously meant as a RESOURCE, so a missing one keeps the missing-file
+// diagnostic; only a verb-shaped miss is reported as an unknown subcommand.
+fn is_verb_shaped(arg string) bool {
+	return arg != '' && !arg.contains('/') && !arg.contains('\\') && !arg.contains('.')
+}
 
 // profile_refusal — a platform verb word reached a non-platform cx: refuse
 // loudly BY NAME, never file-argument fall-through (cmd_data precedent).
@@ -1267,7 +1323,9 @@ fn usage_text() string {
 	b << '  Capabilities are deny-by-default (spec/core/security.md); grant explicitly:'
 	b << '    ' + allow_flags[..5].join(' ')
 	b << '    ' + allow_flags[5..].join(' ')
-	b << '    (--allow-net takes an optional scope: --allow-net=host[:port])'
+	b << '    (--allow-net takes an optional scope: --allow-net=host[:port] — it is the'
+	b << '     ONLY grant whose scope is enforced. A resource suffix on --allow-read /'
+	b << '     --allow-write / --allow-env is a usage error, not a narrowing: #1059)'
 	b << '    --allow-common is the common working set WITHOUT secret-reveal;'
 	b << '    --allow-all additionally grants secret-reveal, which declassifies secrets.'
 	b << ''
@@ -1288,8 +1346,18 @@ fn usage_text() string {
 	b << '  --include-root=DIR     resolve [?cx include=...] against DIR first'
 	b << ''
 	b << 'Subcommands (`cx <subcommand> --help` for details):'
+	// The summary column is DERIVED from the widest registered name, not a
+	// hardcoded width: `store-mint-principal` (#969) outgrew the old 17-column
+	// pad and rendered its summary unaligned in `cx --help` AND in the
+	// generated LLM doc tree. One table, one column, no constant to forget.
+	mut verb_col := 0
 	for sc in subcommands {
-		b << '  ${sc.name:-17} ${sc.summary}'
+		if sc.name.len > verb_col {
+			verb_col = sc.name.len
+		}
+	}
+	for sc in subcommands {
+		b << '  ${sc.name}${' '.repeat(verb_col - sc.name.len)} ${sc.summary}'
 	}
 	return b.join('\n') + '\n'
 }

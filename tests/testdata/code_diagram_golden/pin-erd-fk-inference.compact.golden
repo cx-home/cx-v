@@ -1,5 +1,5 @@
 erDiagram
   order {
-    int order-id
-    int total
+    int order-id "e.g. 1"
+    int total "e.g. 2"
   }

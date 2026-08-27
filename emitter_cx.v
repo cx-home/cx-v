@@ -74,7 +74,13 @@ fn cx_emit_node(n Node, depth int, compact bool, mut out []string) {
 		ScalarNode       { out << cx_scalar(n) }
 		CommentNode      {
 			if n.is_line {
-				out << '${ind}# ${n.value}${nl}'
+				// #962 — a line comment runs to end-of-line: the terminating
+				// newline is SYNTAX, not layout. Even compact emit must keep
+				// it, or the comment swallows everything after it (the
+				// document's remaining roots, an element's later siblings) on
+				// re-parse. cx_emit_node_str trims a trailing newline, so a
+				// STANDALONE comment still renders as bare `# value`.
+				out << '${ind}# ${n.value}\n'
 			} else {
 				out << '${ind}[;${n.value}]${nl}'
 			}
@@ -177,6 +183,39 @@ pub fn cx_emit_array_inline(n ArrayNode, compact bool) string {
 // item keeps the canonical form uniform (`['admin', 'user']`) and bijective.
 // Sequence `( … )` and map values are unambiguous, so they keep the bare form
 // via cx_emit_collection_item.
+//
+// #983 — WHY AN OPERATOR-SHAPED ITEM STILL EMITS BARE, and why that is not the
+// asymmetry it looks like. `[<=x]` canonicalizes to the bare `[<=x]` even
+// though the same string in map-value position emits QUOTED (`{k: '<=x'}`),
+// because `cx_collection_bare_safe` — which owns THAT position — requires a
+// name-start first byte. The two predicates are INDEPENDENT rules for
+// INDEPENDENT positions, not one rule applied inconsistently:
+//
+//   collection-item (`{k: v}`, `(a, b)`)  cx_collection_bare_safe — the
+//     INTERSECTION of the data and program readings (#831 / 831-1a′), which is
+//     why it is name-shaped and strict.
+//   array-item (`[a, b]`)                 cx_is_bare_name || the boundary
+//     predicate cx_array_item_needs_quote. Arrays are the one position where
+//     the two readings always agreed, so the safe set is defined by RE-PARSE,
+//     not by name shape.
+//
+// By that array rule `<=x` is bare-safe and MEASURABLY round-trips: a GLUED
+// operator glyph is not an operator head (`operator_head_len` requires a
+// whitespace / `]` / EOF delimiter — #976), and `<=x` is not a bare name, so
+// the emitted `[<=x]` re-enters the array lane and yields the same one-item
+// string array. Evidence: `[<=x]` and its quoted twin `['<=x']` both
+// canonicalize to `[<=x]` at the SAME Tier-1 digest
+// (sha2-256:fde968e0f5f04839653716b5d656e4261755239cd77588d8424ac029c1b80719),
+// and re-canonicalizing that image is a fixpoint. oph-403/404 pin the image
+// and the digest; oph-409 pins the bare/quoted hash-EQUALITY, which is the
+// half this note actually rests on.
+//
+// So the emitter is NOT changed to quote here, and the reason is not taste:
+// Tier-1 identity IS the strict canonical bytes (canonical.md §1.4), so
+// emitting `['<=x']` would MOVE the content address of every array document
+// carrying such an item — the same class of address move #976 had to name a
+// migration for. No ruling and no migration names this one, and the current
+// form is already round-trip-sound, so bare stands and this note records why.
 fn cx_emit_array_item_literal(n Node, compact bool) string {
 	match n {
 		TextNode {
@@ -988,7 +1027,23 @@ fn cx_build_inline_body(items []Node, compact bool, parent_scalar_typed bool) st
 			//
 			// Routed through cx_emit_node_str so the spelling has ONE
 			// authority shared with the multiline lane and the top level.
-			parts << cx_emit_node_str(item, compact)
+			//
+			// #962 / R-A7 — the multiline escape hatch is NOT universal: two
+			// callers reach this lane holding a LINE comment.
+			// `cx_emit_eval_directive` always builds its body inline, and the
+			// COMPACT element emit (`cx_emit_node_str(n, true)` — the program
+			// lane's data-node render) never takes the multiline branch at
+			// all. In both, cx_emit_node_str trimming the comment's trailing
+			// newline — correct for a STANDALONE comment, which must render
+			// bare — let the comment swallow every following sibling and the
+			// closing bracket on re-parse. The newline that terminates a line
+			// comment is SYNTAX, not layout, so this lane writes it
+			// explicitly; the block form stays inline and self-delimiting.
+			if item.is_line {
+				parts << '# ${item.value}\n'
+			} else {
+				parts << cx_emit_node_str(item, compact)
+			}
 		}
 		AliasNode     {
 				// #736: an alias reference in ELEMENT BODY position was
@@ -1112,6 +1167,13 @@ fn cx_has_control_byte(s string) bool {
 // Array-literal position was never affected: cx_emit_array_item_literal
 // already applies a stricter boundary predicate, which is exactly why arrays
 // are the one collection position where the two lanes always agreed.
+//
+// #983: that independence is load-bearing, not incidental. This predicate
+// refusing a string (`<=x`, a glued operator glyph) says NOTHING about whether
+// the array emitter may render it bare — array position asks a different
+// question (does the image re-parse to the same value?) and answers it with
+// cx_is_bare_name / cx_array_item_needs_quote. See the round-trip evidence and
+// the address-preservation reasoning on cx_emit_array_item_literal.
 pub fn cx_collection_bare_safe(s string) bool {
 	if s.len == 0 || !is_name_start(s[0]) {
 		return false
@@ -1279,23 +1341,42 @@ fn cx_is_escape_initial(c u8) bool {
 //   • explicit / default string                     → `name=value`, quoting when
 //     the value would otherwise auto-type (`code='007'`)
 pub fn cx_attr_scalar(a Attribute) string {
+	name_part, val_part := cx_attr_scalar_parts(a)
+	return '${name_part}=${val_part}'
+}
+
+// cx_attr_scalar_parts is the implementation behind `cx_attr_scalar`,
+// split into the two sides of the `=`: the NAME side (which carries any
+// glued `::T` type annotation) and the VALUE side. `cx_attr_scalar` is
+// exactly `name_part + '=' + val_part`.
+//
+// The split exists so an emitter with a different LAYOUT — the format
+// module's pretty / diff-friendly forms, which pad between the `=` and
+// the value for :attribute-alignment — can reuse this one type-aware
+// value decision instead of re-deriving it from the `ScalarValue` union
+// alone. That union cannot express the string-carried kinds (decimal,
+// bigint, atom, date, datetime, duration, period all park their verbatim
+// CX image in a `string` and ride their type on `data_type`), so a
+// value-only match reads every one of them as a string and quotes it —
+// the #978 round-trip defect (RULED: CO-3). One decision, one place.
+pub fn cx_attr_scalar_parts(a Attribute) (string, string) {
 	val_str := a.str_value()
 	if a.is_ref {
-		return '${a.name}=@${val_str}'
+		return a.name, '@${val_str}'
 	}
 	if dt := a.data_type() {
 		if dt == 'atom' {
 			// The atom name is stored bare; the `:` sigil is the canonical
 			// surface and round-trips losslessly, so atoms keep it rather
 			// than the glued `::atom=` form.
-			return '${a.name}=:${val_str}'
+			return a.name, ':${val_str}'
 		}
 		if dt == 'string' {
 			v := if cx_would_autotype(val_str) { "'${val_str}'" } else { cx_quote_attr_if_needed(val_str) }
-			return '${a.name}=${v}'
+			return a.name, v
 		}
 		if type_name_is_auto_recoverable(dt) {
-			return '${a.name}=${cx_quote_attr_if_needed(val_str)}'
+			return a.name, cx_quote_attr_if_needed(val_str)
 		}
 		// I1 stream 11 (L45 + ruling 2b): bigint AND decimal drop the
 		// annotation exactly when the bare image re-types the same kind on
@@ -1306,16 +1387,16 @@ pub fn cx_attr_scalar(a Attribute) string {
 			want := if dt == 'bigint' { ScalarType.bigint_type } else { ScalarType.decimal_type }
 			if re := try_autotype(val_str) {
 				if re.data_type == want {
-					return '${a.name}=${val_str}'
+					return a.name, val_str
 				}
 			}
 		}
 		// Sized numerics / decimal / small bigint / bytes — no self-evident
 		// lexical form, so carry the glued annotation.
-		return '${a.name}::${dt}=${cx_quote_attr_if_needed(val_str)}'
+		return '${a.name}::${dt}', cx_quote_attr_if_needed(val_str)
 	}
 	v := if cx_would_autotype(val_str) { "'${val_str}'" } else { cx_quote_attr_if_needed(val_str) }
-	return '${a.name}=${v}'
+	return a.name, v
 }
 
 pub fn cx_would_autotype(s string) bool {

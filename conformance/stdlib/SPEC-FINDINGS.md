@@ -2080,3 +2080,81 @@ expected list (`vcx/tests/v08_stdlib_skeleton_test.v`, asserting 32) before
 this fixture pass — http is a count RECONCILIATION (the README §3 row remains
 the only graduation edit, spec §12), not a +1. No skeleton-count change was
 needed; the canary is correct at 32 and already enumerates http.
+
+---
+
+## §AR — `cx:` module: the ten unimplemented functions landed; two spec latitudes recorded (2026-08-24, #940 / RULED VC-6)
+
+`modules/cx.md` specified ten functions the engine never dispatched
+(`cx:eval` `cx:render` `cx:validate` `cx:anchors` `cx:ids` `cx:references`
+`cx:resolve-includes` `cx:strip-comments` `cx:strip-attrs`
+`cx:pretty-print`). VC-6 ruled them implemented rather than retired.
+`cx.cxd` gains 40 cases, `cx-122`..`cx-161`; every expected output was derived
+by running the real binary (`vcx/target/cx <file>`), one oracle.
+
+**Arity is the signature, exactly.** §2.2 marks only `$opts` with `=$nil`, so
+`$context` is REQUIRED for `cx:eval` and `cx:render` and OPTIONAL for
+`cx:eval-tree` — a distinction the spec draws deliberately. A one-argument
+`cx:eval` refuses (CXER0100) rather than quietly meaning "empty context",
+which would invent surface the spec withheld in the one function whose whole
+contract is that nothing enters the sandbox implicitly. Fixtures `cx-160`,
+`cx-161`.
+
+Two places where approved spec text types a thing without defining it. Both
+were implemented on the most defensible reading and are recorded here rather
+than resolved in spec text — VC-6 authorizes implementation only.
+
+**1. `cx:strip-attrs` — the "name-pattern" language is undefined (OPEN).**
+§2.3 types the argument `$pattern::string`; §6 assigns `CXER4115` to an
+"invalid name-pattern"; no approved text says what a name-pattern IS.
+Implemented as the single-segment name GLOB the engine already carries
+(`*` any run, `?` one char, `[abc]`/`[a-z]` a class — `stdlib_path.v`
+`match_one_seg`, shared with `io:glob` and the `bus.md` head-name patterns),
+because "name-pattern" is the glob vocabulary in this tree and reusing one
+matcher beats introducing a second. Deliberately NOT the RE2 `pattern=` of
+`schema.md` / `validate.md`: that one is spelled `pattern`, is a full-match
+regex over VALUES, and would make `x-*` mean something else. `CXER4115` fires
+on an empty/blank pattern and on an unterminated `[` class — the two ways a
+name-glob is malformed rather than merely non-matching. Fixtures `cx-152`
+(glob), `cx-153` (`*`), `cx-154` (`CXER4115`). **A spec sentence naming the
+pattern language would close this.**
+
+**2. `cx:references` — the map's keys are unnamed (RESOLVED by choice).**
+§2.2 types the item `[sequence map]` and stops. The record is
+`{attr, kind, path, ref, resolved}` in canonical (sorted) key order.
+`kind` enumerates all four reference productions the grammar admits, across
+the two disjoint `cxdm.md` §4 namespaces: `idref` (`@name` attribute) and
+`body-ref` (`[ref @name]`) resolve against the ID table; `alias`
+(`[*name]`, grammar [62]) and `merge` (`*name` on a head, [61]) resolve
+against the ANCHOR table. `path` uses the same `/root/child[2]` spelling
+`cx:diff` / `cx:patch` address with (`cx_mod_split_path`). `resolved` is why
+the item is a map at all — resolution is the question a caller is asking, and
+recomputing it in-language would re-walk the value once per reference.
+Fixtures `cx-142`, `cx-143`, `cx-144`.
+
+**Error-code mapping for `cx:resolve-includes` (no ambiguity, worth stating).**
+§2.2 says it runs the `code.md` §13 algorithm, whose codes are §13.8's `E9xx`;
+§6 assigns CXER codes to three of those outcomes. So exactly three are
+re-coded — `E904`→`CXER4107` (cycle), `E906`→`CXER4108` (not found),
+`E902`→`CXER4109` (traversal) — and `E901`/`E903`/`E905`/`E907`..`E911` pass
+through on §13.8, which stays their normative table. The capability is `read`,
+spec-cited: `security.md`'s capability table scopes `read` as "filesystem
+reads, `[?cx include]`", and this is `[?cx include]` at runtime. Fixtures
+`cx-145`..`cx-149`.
+
+**GAP (measured, pre-existing, NOT changed): the `cx:` dispatch hook converts
+a propagated `!` error into `none`.** `cx_module_stdlib_builtin_env` returns
+`?cx.Node`; a `!` error crossing it becomes `none`, the chain falls through,
+and the caller is told `no callable "cx:<fn>"` — i.e. a raise inside the
+function is reported as the function not existing, which is the
+silent-absence class #940 is about. Measured on the first build of this
+change: a fragment whose `[?lib]` widened raised `CXER4113` and the caller saw
+`no callable "cx:eval"`. `cx:eval` / `cx:render` therefore convert at the
+boundary with `closure_err_to_value` (the same converter the closure-dispatch
+boundary uses, for the same reason), so `CXER4113` is observable — fixture
+`cx-126`. **`cx:eval-tree` still has the swallow**: it dispatches with a bare
+`!` at `vcx/code/eval.v`, which is why #940's own method note records it
+answering `no callable "cx:eval-tree"` at zero args. Left as-is here — VC-6
+authorizes the ten, and changing a shipped function's error surface is its own
+issue. One-line fix when it is taken: `return eval_tree_fn(args, mut env) or {
+closure_err_to_value(err) }`.

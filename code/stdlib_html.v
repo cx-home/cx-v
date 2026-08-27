@@ -40,6 +40,7 @@ fn html_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('html', 'html-', 'string', n)
 	return none
 }
 

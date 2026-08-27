@@ -16,6 +16,6 @@ erDiagram
     string note "appears 1× depth 2"
   }
   span {
-    int id "@ 1"
+    int id "1"
     string note "appears 1× depth 3"
   }

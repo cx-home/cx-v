@@ -1395,6 +1395,7 @@ true
       and its [instantiated-from …] provenance — and composes like any
       other feature. The pin is computed in-case (the archetype is inline),
       which is also the demonstration that of= is derivable, never magic. ]
+   [; R-A1 migration: envelope → spliced children (2026-08-25) ]
    [in-cx [# [empty] #]]
    [in-code [#
 [?lib 'cx-xap' :as xap]
@@ -1425,7 +1426,7 @@ true
         [composes [$string $r@ok]]]]
 #]]
    [out-text [#
-[probe [name 'wax-seal'] [cq ('irreversible')] [rule ('wax-seal/see')] [fields 3] [sel 1] [prov 1] [composes 'true']]
+[probe [name 'wax-seal'] [cq 'irreversible'] [rule 'wax-seal/see'] [fields 3] [sel 1] [prov 1] [composes 'true']]
 #]]
   ]
 
@@ -1526,6 +1527,7 @@ cx-err:CXER4879
    [tags xap-compose cohesion granularity split-advisor]
    [; #867 §4.4 — two connected components are two features wearing one
       name, and the components ARE the split the gate would accept. ]
+   [; R-A1 migration: envelope → spliced children (2026-08-25) ]
    [in-cx [# [empty] #]]
    [in-code [#
 [?lib 'cx-xap' :as xap]
@@ -1542,7 +1544,7 @@ cx-err:CXER4879
                  [yield [part [?splice [?for [in $m $c/*] [yield [x [$string $m@name]]]]]]]]]]]
 #]]
    [out-text [#
-[probe [n '2'] [split ([part [x 'piano'] [x 'tune']], [part [x 'sale'] [x 'ring-up']])]]
+[probe [n '2'] [split [part [x 'piano'] [x 'tune']] [part [x 'sale'] [x 'ring-up']]]]
 #]]
   ]
 

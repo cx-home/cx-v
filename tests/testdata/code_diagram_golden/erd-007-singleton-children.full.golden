@@ -6,9 +6,9 @@ erDiagram
   }
   user ||--|| profile : has
   user {
-    int id "@ 1"
+    int id "1"
   }
   profile {
-    string email "@ 'a@x.test'"
+    string email "'a@x.test'"
     string note "appears 1× depth 1"
   }

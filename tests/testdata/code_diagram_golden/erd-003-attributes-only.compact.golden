@@ -1,5 +1,5 @@
 erDiagram
   user {
-    int id "@"
-    string name "@"
+    int id "e.g. 1"
+    string name "e.g. alice"
   }

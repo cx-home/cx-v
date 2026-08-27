@@ -584,6 +584,10 @@ fn xap_ramp_level(rt &XapRuntime, comp string, class string) int {
 	general := 'ramp/${comp}'
 	mut pin := -1
 	mut have_specific := false
+	// #997 — the manual pin is read out of `rt.dials`, which a live [$xap:dial]
+	// appends to on another thread; the read bracket covers exactly the walk
+	// (never the fold below, which reads the journal, not the basis).
+	authz_grants_rlock()
 	for d in rt.dials {
 		if d is cx.Element && d.name == 'delegation' {
 			mut scope := ''
@@ -612,6 +616,7 @@ fn xap_ramp_level(rt &XapRuntime, comp string, class string) int {
 			}
 		}
 	}
+	authz_grants_runlock()
 	if pin >= 0 {
 		return pin
 	}
@@ -1033,7 +1038,36 @@ fn xap_run_derivers(dv cx.Node, derived map[string][]string) !map[string]string 
 	return bound
 }
 
+// xap_run is the DIRECT `[$xap:run]` lane: run assembly, and the runtime is
+// live — including its §3.1.2 source pumps — the moment it returns. The caller
+// holds the value, so there is nothing left for anyone else to wire.
 fn xap_run(args []cx.Node, mut env MatchEnv) ?cx.Node {
+	return xap_run_composed(args, mut env, false)
+}
+
+// xap_run_composed is run assembly with the #994 boot-ordering contract made
+// explicit for a COMPOSING caller ([$xap:host]).
+//
+// #994 — a composing layer keeps wiring the runtime AFTER assembly returns:
+// [$xap:host] translates the deployment's roles ladder, governance grants and
+// [host-auth] block into runtime dials only once it holds the handle. Source
+// pumps that consume in that gap meet a PEP with no dials yet, and §3.1.2's
+// deny path is skip-and-ack — a pre-seeded stream's first entries were lost on
+// thread-start timing, silently and non-deterministically.
+//
+// So the ORDER is the fix, not a retry: with `defer_pumps` the subscriptions
+// still OPEN here (a bad binding refuses at run assembly, never at first
+// delivery — that contract is untouched) but no pump consumes until the caller
+// calls xap_arm_source_pumps(id). A caller that takes the deferral OWES the
+// runtime exactly one of:
+//
+//   xap_arm_source_pumps(id)     — authority is wired; consume from here on;
+//   xap_abandon_source_pumps(id) — this boot failed; never consume.
+//
+// Nothing is acked before arming, so an abandoned boot leaves the group's
+// committed offset where it was and the entries stay redeliverable to the next
+// boot. The direct lane passes false and is byte-for-byte what it always was.
+fn xap_run_composed(args []cx.Node, mut env MatchEnv, defer_pumps bool) ?cx.Node {
 	opts := if args.len > 0 { args[0] } else { xap_elem('__cx_map__', [], []) }
 	mut reg := xap_reg()
 	reg.next_id = reg.next_id + 1
@@ -1189,12 +1223,18 @@ fn xap_run(args []cx.Node, mut env MatchEnv) ?cx.Node {
 		}
 	}
 	// §3.1.2 (#583): event-source bindings — the runtime owns each fabric
-	// subscription; a bad binding refuses at run. Pumps start after the
+	// subscription; a bad binding refuses at run. Pumps open after the
 	// §3.1.1 re-fold so ingested deliveries land on the replayed state.
 	if sv := xap_map_get_node(opts, 'sources') {
 		if serr := xap_start_source_pumps(id, xap_seq_items(sv), tenant, mut env) {
 			return serr
 		}
+	}
+	// #994: opening a subscription and CONSUMING from it are two moments. The
+	// direct lane closes the gap here — the caller holds the runtime and there
+	// is no later wiring step — while a composing caller arms after its own.
+	if !defer_pumps {
+		xap_arm_source_pumps(id)
 	}
 	return xap_elem('xap-runtime', [xap_attr('id', id.str()), xap_attr('tenant', tenant)],
 		[])
@@ -1872,7 +1912,15 @@ fn xap_pep_admits(rt &XapRuntime, actor string, verb string, bind string) bool {
 			}),
 		]
 	}
+	// #997 — the READ bracket. This runs on a §3.1.2 source pump's thread and on
+	// every reactor thread, concurrently with a live [$xap:dial]. Readers do not
+	// exclude each other, so the fan-out is unchanged; a dial excludes them all,
+	// which is what makes this decision run wholly before or wholly after it and
+	// never over a half-grown basis. A torn DENY here is not recoverable — the
+	// pump skips-and-acks it (§3.1.2), so the entry is gone.
+	authz_grants_rlock()
 	decision := authz_decide(rt.authz, req, map[string]cx.Node{})
+	authz_grants_runlock()
 	return decision is cx.Element && (decision as cx.Element).name == 'permit'
 }
 
@@ -2455,11 +2503,29 @@ fn xap_dial(args []cx.Node) ?cx.Node {
 		assurance:    't0'
 		value:        deleg
 	}
+	xap_dial_publish(mut rt, real, deleg)
+	return deleg
+}
+
+// xap_dial_publish installs one issued dial as ONE act under the authority-basis
+// WRITE lock (#997): the real grant the PEP decides against, and the display
+// element `why-allowed` renders its chain from, become visible together — and
+// neither array grows in place while a running §3.1.2 source pump or a reactor
+// thread is walking it. A dial issued by a live deployment worker is a
+// steady-state write against readers on other threads; see the AuthzStore doc
+// comment (stdlib_authz.v) for the tier table.
+//
+// This is the ONLY site outside stdlib_authz.v's helpers permitted to touch
+// `.delegations` directly, because the paired `rt.dials` append lives on
+// XapRuntime and a pthread rwlock does not nest — pinned by the guard in
+// vcx/tests/xap_umbrella_test.v.
+fn xap_dial_publish(mut rt XapRuntime, real &AuthzDelegation, deleg cx.Node) {
+	authz_grants_lock.lock()
 	if rt.authz != unsafe { nil } {
 		rt.authz.delegations << real
 	}
 	rt.dials << deleg
-	return deleg
+	authz_grants_lock.unlock()
 }
 
 // xap-revoke revokes an issued dial delegation by id (§22.2 — revocation is
@@ -2476,12 +2542,10 @@ fn xap_revoke(args []cx.Node) ?cx.Node {
 	id := xap_arg_name(args[1])
 	mut found := false
 	if rt.authz != unsafe { nil } {
-		for mut d in rt.authz.delegations {
-			if d.id == id && !d.revoked {
-				d.revoked = true
-				found = true
-			}
-		}
+		// #997: under the write lock, so the flag flip is atomic against a PEP
+		// decision in flight on a pump or reactor thread — that decision either
+		// ran wholly before the revocation or wholly after it.
+		found = authz_grants_mark_revoked(mut rt.authz, id)
 	}
 	ok := if found { 'true' } else { 'false' }
 	return xap_elem('revoked', [xap_attr('id', id), xap_attr('ok', ok)], [])
@@ -2540,6 +2604,14 @@ fn xap_why_allowed(args []cx.Node) ?cx.Node {
 	mut via_ids := map[string]bool{}
 	mut rooted := ''
 	mut all_permit := true
+	// #997 — ONE read bracket over the WHOLE answer, not one per leaf grant: the
+	// leaf decisions and the `rt.dials` chain render below must describe the same
+	// basis. Bracketed per-decision, a dial landing between two leaves could make
+	// this report a wrapper allowed against a chain that never granted it.
+	authz_grants_rlock()
+	defer {
+		authz_grants_runlock()
+	}
 	for gname in grants {
 		gbind := xap_route_bind(gname)
 		req := cx.Element{

@@ -682,7 +682,7 @@ cx-err:CXER3300
 [$time:duration-total-h [$time:duration-h 2]]
 #]]
   [out-text [#
-2.0
+2.0e0
 #]]
  ]
 

@@ -27,7 +27,11 @@
 [module-doc name=format
   [scope """Emit CX values back to CX text in four forms: canonical, pretty, compact, and diff-friendly.
 
-   Canonical is the byte-stable hash preimage used for hashing, diffing, and content addressing; pretty is human-readable with indentation and wrapping; compact minimizes whitespace for transport; diff-friendly is a version-stable, one-element-per-line form for snapshots and version control. This is CX-to-CX text only — cross-format conversion lives in modules like json and csv. Every form round-trips: parsing the output is structurally equal to the original value."""]]
+   Canonical is the byte-stable hash preimage used for hashing, diffing, and content addressing; pretty is human-readable with indentation and wrapping; compact minimizes whitespace for transport; diff-friendly is a version-stable, one-element-per-line form for snapshots and version control. This is CX-to-CX text only — cross-format conversion lives in modules like json and csv. Every form round-trips: parsing the output is structurally equal to the original value.
+
+   Round-tripping means TYPES survive, not just characters. A non-string scalar is never quoted by any form: a decimal stays `score=1.5`, an atom keeps its sigil as `tier=:gold`, and a type with no self-evident lexical form keeps its glued annotation as `port::u16=8080`. Quoting any of those would re-parse it as a string and silently change the value's type.
+
+   Pretty and diff-friendly differ from canonical on exactly one point, deliberately: they ALWAYS quote a string, honoring the string-quote option, where canonical leaves a string bare whenever the bare form re-parses as that same string. So `[user name=alice]` emits `name=alice` in canonical and `name="alice"` in pretty. Both round-trip; pretty's choice keeps the string/non-string distinction visible to a human reader scanning indented output, which is the form's whole purpose. This is the only divergence between the two."""]]
 [fn-doc name=canonical scope=public purity=pure
   [sig """-> string"""]
   [summary """Emit the byte-stable canonical form of a value — the hash preimage for content addressing."""]
@@ -37,6 +41,11 @@
   [summary """Emit a human-readable form with indentation and line wrapping; not version-stable."""]
   [example [code """[?lib 'cx-stdlib/format']
 [$format:pretty [user]]"""] [expect """'[user]'"""]]
+  [; Strings are always quoted (the string-quote option picks which quote);
+     every non-string scalar keeps its bare canonical form, so the output
+     re-parses to the same TYPES. ]
+  [example [code """[?lib 'cx-stdlib/format']
+[$format:pretty [user name=alice role="ops lead" age=41 active=true score=1.5]]"""] [expect """'[user name="alice" role="ops lead" age=41 active=true score=1.5]'"""]]
 ]
 [fn-doc name=compact scope=public purity=pure
   [sig """-> string"""]

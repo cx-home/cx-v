@@ -1663,10 +1663,11 @@ fn xap_pkg_install(args []cx.Node) ?cx.Node {
 						assurance:    't0'
 						value:        deleg
 					}
-					if rt.authz != unsafe { nil } {
-						rt.authz.delegations << real
-					}
-					rt.dials << deleg
+					// #997 — same act, same publication helper as [$xap:dial]:
+					// enabling a feature on a RUNNING runtime is a live authority
+					// write, and the pump/reactor threads deciding against that
+					// basis must see the grant and its display element together.
+					xap_dial_publish(mut rt, real, cx.Node(deleg))
 				}
 				for c in caps {
 					granted << cx.Node(xap_elem('grant', [xap_attr('capability', c)], []))

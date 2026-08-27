@@ -134,6 +134,21 @@ pub:
 	tenant string
 }
 
+// xsp_grant_caps is the v1 `[grant … caps="…"]` grammar (§6.1) — the ONE
+// list. svc_parse_xsp validates against it and the offline principal-mint
+// verb (svc_mint_xsp_principal) emits against it, so a stanza the mint
+// prints can never name a capability this parser would refuse.
+pub const xsp_grant_caps = ['read', 'write', 'delete', 'admin', 'peer']
+
+// xsp_identity_attrs is the v1 `[xsp [identity …]]` attribute row (§5) — the
+// ONE list, on the xsp_grant_caps model. svc_parse_xsp validates the daemon's
+// own responder identity against it and the offline principal-mint verb emits
+// through svc_xsp_identity_attrs (xsp_principal_mint.v), so a row the mint
+// prints for `--for identity` can never carry an attribute this parser would
+// refuse, nor omit one it requires. Both attributes are mandatory: there is
+// no anonymous responder (N-IDENT-2).
+pub const xsp_identity_attrs = ['did', 'seed-env']
+
 // XspGrant is one operator-granted root of authority: a DID (or the
 // configured floor) → capability classes, optionally sliced. This is the
 // CSRP DidGrant table become ordinary delegations — same operator intent,
@@ -334,7 +349,7 @@ fn svc_parse_xsp(el cx.Element) !XspConfig {
 	mut pushdown_steps := u64(100000000)
 	mut pushdown_mem_mb := u64(512)
 	xsp_child_attrs := {
-		'identity':    ['did', 'seed-env']
+		'identity':    xsp_identity_attrs
 		'policy':      ['mode', 'floor']
 		'limits':      ['pending-window', 'liveness-ms', 'handshake-ms', 'max-frame-bytes']
 		'grants':      []string{}
@@ -420,11 +435,11 @@ fn svc_parse_xsp(el cx.Element) !XspConfig {
 					caps_str := g.attr('caps')
 					caps := caps_str.split(' ').filter(it != '')
 					if caps.len == 0 {
-						return error('${e_svc_cfg}: [xsp [grants [grant]]] needs caps= (space-separated: read write delete admin peer)')
+						return error('${e_svc_cfg}: [xsp [grants [grant]]] needs caps= (space-separated: ${xsp_grant_caps.join(' ')})')
 					}
 					for c in caps {
-						if c !in ['read', 'write', 'delete', 'admin', 'peer'] {
-							return error('${e_svc_cfg}: [xsp [grants [grant]]] unknown capability "${c}" (the v1 grammar: read write delete admin peer — §6.1)')
+						if c !in xsp_grant_caps {
+							return error('${e_svc_cfg}: [xsp [grants [grant]]] unknown capability "${c}" (the v1 grammar: ${xsp_grant_caps.join(' ')} — §6.1)')
 						}
 					}
 					grants << XspGrant{

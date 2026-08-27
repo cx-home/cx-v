@@ -221,7 +221,7 @@ shipped binary (cx <file> — the single oracle).
   [~ "acme corp" "acme corp." [$similar:predicate {decide: {match: 0.99, review: 0.85}, resolutions: ($r)}]]]
 #]]
   [out-text [#
-[similar score=1.0 band=:match [evidence [resolved decided-by=agent:mistral :match]]]
+[similar score=1.0e0 band=:match [evidence [resolved decided-by=agent:mistral :match]]]
 #]]
  ]
 
@@ -235,7 +235,7 @@ shipped binary (cx <file> — the single oracle).
   [~ "acme corp." "acme corp" [$similar:predicate {decide: {match: 0.99, review: 0.85}, resolutions: ($r)}]]]
 #]]
   [out-text [#
-[similar score=1.0 band=:match [evidence [resolved decided-by=agent:mistral :match]]]
+[similar score=1.0e0 band=:match [evidence [resolved decided-by=agent:mistral :match]]]
 #]]
  ]
 
@@ -249,7 +249,7 @@ shipped binary (cx <file> — the single oracle).
   [~ "globex" "globex inc" [$similar:predicate {decide: {match: 0.9, review: 0.8}, resolutions: ($r)}]]]
 #]]
   [out-text [#
-[similar score=0.0 band=:no-match [evidence [resolved decided-by=agent:mistral :no-match]]]
+[similar score=0.0e0 band=:no-match [evidence [resolved decided-by=agent:mistral :no-match]]]
 #]]
  ]
 ]

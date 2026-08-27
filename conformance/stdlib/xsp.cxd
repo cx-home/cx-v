@@ -498,6 +498,7 @@ cx-err:CXER3705
  ]
  [case id=xsp-021-headset-cursor-form level=core gate=enforced
   [tags xsp resume cursor head-set map store-profile i5-stream4]
+  [; R-A1 migration: envelope → spliced children (2026-08-25) ]
   [doc [#
 The HEAD-SET map cursor FORM (store profile §5.1/§5.2, xsp.md §5.3): a
 multi-stream feed resumes with a MAP - [from boot="…" [s plane= name=?
@@ -522,7 +523,7 @@ behavior in store_xsp_serve_test.v.
     [?for [in $s $f/s] [yield [$text $s/@pos]]]]]
 #]]
   [out-text [#
-[seq 'b-1' 2 ('7', '3')]
+[seq 'b-1' 2 '7' '3']
 #]]
  ]
 

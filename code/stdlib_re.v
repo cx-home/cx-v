@@ -87,6 +87,7 @@ fn re_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('re', 're-', 'string', n)
 	return none
 }
 
@@ -99,6 +100,7 @@ fn re_arg_int(n cx.Node) ?i64 {
 			else {}
 		}
 	}
+	note_operand_fault('re', 're-', 'int', n)
 	return none
 }
 

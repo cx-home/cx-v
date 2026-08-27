@@ -136,6 +136,7 @@ fn val_arg_str(n cx.Node) ?string {
 			return v
 		}
 	}
+	note_operand_fault('validate', 'validate-', 'string', n)
 	return none
 }
 

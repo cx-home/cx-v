@@ -5,6 +5,6 @@ erDiagram
     int max_depth "1"
   }
   "+" {
-    int x
-    int y
+    int x "1"
+    int y "2"
   }

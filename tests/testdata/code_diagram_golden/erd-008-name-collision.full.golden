@@ -11,15 +11,15 @@ erDiagram
   org {
   }
   team {
-    string name "@ 'alpha'"
+    string name "'alpha'"
     string note "appears 1× depth 1"
   }
   user {
-    int id "@ 1, 2"
-    string name "@ 'alice', 'bob'"
+    int id "1, 2"
+    string name "'alice', 'bob'"
     string note "appears 2× depth 2"
   }
   project {
-    string name "@ 'beta'"
+    string name "'beta'"
     string note "appears 1× depth 1"
   }

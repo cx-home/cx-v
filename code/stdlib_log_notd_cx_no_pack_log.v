@@ -88,6 +88,7 @@ fn log_atom_name(n cx.Node) ?string {
 			}
 		}
 	}
+	note_operand_fault('log', 'log-', 'atom', n)
 	return none
 }
 

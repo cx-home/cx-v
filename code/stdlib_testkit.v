@@ -62,6 +62,7 @@ fn test_arg_str(n cx.Node) ?string {
 		}
 		else {}
 	}
+	note_operand_fault('test', 'test-', 'string', n)
 	return none
 }
 

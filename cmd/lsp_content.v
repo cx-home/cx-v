@@ -132,14 +132,14 @@ fn completion_module_fns() map[string]string {
 	return {
 		// cx: self-host module
 		'cx:parse':              'Parse CX source text into an AST value.'
-		'cx:render':             'Render an AST value back to CX source.'
+		'cx:render':             'Evaluate a template source string and serialize the result (sugar over cx:eval).'
 		'cx:ast':                'Declaration-AST JSON projection of module source (libs/consts/defs).'
 		'cx:hash':               'SHA-256 of canonical bytes.'
 		'cx:diff':               'Three-policy semantic diff.'
 		'cx:patch':              'Apply a diff to an AST.'
 		'cx:schema-of':          'Infer a cxs schema from instance data.'
 		'cx:resolve-includes':   'Resolve ?include directives into a single AST.'
-		'cx:eval':               'Sandboxed nested evaluation (M1-M5 gated).'
+		'cx:eval':               'Evaluate a CX source string in the context-only sandbox (eval capability).'
 		// log: structured logging
 		'log:trace':             'Log at trace level.'
 		'log:debug':             'Log at debug level.'
@@ -292,13 +292,13 @@ const directive_docs = {
 
 const module_fn_docs = {
 	'cx:parse':            '**cx:parse(source)** — Parse a CX source string into an AST value. Lossless round-trip with `cx:render`.'
-	'cx:render':           '**cx:render(ast)** — Render an AST value back to canonical CX source.'
+	'cx:render':           '**cx:render(template, context)** — `cx:serialize(cx:eval(template, context))`: evaluate a template source string in the cx:eval sandbox and serialize the result. Impure (`eval` capability), and it shares cx:eval\'s recursion budget.'
 	'cx:hash':             '**cx:hash(value)** — SHA-256 hex of the strict canonical bytes for `value`.'
 	'cx:diff':             '**cx:diff(a, b, :policy ?)** — Three-policy semantic diff: `:structure`, `:identity`, `:value`. Returns a patch.'
 	'cx:patch':            '**cx:patch(doc, patch)** — Apply a `cx:diff` patch to an AST. Order-sensitive against the source it was diffed from.'
 	'cx:schema-of':        '**cx:schema-of(value)** — Infer a `cxs` schema from instance data. Returns the canonical schema AST.'
-	'cx:resolve-includes': '**cx:resolve-includes(doc, :base ?)** — Walk `?include` directives, sandbox-resolve, splice in. See spec/include.md.'
-	'cx:eval':             '**cx:eval(source, :caps ?)** — Sandboxed nested evaluation. Caps default to M1-M5 limits.'
+	'cx:resolve-includes': '**cx:resolve-includes(value, root)** — Run the `[?cx include]` resolution algorithm against an EXPLICIT root. Impure (`read` capability). See spec/core/code.md §13.'
+	'cx:eval':             '**cx:eval(source, context, opts?)** — Evaluate a CX source string against `context`, in the context-only sandbox: no ambient capture, `[?lib]` may narrow but not widen (CXER4113), recursion depth 8 (`opts.max-depth`, CXER4114). Impure (`eval` capability). See spec/modules/cx.md §3.'
 	'log:trace':           '**log:trace(msg, fields…)** — Trace-level log. Filtered by `:level` ambient context.'
 	'log:debug':           '**log:debug(msg, fields…)** — Debug-level log.'
 	'log:info':            '**log:info(msg, fields…)** — Info-level log.'
