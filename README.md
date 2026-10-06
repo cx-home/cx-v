@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/cx-logo.png" width="96" alt="cx"></p>
+
 # cx — CX for V
 
 [![Version](https://img.shields.io/badge/version-v0.17.0-blue.svg)](#status)
